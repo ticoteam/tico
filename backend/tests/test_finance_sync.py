@@ -9,6 +9,7 @@ from backend.credentials import Vault
 from backend.finance import banking, sync
 from backend.finance.mercury import Answer
 from backend.finance.store import banking as SK
+from backend.tests.helpers.wait import wait_for
 from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
@@ -22,6 +23,7 @@ from backend.tests.helpers.finance_fixtures import (
     store,
     sync_once,
 )
+
 
 HOURS = [f"2026-10-15T{h:02d}:30:00.000000Z" for h in range(13, 24)]
 
@@ -606,22 +608,21 @@ def test_a_card_change_reaches_mercury_on_commit_without_waiting_for_a_sweep_or_
     assert fake.sent("create_card") == [("user-eve", 20_000)]
     sync.start(books, Vault(books), make=lambda _token: fake)  # the worker runs and waits on its doorbell
     try:
-        time.sleep(0.5)
+        assert sync.FIRST_PASS.wait(10), "the bank worker never finished its first pass"
         rung = sync.BELL.rung
         with books.transaction() as c:
             assert act(c, OWNER, "card_freeze", {"card_id": card_id}).status == "committed"
             assert c.execute("SELECT sync_status FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0] == "pending"
             assert sync.BELL.rung == rung  # not before the commit
         assert sync.BELL.rung > rung  # rung by the commit, not left to the sweep
-        deadline = time.monotonic() + 15
-        confirmed = None
-        while time.monotonic() < deadline and confirmed is None:
-            time.sleep(0.05)
+
+        def confirmed():
             with books.read() as c:
                 row = c.execute("SELECT sync_status, provider_status FROM fin_cards WHERE id=?", (card_id,)).fetchone()
-                confirmed = tuple(row) if row[0] == "ok" else None
+            return tuple(row) if row[0] == "ok" else None
+
+        assert wait_for(confirmed, "Mercury confirmed the card freeze", seconds=15) == ("ok", "frozen")
         assert fake.sent("card_state") == [("card-eve", "freeze")]
-        assert confirmed == ("ok", "frozen")
     finally:
         sync.stop()
 

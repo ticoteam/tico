@@ -433,6 +433,27 @@ def call_show(api, args):
 
 
 @tool(
+    "tico_call_notes",
+    "Read a bot's brief for a call. People name a bot they can see. An attached bot reads its own brief.",
+    {"call_id": _s("The call's id"), "bot": _s("The bot's id or slug")},
+    required=("call_id",),
+)
+def call_notes(api, args):
+    return api.get(f"calls/{args['call_id']}/bot-notes", bot=args.get("bot"))
+
+
+@tool(
+    "tico_call_note",
+    "As a bot attached to a call, add a short fact to your brief. Use only facts you can share in the call's thread.",
+    {"call_id": _s("The call's id"), "text": _s("The fact or short note to add")},
+    required=("call_id", "text"),
+    writes=True,
+)
+def call_note(api, args):
+    return api.post(f"calls/{args['call_id']}/bot-notes", {"text": args["text"]}, key=_key(args))
+
+
+@tool(
     "tico_call_start",
     "Start a call in a thread you can write to. Its audio and screen share reach the people in the "
     "thread, and a live transcript is kept while it runs and posted to the thread when it ends. You are its connector. "
@@ -440,10 +461,18 @@ def call_show(api, args):
     {
         "thread_id": _s("The thread's id"),
         "title": _s("What the call is called, up to 200 characters"),
+        "model": _s("Deprecated. A bot keeps its own model."),
+        "effort": _s("Deprecated. Voice replies use low effort."),
         "speak_replies": {
             "type": "boolean",
-            "description": "Bots speak their replies on this call. Off unless asked; "
-            "spoken replies are refused until the Gateway has text-to-speech, so leave it out",
+            "description": "Bots answer aloud as well as in the thread: true makes the call Tico Meet. Left out, "
+            "a Tico Meet call has it on and a Google Meet off",
+        },
+        "bots": {
+            "type": "array",
+            "items": _s("A bot's slug"),
+            "maxItems": 10,
+            "description": "Bots in the call from its start; the call is Tico Meet",
         },
     },
     required=("thread_id",),
@@ -453,6 +482,11 @@ def call_start(api, args):
     body = {"title": str(args["title"])} if args.get("title") else {}
     if args.get("speak_replies"):
         body["speak_replies"] = True
+    for key in ("model", "effort"):
+        if args.get(key):
+            body[key] = str(args[key])
+    if args.get("bots"):
+        body["bots"] = [str(bot) for bot in args["bots"]]
     return _as_person(api).post(f"threads/{args['thread_id']}/calls", body, key=_key(args))
 
 
@@ -556,10 +590,29 @@ CALL = (
     Command(
         "call start",
         "start a call in a thread you can write to; you become its connector",
-        args=(Arg("title", default=""), Arg("speak_replies", flag="--speak")),
-        example="tico call start t1 --title 'Weekly sync'",
+        args=(
+            Arg("title", default=""),
+            Arg("speak_replies", flag="--speak"),
+            Arg("bots", flag="--bot"),
+            Arg("model"),
+            Arg("effort"),
+        ),
+        example="tico call start t1 --title 'Weekly sync' --bot ops",
     ),
     Command("call show", "a call: its state, people, bots and how it ended", example="tico call show c1"),
+    Command(
+        "call notes",
+        "read a bot's brief for a call",
+        args=(Arg("call_id", flag="--call"),),
+        render=lambda _args, result: result["text"],
+        example="tico call notes --call c1 --bot ops",
+    ),
+    Command(
+        "call note",
+        "add to your brief as a bot attached to the call",
+        args=(Arg("call_id", flag="--call"),),
+        example="tico call note --call c1 'The rollout reached 45% on Tuesday'",
+    ),
     Command(
         "call join",
         "join a call: the URL and a token good for 5 minutes",

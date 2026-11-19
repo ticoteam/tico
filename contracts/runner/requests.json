@@ -1062,12 +1062,14 @@
        "model_connect_v1",
        "claude_login_v1",
        "threads_v1",
+       "voice_sessions_v1",
        "memory_tidy_packets_v1",
        "harness_allocation_v1",
        "make_page",
        "memory_tidy_keep_v1",
        "browser_v1",
-       "plan_switch_resume_v1"
+       "plan_switch_resume_v1",
+       "push_hints_v1"
       ],
       "type": "string"
      },

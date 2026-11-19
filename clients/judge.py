@@ -183,7 +183,13 @@ def _paid(exc, model, usage):
 
 # A chain of providers (backend/judge.py `ordered`) asks each under one deadline, so a slow one leaves the next only
 # what is left, and the whole chain answers before its callers stop waiting. `clock` is the seam the tests use.
-clock = time.monotonic
+
+
+def clock():
+    """The deadline clock: a test replaces this and not time.monotonic for the whole process."""
+    return time.monotonic()
+
+
 _DEADLINE = contextvars.ContextVar("tico_judge_deadline", default=None)
 MIN_ATTEMPT = 1.0  # seconds: with less left, a provider is not asked at all
 
@@ -996,6 +1002,12 @@ def _registry_error(revision):
     return error
 
 
+def _open(part, flags, dir_fd):
+    """Every registry open goes through here, so a test can swap a file between its check and its open, and not
+    replace os.open for the whole process."""
+    return os.open(part, flags, dir_fd=dir_fd)
+
+
 def _registry_text(registry, name):
     """Read only regular files through anchored, no-follow registry directory handles.
 
@@ -1031,7 +1043,7 @@ def _registry_text(registry, name):
             flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
             if directory:
                 flags |= os.O_DIRECTORY
-            descriptor = os.open(part, flags, dir_fd=parent)
+            descriptor = _open(part, flags, parent)
             descriptors.append(descriptor)
             opened = os.fstat(descriptor)
             if not expected(opened.st_mode):

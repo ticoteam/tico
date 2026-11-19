@@ -1162,18 +1162,24 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
         vault = getattr(app.state, "vault", None)
         return vault.admins if vault is not None else ()
 
-    def shown_grants(c, who, bot):
-        """The bot's grants this reader may know of: a tool they may see (`api_tools.visible`), or one for Everyone when
-        they are a credential admin, the bot itself or someone who manages it; a key on no tool for those three only. An
-        Only listed tool stays hidden from anyone it does not list."""
-        from . import api_tools
+    def close_to(c, who, bot):
+        """Whether `who` is a credential admin, the bot itself or someone who manages it."""
         from .credentials import administrator
 
+        return administrator(c, who, admins()) or who.actor == "bot:" + bot or auth.bot_manager(c, who, bot)
+
+    def shown_grants(c, who, bot, close):
+        """The bot's grants this reader may know of: a tool they may see (`api_tools.visible`), or one for Everyone when
+        they are `close` (close_to); a key on no tool for those only. An Only listed tool stays hidden from anyone it
+        does not list."""
+        from . import api_tools
+        from .read_cache import one
+
         rows, keep = _granted_tools(c, bot), []
-        close = administrator(c, who, admins()) or who.actor == "bot:" + bot or auth.bot_manager(c, who, bot)
         for row in rows:
             tool_id = row["granted"].get("tool_id")
-            tool = c.execute("SELECT * FROM tools WHERE id=?", (tool_id,)).fetchone() if tool_id else None
+            # The row _granted_tools read for its health, in this snapshot: not read again.
+            tool = one(c, "SELECT * FROM tools WHERE id=?", (tool_id,)) if tool_id else None
             if tool is not None:
                 if api_tools.visible(c, who, tool, admins(), auth) or (close and api_tools.audience_of(tool) is None):
                     keep.append(row)
@@ -1193,18 +1199,20 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
     def bot_tools(request: Request, bot: str):
         who = request.state.identity
         auth.domain(who)
+        from . import task_privacy as privacy
+
         with store.read() as c:
+            # One snapshot for the whole answer: who may see what and the rows it shows agree, and each row is read once.
+            privacy.snapshot(c)
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             auth.require_read(c, who, bot)  # a 404 for someone who cannot even see the bot
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             result = listing(c, store.settings, bot)
-            result["tools"] = _merge_granted(result["tools"], shown_grants(c, who, bot))
-            from .credentials import administrator
-
-            if administrator(c, who, admins()) or who.actor == "bot:" + bot or auth.bot_manager(c, who, bot):
+            close = close_to(c, who, bot)
+            result["tools"] = _merge_granted(result["tools"], shown_grants(c, who, bot, close))
+            if close:
                 result["tools"] += _choices(c, bot, result["tools"])
-            from . import task_privacy as privacy
 
             def redact(value):
                 if isinstance(value, dict):

@@ -769,11 +769,20 @@ def test_task_list_reads_a_fixed_number_of_statements_and_hides_private_tasks(ap
             assert counts[300, key, brief] <= counts[30, key, brief] + 5, counts
 
 
-def test_tag_list_reads_a_fixed_number_of_statements_and_hides_tags_only_on_private_tasks(api):
+def test_tag_list_reads_a_fixed_number_of_statements_and_hides_tags_only_on_private_tasks(api, monkeypatch):
     """The tag list reads every tag's links and attach events together, so a tag on 100 tasks costs what one on 10
     does, and passes exactly the tags tag_readable passes one by one: a tag only on another's private tasks, still
-    named by an attach event after it came off, stays hidden."""
+    named by an attach event after it came off, stays hidden. A tag on a company-visible task needs no links or
+    attach events at all: reading them for every tag held tens of MB per list on TIDY."""
     store = api.app.state.store
+    loaded = set()
+
+    def tag_attaches(c, tags):
+        loaded.update(tags)
+        return attaches(c, tags)
+
+    attaches = task_privacy.tag_attaches
+    monkeypatch.setattr(task_privacy, "tag_attaches", tag_attaches)
 
     def attach(size):
         with store.transaction() as c:
@@ -790,13 +799,20 @@ def test_tag_list_reads_a_fixed_number_of_statements_and_hides_tags_only_on_priv
     for size in (10, 100):
         attach(size)
         for token, person in (("ben-test", "human:ben"), ("cara-test", "human:cara")):
+            loaded.clear()
             listed, counts[size, person] = traced_get(api, "tags", token)
+            listing_loaded = set(loaded)
             with store.read() as c:
                 one_by_one = [t["id"] for t in H.tags(c) if task_privacy.tag_readable(c, Identity(person, "human"), t)]
             assert [t["id"] for t in listed["tags"]] == one_by_one
             keys = {t["key"] for t in listed["tags"]}
             assert {"mixed", f"open-{size}"} <= keys
             assert (f"secret-{size}" in keys) == (person == "human:cara")
+            with store.read() as c:
+                by_key = {t["key"]: t["id"] for t in H.tags(c)}
+            assert by_key[f"secret-{size}"] in listing_loaded
+            public = {by_key["mixed"], by_key[f"open-{size}"]}
+            assert not listing_loaded & public, "a tag on a company-visible task loads no links or attach events"
     assert counts[100, "human:ben"] <= counts[10, "human:ben"] + 5, counts
     assert counts[100, "human:cara"] <= counts[10, "human:cara"] + 5, counts
 
@@ -1041,3 +1057,19 @@ def test_person_origin_rows_are_checked_in_one_row_and_match_the_one_row_read(ap
                 c.set_trace_callback(None)
             outcomes.add(frozenset(readable))
     assert len(outcomes) >= 3  # the readers see different tasks: the rule is exercised, not trivial
+
+
+def test_a_task_number_search_finds_a_private_finished_task_only_for_who_may_read_it(api):
+    """The Tasks search reads a typed number with GET /api/v2/tasks?number=N, across every view, status and snooze
+    (spec "Task search finds a task by its number"): a private closed task comes back to its party and to nobody
+    else, so the search never says such a task exists."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        hidden = H.task_create(c, "human:cara", "Private plan", "Secret", "human:cara", private=True, lint=False)
+        c.execute("UPDATE tasks SET number=? WHERE id=?", (98765, hidden["id"]))
+        H.task_close(c, "human:cara", hidden["id"], note="Done with it")
+    for brief in ("&brief=1", ""):
+        cara = get(api, "tasks?number=98765" + brief, "cara-test")
+        assert [t["id"] for t in cara["tasks"]] == [hidden["id"]]
+        ben = get(api, "tasks?number=98765" + brief, "ben-test")
+        assert ben["tasks"] == [] and "Private plan" not in json.dumps(ben)

@@ -143,6 +143,14 @@ def items(value: object, what: str, most: int = MAX_ITEMS) -> list[object]:
     return out
 
 
+def opt_items(value: object, what: str, most: int = MAX_ITEMS) -> list[object]:
+    """A list that may be missing or empty (one of several lists where only all of them empty is wrong); otherwise
+    checked as `items` checks it."""
+    if value is None or value == [] or value == ():
+        return []
+    return items(value, what, most)
+
+
 def text(p: Payload, key: str, most: int = MAX_TEXT) -> str:
     value = opt_text(p, key, most)
     if not value:

@@ -50,8 +50,8 @@ main fetched last time), `scripts/check.sh`, and `scripts/check_conflicts.sh`. A
 do. `check.sh` prints one line per check with its time; a check whose inputs did not change prints SKIP.
 
 `check.sh` runs the checks CI's static job runs, on what you changed: the Python lint baseline and ruff format, shellcheck,
-actionlint, the migration order, the UI API types, UI strict (every script TypeScript), node types (the scripts/ and
-recorder/ TypeScript), the UI source suffix check, the
+actionlint, the migration order, the UI API types, UI strict (every script TypeScript), node types (the scripts/
+TypeScript), the UI source suffix check, the
 OpenAPI spec (generated, never committed), Biome,
 the UI's API paths, the runner wire contract, and basedpyright on the backend against its baseline. It also runs cargo fmt on the Rust crates. `scripts/check.sh --all` runs every check on every tracked
 file, which is what CI's static job runs on each pull request.
@@ -70,7 +70,7 @@ Where the local gate differs from CI:
   PATH. CI uses a pinned Python 3.15 venv and Node 24 with `npm ci`.
 - `check.sh` runs cargo fmt on the Rust crates; CI's static job does not (the merge queue's rust lint does).
 - `check.sh` collects every test file (`pytest --collect-only`, nothing run), so a test that imports a removed module fails before the push; CI finds it only in the test job.
-- Tests, clippy, the desktop app, the recorder and the Caddy checks are not in `check.sh`. The merge queue runs the tests a change reaches; run the ones you touched with `scripts/remote.py`.
+- Tests, clippy, the desktop app and the Caddy checks are not in `check.sh`. The merge queue runs the tests a change reaches; run the ones you touched with `scripts/remote.py`.
 - Diff-aware skips: a check is skipped only when no file it reads changed. A skip that should have run is a bug in its trigger.
 
 The lint and type baselines need no merge driver: each source file's
@@ -95,7 +95,7 @@ all seconds long. Each counts findings per file against its own baseline file: `
 `ui/baselines/biome/<path>.json` (a file with no findings has none). The counts only shrink: after you fix findings, lower the baseline with
 `python3 scripts/check_ui_strict.py --write` (or `python3 scripts/ui_baseline.py tsc --write`, or `biome`).
 `ui/index.html` must keep the blank lines: `python3 scripts/ui_baseline.py migrate` adds them.
-The TypeScript that Node runs directly outside `ui/` (the `.cts` and `.mts` scripts under `scripts/` and `recorder/`)
+The TypeScript that Node runs directly outside `ui/` (the `.cts` and `.mts` scripts under `scripts/`)
 has its own strict check with no baseline, `python3 scripts/check_node_types.py`: each folder's `tsconfig.json` extends
 `tsconfig.node.json`, which `ui/tests/tsconfig.json` extends too, and every TypeScript file outside `ui/` must be in one.
 The UI's API calls are checked against the backend's routes by `bash scripts/check_ui_routes.sh`: it imports the app and
@@ -136,6 +136,22 @@ the development lock. Keep major migrations separate. After changing the browser
 `package.json`, run `npm run build:observability` and the real SDK privacy and retry tests in
 `node scripts/ui-tests.cts telemetry`. The desktop GLib backport and its provenance checks are
 documented in `app/vendor/README.md`; retain them when updating Cargo locks.
+
+### Advisory scan
+
+`scripts/osv_gate.py` runs the pinned OSV-Scanner (`scripts/pinned_tool.sh`) over every `requirements*.txt`,
+`package-lock.json` and `Cargo.lock`, the libraries in `ui/vendor/` and `templates/employee-repo/ui/vendor/`, and the uv
+versions scripts pin. PR checks run it when one of those inputs changes, and the daily full release validation runs it
+too, so an advisory published against untouched inputs shows there as a red `advisories` job. It fails only on a known
+advisory, never on an older version, and prints RustSec maintenance notices without failing. It never changes a version.
+
+- Vendoring or updating a library: set its package, version and `sha256` in `scripts/advisories/vendored.json`.
+- Pinning uv in a script: list the file in `scripts/advisories/tools.json`.
+- An advisory you accept rather than fix: add an entry to `scripts/advisories/allowlist.json` with the advisory id, the
+  package, the lockfile or vendored file it was found in, a reason and an `expires` date no more than a year out.
+
+The drift gate (`scripts/gates/advisory_inputs.py`) fails a pull request whose vendored files or uv pins no longer match
+those two inventories. Run `python3 scripts/osv_gate.py scan` to check locally.
 
 ## Developer Certificate of Origin
 

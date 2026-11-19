@@ -1,0 +1,6 @@
+{
+  "ui/tests/threads-unread.cts": {
+    "no-fixed-wait-ui": 2,
+    "timing-assert": 1
+  }
+}

@@ -12,12 +12,12 @@ Nothing was rerun, skipped or changed. First draft, not yet reviewed.
 ## Flaky tests
 | Test | Flips (14 days) | Example runs | Suspected cause | Decision |
 |---|---|---|---|---|
-| `test_booking_reminder_sends_at_7am` | 6 | 88121, 88164 | timezone: passes except 23:00-00:00 UTC | fix by Fri, owner API |
+| `test_booking_reminder_sends_at_7am` | 6 | 88121, 88164 | timezone: passes except 23:00-00:00 UTC | fix today (freeze the clock), owner API |
 | `e2e/checkout.spec: applies promo` | 3 | 88127, 88159 | waits on a fixed 2 s sleep | fix, owner web |
-| `test_export_csv_large` | 2 (was 5) | 88150, 88172 | shared temp dir; the 2026-09-23 fix halved it | watch to 2026-10-06 |
+| `test_export_csv_large` | 2 (was 5) | 88150, 88172 | shared temp dir; the 2026-09-23 fix halved it | still flips: fix the second cause or delete it today |
 
-## Past deadline
-- `test_refund_partial` quarantined 2026-08-18 with ticket ENG-412, deadline 2026-09-01. Still skipped; owner to decide.
+## Skipped
+- `test_refund_partial` skipped since 2026-08-18 (ENG-412) after it flipped. A skip hides a flake: fix it at its cause or delete it today; owner to decide.
 
 ## Paths with no test
 - Permission change on a shared folder: no test asserts it. Named, not counted as covered.

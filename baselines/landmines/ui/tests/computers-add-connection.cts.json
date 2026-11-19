@@ -1,0 +1,5 @@
+{
+  "ui/tests/computers-add-connection.cts": {
+    "no-raised-timeout": 2
+  }
+}

@@ -28,8 +28,8 @@ def live(api):
     assert settle(api)
 
 
-def ready(api, r, bots, capabilities=("private_lanes_v1",)):
-    """A current runner: it advertises private lanes, so it takes a private meeting's turns (execution.PRIVATE_LANES)."""
+def ready(api, r, bots, capabilities=()):
+    """Advertise readiness for the given bots and any capabilities a test needs."""
     return post(
         api,
         "runners/heartbeat",

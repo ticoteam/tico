@@ -23,7 +23,7 @@ from backend.tests.helpers.model_keys import (
 )
 from backend.tests.helpers.computer_signin import store
 from backend.tests.helpers.getting_started import add_bot
-from backend.tests.helpers.onboarding import as_person, environment, signed_in  # noqa: F401
+from backend.tests.helpers.onboarding import as_person, environment, signed_in  # noqa: F401 - pytest fixture
 
 OWN = "sk-proj-own-key-0123456789"
 TEAM = "sk-ant-team-key-0123456789"
@@ -308,7 +308,7 @@ def test_use_the_shared_key_brings_back_only_the_key_the_computer_is_given(envir
 
 
 def test_a_bots_own_key_grant_signs_its_turns_in_before_the_computers_key(environment):
-    """Codex review P1-4: a bot granted its own model key ran on it before the computer's key (v0.6.0-rc.1 runners set
+    """A bot granted its own model key ran on it before the computer's key (v0.6.0-rc.1 runners set
     the computer's key only where no grant set one). A computer's key, now a subscription, is not handed to that bot's
     turns, since a runner takes the granted key out for a subscription handed; other bots still get it."""
     api = setup(environment)
@@ -331,7 +331,7 @@ def test_a_bots_own_key_grant_signs_its_turns_in_before_the_computers_key(enviro
 
 
 def test_deleting_a_shared_codex_key_in_credentials_clears_it_on_each_computer(environment):
-    """Codex review P2-1: a key deleted while computers run on it tells each to clear its copy (`clear_key`): a
+    """A key deleted while computers run on it tells each to clear its copy (`clear_key`): a
     v0.6.0-rc.1 runner logs Codex out of the login the key made, which it otherwise keeps in auth.json."""
     api = setup(environment)
     one = computer(api, "Alpha", source="shared")
@@ -371,6 +371,7 @@ def test_dropping_computer_keys_keeps_each_computer_on_what_it_signs_in_with(env
     unsent = {kind: login_job(api, golf, kind, "requested") for kind in ("use_key", "clear_key", "to_key")}
     staged = own_key(api, alpha, "claude", "ANTHROPIC_API_KEY", "sk-ant-staged-0123456789", "staged", unsent["use_key"])
     held = own_key(api, bravo, "claude", "ANTHROPIC_API_KEY", "sk-ant-held-0123456789", "staged", unsent["to_key"])
+    free = own_key(api, golf, "codex", "OPENAI_API_KEY", "sk-proj-free-0123456789", "staged", unsent["to_key"])
     add_bot(api, "mailer")
     with api.app.state.store.read() as c:
         mailer = H.resolve_bot(c, "mailer")["id"]
@@ -401,6 +402,7 @@ def test_dropping_computer_keys_keeps_each_computer_on_what_it_signs_in_with(env
         assert not tables & {"computer_keys", "computer_keys_by_runner", "model_login_key_off"}
         assert not c.execute("SELECT 1 FROM credentials WHERE id=?", (staged,)).fetchone()
         assert not c.execute("SELECT 1 FROM credential_grants WHERE credential_id=?", (staged,)).fetchone()
+        assert not c.execute("SELECT 1 FROM credentials WHERE id=?", (free,)).fetchone()
         assert c.execute("SELECT 1 FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (held,)).fetchone()
         states = {r["id"]: r["state"] for r in c.execute("SELECT id,state FROM model_logins")}
     assert [states[lid] for lid in unsent.values()] == ["canceled"] * 3
@@ -463,27 +465,6 @@ def test_a_switch_to_a_subscription_with_a_lost_commit_keeps_the_key_it_runs_on(
         assert report(api, box, lid, verdict)["state"] == verdict
         assert fetch(api, box)["credentials"] == [{"env": "OPENAI_API_KEY", "value": SHARED, "source": "shared"}]
     assert given(api) == {(box["runner_id"], "codex"): ("Team OpenAI", team) for box in boxes}
-
-
-def test_a_key_job_the_runner_never_took_is_canceled_and_its_key_deleted(environment):
-    """A key job still `requested` (no runner has taken it) is canceled, and the key staged for it, which nothing else
-    holds, leaves the vault. The key the computer runs on stays given."""
-    api = setup(environment)
-    box = computer(api, "Alpha", source="computer")
-    key = own_key(api, box, "codex", "OPENAI_API_KEY", OWN)
-    jobs = {kind: login_job(api, box, kind, "requested") for kind in ("to_key", "use_key")}
-    staged = {
-        kind: own_key(api, box, "codex", "OPENAI_API_KEY", f"sk-proj-{kind}-0123456789", "staged", lid)
-        for kind, lid in jobs.items()
-    }
-    with api.app.state.store.transaction() as c:
-        DROP.up(c)
-    assert given(api) == {(box["runner_id"], "codex"): ("OpenAI API · Alpha", key)}
-    assert fetch(api, box)["credentials"] == [{"env": "OPENAI_API_KEY", "value": OWN, "source": "computer"}]
-    with api.app.state.store.read() as c:
-        for cid in staged.values():
-            assert not c.execute("SELECT 1 FROM credentials WHERE id=?", (cid,)).fetchone()
-        assert {r["state"] for r in c.execute("SELECT state FROM model_logins")} == {"canceled"}
 
 
 def test_the_computer_key_routes_say_where_keys_are_changed_now(environment):

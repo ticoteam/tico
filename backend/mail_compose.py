@@ -18,6 +18,7 @@ from email.message import EmailMessage
 from typing import Any, cast
 
 from . import gmail_live
+from .email_content import MAX_RAW
 from .store import Problem, Store
 
 Conn = sqlite3.Connection
@@ -31,6 +32,11 @@ FORWARDED = (
 )
 BODY_MAX = 100_000
 SUBJECT_MAX = 900
+RAW_MAX = MAX_RAW  # the send gate's limit on a whole email; Gmail's is 25 MB
+MB = 1024 * 1024
+
+# A file on an email: (name, content type, bytes).
+Attachment = tuple[str, str, bytes]
 
 
 def key(*parts: object) -> str:
@@ -73,8 +79,10 @@ def build(
     cc: Sequence[str] = (),
     in_reply_to: str = "",
     references: str = "",
+    attachments: Sequence[Attachment] = (),
 ) -> str:
-    """Plain-text MIME, base64url without padding (the Gmail API's raw)."""
+    """Plain-text MIME, base64url without padding (the Gmail API's raw); with `attachments`, multipart/mixed: the
+    text, then each file in order. An email over RAW_MAX (its files base64-encoded) is refused."""
     if len(body or "") > BODY_MAX:
         raise Problem("body", f"The email body is over {BODY_MAX:,} characters", 422)
     msg = EmailMessage()
@@ -89,7 +97,21 @@ def build(
     if references:
         msg["References"] = references
     msg.set_content(body or "")
-    return base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=")
+    for name, content_type, data in attachments:
+        maintype, _, subtype = (content_type or "").partition("/")
+        if not maintype or not subtype:
+            maintype, subtype = "application", "octet-stream"
+        msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=name)
+    mime = msg.as_bytes()
+    if len(mime) > RAW_MAX:
+        raise Problem(
+            "attachments",
+            f"This email is {len(mime) / MB:.1f} MB with its files encoded; an email through Tico is at most "
+            f"{RAW_MAX // MB} MB (about {RAW_MAX * 3 // 4 // MB} MB of files). Send fewer or smaller files, or share "
+            "a link",
+            413,
+        )
+    return base64.urlsafe_b64encode(mime).decode().rstrip("=")
 
 
 def _header(item: Json, name: str) -> str:
@@ -98,7 +120,13 @@ def _header(item: Json, name: str) -> str:
 
 
 def reply(
-    mailbox: str, original: Json, body: str, mid: str, to: object = (), cc: object = ()
+    mailbox: str,
+    original: Json,
+    body: str,
+    mid: str,
+    to: object = (),
+    cc: object = (),
+    attachments: Sequence[Attachment] = (),
 ) -> tuple[str, str, list[str], str]:
     """A reply to `original` (a normalized Gmail message): (raw, thread id, recipients, subject). It goes to the
     message's sender unless `to` names others."""
@@ -119,6 +147,7 @@ def reply(
         cc=addresses(cc),
         in_reply_to=answered,
         references=refs,
+        attachments=attachments,
     )
     return raw, str(original.get("thread_id") or ""), to, subject
 

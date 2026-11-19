@@ -1,0 +1,5 @@
+{
+  "runner_support/tests/test_conformance.py": {
+    "no-fixed-sleep-py": 1
+  }
+}

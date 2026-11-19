@@ -142,3 +142,15 @@ def test_with_github_installed_but_no_repository_in_use_the_owner_is_asked_to_ch
     assert [n["line"] for n in _connect(c)] == [F.CHOOSE]
     X.github_installed(c)  # a person puts acme/app in use
     assert _connect(c) == [] and later(seconds=10) == {"woken": 2}
+
+
+def test_a_task_held_days_on_connect_github_is_not_handed_up_once_github_is_connected(c, eng, later):
+    """Review of #588: a Connect GitHub hold keeps its Late label, and connecting wakes the bot, nothing more: no
+    manager hand-off, no "stuck" question for a person."""
+    task_id = X.new_task(c, ANA, "Add a login page", "eng")["id"]
+    assert later(days=5) == {"late": 1}
+    X.github_installed(c)
+    assert later(seconds=10) == {"woken": 1}
+    assert later(hours=1).get("to_manager") is None and later(days=1).get("to_person") is None
+    assert [n for n in W.needs(c, ANA) if n["kind"] == "question"] == []
+    assert X.wakes(c, task_id, MANAGER) == []

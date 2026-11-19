@@ -71,6 +71,7 @@ compaction = true
 compaction_events = true
 # A message for the running turn is written into it (stream-json input, needs a CLI that echoes it).
 steer = true
+voice_session = true
 resume_command = "claude --resume"
 model_list = "host"
 repo_permission_lint = true

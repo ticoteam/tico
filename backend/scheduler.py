@@ -434,6 +434,7 @@ class Scheduler:
         self.gateway_checked = None
         self.tools_checked = None
         self.access_swept = None
+        self.renewals_swept = None
         self.billing_checked = None
         self.cloud_checked = None
         self.threads_ranked = None
@@ -744,6 +745,18 @@ class Scheduler:
                 from . import api_tools
 
                 api_tools.check_soon(self.store, self.store.settings)
+        if self.renewals_swept is None or at - self.renewals_swept >= timedelta(hours=1):
+            # API tools whose key ends within api_tools.EXPIRING_DAYS get their Renew task, checked or not
+            # (backend/reconnect_tasks.py `sweep`): plain SQL, no vendor call.
+            self.renewals_swept = at
+            with SR.recording(self.store, "tool_renewals", failures, "tools") as run:
+                from . import reconnect_tasks
+
+                synced = reconnect_tasks.sweep(self.store)
+                run.did(
+                    f"Looked at {synced} tools with a key ending soon" if synced else "No keys ending soon",
+                    quiet=not synced,
+                )
         if self.access_swept is None or at - self.access_swept >= timedelta(hours=1):
             # Access requests whose access exists by a path no write announced, and old free-text access tasks
             # (backend/access_requests.py).

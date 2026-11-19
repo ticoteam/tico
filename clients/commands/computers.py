@@ -292,9 +292,10 @@ def computers(api, args):
 @tool(
     "tico_computer_performance",
     "A computer's CPU, memory, load, swap and free disk over the last hours (up to 336): a "
-    "summary of when it was overloaded and what ran then, its overloads, the bots with the most "
-    "turns there and the busiest processes, and up to 96 points (columns named in `columns`). "
-    "Numbers and process names only.",
+    "summary of when it was overloaded and what ran then, `advice` (which bots to give their own "
+    "Large machine, when the same ones ran in every overload of a shared computer), its overloads, "
+    "the bots with the most turns there and the busiest processes, and up to 96 points (columns "
+    "named in `columns`). Numbers and process names only.",
     {
         "computer": _s("The computer's label or id (tico computer list)"),
         "hours": {
@@ -321,6 +322,7 @@ def computer_performance(api, args):
                 "performance",
                 "hours",
                 "summary",
+                "advice",
                 "overloads",
                 "busiest",
                 "columns",

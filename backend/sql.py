@@ -756,6 +756,10 @@ SETS = (
 RUN_EVENTS = "('task.next-run.carried','attempt.input.moved')"
 
 
+def names_run(refs):
+    return " OR ".join(f"""instr(coalesce({refs},''),'"{key}"')>0""" for key in ("turn_id", "run"))
+
+
 class Gates:
     """SQL that answers yes, without Python, for a row the privacy functions in backend/privacy_index.py allow.
 
@@ -868,7 +872,8 @@ class Gates:
             f"{alias}.conversation_id NOT IN (SELECT id FROM {self.rooms}) AND {self.refs(refs, top=True)} "
             f"AND (coalesce({alias}.in_reply_to,'')='' AND coalesce(instr({refs},'\"answers\"'),0)=0 "
             f"AND coalesce(instr({refs},'\"inputs\"'),0)=0 OR NOT EXISTS (SELECT 1 FROM ({ancestors}) ancestor JOIN {self.messages} parent "
-            f"ON parent.id=ancestor.id WHERE parent.id<>{alias}.id AND NOT {self.root('parent')}))"
+            f"ON parent.id=ancestor.id WHERE parent.id<>{alias}.id AND (NOT {self.root('parent')} "
+            f"OR (parent.id={alias}.in_reply_to AND ({names_run('parent.refs')})))))"
         )
 
     def attempt(self, aid):
@@ -969,10 +974,20 @@ def materialize(conn, index, tables, inner, function, private):
         whose walk read a message naming a file is never settled (read_deps.names_file): its file refusals are per
         reader, so ReadIndex reads it."""
         key = f"'{prefix}:'||source.id"
-        return (
+        indexed = (
             f"{key} IN (SELECT key FROM {inner('read_index')}) AND {key} NOT IN "
             f'(SELECT id FROM "{private("denied_reads")}")'
         )
+        if prefix == "m":
+            # A settled reply can predate the meeting check on its ancestors' run references. Its dependencies
+            # still name those messages, so run-linked replies go through the current gate.
+            indexed += (
+                f" AND (source.in_reply_to IS NULL OR NOT EXISTS (SELECT 1 FROM {inner('read_deps')} d "
+                f"JOIN {inner('messages')} parent ON parent.id=substr(d.dep,3) "
+                f"WHERE d.key={key} AND substr(d.dep,1,2)='m:' AND parent.id<>source.id "
+                f"AND ({names_run('parent.refs')})))"
+            )
+        return indexed
 
     # CASE evaluates only the chosen branch. A fast yes skips the Python callback altogether; OR can evaluate
     # the function first, and passing the fast answer to a function still calls Python for every history row.
@@ -1034,6 +1049,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
     inner = lambda table: f'"{prefix}{table}"'
     function = lambda name: f'"{prefix}privacy_{name}"'
     private = lambda name: prefix + name
+    private_views = {"pages", "read_deps"}
     # Internal provenance SELECTs cannot leave authorized prepared statements for callers.
     conn = sqlite3.connect(
         f"file:{path}?mode=ro", uri=True, timeout=5, isolation_level=None, cached_statements=0, factory=ReadConnection
@@ -1043,12 +1059,24 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
     if trace:
         conn.set_trace_callback(trace)
     trusted = [False]
+
+    def in_time():
+        # The Python steps between statements: the progress handler stops only SQLite's own work.
+        if deadline is not None and time.monotonic() > deadline:
+            raise sqlite3.OperationalError("interrupted")
+
     try:
+        # The whole visibility build is under the caller's time limit, not only its materialized sets: a build that
+        # outruns it is stopped like a query that does (422 `timeout`), so one slow call holds a worker only that long.
+        if deadline is not None:
+            conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 2000)
         # Predicates, provenance and result rows use one read snapshot.
         conn.execute("BEGIN")
         columns = schema_columns(conn, path)
         unseen = TA.hidden(conn, who, "see", ("human", "group"), auth)
+        in_time()
         tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen)
+        in_time()
         readable = tables.pop(READABLE_MESSAGES)
         # Page visibility traverses letter proofs and current agent standing through trusted callbacks only.
         source_tables = set(tables) | {
@@ -1194,15 +1222,15 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
             names = ",".join(f'"{column}"' for column in exposed[table])
             conn.execute(f'CREATE TEMP VIEW {inner(table)} AS SELECT {names} FROM main."{table}"')
         conn.execute(f'CREATE TEMP VIEW {inner("pages")} AS SELECT file_id,audience FROM main.pages')
-        if deadline is not None:
-            conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 2000)
+        conn.execute(f'CREATE TEMP VIEW {inner("read_deps")} AS SELECT dep,key FROM main.read_deps')
+        in_time()
         tables = materialize(conn, index, {**tables, READABLE_MESSAGES: readable}, inner, function, private)
         readable = tables.pop(READABLE_MESSAGES)
         # The rule over the unfiltered messages: each row is `source`, as materialize's gates read it.
         conn.execute(
             f"CREATE TEMP VIEW {inner(READABLE_MESSAGES)} AS SELECT * FROM {inner('messages')} AS source WHERE {readable[0]}"
         )
-        conn.set_progress_handler(None, 0)
+        in_time()
         masks = {**MASKED, **live_masks(unsettled_watched(conn, inner))}
         masks["messages"] = {**masks.get("messages", {}), "refs": function("page_refs") + "(source.refs)"}
         from . import threads
@@ -1247,6 +1275,8 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
         worked_out = {name for name in WORKED_OUT if re.search(rf"\b{name}\b", statement or "", re.I)}
         if "task_waits" in worked_out:
             task_waits(conn, c, private, set(unseen) | set(bots))
+        in_time()
+        conn.set_progress_handler(None, 0)
         # Older SQLite versions initialize JSON virtual tables with schema authorization calls.
         # Initialize only these built-ins before installing the read-only authorizer.
         for function in sorted(TABLE_FUNCTIONS):
@@ -1263,7 +1293,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
     except BaseException:
         conn.close()
         raise
-    inner_names = {prefix + table for table in set(tables) | sources | {"pages", READABLE_MESSAGES}}
+    inner_names = {prefix + table for table in set(tables) | sources | private_views | {READABLE_MESSAGES}}
     sets = {private(name) for name in SETS}
 
     def fts_parent(name):
@@ -1318,7 +1348,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
             }:
                 return sqlite3.SQLITE_OK
             # A base table is read only by its own inner view, whose name is this connection's secret.
-            if (table in tables or table in sources or table == "pages") and context == prefix + table:
+            if (table in tables or table in sources or table in private_views) and context == prefix + table:
                 return sqlite3.SQLITE_OK
             # FTS5 reads the virtual table and its shadow tables with no view
             # context. Allow that only for the owner.

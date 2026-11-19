@@ -167,6 +167,7 @@ def test_the_hand_off_the_old_stage_filed_closes_as_after_back_and_a_sub_task_st
 
 
 def test_a_task_made_without_a_prefix_keeps_no_label_after_it_moves(c, boards):
+    c.execute("UPDATE pipelines SET prefix=NULL WHERE id='general'")  # a pipeline with no prefix, as General had
     row = X.new_task(c, ANA, "Untitled", "general", assignee=ANA)
     c.execute("UPDATE tasks SET prefix=NULL WHERE id=?", (row["id"],))  # made before prefixes were kept
     E.refile(c, row["id"], "backlog", None, ANA)

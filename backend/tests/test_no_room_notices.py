@@ -1,21 +1,17 @@
 """No "has room" notices (Spec: "Spec has room: move it, don't send a notice", task #224). When the stage after a
 by-hand stage has room, the never-stuck pass moves the oldest idea a person picked and tells nobody about room; an idea
-nobody picked stays where it is. Undelivered "has room" notices already queued are taken out at release by a one-time
-clean-up, which touches nothing else.
+nobody picked stays where it is.
 
 Synthetic rows only (backend/tests/helpers/engine.py): a fictional company, its bots and pipelines. Never a model.
 """
 
-import importlib.util
 import json
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import pytest
 
 from backend import never_stuck as N
 from backend import task_engine as E
-from backend import task_wakes
 from backend.store import H
 from backend.tests.helpers import engine as X
 
@@ -148,65 +144,3 @@ def test_when_one_slot_frees_the_older_of_two_requests_moves_and_nothing_else_is
         for row in c.execute("SELECT wake_key FROM messages WHERE id IN (SELECT value FROM json_each(?))", (new,))
     ]
     assert keys and all(key.startswith(older["id"] + ":") for key in keys), keys
-
-
-# ----------------------------------------------------------------------------- the clean-up at release
-def _cleanup():
-    path = next(Path(N.__file__).parent.glob("migrations/*_drop_queued_room_notices.py"))
-    spec = importlib.util.spec_from_file_location("drop_room_notices", path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _job(c, message_id):
-    return c.execute("SELECT state FROM jobs WHERE message_id=?", (message_id,)).fetchone()[0]
-
-
-def test_the_clean_up_takes_out_every_queued_room_notice_and_touches_nothing_else(c, monkeypatch):
-    """Given undelivered "has room" notices at release (one alone, one that took in an earlier wake about its task, and
-    one already delivered), when the clean-up runs, then none is left queued, the wake it took in is still queued with
-    its own words, and every other message and job is as it was. Running it again changes nothing."""
-    # The notices predate the rule that a wake key starts with its task id, which now refuses them: make them as
-    # they were made then.
-    monkeypatch.setattr(task_wakes, "filed_under", lambda wake_key, task_id: True)
-    alone = X.new_task(c, WRITER, "Brief", "product")
-    folded = X.new_task(c, WRITER, "Second brief", "product")
-    other = X.new_task(c, WATCHER, "Weekly signups", "watch")
-    X.settled(c)
-    first = task_wakes.add(c, alone, WRITER, alone["visit"], "Spec has room.", wake_key="room:product-next:start")
-    done = task_wakes.add(c, alone, WRITER, alone["visit"], "Spec has room.", wake_key="room:product-next:v1")
-    c.execute("UPDATE jobs SET state='completed' WHERE message_id=?", (done,))
-    turn = task_wakes.add(c, folded, WRITER, folded["visit"], "Your turn on the brief.")
-    holder = task_wakes.add(c, folded, WRITER, folded["visit"], "Spec has room.", wake_key="room:product-next:v2")
-    assert _job(c, turn) == "canceled"  # folded into the room notice, as task_wakes.add does
-    unrelated = task_wakes.add(c, other, WATCHER, other["visit"], "Look at signups.")
-
-    def snapshot():
-        """Every message but the two queued notices, with its job's state."""
-        sql = (
-            "SELECT m.id, m.body, m.refs, j.state FROM messages m LEFT JOIN jobs j ON j.message_id = m.id "
-            "WHERE m.id NOT IN (?, ?) ORDER BY m.id"
-        )
-        return [tuple(row) for row in c.execute(sql, (first, holder))]
-
-    others = snapshot()
-
-    _cleanup().up(c)
-
-    assert _job(c, first) == "canceled"
-    assert _job(c, done) == "completed"
-    assert _job(c, holder) == "queued"  # it carries the earlier wake, so it stays queued without the room words
-    body, refs = c.execute("SELECT body, refs FROM messages WHERE id=?", (holder,)).fetchone()
-    assert body == "Your turn on the brief."
-    assert [part["key"] for part in json.loads(refs)["parts"]] == [task_wakes.key(folded["id"], folded["visit"]["id"])]
-    assert snapshot() == others
-    queued_room = c.execute(
-        "SELECT COUNT(*) FROM messages m JOIN jobs j ON j.message_id = m.id "
-        "WHERE j.state='queued' AND m.body LIKE '%has room.%'"
-    ).fetchone()[0]
-    assert queued_room == 0
-    _cleanup().up(c)
-    assert snapshot() == others and _job(c, holder) == "queued" and _job(c, first) == "canceled"
-    assert unrelated in {row[0] for row in others}

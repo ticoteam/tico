@@ -47,7 +47,13 @@ PUBLIC_API = "https://public-api.granola.ai/v1"
 KEPT_HEADERS = ("content-type", "content-encoding", "mcp-session-id", "retry-after")
 RETRY_WAIT, RETRY_WAIT_MAX = 20, 60  # one wait-and-retry for a throttled probe, never longer than this
 TRANSPORT = None  # tests replace the network; None is the real one
-SLEEP = time.sleep
+
+
+def _sleep(seconds):
+    """Every pause goes through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
+
+
 RATE_LIMITS = ("rate_limit_http_429", "rate_limit_rpc_error", "rate_limit_tool_error")
 
 
@@ -216,7 +222,7 @@ def live_mcp(token, timeout=45):
                     return result
                 exchanges[throttle] = exchange  # the throttle's own shape is checked too
                 if attempt == 0:
-                    SLEEP(retry_wait(response))
+                    _sleep(retry_wait(response))
             incomplete.append(f"{name}: rate-limited twice, its answer was not checked")
             return None
 
@@ -272,7 +278,7 @@ def live_public_api(key, timeout=30):
             if response.status_code != 429:
                 break
             if attempt == 0:
-                SLEEP(retry_wait(response))
+                _sleep(retry_wait(response))
         else:
             return [], ["public API notes: rate-limited twice, its answer was not checked"]
     if response.status_code in (401, 403):

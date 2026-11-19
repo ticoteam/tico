@@ -132,6 +132,7 @@ def test_a_blocker_is_named_by_its_label_or_by_its_title_never_by_its_id(c):
     ("7a0009f1") says nothing to them. The row carries the label and title for the card's link to the blocker."""
     build(c)
     c.execute("UPDATE pipelines SET prefix='O' WHERE id='eng'")
+    c.execute("UPDATE pipelines SET prefix=NULL WHERE id='general'")  # a pipeline that numbers nothing
     numbered = task(c, "Write the launch post")
     plain = task(c, "Call the printer", "general", assignee=X.ANA)
     blocked = task(c, "Ship the launch")

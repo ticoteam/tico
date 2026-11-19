@@ -49,7 +49,7 @@ def _harness_name(runtime):
 from .store import H, Problem, readiness_document
 from .views import roster
 from . import bot_settings as BS
-from .api_contract import api_v2
+from .api_contract import api_v2, error as answer_error
 
 QUEUE_MINUTES = 15  # work that has waited this long on a computer that is up is stuck
 PERSON_QUEUE_MINUTES = 2  # a person's own message, sooner: someone is sitting there waiting for the reply
@@ -455,7 +455,10 @@ def _history_check(c, withheld):
             + (f" and {len(taken) - 3} more" if len(taken) > 3 else "")
             + ": a repository with the bot's name was already there, made by someone else, so Tico leaves it alone"
         )
-    return _check("bot_history", "Bot history", "info", ". ".join(said) + ".")
+    # The line is the owner's and admins' (`full`): Claim says those repositories are this company's after all, as a
+    # bot moved from another server's are (POST /api/v2/repositories/claim, `tico repo claim`).
+    claim = [{**_fix("Claim"), "claim": True}] if taken else []
+    return _check("bot_history", "Bot history", "info", ". ".join(said) + ".", claim)
 
 
 def _reported(c, prefix, limit=200):
@@ -675,8 +678,11 @@ def _listening(c, settings):
     return _check("listening", "Listening", "warn", summary, [_fix("Listening", "#/listening")])
 
 
-def repository_fix(c, bot, label, github_owner=""):
-    """The original repository and the clone command on the computer that is missing it."""
+def repository_fix(c, bot, label, github_owner="", why=""):
+    """The original repository and the clone command on the computer that is missing it. When the runner's `why`
+    says a checkout is there without its instructions file, a clone into it would fail: the fix says the runner
+    clones it again by itself (runner-rs fetchrepo.heal_or_replace) and, for an older runner, to set the folder
+    aside first."""
     from .shared_bots import declared, follow
     from .store import repo_url
 
@@ -697,6 +703,17 @@ def repository_fix(c, bot, label, github_owner=""):
     report = ((readiness_document(row[0]).get("bots") or {}).get(bot) or {}) if row else {}
     path = report.get("repository") or "<projects>/" + repo.rstrip("/").split("/")[-1].removesuffix(".git")
     command = f"gh repo clone {shlex.quote(repository)} {shlex.quote(path)}"
+    if "has task worktrees" in why:
+        return repository, (
+            f"The runner on {label} replaces it once the task worktrees named above are finished or removed; "
+            f"moving the folder by hand would cut those tasks off from their work"
+        )
+    if "is checked out here but has no" in why:
+        aside = f"mv {shlex.quote(path)} {shlex.quote(path + '.set-aside')}"
+        return repository, (
+            f"An up-to-date runner clones it again by itself at its next check and keeps the old copy beside it; "
+            f"if this stays, update the runner on {label}, or run `{aside}` then `{command}` there (nothing is deleted)"
+        )
     return repository, f"Run `{command}` on {label}, or ask BotOps"
 
 
@@ -924,8 +941,16 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
         return holding[runner_id]
 
     waiting, slow, stuck = [], [], []
-    # The whole queue, not the next three jobs: queued_reasons reads every queued message.
-    aged_bots = [slug for slug in queued if slug in assigned]
+    # The whole queue, not the next three jobs: queued_reasons reads every queued message. Only the bots the loop below
+    # asks the claim about: one on a computer, not waiting for setup, whose oldest queued job is old (or a person's
+    # message has waited). A young queue is asked nothing, so its messages are not read.
+    aged_bots = [
+        slug
+        for slug, (_, oldest) in queued.items()
+        if slug in assigned
+        and slug not in parked
+        and ((oldest and oldest < cutoff) or (asked.get(slug) and asked[slug] < person_cutoff))
+    ]
     prime_claimables(c, aged_bots, first=None)
     # Bots on a cloud machine (backend/cloud_machines.py): one stopped for want of work is not offline.
     from .cloud_machines import GOING, STALE, homes, problem_words
@@ -3337,7 +3362,7 @@ def view(c, who, settings, auth, github, config, filing=False):
                 "bad",
                 "Bots cannot run because their computer has no repository for them: "
                 + "; ".join(
-                    f"{_bot_name(c, bot)} on {label}: {why}. {repository_fix(c, bot, label, settings.github_owner)[1]}"
+                    f"{_bot_name(c, bot)} on {label}: {why}. {repository_fix(c, bot, label, settings.github_owner, why)[1]}"
                     for bot, label, why in lacking[:3]
                 )
                 + ("." if len(lacking) <= 3 else f"; and {len(lacking) - 3} more."),
@@ -4095,6 +4120,40 @@ def note_github_token(store, error=None, action=""):
             )
 
 
+def _instant(value):
+    """A stored or asked-for ISO time as an aware UTC datetime, or None when it is not one. A time without a zone is UTC."""
+    try:
+        at = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+
+
+def _whole_second(value):
+    """A stored time as Health's release history lists it: whole-second UTC, "2026-11-17T08:03:11Z". A value that
+    can't be read is passed on as stored."""
+    at = _instant(value)
+    if at is None:
+        return str(value or "")
+    return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def release_history(c, since=None):
+    """The releases this server ran and when it first started on each (backend/releases.py `record_start`), oldest
+    first, as Health shows them to bots and people: only version and since, whatever else an entry may carry. Each
+    since is given to the whole second in UTC ("2026-11-17T08:03:11Z") so 500 entries stay within Health's 30 KB
+    guard; the stored record keeps its microseconds. Versions are never shortened. `since` (an ISO time) keeps the
+    entries that started at or after it, compared at the stored precision so a fractional cutoff never hides a later
+    start in the same second; a malformed one is refused with a 400."""
+    stored = releases.history(c)
+    if since is not None:
+        start = _instant(since)
+        if start is None:
+            raise Problem("invalid_since", "since must be an ISO time, like 2026-11-17T00:00:00Z", 400)
+        stored = [r for r in stored if (at := _instant(r.get("since"))) is not None and at >= start]
+    return [{"version": str(r.get("version") or ""), "since": _whole_second(r.get("since"))} for r in stored]
+
+
 def install(app, store, auth, settings):
     from fastapi import Request
 
@@ -4122,14 +4181,21 @@ def install(app, store, auth, settings):
             "getHealth",
             "Checks, computers and failures (bots see counts, computers and failed runs)",
             "Health",
+            parameters={
+                "since": "An ISO time (2026-11-17T00:00:00Z; no zone means UTC): update.history keeps only the "
+                "releases this server started on at or after it. A malformed one is refused with a 400"
+            },
+            responses={"400": answer_error("invalid_since: since is not an ISO time")},
         ),
     )
-    def read(request: Request):
+    def read(request: Request, since: str | None = None):
         who = request.state.identity
         if who.role != "bot":
             _person(who)
         github = getattr(request.app.state, "github_app", None)
         with store.read_transaction() as c:
+            # The release history is checked first, so a malformed `since` costs no health read.
+            ran = release_history(c, since)
             # Health reads only these two parts of the config; building all of it cost a changelog parse per poll.
             return view(
                 c,
@@ -4137,5 +4203,5 @@ def install(app, store, auth, settings):
                 settings,
                 auth,
                 github,
-                {"update": hosted_updates.notice(c, settings), "backup": replication.status()},
+                {"update": {**hosted_updates.notice(c, settings), "history": ran}, "backup": replication.status()},
             )

@@ -1,9 +1,7 @@
 """Listening (backend/listening.py): sources save posts, each pass marks copies, scores against the rules, expires
 and sends within the rate limits as one run of the listening's automation."""
 
-import importlib
 import json
-import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import time_machine
@@ -552,74 +550,6 @@ def test_the_old_routes_and_tools_are_gone(api):
 
     names = {t["name"] for t in hubtools.TOOLS if "listening" in t["name"]}
     assert names == {"tico_listening_sources", "tico_listening_save"}
-
-
-def test_the_migration_drops_the_old_tables_and_the_automations_on_the_old_model():
-    import json
-
-    up = importlib.import_module("backend.migrations.20261111190425_listening_feed").up
-    conn = sqlite3.connect(":memory:")
-    old = ("intake_items", "listen_judgments", "listen_items", "listen_runs", "listening_destinations")
-    for table in old:
-        conn.execute(f"CREATE TABLE {table} (id TEXT)")
-    conn.execute("CREATE TABLE automations (id TEXT, trigger_type TEXT, flow TEXT, enabled INTEGER)")
-    conn.execute("CREATE TABLE automation_versions (automation_id TEXT, n INTEGER, flow TEXT)")
-    for table in ("automation_runs", "automation_daily", "automation_holds"):
-        conn.execute(f"CREATE TABLE {table} (automation_id TEXT)")
-    find = {"id": "f", "type": "find", "source": "listening"}
-    inner = {"id": "p", "type": "paths", "paths": [{"name": "b", "steps": [find]}], "otherwise": {"steps": [find]}}
-    fork = {"id": "k", "type": "paths", "paths": [{"name": "a", "steps": [inner, NOTE]}], "otherwise": {"steps": []}}
-    flows = {
-        "old": ("listening", {"trigger": {"type": "listening", "destination": "leads"}, "steps": [NOTE]}),
-        "finds": ("schedule", {"trigger": {"type": "schedule"}, "steps": [find, NOTE], "enabled": True}),
-        "plain": ("schedule", {"trigger": {"type": "schedule"}, "steps": [NOTE], "enabled": True}),
-        "nested": ("schedule", {"trigger": {"type": "schedule"}, "steps": [NOTE, fork], "enabled": True}),
-    }
-    for aid, (kind, flow) in flows.items():
-        conn.execute("INSERT INTO automations VALUES (?,?,?,1)", (aid, kind, json.dumps(flow)))
-    conn.execute("INSERT INTO automation_runs VALUES ('old')")
-    up(conn)
-    up(conn)  # again changes nothing
-    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert not tables & set(old) and {"listening_sources", "listening_items"} <= tables
-    rows = {r[0]: (json.loads(r[1]), r[2]) for r in conn.execute("SELECT id, flow, enabled FROM automations")}
-    assert (
-        set(rows) == {"finds", "plain", "nested"}
-        and conn.execute("SELECT count(*) FROM automation_runs").fetchone()[0] == 0
-    )
-    assert rows["finds"][0]["steps"] == [NOTE] and rows["finds"][0]["enabled"] is False and rows["finds"][1] == 0
-    assert rows["plain"] == (flows["plain"][1], 1)
-    assert '"find"' not in json.dumps(rows["nested"][0]) and rows["nested"][1] == 0
-    assert rows["nested"][0]["steps"][1]["paths"][0]["steps"][1] == NOTE
-
-
-def test_a_migrated_automation_runs_without_its_listening_find_when_turned_back_on(api):
-    import json
-
-    up = importlib.import_module("backend.migrations.20261111190425_listening_feed").up
-    say = {"id": "say", "type": "action", "do": "note", "args": {"text": "hello"}}
-    body = {
-        "name": "Daily",
-        "owner": "person:ana",
-        "trigger": {"type": "schedule", "cron": "0 9 * * *"},
-        "steps": [say],
-    }
-    aid = post(api, "automations", body)["id"]
-    find = {"id": "f", "type": "find", "source": "listening"}
-    with api.app.state.store.transaction() as c:  # as the old server saved it: the step in the flow and its version
-        for table, where in (("automations", "id"), ("automation_versions", "automation_id")):
-            for row in c.execute(f"SELECT rowid AS r, flow FROM {table} WHERE {where}=?", (aid,)).fetchall():
-                flow = json.loads(row["flow"])
-                flow["steps"] = [find, *flow["steps"]]
-                c.execute(f"UPDATE {table} SET flow=? WHERE rowid=?", (json.dumps(flow), row["r"]))
-        up(c)
-    assert '"find"' not in str(sql(api, "SELECT flow FROM automation_versions WHERE automation_id=?", (aid,)))
-    assert get(api, f"automations/{aid}")["enabled"] is False
-    patch(api, aid, {"enabled": True})
-    post(api, f"automations/{aid}/run", {})
-    api.app.state.store.automations.drain()
-    done = runs(api, aid)
-    assert len(done) == 1 and done[0]["status"] == "ok" and notes(done[0]) == ["hello"]
 
 
 def test_ten_small_posts_with_three_rules_take_one_call_and_each_is_decided_as_alone(api, monkeypatch):

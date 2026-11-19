@@ -12,11 +12,14 @@ const RH_LABEL = 'rule-review';
 // The rule's If broken, in the words the Rules page uses for it (ui/app/org-rules.ts RU_BROKEN).
 const RH_OUTCOME: Record<'blocked' | 'escalated', readonly [string, string]> = {blocked: ['Stop', 'rh-blk'], escalated: ['Ask first', 'rh-esc']};
 
-/** One rule a hold was checked against: the card's Rule block. */
-interface RuleHoldRule { id: string; kind: string; text: string; }
+/** One rule a hold was checked against: the card's Rule block. `part`: the part of the held text that breaks it
+    (backend `_parts`), null when no single part does; only an opened hold carries it. */
+interface RuleHoldRule { id: string; kind: string; text: string; if_broken?: string; part?: string | null; }
 /** A rule hold: a list gives summaries, GET /v2/rule-holds/<id> the card (its text, rules and the actions the reader may take). */
 interface RuleHold {
   id: string;
+  operation?: string;
+  created_at?: WhenInput;
   outcome: 'blocked' | 'escalated';
   state?: string;
   author?: string;
@@ -30,6 +33,8 @@ interface RuleHold {
   can_send?: boolean;
   can_withdraw?: boolean;
   nonce?: string;
+  /** The part call still runs (backend `_fill_parts`): an open card reads the hold again until this goes false. */
+  part_pending?: boolean;
 }
 interface RuleHoldPage { holds: RuleHold[]; next_cursor?: string; }
 /** GET /v2/rules/stats: the Rules page header's checks line. */
@@ -68,6 +73,8 @@ async function ruleHoldsLoad(slot: HTMLElement, id: string, cursor = '') {
     (page.next_cursor ? `<button class="ghost small rh-more" type="button">Show more</button>` : ''));
   slot.hidden = !slot.querySelector('[data-hold]');
   ruleHoldsWire(slot, id);
+  // Two or more still held: the rule's group heads the cards (the rule-review part), read from every page.
+  if (!cursor) void ruleReviewGroupInto(slot, id);
   const more: HTMLButtonElement | null = $('.rh-more', slot);
   more?.addEventListener('click', () => {
     more!.disabled = true;
@@ -89,13 +96,16 @@ function ruleHoldHTML(h: RuleHold): string {
   const reviewer = !!h.nonce || h.can_send;
   const decided = h.state === 'sent' ? `Sent anyway${h.decided_by ? ' by ' + esc(actorLabel(h.decided_by)) : ''}`
     : h.state === 'kept' ? `Kept blocked${h.decided_by ? ' by ' + esc(actorLabel(h.decided_by)) : ''}` : '';
-  const rule = h.rules?.[0];
-  const to = h.to || [];
+  const rule = rhRule(h);
+  const to = h.to || [], text = rhText(h), cut = text.length > RH_TEXT_MAX;
+  const shown = cut ? text.slice(0, RH_TEXT_MAX).trimEnd() : text, part = rhPart(h);
   return `<article class="rh-card" data-hold="${esc(h.id)}">
     <header><span class="rh-pill ${cls}">${word}</span><span class="rh-to muted">${esc(h.author_name || actorLabel(h.author))}${
       to.length ? ' → ' + esc(to.join(', ')) : ''}</span></header>
-    <div><div class="rh-lbl">Tried to send</div><div class="rh-msg">${esc(h.text || '')}${h.text_cut ? '…' : ''}</div></div>
+    <div><div class="rh-lbl">Tried to send</div><div class="rh-msg">${rhMarkedHTML(shown, shown.includes(part) ? part : '')}${cut || h.text_cut ? '…' : ''}</div>${
+      h.rules?.length && !part ? '<p class="rh-whole muted">The whole text breaks it.</p>' : ''}</div>
     <div><div class="rh-lbl">Rule</div>${rules || '<div class="rh-rule muted">A rule that no longer exists</div>'}</div>
+    ${RH_FAILED.has(h.id) ? `<p class="rh-err" role="alert">${esc(RH_FAILED.get(h.id) || '')}</p>` : ''}
     ${h.why ? `<div><div class="rh-lbl">Appeal</div><div class="rh-why">${esc(h.why)}</div></div>` : ''}
     ${decided ? `<p class="muted rh-done">${decided}</p>` : reviewer ? `<div class="rh-acts">
       ${rule ? `<a class="ghost small rh-btn" href="${esc(ruHref(rule.kind, {rule: rule.id}))}">Edit rule</a>` : ''}
@@ -106,6 +116,30 @@ function ruleHoldHTML(h: RuleHold): string {
     <p class="rh-err" role="status" hidden></p>
   </article>`;
 }
+// ----------------------------------------------------------------- a rule's holds, as one review
+// Holds of one rule for one reviewer share one review task (backend `open_review`): its group (the rule, how many wait,
+// the failing part of each, one decision for all) is the rule-review part, ui/app/org-rule-review.ts.
+// A hold's text on its card: the first RH_TEXT_MAX characters, then "…".
+const RH_TEXT_MAX = 600;
+const RH_ASKS = ['question', 'chat_question', 'task_ask'];
+/** A hold's text as its reviewer reads it: an ask held before its copy dropped its labels reads without them too. */
+const rhText = (h: RuleHold): string => {
+  const text = h.text || '';
+  return RH_ASKS.includes(h.operation || '') ? text.replace(/^(?:Ask|Shows): /gm, '') : text;
+};
+/** The rule a hold is on: the first that is not Warn (the server lists it first; an older hold may not). */
+const rhRule = (h: RuleHold): RuleHoldRule | undefined => (h.rules || []).find(r => r.if_broken !== 'warn') || h.rules?.[0];
+// Why a hold Send all could not send, by hold id: said under that hold until it is decided.
+const RH_FAILED = new Map<string, string>();
+/** The part of a hold's text the first rule that names one says breaks it, '' when none does. */
+const rhPart = (h: RuleHold): string => (h.rules || []).map(r => r.part || '').find(p => !!p && rhText(h).includes(p)) || '';
+/** `text` with `part` marked (the fail tint and a 2px bar: not colour alone), escaped. */
+function rhMarkedHTML(text: string, part: string): string {
+  const at = part ? text.indexOf(part) : -1;
+  if (at < 0) return esc(text);
+  return `${esc(text.slice(0, at))}<mark class="rh-part">${esc(part)}</mark>${esc(text.slice(at + part.length))}`;
+}
+
 // `after(card, hold, path)` runs once an action is taken; a task's cards redraw in place, a chat's leave the thread.
 function ruleHoldsWire(slot: HTMLElement, id: string | undefined,
   after: HoldAfter = (card, hid) => ruleHoldRedraw(slot, id, card, hid)) {
@@ -230,7 +264,7 @@ async function ruleChecksMount(head: HTMLElement | null) {
 // The checks line at the top of ⋯, or none while it is unread or not readable.
 function ruleChecksPaint(head: HTMLElement) {
   const menu = head.querySelector<HTMLElement>(':scope > .ph-menu'), text = head.dataset.checks || '', warn = !!text && head.dataset.checksWarn === 'true';
-  // The dot on ⋯ (its own class: the header's .ph-held dot is page-head.ts's, for a folded search).
+  // The dot on ⋯: rule checks need attention.
   const more = head.querySelector<HTMLElement>(':scope > .ph-more');
   more?.classList.toggle('ru-checks-warn', warn);
   if (warn) more?.setAttribute('aria-description', 'Rule checks need attention'); else more?.removeAttribute('aria-description');

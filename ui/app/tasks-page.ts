@@ -56,12 +56,46 @@ interface TasksPageState {
   menuAnchor?: HTMLElement | null | undefined;
   menuField?: string | undefined;
   searchTimer?: ReturnType<typeof setTimeout>;
+  /** The task a search that is only a number names (tasksJumpNumber), from any pipeline and status the reader may read,
+   * shown first over the view; `jumpFor` is the number it was read for (0: none), so a late answer for an older
+   * number is dropped. */
+  jump?: TaskBriefV3 | null;
+  jumpFor?: number;
 }
 let TASKS_ST: TasksPageState | null = null;
 const TASKS_KEPT = 'tico.tasks.view';
 const TASK_ARCHIVES: [TasksArchive, string][] = [['snoozed', 'Snoozed'], ['done', 'Done'], ['closed', 'Closed']];
 let TASK_PIPELINES: PipelineRec[] | null = null;
-const tasksPipelinesRead = async (): Promise<PipelineRec[]> => (TASK_PIPELINES = (await pipelinesAll()).filter(p => !p.retired_at));
+// The boards as last read in this browser, kept for the same person: the next open has the view button's boards and the
+// board in view's name from its first frame, while their read is out (else the page opened as a blank "You" with no
+// other boards for seconds). It is only ever shown: TASK_PIPELINES is the live list, and whatever the kept one put in
+// gives way to it the moment it lands. Another person signed in here never gets them, sign-out removes them
+// (boot-snap.ts bootSnapDrop), and a list over 200 KB is not kept.
+const TASK_PIPELINES_KEPT = 'tico.tasks.pipelines', TASK_PIPELINES_KEPT_MAX = 200 * 1024;
+function tasksPipelinesKept(): PipelineRec[] {
+  try {
+    const kept = JSON.parse(localStorage.getItem(TASK_PIPELINES_KEPT) || 'null') as {who?: string; list?: PipelineRec[]} | null;
+    return S.me?.id && kept?.who === S.me.id && Array.isArray(kept.list) ? kept.list : [];
+  } catch { return []; }
+}
+function tasksPipelinesForget() {
+  try { localStorage.removeItem(TASK_PIPELINES_KEPT); } catch { /* nothing was kept */ }
+}
+/** Every pipeline as last read, retired ones too: a finished task stays in its retired pipeline, and a search by its
+ * number names that pipeline and takes its prefix (tasksJumpPipelines). The views and the view menu keep the rest. */
+let TASKS_EVERY_PIPELINE: PipelineRec[] = [];
+async function tasksPipelinesRead(): Promise<PipelineRec[]> {
+  const every = await pipelinesAll();
+  TASKS_EVERY_PIPELINE = every;
+  const list = every.filter(p => !p.retired_at);
+  TASK_PIPELINES = list;
+  try {
+    const kept = JSON.stringify({who: S.me?.id || '', list});
+    if (S.me?.id && kept.length <= TASK_PIPELINES_KEPT_MAX) localStorage.setItem(TASK_PIPELINES_KEPT, kept);
+    else localStorage.removeItem(TASK_PIPELINES_KEPT);
+  } catch { /* the next open waits for the read */ }
+  return list;
+}
 
 // The view comes from the address (#/tasks?pipeline=<id>&layout=columns&archive=done), else as it was last left.
 // A `view` (NEEDS_YOU, Home's My tasks) names You: no pipeline unless the address names one.
@@ -92,7 +126,7 @@ function tasksURLWrite(state: TasksPageState) {
 function pageTasks(openId = '') {
   tasksLeave();
   const state: TasksPageState = {...tasksViewFromURL(), q: '', filters: {}, needs: S.v2.needs ? [...S.v2.needs] as NeedsEntry[] : [],
-    tasks: [], pipelines: TASK_PIPELINES || [], loading: true, kept: false, failed: '', feed: taskFeedNew(), cursor: '', behind: false, more: false, edge: null, after: '', narrow: {}, readKey: '', base: [], paging: null, stalled: false, abort: new AbortController()};
+    tasks: [], pipelines: TASK_PIPELINES || tasksPipelinesKept(), loading: true, kept: false, failed: '', feed: taskFeedNew(), cursor: '', behind: false, more: false, edge: null, after: '', narrow: {}, readKey: '', base: [], paging: null, stalled: false, abort: new AbortController()};
   tasksKept(state);
   TASKS_ST = state;
   const main = $('#main');
@@ -129,6 +163,7 @@ function pageTasks(openId = '') {
           `<button type="button" data-archive="${k}">${label}</button>`).join('')}</div>
         <div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="task-chips"></span></div>
       </div>
+      <div id="task-jump" class="tk-jump" role="region" aria-label="Task by number" hidden></div>
       <div id="task-body" role="region" aria-label="Tasks"></div>
       <div class="tl-more" id="task-more" hidden><button type="button" class="ghost">More</button></div>
       <div class="pa-host" id="task-ask" hidden></div>
@@ -174,6 +209,9 @@ function pageTasks(openId = '') {
     state.searchTimer = setTimeout(() => tasksRender(state), 150);
   };
   search.onkeydown = (ev: KeyboardEvent) => {
+    // Enter opens the task a number names, as a click on its row does.
+    const jump = tasksJumpShown(state);
+    if (ev.key === 'Enter' && jump) { ev.preventDefault(); void taskModalOpen(jump.id); return; }
     if (ev.key !== 'Escape') return;
     if (search.value) ev.stopPropagation(); else search.blur();
     search.value = state.q = '';
@@ -195,6 +233,15 @@ function pageTasks(openId = '') {
     const anchor = state.menuAnchor; state.menuAnchor = null;
     if (anchor?.isConnected && (pop.contains(document.activeElement) || document.activeElement === document.body)) anchor.focus();
   });
+  const jumpEl = $('#task-jump');
+  jumpEl.addEventListener('click', (ev: MouseEvent) => {
+    const id = eventElement(ev)?.closest<HTMLElement>('[data-task]')?.dataset.task;
+    if (id) void taskModalOpen(id);
+  }, {signal});
+  jumpEl.addEventListener('keydown', (ev: KeyboardEvent) => {
+    const row = eventElement(ev)?.closest<HTMLElement>('[data-task]');
+    if ((ev.key === 'Enter' || ev.key === ' ') && row && row === eventElement(ev)) { ev.preventDefault(); row.click(); }
+  }, {signal});
   const body = $('#task-body');
   body.addEventListener('click', (ev: MouseEvent) => void tasksBodyClick(state, ev), {signal});
   body.addEventListener('keydown', (ev: KeyboardEvent) => {
@@ -221,7 +268,8 @@ function pageTasks(openId = '') {
  * finished, not the view last left. The address stays the task's; closing the window writes the view's
  * (task-modal.ts). */
 function tasksBehindTask(t: {pipeline_id?: string | null; status?: string | null}) {
-  const state = TASKS_ST, pipeline = t.pipeline_id || '', known = state?.pipelines.length ? state.pipelines : TASK_PIPELINES;
+  // Only the live list says a pipeline is gone: one made since the kept list was read is still put behind its task.
+  const state = TASKS_ST, pipeline = t.pipeline_id || '', known = TASK_PIPELINES;
   if (!state || !pipeline || (known?.length && !known.some(p => p.id === pipeline))) return;
   const archive: TasksArchive = t.status === 'done' ? 'done' : t.status === 'closed' ? 'closed' : '';
   if (state.pipeline !== pipeline || state.archive !== archive) tasksShow(state, {pipeline, archive}, false);
@@ -249,9 +297,9 @@ function tasksShow(state: TasksPageState, change: Partial<Pick<TasksPageState, '
   tasksKept(state);
   // A task's window choosing what is behind it (`write` false) keeps the pipelines already read: opening a task reads
   // them once (ui/tests/live-first-open.cts). A read still on its way is joined (api.ts get).
-  const kept = state.pipelines.length ? state.pipelines : TASK_PIPELINES;
-  if (!write && kept?.length) state.pipelines = kept;
-  void tasksLoad(state, write || !state.pipelines.length);
+  // The live list only: a kept one (tasksPipelinesKept) is no read, and is read again.
+  if (!write && TASK_PIPELINES?.length) state.pipelines = TASK_PIPELINES;
+  void tasksLoad(state, write || !TASK_PIPELINES?.length);
   tasksRender(state);
 }
 // A view seen before draws its last read at once while the new one is out; the app's own Needs you list wins for You.
@@ -336,8 +384,18 @@ async function tasksLoad(state: TasksPageState, pipelinesToo = true): Promise<vo
   let held: LiveTaskEvent[] | null = [];
   try {
     const query = tasksQuery(state);
+    // The boards go in the moment their read lands, not with the rows: Needs you or a board's 500 rows can take seconds,
+    // and until the boards are known the view button offers You alone and a board in view has no name.
+    // Put in even when a later read of the view has landed first: that one held only what was known then.
+    const boards = pipelinesToo ? tasksPipelinesRead().then(list => {
+      if (TASKS_ST !== state) return list;
+      state.pipelines = list;
+      if (!state.loading && state.pipeline && !list.some(p => p.id === state.pipeline)) tasksShow(state, {pipeline: ''}, !location.hash.startsWith('#/task/'));
+      else tasksRender(state);
+      return list;
+    }, () => state.pipelines) : state.pipelines;
     const [pipelines, rows, needs] = await Promise.all([
-      pipelinesToo ? tasksPipelinesRead().catch(() => state.pipelines) : state.pipelines,
+      boards,
       query ? taskBriefsPage(tasksPageQuery(state, query)) : null,
       tasksNeedsView(state) && pipelinesToo ? needsYou() : null,
     ]);
@@ -347,10 +405,13 @@ async function tasksLoad(state: TasksPageState, pipelinesToo = true): Promise<vo
     if (TASKS_ST !== state) return;
     held = taskFeedLanded(state.feed, ticket, rows ? rows.cursor : '');
     if (!held) return;
-    state.pipelines = pipelines;
-    // A pipeline gone (or one a task's window named before the pipelines landed) falls back to You. The address is the
-    // list's to rewrite, not an open task's (#/task/<id>): closing that window writes the list's.
-    if (state.pipeline && !pipelines.some(p => p.id === state.pipeline)) { state.pipeline = ''; if (!location.hash.startsWith('#/task/')) tasksURLWrite(state); }
+    // The live list wins over what this read began with (the kept list, or none yet).
+    const live = TASK_PIPELINES;
+    state.pipelines = live || pipelines;
+    // A pipeline gone (or one a task's window named before the pipelines landed) falls back to You, by the live list
+    // only: until it lands nothing is gone (its own landing falls back, above). The address is the list's to rewrite,
+    // not an open task's (#/task/<id>): closing that window writes the list's.
+    if (live && state.pipeline && !live.some(p => p.id === state.pipeline)) { state.pipeline = ''; if (!location.hash.startsWith('#/task/')) tasksURLWrite(state); }
     state.stalled = false;
     if (needs) state.needs = needs;
     if (!rows) { state.tasks = []; state.base = []; state.cursor = ''; state.more = false; state.edge = null; state.after = ''; }
@@ -490,10 +551,12 @@ function tasksHeadPaint(state: TasksPageState) {
   const p = tasksPipeline(state), view = tasksViewOnly(), own = view ? state.tasks.length : 0;
   const you = view ? S.me?.name || 'Bot' : 'You';
   const scope = $('#task-scope');
-  const label = p ? `<span class="tl-scope-l">${esc(p.name)}</span>`
+  // A board in view before the boards are known (a first open, its read out) has no name yet: never You's.
+  const label = state.pipeline && !p ? '<span class="tl-scope-l"></span>'
+    : p ? `<span class="tl-scope-l">${esc(p.name)}</span>`
     : `<span class="tl-scope-l">${esc(you)}</span>${own ? `<span class="cnt tnum">${own}${state.more ? '+' : ''}</span>` : ''}`;
   if (scope.dataset.label !== label) { scope.dataset.label = label; scope.innerHTML = label + TL_ICON.caret; }
-  scope.setAttribute('aria-label', p ? `Showing ${p.name}` : `Showing ${you}${own ? `, ${own}` : ''}`);
+  scope.setAttribute('aria-label', p ? `Showing ${p.name}` : state.pipeline ? 'Loading board' : `Showing ${you}${own ? `, ${own}` : ''}`);
   // Flow is always on the row and keeps one width: its count is the one count of what waits on the person.
   const n = tasksReviewCount(state), play = $('#task-play');
   tasksHidden(play, view);   // a view reviews nothing: no Needs you, no answers
@@ -536,6 +599,7 @@ function tasksRender(state: TasksPageState | null) {
   if (!body || !state || TASKS_ST !== state) return;
   tasksHeadPaint(state);
   needsBadgePaint();
+  tasksJumpRead(state);
   // A search or a filter is the server's: a change of either reads its first page of matches (held rows, matched here,
   // show meanwhile); More reads the next page.
   if (tasksQuery(state) && tasksNarrowKey(tasksNarrow(state)) !== state.readKey) {
@@ -554,22 +618,88 @@ function tasksRender(state: TasksPageState | null) {
   if (p && hooks && board) {
     // The view keeps what is being done in it (a drag, a phone's stage) and draws itself again into the root it is bound
     // to: only the stages that changed (task-pipelines.ts).
-    const opts = {layout: state.layout, q: state.q, filters: state.filters, phone: matchMedia(PHONE).matches};
+    const opts = {layout: state.layout, q: state.q, filters: state.filters, phone: matchMedia(PHONE).matches, more: state.more};
     TASKS_DRAWN.delete(body);
     if (hooks.draw) hooks.draw(body, p, state.tasks, opts);
     else body.innerHTML = hooks.html(p, state.tasks, opts);
     hooks.bind?.(body, p);
     hooks.ask?.($('#task-ask'), p, matchMedia(PHONE).matches);
+    tasksJumpPaint(state);
     return;
   }
   tasksAskOff();
+  // Loading rows until the view's own rows land: You's Needs you (already read by the app) says nothing of a board's.
+  const held = state.archive || state.pipeline || tasksViewOnly() ? state.tasks.length : state.needs.length;
   const html = state.failed ? `<p class="err" role="alert">${esc(state.failed)} <button type="button" class="linkish" data-reload>Try again</button></p>`
-    : state.loading && !state.kept && !state.needs.length && !state.tasks.length ? skelRows(6)
+    : state.loading && !state.kept && !held ? skelRows(6)
     : state.archive ? tasksArchiveHTML(state)
     : state.pipeline ? tasksPipelineHTML(state)
     : tasksViewOnly() ? tasksOwnHTML(state)
     : tasksYouHTML(state);
   if (TASKS_DRAWN.get(body) !== html) { TASKS_DRAWN.set(body, html); body.innerHTML = html; }
+  tasksJumpPaint(state);
+}
+
+// ---- a task by its number (spec "Task search finds a task by its number")
+/** The task number a search is, when the whole search is one: 556, #556, or a pipeline's prefix and it (P556, p-556).
+ * 0 when it is not, so words, or letters that are no pipeline's prefix ("v2"), search as before. */
+/** The pipelines a number search knows: every one, retired too, once read; the view's until then. */
+const tasksJumpPipelines = (state: Pick<TasksPageState, 'pipelines'>): PipelineRec[] =>
+  TASKS_EVERY_PIPELINE.length ? TASKS_EVERY_PIPELINE : state.pipelines;
+function tasksJumpNumber(state: Pick<TasksPageState, 'q' | 'pipelines'>): number {
+  const m = /^#?(?:([a-z]{1,4})-?)?(\d{1,9})$/i.exec(state.q.trim());
+  if (!m) return 0;
+  const prefix = (m[1] || '').toLowerCase();
+  if (prefix && !tasksJumpPipelines(state).some(p => (p.prefix || '').toLowerCase() === prefix)) return 0;
+  return Number(m[2]) || 0;
+}
+/** Reads the task the search's number names, once per number: the server's number read ignores the view, the status
+ * and the snooze, and answers only a task the reader may read. */
+function tasksJumpRead(state: TasksPageState) {
+  const n = tasksJumpNumber(state);
+  if (n === (state.jumpFor || 0)) return;
+  state.jumpFor = n; state.jump = null;
+  if (!n) return;
+  void taskBriefsPage({number: n, limit: 1}).then(page => {
+    if (TASKS_ST !== state || state.jumpFor !== n) return;  // a newer search, or the page left
+    state.jump = page.tasks.find(t => t.number === n) || null;
+    tasksRender(state);
+  }, () => {
+    if (TASKS_ST === state && state.jumpFor === n) state.jump = null;
+  });
+}
+/** The task shown first, when the search still names it. */
+const tasksJumpShown = (state: TasksPageState): TaskBriefV3 | null =>
+  state.jump && state.jumpFor && state.jump.number === tasksJumpNumber(state) ? state.jump : null;
+/** Its label as the task's page shows it: its pipeline's prefix and number ("P556"), else "#556". */
+function tasksJumpLabel(state: TasksPageState, t: TaskBriefV3): string {
+  const prefix = tasksJumpPipelines(state).find(p => p.id === t.pipeline_id)?.prefix || '';
+  return `${prefix || '#'}${t.number}`;
+}
+/** Where it is: its stage while open, else Snoozed, Done or Closed. */
+function tasksJumpWhere(state: TasksPageState, t: TaskBriefV3): string {
+  if (t.status === 'done') return 'Done';
+  if (t.status === 'closed') return 'Closed';
+  if (t.snoozed) return 'Snoozed';
+  return tasksStageName(state, t.stage_id) || 'Open';
+}
+function tasksJumpHTML(state: TasksPageState, t: TaskBriefV3): string {
+  const pipeline = tasksJumpPipelines(state).find(p => p.id === t.pipeline_id)?.name || '';
+  const line = [pipeline, t.owner_id ? actorLabel(t.owner_id) : ''].filter(Boolean).join(' · ');
+  return `<div class="tk-row" data-task="${esc(t.id)}" role="button" tabindex="0">`
+    + `<span class="tk-ref tnum">${esc(tasksJumpLabel(state, t))}</span>`
+    + `<span class="tk-two"><span class="tk-title">${esc(t.title || '')}</span>${line ? `<span class="tk-ask">${esc(line)}</span>` : ''}</span>`
+    + `<span class="pill">${esc(tasksJumpWhere(state, t))}</span><kbd aria-hidden="true">↵</kbd></div>`;
+}
+/** Draws the task first, over the view, and takes its own row out of the view's so it shows once. */
+function tasksJumpPaint(state: TasksPageState) {
+  const el = $('#task-jump'), body = $('#task-body'), t = tasksJumpShown(state);
+  if (!el || !body) return;
+  const html = t ? tasksJumpHTML(state, t) : '';
+  if (el.dataset.drawn !== html) { el.dataset.drawn = html; el.innerHTML = html; }
+  el.hidden = !t;
+  const rows = body.querySelectorAll('[data-task]') as NodeListOf<HTMLElement>;
+  for (const row of rows) row.hidden = !!t && row.dataset.task === t.id;
 }
 /** No Ask bar away from a pipeline's board (pipeline-ask.ts). */
 function tasksAskOff() {
@@ -606,14 +736,23 @@ function needsTitle(it: NeedsEntry): string {
 function needsAsk(it: NeedsEntry): string {
   return needsGroup(it) === 'answer' && needsTitle(it) !== it.line ? it.line : '';
 }
-/** One row of You: its task's title (needsTitle), an Answer row's question under it. */
+/** How long an ask or a ❓ has waited on the person: past a day, the day it was asked ("Since Nov 16"), never Late. A
+    task that waits on a person's answer is not Late (backend/late_rule.py): the bot is not behind, the reply is owed. */
+function needsSince(it: NeedsEntry): string {
+  const at = Date.parse(it.since || '');
+  if ((it.kind === 'ask' || it.kind === 'question') && at && Date.now() - at >= 86400 * 1000) return `Since ${dayWords(it.since || '')}`;
+  return ageShort(it.since);
+}
+/** One row of You: its task's title (needsTitle), an Answer row's question under it. A bot's ❓ to sign in on a
+    website carries Open browser, its live view without going through Flow. */
 function needsRowHTML(it: NeedsEntry): string {
-  const ask = it.ask;
+  const ask = it.ask, browser = needsBrowserRef(it);
   const who = it.kind === 'mention' || it.kind === 'question' ? it.from_id || '' : ask?.asked_by || it.task?.owner_id || (it.bots?.[0] ? 'bot:' + it.bots[0] : '');
   const tip = it.kind !== 'task' && needsTitle(it) !== it.line && !needsAsk(it) ? ` title="${esc(it.line)}"` : '';
   return `<div class="tk-row" data-need="${esc(it.id)}" role="button" tabindex="0"${tip}>`
     + `<span class="tk-two"><span class="tk-title">${esc(needsTitle(it))}</span>${needsAsk(it) ? `<span class="tk-ask">${esc(needsAsk(it))}</span>` : ''}</span>${it.task ? lateTagHTML(it.task) : ''}`
-    + `<span class="tk-who">${who ? actorFace(who, 16) : ''}</span><span class="tk-age">${esc(ageShort(it.since))}</span></div>`;
+    + (browser ? `<button type="button" class="ghost small" data-need-browser="${esc(it.id)}">Open browser</button>` : '')
+    + `<span class="tk-who">${who ? actorFace(who, 16) : ''}</span><span class="tk-age">${esc(needsSince(it))}</span></div>`;
 }
 /** Needs you by stage: a chip per stage with items for the person, in the pipelines' order, then Other; each opens that
     stage's review (decide.ts). None until a stage of a pipeline in view has items. */
@@ -677,6 +816,13 @@ async function tasksBodyClick(state: TasksPageState, ev: MouseEvent) {
   if (el?.closest('[data-reload]')) { state.failed = ''; state.loading = true; tasksRender(state); void tasksLoad(state); return; }
   const chip = el?.closest<HTMLElement>('[data-need-stage]');
   if (chip) { void decideStageOpen(chip.dataset.needStage || ''); return; }
+  const browse = el?.closest<HTMLElement>('[data-need-browser]');
+  const asking = browse ? state.needs.find(n => n.id === browse.dataset.needBrowser) : null;
+  if (asking) {
+    const [toolId = '', accountId = ''] = needsBrowserRef(asking).slice(8).split('/');
+    decideBrowserOpen(toolId, accountId, needsTitle(asking));
+    return;
+  }
   const row = el?.closest<HTMLElement>('[data-need]');
   const it = row ? state.needs.find(n => n.id === row.dataset.need) : null;
   if (it) { decideOpen(it.id); return; }

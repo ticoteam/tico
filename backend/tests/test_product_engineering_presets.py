@@ -780,12 +780,12 @@ def test_no_bot_gives_or_pushes_past_a_sign_off_and_late_still_ends_on_the_perso
             A.answer(c, row["id"], rid, bot, "ok", seen_version=E.task(c, row["id"])["version"])
         with pytest.raises(H.Refused, match="task_needs_person"):
             E.move(c, row["id"], E.NEXT, bot, "The person is away", seen_version=E.task(c, row["id"])["version"])
-    # Late: no bot is woken, since none can give or push past a people-only OK, and the manager still cannot push
-    # past. The task stays the person's, whom it reads.
+    # Past the stage's expected time: a person's turn is never Late, no bot is woken, since none can give or push past
+    # a people-only OK, and the manager still cannot push past. The task stays the person's, whom it reads.
     minutes = row["stage"]["expected_minutes"]
     X.settled(c)
     time_machine.shift(timedelta(minutes=minutes + 1))
-    assert N.check(c)["late"] == 1
+    assert N.check(c)["late"] == 0
     late = E.task(c, row["id"])
     assert [who for key, who in X.wakes(c, row["id"]) if key.endswith(":late")] == []
     with pytest.raises(H.Refused, match="task_needs_person"):
@@ -1093,20 +1093,24 @@ def test_owner_on_the_team_at_release_clears_a_picked_owner_and_its_assignee(c):
     assert (row["owner_id"], row["assignee_id"]) == (None, None)
 
 
-def _engineering_at_release(c):
-    """A Product task in Spec, with Engineering set as the release migration sets it: On deck and Build pick from two
-    Builders (the pick becomes the task's owner), the two Reviews from two Reviewers."""
-    import importlib
+BUILDERS, REVIEWERS = ("bot:builder", "bot:builder-2"), ("bot:rev-a", "bot:rev-b")
 
+
+def _engineering_at_release(c):
+    """A Product task in Spec, with Engineering set as the release migration engineering_picks_at_release set it: On
+    deck and Build pick from two Builders (the pick becomes the task's owner), the two Reviews from two Reviewers."""
     _role_bot(c, "builder-2", "builder")
     row = _product_task(c)
     _seat(c, "Builder 2", "builder", "builder-2")
     X.github_installed(c)  # Build needs a repository: with no App it would wait on Connect GitHub
-    importlib.import_module("backend.migrations.20261113033639_engineering_picks_at_release").up(c)
+    for stages, bots, prefer, owns in (
+        (("engineering-on-deck", "engineering-build"), BUILDERS, "anyone", True),
+        (("engineering-review-1", "engineering-review-2"), REVIEWERS, "new", False),
+    ):
+        pick = {"bots": list(bots), "how": "turns", "limit_each": None, "prefer": prefer, "owns_task": owns}
+        for stage in stages:
+            c.execute("UPDATE stages SET owner='pick', pick=? WHERE id=?", (json.dumps(pick, sort_keys=True), stage))
     return row
-
-
-BUILDERS, REVIEWERS = ("bot:builder", "bot:builder-2"), ("bot:rev-a", "bot:rev-b")
 
 
 def test_a_handoff_into_picking_stages_gets_a_builder_and_review_1_a_reviewer(c):

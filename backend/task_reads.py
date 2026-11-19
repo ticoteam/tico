@@ -233,7 +233,8 @@ def brief(c, rows, visible_sql="1"):
     `blocked_by` and `blocks` (the open tasks it depends on and those it blocks, `_dependencies`; only where there are any),
     `pushed_past` (it entered its stage pushed past a requirement), `stuck` (only when the ladder brought it to a
     person, stuck or late with them: its Needs you card is the stuck card, task #392), `stage_since` (when it
-    entered its stage: its open visit, else when it was filed; a board card's age) and `on_person` (it waits only on a
+    entered its stage: its open visit, else when it was filed; a board card's age), `visit_id` (its open visit, only when
+    its turn is an ask: Needs you reads that one ask by id) and `on_person` (it waits only on a
     person's OK or answer, so it holds no slot where its stage has a limit). One `H.task_waits` for every row, one
     read of the open visits and one of the open snoozes, never a read per row. A sub-task the reader may not open is
     named by neither its title nor its id in a turn's line, as in the task's own read (waiting_on.unnamed). A snoozed
@@ -251,23 +252,27 @@ def brief(c, rows, visible_sql="1"):
     origins = came_from(c, ids)
     waits = H.task_waits(c, ids)
     marks = json.dumps(ids)
-    marked, pushed, entered, stuck = {}, set(), {}, set()
+    marked, pushed, entered, stuck, visits = {}, set(), {}, set(), {}
     for r in c.execute(
-        "SELECT v.task_id, v.late_told_at, v.late_person_at, v.entered_how, v.entered_at, v.level, s.expected_minutes "
+        "SELECT v.task_id, v.late_told_at, v.late_person_at, v.entered_how, v.entered_at, v.level, s.expected_minutes, v.id "
         "FROM visits v LEFT JOIN stages s ON s.id=v.stage_id "
         "WHERE v.left_at IS NULL "
         "AND v.task_id IN (SELECT value FROM json_each(?))",
         (marks,),
     ):
-        entered[r[0]] = r[4]
+        entered[r[0]], visits[r[0]] = r[4], r[7]
         if r[5] == "person":
             stuck.add(r[0])
         if r[1]:
             # Late is read against the owner who holds the task now (late_rule), not the owner the mark was written for.
-            marked[r[0]] = ({"late_told_at": r[1], "late_person_at": r[2], "entered_at": r[4]}, r[6])
+            marked[r[0]] = ({"late_told_at": r[1], "late_person_at": r[2], "entered_at": r[4], "id": r[7]}, r[6])
         if r[3] == "pushed_past":
             pushed.add(r[0])
     now = datetime.now(timezone.utc)
+    # A person who answered after the mark gave the bot its whole time again (never_stuck.clock_from): one read for all.
+    answered = late_rule.last_answers(
+        c, [(str(v["id"]), str(tid), str(v["entered_at"])) for tid, (v, _m) in marked.items()]
+    )
     snoozed = {
         r[0]
         for r in c.execute(
@@ -300,8 +305,21 @@ def brief(c, rows, visible_sql="1"):
             if turn["state"] == W.SNOOZED:
                 turn["line"] = clip_line(turn["line"])
         row["turn"] = turn
+        if turn and turn["ask"] and visits.get(row["id"]):
+            row["visit_id"] = visits[row["id"]]  # only on an ask: with it the ask is read by id (waiting_on.ask_id)
         mark = marked.get(row["id"])
-        row["late"] = late_rule.late_of(row, mark[0], mark[1], now) if mark else None
+        row["late"] = (
+            late_rule.late_of(
+                row,
+                mark[0],
+                mark[1],
+                now,
+                persons_turn=W.persons_turn(waits.get(row["id"]) or []),
+                answered_at=answered.get(str(mark[0]["id"])),
+            )
+            if mark
+            else None
+        )
         if row["id"] in stuck:
             row["stuck"] = True  # only when true: every list row carries the brief, under its payload budget
         # Blocked wins over a snooze: no list says Snoozed for a blocked task (hubdb.tasks' snoozed filter agrees).
@@ -385,24 +403,47 @@ def _running(c, bots):
 
 
 def comment_rights(c, auth, who, task_id):
-    """Whether the caller may write on the task: every comment and file goes through here. Returns the task's row."""
-    from . import lifecycle
+    """Whether the caller may write on the task: every comment and file goes through here. Returns the task's row.
+
+    Anyone who can read the task may comment and attach files on it, a bot as a person: a bot Related input picks is no
+    party to the task (related_input.candidates), and its comment is what the stage waits on. What stays: the read
+    check, onboarding, and the owner bot's own Write access and contact settings (refuse_comment). The task's pages stay
+    with its parties (page_rights)."""
+    row = auth.task(c, who, task_id)
+    refuse_comment(c, auth, who, row)
+    return row
+
+
+def page_rights(c, auth, who, task_id):
+    """Whether the caller may write the task's pages: a page linked to the task, or one published in a role on it (its
+    Spec). A page is what a stage decides on, so this keeps the party rule comments dropped: a bot writes one only as
+    the task's party, a manager of one, a delegate, a party of a task above it, or one who can work the task.
+    Returns the task's row."""
     from .store import H, Problem
 
-    row = auth.task(c, who, task_id)
-    lifecycle.refuse_send(c, who, None, what="task comments")
+    row = comment_rights(c, auth, who, task_id)
     if who.role == "bot" and not H.task_participant(c, who.actor, row):
         delegated = c.execute(
             "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires_at>?",
-            (task_id, who.actor, H.now()),
+            (row["id"], who.actor, H.now()),
         ).fetchone()
         if not delegated and not H.task_ancestor_party(c, who.actor, row) and not H.task_can_work(c, who.actor, row):
             raise Problem(
                 "forbidden",
                 "Only the task's parties, their managers, delegates, the parties of a task above it and its "
-                "pipeline's manager may comment",
+                "pipeline's manager may write its pages",
                 403,
             )
+    return row
+
+
+def refuse_comment(c, auth, who, row):
+    """Refuse a comment on a task the caller already reads: an onboarding bot, or one the task's bot (owner, requester
+    or origin) gives no Write access or does not take contact from. related_input.candidates asks it of each bot."""
+    from . import lifecycle
+    from .store import H
+
+    lifecycle.refuse_send(c, who, None, what="task comments")
     origin = None if H.task_private(c, row) else H.task_origin(c, row)
     others = [
         a
@@ -413,8 +454,7 @@ def comment_rights(c, auth, who, task_id):
     if target and not H.task_represents(c, who.actor, row["owner_id"]):
         auth.require_write(c, who, H.actor_id(target))
     if target:
-        auth.require_bot_contact(c, who, target, task_id=task_id, kind="comment")
-    return row
+        auth.require_bot_contact(c, who, target, task_id=row["id"], kind="comment")
 
 
 COVERS_SQL = (

@@ -21,6 +21,7 @@ interface CloudAccess {
   plan: string;
   trial_days_left: number | null;
   billing_url: string;
+  days_left?: number | null;
 }
 declare function refresh(force: boolean): Promise<void>;
 declare function cloudAccessPoll(): Promise<void>;
@@ -87,6 +88,17 @@ declare function get(path: string): Promise<unknown>;
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll on a phone');
     if (shots) await page.screenshot({path: path.join(shots, 'cloud-frozen-phone.png')});
     await page.setViewportSize({width: 1280, height: 800});
+
+    // Low credit while still open: the same strip warns before anything stops, with Add credit.
+    cloud = {access: 'open', reason: null, plan: 'trial', trial_days_left: 9, billing_url: BILLING, days_left: 1};
+    await page.evaluate(async () => { await refresh(false); });
+    await page.locator('#cloud-banner').waitFor();
+    assert.equal(await page.locator('#cloud-banner [data-cloud-title]').innerText(), 'Low credit · about 1 day left');
+    assert.equal(await page.locator('#cloud-banner a').getAttribute('href'), BILLING);
+    // Out of credit again: the strip says so.
+    cloud = {access: 'frozen', reason: 'out_of_credit', plan: 'trial', trial_days_left: 9, billing_url: BILLING};
+    await page.evaluate(async () => { await refresh(false); });
+    assert.equal(await page.locator('#cloud-banner [data-cloud-title]').innerText(), 'Out of credit');
 
     // Locked by the poll: Pay to continue over everything, with billing and the owner's download.
     cloud = {access: 'locked', reason: 'trial_over', plan: 'trial', trial_days_left: 0, billing_url: BILLING};

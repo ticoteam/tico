@@ -12,6 +12,12 @@ from urllib.parse import urlparse
 from . import health
 from .store import Problem
 
+
+def _monotonic():
+    """The deadline clock: a test replaces this and not time.monotonic for the whole process."""
+    return time.monotonic()
+
+
 LOOPBACK = {"127.0.0.1", "localhost", "::1", ""}
 EVERY = 30  # seconds between one person's runs: each run makes up to four outbound HTTPS checks
 _last: dict[str, float] = {}
@@ -98,7 +104,7 @@ def health_checks(view):
 
 
 def run(store, who, settings, auth, github, config_view, checks=None):
-    key, at = who.actor, time.monotonic()
+    key, at = who.actor, _monotonic()
     if at - _last.get(key, -EVERY) < EVERY:
         raise Problem("setup_check_busy", "Setup check just ran. Try again in half a minute.", 429, retryable=True)
     _last[key] = at

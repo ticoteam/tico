@@ -1568,6 +1568,45 @@ def stripe_waiting(c: sqlite3.Connection, money_account_id: str, kinds: Sequence
     ).fetchall()
 
 
+def stripe_unsettled(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], most: int) -> list[Any]:
+    """Stripe rows of these kinds left new, posted nowhere and not marked for a day's summary, oldest first."""
+    return c.execute(
+        f"SELECT * FROM fin_feed_txns WHERE money_account_id=? AND kind IN ({_marks(kinds)}) AND status='new' AND "
+        "entry_id IS NULL AND json_extract(raw, '$.summary') IS NULL ORDER BY txn_date, id LIMIT ?",
+        (money_account_id, *kinds, most),
+    ).fetchall()
+
+
+def rule_candidates(c: sqlite3.Connection, book_id: str, start: str, most: int) -> list[Any]:
+    """Settled bank and card rows dated from `start` that may still want a category, oldest first: new with no entry,
+    or posted (whether its entry is only the Other expenses default is the caller's check). Never a reconciled row, nor
+    a Stripe balance row (it posts in its day's summary)."""
+    return c.execute(
+        "SELECT f.* FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id WHERE m.book_id=? AND "
+        "m.kind!='stripe' AND f.txn_date>=? AND f.pending=0 AND f.reconciliation_id IS NULL AND "
+        "((f.status='new' AND f.entry_id IS NULL) OR (f.status='posted' AND f.entry_id IS NOT NULL)) "
+        "ORDER BY f.txn_date, f.id LIMIT ?",
+        (book_id, start, most),
+    ).fetchall()
+
+
+def asked(c: sqlite3.Connection, name: str, subject: str) -> bool:
+    """Whether the plain `name` ask (no period key) was ever raised about `subject`, sent on or not."""
+    return (
+        c.execute(
+            "SELECT 1 FROM fin_events WHERE name=? AND subject=? AND period_key='' LIMIT 1", (name, subject)
+        ).fetchone()
+        is not None
+    )
+
+
+def withdraw_asks(c: sqlite3.Connection, name: str, subject: str) -> int:
+    """Drop the `name` events about `subject` not yet sent on to Tico's rules (drained): what they asked is settled."""
+    return c.execute(
+        "DELETE FROM fin_events WHERE name=? AND subject=? AND drained_at IS NULL", (name, subject)
+    ).rowcount
+
+
 # A posted entry that is the bank side of a Stripe payout's clearing: its source id is `stripe:clear:<feed row id>`,
 # and `fresh_source` may add `:<when>` after it. `f` is the feed row of the payout.
 _CLEARED = (

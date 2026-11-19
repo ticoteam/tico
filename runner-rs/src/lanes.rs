@@ -19,6 +19,7 @@ pub const FRESH_SESSION: &str = "fresh_session_v1";
 /// without it the server starts a computer's Claude sessions fresh on each move.
 pub const PLAN_SWITCH_RESUME: &str = "plan_switch_resume_v1";
 
+const VOICE_SESSIONS: &str = "voice_sessions_v1";
 pub const CAPABILITIES: &[&str] = &[
     "task_lanes_v2",
     "session_roots_v1",
@@ -34,7 +35,7 @@ pub const CAPABILITIES: &[&str] = &[
     // Full Claude logins: a turn's own credentials file, refreshes and usage reads (claude_login.rs).
     crate::claude_login::CAPABILITY,
     "turns_at_once_v1",
-    // Private live meetings run in their own lane and checkout (sessions.rs); the server hands them to no other runner.
+    // A previous hub release can still send the retired meeting lane (sessions.rs).
     "private_lanes_v1",
     "model_subscriptions_v1",
     "model_subscription_activation_v1",
@@ -49,6 +50,9 @@ pub const CAPABILITIES: &[&str] = &[
     FORK_SESSION,
     FRESH_SESSION,
     PLAN_SWITCH_RESUME,
+    VOICE_SESSIONS,
+    // A push to a bot's repository is heard at once, so its chat turns never start on an older fetch (fetch_fresh.rs).
+    crate::fetch_fresh::PUSH_HINTS,
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
@@ -199,6 +203,8 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
             }
         }
         for name in [
+            crate::fetch_fresh::PUSH_HINTS,
+            VOICE_SESSIONS,
             PLAN_SWITCH_RESUME,
             crate::claude_login::CAPABILITY,
             crate::browser::CAPABILITY,
@@ -420,6 +426,8 @@ mod tests {
             .copied()
             .filter(|c| {
                 ![
+                    crate::fetch_fresh::PUSH_HINTS,
+                    VOICE_SESSIONS,
                     FRESH_SESSION,
                     crate::claude_login::CAPABILITY,
                     PLAN_SWITCH_RESUME,
@@ -449,14 +457,27 @@ mod tests {
     fn the_runner_offers_a_fresh_session_and_an_older_server_drops_only_that() {
         assert!(CAPABILITIES.contains(&FRESH_SESSION));
         let all = json!({"capabilities": CAPABILITIES});
-        // The newest goes first: resuming across plans, full Claude logins, then a fresh session.
+        // A bare capabilities refusal from an older hub drops the newest offer first.
         assert_eq!(
             refused_field("body.capabilities: bad", &all).as_deref(),
-            Some(PLAN_SWITCH_RESUME)
+            Some(crate::fetch_fresh::PUSH_HINTS)
         );
         let older: Vec<&str> = CAPABILITIES
             .iter()
             .copied()
+            .filter(|c| *c != crate::fetch_fresh::PUSH_HINTS)
+            .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(VOICE_SESSIONS)
+        );
+        let older: Vec<&str> = older.into_iter().filter(|c| *c != VOICE_SESSIONS).collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(PLAN_SWITCH_RESUME)
+        );
+        let older: Vec<&str> = older
+            .into_iter()
             .filter(|c| *c != PLAN_SWITCH_RESUME)
             .collect();
         assert_eq!(

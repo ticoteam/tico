@@ -72,7 +72,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     assert.deepEqual(await rows(), ['Approve Spec'], 'the row names the document');
     await open(0);
     assert.equal(await at(0, 'document').inputValue(), 'Spec');
-    assert.deepEqual(await at(0, 'document').locator('option').allInnerTexts(), ['Spec', 'QA report', 'Release report', 'Invoice']);
+    assert.deepEqual(await at(0, 'document').locator('option').allInnerTexts(), ['Spec', 'QA report', 'Release report', 'Invoice', 'Proposal', 'Results', 'Checked in production']);
     assert.equal(await at(0, 'approver').locator('option:checked').innerText(), 'Any person');
     assert.equal(await at(0, 'approver').locator('option', {hasText: 'Ops'}).count(), 0, 'a person approves a document, never a bot');
     assert.doesNotMatch(await dialog.innerText(), /Jev|Pitch/, 'no "Jev", no Pitch');

@@ -47,8 +47,22 @@ class Judge:
     def __init__(self, store, needles=None):
         self.store, self.needles = store, dict(needles or {COLOR: NEEDLE})
         self.calls, self.locked, self.fail, self.hold = [], [], None, None
+        self.parts, self.part_fail = [], None  # rule-part@1's calls, kept apart: `calls` are the rule checks
+
+    def part(self, state, questions):
+        """Answers rule-part@1: the first part that holds a needle, else `whole`."""
+        self.locked.append(bool(self.store.writer.queue))
+        self.parts.append({"state": state, "questions": questions})
+        if self.part_fail:
+            raise self.part_fail
+        needles = [n.lower() for n in self.needles.values()]
+        hit = next((p["id"] for p in state["parts"] if any(n in p["text"].lower() for n in needles)), "whole")
+        answers = {qid: {"type": "choice", "choice": hit, "confidence": 0.9} for qid in questions}
+        return {"model": "jev-1.14", "usage": {"input_tokens": 120, "output_tokens": 0}, "ms": 30, "answers": answers}
 
     def __call__(self, state, questions, label=None):
+        if str(label or "").startswith("rule-part@"):
+            return self.part(state, questions)
         self.locked.append(bool(self.store.writer.queue))
         self.calls.append({"state": state, "questions": questions, "label": label})
         if len(questions) > GATEWAY_MOST:
@@ -336,6 +350,53 @@ def test_the_third_block_in_a_day_escalates_with_one_review_task(ruled):
     assert outcomes == ["blocked", "blocked", "escalated", "escalated"]
     tasks = {row["task_id"] for row in sql(api, "SELECT task_id FROM org_rule_holds WHERE task_id IS NOT NULL")}
     assert len(tasks) == 1
+
+
+def _close(api, task_id):
+    """The review task's owner (its reviewer) closes it."""
+    with api.app.state.store.transaction() as c:
+        owner = c.execute("SELECT owner_id FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
+        H.task_close(c, owner, task_id, "Decided.")
+
+
+def _hold_notice(api, hold_id):
+    """The review task's Hold line for `hold_id` was posted, so the reviewer can open the hold."""
+    return bodies(api, "Hold: " + hold_id)
+
+
+def _status(api, task_id):
+    return sql(api, "SELECT status FROM tasks WHERE id=?", (task_id,))[0]["status"]
+
+
+def test_a_closed_repeat_review_task_is_not_reused_for_the_next_escalation(ruled):
+    api, _ = ruled
+    color_rule(api)
+    held = [say(api, f"Try {n}: our favorite color is gold")["held"] for n in range(3)]
+    first = hold_row(api, held[2]["id"])["task_id"]
+    _close(api, first)  # the reviewer closes the review task: none of its holds is decided by that
+    assert hold_row(api, held[2]["id"])["state"] == "held"
+    later = say(api, "Try 4: our favorite color is gold")["held"]
+    assert later["outcome"] == "escalated"
+    task = hold_row(api, later["id"])["task_id"]
+    assert task and task != first and _status(api, task) == "open"
+    assert _hold_notice(api, later["id"])
+
+
+def test_an_appeal_on_a_hold_whose_review_task_closed_opens_a_new_one(ruled):
+    api, _ = ruled
+    color_rule(api)
+    held = [say(api, f"Try {n}: our favorite color is gold")["held"] for n in range(4)]
+    first = hold_row(api, held[3]["id"])["task_id"]
+    assert hold_row(api, held[2]["id"])["task_id"] == first  # the day's repeat task, shared while open
+    _close(api, first)
+    appealed = post(api, f"rule-holds/{held[3]['id']}/appeal", {"why": "Gold is public."}, token="ops-test")
+    task = appealed["task_id"]
+    assert task != first and _status(api, task) == "open"
+    assert _hold_notice(api, held[3]["id"])
+    assert hold_row(api, held[3]["id"])["task_id"] == task and hold_row(api, held[3]["id"])["state"] == "held"
+    # An appeal while its review task is open keeps that task.
+    again = post(api, f"rule-holds/{held[3]['id']}/appeal", {"why": "Still public."}, token="ops-test")
+    assert again["task_id"] == task
 
 
 def test_cache_hits_count_toward_repeats(ruled):
@@ -1108,6 +1169,19 @@ def test_a_task_room_reply_held_before_done_keeps_its_text_nowhere(ruled):
     assert sql(api, "SELECT 1 FROM attempt_captures WHERE attempt_id=?", (aid,)) == []
     get(api, f"attempts/{aid}/capture", expected=404)
     assert "blue" not in api.get(f"/api/v2/turns/{aid}/steps", headers=headers()).text
+
+
+def test_a_warn_rule_leaves_its_bots_live_replies_showing(ruled):
+    """A Warn rule never holds a reply, so the replies of the bots it names still stream as they are written; a Block
+    rule's stay hidden until delivered. An everyone-wide Warn rule (a filing due date) hid every bot's live reply on
+    TIDY and Tico Team (Nov 18)."""
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    with api.app.state.store.read() as c:
+        assert K.in_force(c) and not K.watched(c, "bot:ops") and K.watched_bots(c) == []
+    color_rule(api, text="Never name a color in a chat.")
+    with api.app.state.store.read() as c:
+        assert K.watched(c, "bot:ops") and K.watched_bots(c) == ["ops"]
 
 
 def test_sql_shows_a_watched_live_run_tool_steps_but_not_its_said_text(ruled):

@@ -72,8 +72,8 @@ architecture) and C (the screens).
 - **Person approvals** on Product: the Spec, the QA report and the Release report. The rest is bots and the decision
   model. There is no pitch: a feature starts as a chat, and its first approval is the Spec (Nov 16).
 - **Stage approvals name a document** (Nov 16). A stage that asks a person to approve names the task document it
-  approves (a page requirement with `settings.document`: Spec, QA report, Release report or Invoice,
-  `task_requirements.APPROVED`) and who approves it: any person (people only) or one person. The stage editor (✎) sets
+  approves (a page requirement with `settings.document`: Spec, QA report, Release report, Invoice, Proposal,
+  Results or Checked in production, `task_requirements.APPROVED`) and who approves it: any person (people only) or one person. The stage editor (✎) sets
   both. The bot writing that document while the task is in the stage is the submission (`task_pages.submit`, from
   `POST /api/v2/tasks/{id}/files` with `document`); no bot asks for an OK, and a bot adding an OK on such a stage is
   refused. The decision model checks the submitted version: a first fail goes back to the bot without telling anyone, a
@@ -111,7 +111,8 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   page version, an ask, a snooze, a sub-task filed. A comment alone does not count, so a bot can't loop on "working on
   it".
 - **C5.** Late has two steps and no extra settings. At the stage's expected time the manager bot gets the task. At 3
-  times that, the ladder rests, once.
+  times that, the ladder rests, once. A person's turn (all the task waits on is people's answers to asks; a Connect
+  GitHub hold is not one) is never Late, and the bot's clock starts again at the person's last answer.
 - **C6.** A task owned by a person is never chased. It shows Late only after its due date.
 - **C7.** Asks never expire and tasks never close by themselves. *Today: questions expire after 7 days or go ahead on a
   default answer, and done Engineering tasks close after 24 hours.*
@@ -272,8 +273,9 @@ spec, the bots whose areas the work touches get one say.
   during the call. Jev writes no prose, so each score's "why" is the bot's own job line.
 - **Never asked.** The task's owner and assignee, the pipeline's manager, and every bot that holds one of the
   pipeline's stages (a fixed owner, or a bot on a pick list, such as the reviewers and QA). Also never asked: the
-  General Manager and the helper bots, a bot that cannot run, and, on a private task, a bot that cannot already read
-  it. The engine never adds a reader.
+  General Manager and the helper bots, a bot that cannot run, and a bot that could not post its comment: one that
+  cannot read the task (the engine never adds a reader) or one the task's bot refuses through its Write access or
+  contact setting. Any bot that reads a task may comment on it, as a person may, so a pick needs no party role.
 - **Picks.** The top `most` bots (default 2) that score at or over `bar` (default 0.8). Each pick gets one wake on the
   task: read the spec page and comment once, from its area, with `tico task comment`. Its run needs no turn (the
   wake key's kind is `related`), and nobody chases it.
@@ -635,9 +637,10 @@ cases.
 
 - It sits in your list. Nothing runs and nothing reminds you.
 - Everyone else sees an amber "!" with your picture on the row, and "Waiting on Ana" on the task.
-- Past the stage's expected time it is Late. The manager bot looks once. It can push past with a reason if the
-  requirement allows that. If no bot may push past it (people only), no bot is woken. A bot's snooze never takes it
-  out of your list.
+- It is never Late: the bot is not behind. Past a day, your Needs you row says when it was asked ("Since Nov 16").
+- Past the stage's expected time the manager bot looks once. It can push past with a reason if the requirement allows
+  that. If no bot may push past it (people only), no bot is woken. A bot's snooze never takes it out of your list.
+- Once you answer, the bot has the stage's whole expected time again. It is Late only if it then sits that long.
 
 #### Where "what is missing" shows
 
@@ -710,6 +713,9 @@ You don't have to tell the last two apart. Both are one sentence in your list. I
 snoozed by itself: snoozing it snoozes the task. Talk about it is the task's conversation.
 
 A bot's question is none of these. It is a ❓ on the bot's chat message: the person's reply in that chat answers it, and nothing is added to the task.
+
+Approvals win over questions: one card per person per task. While a stage's page waits on your approval, a bot's ❓ to
+you on that task is refused (the approval is its ask), and your OK or send back clears any ❓ to you there.
 
 ### What lands in your list
 
@@ -1625,7 +1631,10 @@ Today: the Engineering and Product pipelines.
 
 Rules:
 
-- The list is the columns turned on their side: grouped by stage, in order.
+- The list is the columns turned on their side: grouped by stage, in order. Each run of empty stages, even one, is
+  one quiet line of stage chips in its place (names only; a chip opens the stage's editor), and a pipeline with nothing
+  open is one empty state: a drawing, "No open tasks in Engineering" and New task. Neither while searching or
+  filtering, nor while more tasks are still to load. The columns and the phone keep every stage.
 - Search and filter work on both views and on every pipeline, General included.
 - Filters: Owner, Waiting on, Stage, Asked by, Tag, Due, Late, Pushed past. "What can Sam do?" is Waiting on: Sam.
 - Done and Closed are not columns. They are behind the archive button, with Snoozed.

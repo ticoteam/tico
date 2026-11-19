@@ -27,6 +27,7 @@ from clients.commands._shared import (
     _visuals,
     ambiguous_page,
     document_attachment,
+    private_document,
     text_file,
 )
 from clients.commands._requester import _as_person, _asked
@@ -608,8 +609,8 @@ def task_follow(api, args):
     "\"<point>: done|not done, <why>\"); never quote their note back to them. "
     "With document instead, the HTML in text or the .html file at path is that document: a page linked to the task "
     "with that name as its role, the same as tico page publish --task --as. Say what changed in a comment; a document "
-    "takes no note. Spec, QA report (the proof), Release report and Invoice are the names a stage approves; name any "
-    "other document as you like.",
+    "takes no note. Spec, QA report (the proof), Release report, Invoice, Proposal, Results and Checked in production "
+    "are the names a stage approves; name any other document as you like.",
     {
         "id": _s("Task id"),
         "document": {
@@ -705,7 +706,15 @@ def _document(api, args):
         body["text"] = args["text"]
     else:
         raise ValueError("Send the document's HTML as text, or path to an .html file")
-    return document_attachment(ambiguous_page(lambda: api.post("pages", body, key=_key(args))), args["document"])
+    published = private_document(
+        lambda: ambiguous_page(lambda: api.post("pages", body, key=_key(args))),
+        api,
+        args["id"],
+        args["document"],
+        body["text"],
+        _key(args),
+    )
+    return document_attachment(published, args["document"])
 
 
 @tool(

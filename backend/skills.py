@@ -113,10 +113,32 @@ def _version_view(row, with_files=False):
     return value
 
 
+# The latest screening's reason and judge call ride on the proposal row, so the list, a rescreen's answer and the
+# proposal's own page all say why one was not screened (docs/skills.md "Not screened"); `screen_failures` counts the
+# not_screened rows since the last screened one, so a rescreen that fails again says so.
+_LATEST_SCREEN = "(SELECT s.{col} FROM skill_screenings s WHERE s.proposal_id = p.id ORDER BY s.created_at DESC, s.rowid DESC LIMIT 1)"
 _PROPOSAL_SQL = (
-    "SELECT p.*, bv.number AS base_number, v.number AS version_number FROM skill_proposals p "
+    "SELECT p.*, bv.number AS base_number, v.number AS version_number, "
+    + _LATEST_SCREEN.format(col="reason")
+    + " AS screen_reason, "
+    + _LATEST_SCREEN.format(col="judge_call_id")
+    + " AS screen_judge_call_id, "
+    "(SELECT COUNT(*) FROM skill_screenings s WHERE s.proposal_id = p.id AND s.status = 'not_screened' AND "
+    "s.rowid > COALESCE((SELECT MAX(k.rowid) FROM skill_screenings k WHERE k.proposal_id = p.id AND "
+    "k.status = 'screened'), 0)) AS screen_failures "
+    "FROM skill_proposals p "
     "LEFT JOIN skill_versions bv ON bv.id = p.base_version_id LEFT JOIN skill_versions v ON v.id = p.version_id"
 )
+
+# What an admin does about each reason a proposal was not screened (the Skills page says the same words).
+SCREEN_REASONS = {
+    "oversize": "The skill is too big to screen (over 120,000 characters with its diff). Make it smaller and propose it again.",
+    "cap": "The monthly spend cap for model calls is reached. Raise the cap or wait for it to reset, then re-run screening.",
+    "unavailable": "No screening model is available: no Gateway, or it refused its key. Connect the Gateway or check its key, then re-run screening.",
+    "timeout": "The screening model did not answer in time. Re-run screening.",
+    "error": "Screening failed. Re-run it; if it fails again, send support the judge call id, if there is one.",
+}
+NO_REASON = "No reason was recorded. Re-run screening."
 
 
 def _proposal(c, pid):
@@ -132,6 +154,7 @@ def _proposal_view(row):
         "name": row["name"],
         "status": row["status"],
         "screen_status": row["screen_status"],
+        **_screen_reason(row),
         "sha256": row["sha256"],
         "description": row["description"],
         "note": row["note"],
@@ -145,6 +168,19 @@ def _proposal_view(row):
         "decline_reason": row["decline_reason"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+    }
+
+
+def _screen_reason(row):
+    """Why a not_screened proposal was not screened, what to do about it, and how many screens in a row failed. Only a
+    not_screened row carries a reason: a pending one waits for its next screen, so the last reason no longer stands."""
+    failed = row["screen_status"] == "not_screened"
+    reason = row["screen_reason"] if failed else None
+    return {
+        "screen_reason": reason,
+        "screen_action": SCREEN_REASONS.get(reason or "", NO_REASON) if failed else None,
+        "screen_failures": row["screen_failures"] or 0,
+        "judge_call_id": row["screen_judge_call_id"],
     }
 
 
@@ -172,6 +208,7 @@ def _screening_view(row):
         "summary": row["summary"],
         "findings": _json(row["findings"], []),
         "patterns": _json(row["patterns"], []),
+        "judge_call_id": row["judge_call_id"],
         "created_at": row["created_at"],
     }
 

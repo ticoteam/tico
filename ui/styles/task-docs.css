@@ -1,19 +1,30 @@
 /* A task's documents (ui/app/task-docs.ts): the tab row beside the title, and one document open under its one version
    line. The task window and Flow on a phone draw the same row and the same view. */
 
-/* The tabs: one segmented control, Chat first; it scrolls sideways, never wraps, and gives way after the title does. */
-.doc-tabs{flex:0 1 auto;min-width:0;display:flex;gap:2px;padding:2px;border-radius:10px;background:var(--surface2);overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none}
-.doc-tabs::-webkit-scrollbar{display:none}
-.doc-tab{flex:none;display:inline-flex;align-items:center;gap:6px;min-height:calc(var(--ctl) - 4px);padding:0 10px;border:0;border-radius:8px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);font-weight:600;white-space:nowrap;cursor:pointer}
+/* The tabs: one segmented control, Chat first. It never scrolls or wraps: Chat and Files (Flow: the approval) keep their
+   size and a document's name gives way first. Past two documents one shows, and +N beside the tabs (how many more; ⋯ is
+   the task's own menu) lists them all. */
+.doc-tabs{flex:0 1 auto;min-width:0;display:flex;gap:2px;padding:2px;border-radius:10px;background:var(--surface2);overflow:hidden}
+.doc-tabs-l{display:contents}
+.doc-tab{flex:0 1 auto;min-width:0;display:inline-flex;align-items:center;gap:6px;min-height:calc(var(--ctl) - 4px);padding:0 10px;border:0;border-radius:8px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);font-weight:600;white-space:nowrap;cursor:pointer}
+.doc-tab-fix,.doc-tab-more{flex:none}
+.doc-tab[hidden]{display:none}
+/* Folded, the one document place keeps one width whichever document is in it, so Chat and Files never move. */
+.doc-tabs:has(>.doc-tab-more) .doc-tab-d{width:9.5em;justify-content:center}
 .doc-tab:hover{color:var(--ink)}
 .doc-tab[aria-selected="true"]{background:var(--bg);color:var(--ink)}
 .doc-tab:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
-.doc-tab-t{max-width:14em;overflow:hidden;text-overflow:ellipsis}
+.doc-tab-t{min-width:0;max-width:14em;overflow:hidden;text-overflow:ellipsis}
+.doc-tab-more{display:inline-grid;place-items:center;min-width:calc(var(--ctl) - 4px);min-height:calc(var(--ctl) - 4px);padding:0 8px;border:0;border-radius:8px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);font-weight:600;font-variant-numeric:tabular-nums;cursor:pointer}
+.doc-tab-more:hover,.doc-tab-more[aria-expanded="true"]{background:var(--bg);color:var(--ink)}
+.doc-tab-more:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .doc-tab .tw-dot{width:6px;height:6px;border-radius:50%;background:var(--wait)}
 /* The Spec cards under a task's title: one card a Spec page, which opens it; a dot when the task was OK'd on an older version. */
 .task-specs{display:flex;flex-direction:column;gap:var(--s1);margin:0 var(--s4) var(--s2);min-width:0}
 .task-spec{display:flex;align-items:center;gap:var(--s3);min-width:0;padding:var(--s2) var(--s3);border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);text-decoration:none}
 .task-spec:hover{background:var(--surface2)}
+/* the Spec open in the window, in place of the chat: its card is lit; pressed again, the chat comes back */
+.task-spec[aria-current="true"]{border-color:var(--ink);background:var(--surface2)}
 .task-spec:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .task-spec-ic{flex:none;width:20px;height:20px;font-size:20px;color:var(--muted)}
 .task-spec-main{display:flex;flex-direction:column;flex:1;min-width:0}
@@ -54,7 +65,8 @@
 .doc-diff .tf-diff-lines span{padding:2px 8px;border-radius:4px}
 
 @media (max-width:760px){
-  .doc-tab{min-height:44px}
+  .doc-tab,.doc-tab-more{min-height:44px}
+  .doc-tab-more{min-width:44px}
   .doc-ver-line,.doc-v{min-height:32px}
   .doc-ic{width:32px;height:32px}
   .doc-body{padding:var(--s1) var(--s2) var(--s2)}

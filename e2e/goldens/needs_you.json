@@ -47,7 +47,7 @@
           "due_at": null,
           "id": "<open_task>",
           "late": null,
-          "number": null,
+          "number": 2,
           "owner_id": "bot:ops",
           "owner_name": "ops",
           "pipeline_id": "general",

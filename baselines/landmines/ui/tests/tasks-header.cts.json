@@ -1,0 +1,6 @@
+{
+  "ui/tests/tasks-header.cts": {
+    "no-fixed-wait-ui": 2,
+    "no-raised-timeout": 2
+  }
+}

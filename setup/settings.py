@@ -292,7 +292,7 @@ class Settings:
             # The same choices as scripts/install.sh --recommended, read on the server's first start.
             e.update(
                 TICO_INSTALL_PRESET="recommended",
-                TICO_MODELS_PRESET="subscriptions-gateway",
+                TICO_MODELS_PRESET="subscriptions",
                 TICO_SUPPORT=self.support or "on",
                 TICO_GATEWAY_INVITE=self.gateway_invite,
             )

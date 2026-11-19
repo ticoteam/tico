@@ -23,6 +23,7 @@ import pytest
 
 from clients import cli_spec, hubcli
 from clients.tico import APIError, Client
+from clients.tests.helpers.wire import BASE, Refusal, Wire, cli_wire
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 
@@ -356,8 +357,8 @@ def test_product_repository_cli_previews_and_requires_the_exact_typed_confirmati
             sent.append(("GET", path, query))
             return {
                 "org": "Acme",
-                "name": "tico-recorder",
-                "repository": "Acme/tico-recorder",
+                "name": "tico-mobile",
+                "repository": "Acme/tico-mobile",
                 "visibility": "private",
                 "auto_init": False,
                 "capability": "available",
@@ -366,18 +367,18 @@ def test_product_repository_cli_previews_and_requires_the_exact_typed_confirmati
 
         def post(self, path, body, key=None):
             sent.append(("POST", path, body, key))
-            return {"repository": "Acme/tico-recorder"}
+            return {"repository": "Acme/tico-mobile"}
 
-    args = hubcli.parser().parse_args(["repo", "product-create", "tico-recorder"])
+    args = hubcli.parser().parse_args(["repo", "product-create", "tico-mobile"])
     assert args.fn == "repo product-create"
-    out = StringIO("Acme/tico-recorder\n")
+    out = StringIO("Acme/tico-mobile\n")
     out.isatty = lambda: True
     remotecli.product_repo_create(Api(), args.name, stdin=out, stderr=StringIO())
-    assert sent[0] == ("GET", "github/product-repos/preview", {"name": "tico-recorder"})
+    assert sent[0] == ("GET", "github/product-repos/preview", {"name": "tico-mobile"})
     assert sent[1][:3] == (
         "POST",
         "github/product-repos",
-        {"org": "Acme", "name": "tico-recorder", "visibility": "private", "auto_init": False, "confirmed": True},
+        {"org": "Acme", "name": "tico-mobile", "visibility": "private", "auto_init": False, "confirmed": True},
     )
     assert sent[1][3] and len(sent[1][3]) <= 200
 
@@ -392,8 +393,8 @@ def test_product_repository_cli_never_writes_without_matching_confirmation(monke
         def get(self, path, **query):
             return {
                 "org": "Acme",
-                "name": "tico-recorder",
-                "repository": "Acme/tico-recorder",
+                "name": "tico-mobile",
+                "repository": "Acme/tico-mobile",
                 "visibility": "private",
                 "auto_init": False,
                 "capability": "available",
@@ -406,7 +407,7 @@ def test_product_repository_cli_never_writes_without_matching_confirmation(monke
     out = StringIO("Acme/other\n")
     out.isatty = lambda: True
     with pytest.raises(remotecli.APIError, match="Confirmation did not match"):
-        remotecli.product_repo_create(Api(), "tico-recorder", stdin=out, stderr=StringIO())
+        remotecli.product_repo_create(Api(), "tico-mobile", stdin=out, stderr=StringIO())
     assert calls == []
 
 
@@ -423,8 +424,8 @@ def test_product_repository_cli_refuses_missing_capability_and_noninteractive_co
         def get(self, path, **query):
             return {
                 "org": "Acme",
-                "name": "tico-recorder",
-                "repository": "Acme/tico-recorder",
+                "name": "tico-mobile",
+                "repository": "Acme/tico-mobile",
                 "visibility": "private",
                 "auto_init": False,
                 "capability": self.capability,
@@ -435,12 +436,10 @@ def test_product_repository_cli_refuses_missing_capability_and_noninteractive_co
             self.writes += 1
 
     with pytest.raises(remotecli.APIError, match="not available"):
-        remotecli.product_repo_create(Api("missing"), "tico-recorder", stdin=StringIO(""), stderr=StringIO())
+        remotecli.product_repo_create(Api("missing"), "tico-mobile", stdin=StringIO(""), stderr=StringIO())
     available = Api("available")
-    with pytest.raises(remotecli.APIError, match="--confirm Acme/tico-recorder, or type it at an interactive terminal"):
-        remotecli.product_repo_create(
-            available, "tico-recorder", stdin=StringIO("Acme/tico-recorder\n"), stderr=StringIO()
-        )
+    with pytest.raises(remotecli.APIError, match="--confirm Acme/tico-mobile, or type it at an interactive terminal"):
+        remotecli.product_repo_create(available, "tico-mobile", stdin=StringIO("Acme/tico-mobile\n"), stderr=StringIO())
     assert available.writes == 0
 
 
@@ -878,17 +877,28 @@ class BotSetup(unittest.TestCase):
     def test_creating_a_bot_without_repo_permission_fails_and_says_a_person_must_act(self):
         from clients.tico import APIError
 
-        self.client.github = APIError(
-            "github_permission_missing",
-            "A person must act: the GitHub App was set up without permission to create repositories.",
-            409,
-            False,
-        )
         args = hubcli.parser().parse_args(["bot", "create", "seo", "--template", "specialist"])
         out = io.StringIO()
+        hub = Wire(
+            {
+                "GET config": NAMES,
+                "GET me": {"actor": "bot:botops", "kind": "botops"},
+                "GET setup": ONBOARDING,
+                "POST bots/register": {"created": True, "status": "planned", "bot_owners": ["cara"]},
+                "POST github/repos": Refusal(
+                    409,
+                    "github_permission_missing",
+                    "A person must act: the GitHub App was set up without permission to create repositories.",
+                ),
+            }
+        )
         with (
-            mock.patch.object(self.remotecli, "Client", lambda *a, **k: self.client),
-            mock.patch.dict(os.environ, {"HUB_API_URL": "http://hub.invalid"}),
+            mock.patch.object(
+                self.remotecli, "Client", lambda url, token, **options: hub.client(token, **options)
+            ),  # double: the HTTP transport only; the client is real
+            mock.patch.dict(
+                os.environ, {"HUB_API_URL": BASE}
+            ),  # double: the OS environment; main() reads the hub URL from it
             contextlib.redirect_stdout(out),
         ):
             code = self.remotecli.main(args)
@@ -1631,6 +1641,38 @@ def test_settings_cli_passes_an_id_addressed_routine_as_the_requester(monkeypatc
     assert calls[1] == ("POST", "routines/ops:qa-review", {"enabled": False}, True)
 
 
+def test_settings_set_passes_on_the_routes_note_for_a_size_tico_does_not_recommend(monkeypatch):
+    from clients import remotecli
+
+    note = "Costs about as much as three Large machines ($0.25/h vs $0.09/h). For more room, give busy bots their own Large machine."
+
+    class Api:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            if path == "settings/catalog/cloud.shared_machine/plan":
+                return {
+                    "run": {"method": "POST", "path": "cloud-machines/shared", "body": {"size": "xlarge"}},
+                    "setting": {"name": "Shared cloud machine", "where": "Settings > Bots > Bot editor > Computer"},
+                    "value": {"size": "xlarge"},
+                }
+            if path == "cloud-machines/shared":
+                return {"shared": {"size": "xlarge"}, "note": note}
+            return {}
+
+        def get(self, path, **query):
+            return self.call("GET", path)
+
+        def post(self, path, body=None, key=None, **kw):
+            return self.call("POST", path, body, key)
+
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    args = hubcli.parser().parse_args(["settings", "set", "cloud.shared_machine", '{"size":"xlarge"}'])
+    assert remotecli.run(args)["note"] == note
+
+
 def test_a_plain_webhook_header_sends_no_secret_key():
     """BotOps' requests refuse any key named like a secret (backend/botops_act.py), so a plain header leaves it out."""
     args = hubcli.parser().parse_args(
@@ -1783,6 +1825,50 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
             "may": "read only",
             "owner_ref": "bot:growth",
         },
+    )
+    # A bot proposes the channel and its source in one ask; the source's fields go under source, without the prefix.
+    assert run(
+        "growth",
+        "channel",
+        "propose",
+        "linkedin",
+        "--name",
+        "LinkedIn posts",
+        "--source-system",
+        "HubSpot",
+        "--source-truth-for",
+        "signups",
+        "--source-reach-kind",
+        "mcp",
+        "--source-map",
+        "new_customers=signups",
+        "--ask",
+        "human:ana",
+    ) == (
+        "POST",
+        "growth/proposals",
+        {
+            "channel": {"slug": "linkedin", "name": "LinkedIn posts"},
+            "source": {
+                "truth_for": "signups",
+                "system": "HubSpot",
+                "reach_kind": "mcp",
+                "sync_map": {"fields": {"new_customers": "signups"}},
+            },
+            "ask": "human:ana",
+        },
+    )
+    assert run("growth", "channel", "propose", "linkedin", "--name", "LinkedIn") == (
+        "POST",
+        "growth/proposals",
+        {"channel": {"slug": "linkedin", "name": "LinkedIn"}},
+    )  # no source: none is proposed
+    assert run(
+        "growth", "source", "propose", "--channel", "linkedin", "--truth-for", "signups", "--system", "HubSpot"
+    ) == (
+        "POST",
+        "growth/proposals",
+        {"source": {"truth_for": "signups", "system": "HubSpot"}, "for_channel": "linkedin"},
     )
     assert run("growth", "source", "update", "src1", "--may", "pause ads") == (
         "PATCH",
@@ -1946,6 +2032,7 @@ def test_call_commands_run_the_call_tools_on_their_routes(monkeypatch):
     monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
     for words in (
         ["call", "start", "thread-1", "--title", "Acme standup"],
+        ["call", "start", "thread-1", "--bot", "ops", "--bot", "finance"],
         ["call", "bot", "add", "call-1", "ops", "finance"],
         ["call", "bot", "remove", "call-1", "ops"],
         ["call", "list", "thread-1", "--limit", "5"],
@@ -1953,6 +2040,7 @@ def test_call_commands_run_the_call_tools_on_their_routes(monkeypatch):
         remotecli.run(hubcli.parser().parse_args(words))
     assert sent == [
         ("POST", "threads/thread-1/calls", {"title": "Acme standup"}, None),
+        ("POST", "threads/thread-1/calls", {"bots": ["ops", "finance"]}, None),
         ("POST", "calls/call-1/bots", {"bots": ["ops", "finance"]}, None),
         ("DELETE", "calls/call-1/bots/ops", {}, None),
         ("GET", "threads/thread-1/calls", {"limit": 5}),
@@ -1962,136 +2050,144 @@ def test_call_commands_run_the_call_tools_on_their_routes(monkeypatch):
 def test_thread_delete_runs_the_message_delete_route(monkeypatch):
     """`tico thread delete` runs `tico_thread_delete`: DELETE on the message, with no body."""
     from clients import remotecli
-    from unittest.mock import Mock
 
-    client = Mock()
-    client.get.return_value = {"actor": "human:ana"}
-    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
-    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    wire = cli_wire(monkeypatch, {"GET me": {"actor": "human:ana"}, "DELETE messages/m7": {}})
     remotecli.run(hubcli.parser().parse_args(["thread", "delete", "m7"]))
-    client.call.assert_called_once_with("DELETE", "messages/m7", None, key=None)
+    (sent,) = wire.writes()
+    assert (sent.method, sent.path, sent.body) == ("DELETE", "/api/v2/messages/m7", {})
 
 
-def test_thread_upload_streams_the_file_to_the_thread_message_route(monkeypatch, tmp_path):
-    """`tico thread upload` runs `tico_thread_upload`: the file is streamed (never read whole) as multipart to the thread's
-    upload route, with the text and reply target as form fields."""
-    from pathlib import Path
-    from unittest.mock import Mock
+def test_thread_upload_sends_the_file_as_multipart_to_the_thread_message_route(monkeypatch, tmp_path):
+    """`tico thread upload` runs `tico_thread_upload`: the file goes as multipart to the thread's upload route, in the
+    `files` part the route reads, with the text and reply target as form fields."""
     from clients import remotecli
 
     path = tmp_path / "report.pdf"
     path.write_bytes(b"%PDF-1.4 test")
-    client = Mock()
-    client.get.return_value = {"actor": "human:ana"}
-    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
-    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
-    from clients import bot_files
-
-    monkeypatch.setattr(bot_files, "checkout_root", lambda: tmp_path)
-    monkeypatch.setattr(Path, "read_bytes", lambda _: pytest.fail("whole file read"))
+    monkeypatch.chdir(tmp_path)  # not a git checkout, so the command's checkout is this folder
+    wire = cli_wire(
+        monkeypatch,
+        {"GET me": {"actor": "human:ana"}, "POST uploads/threads/T1/messages": {"message": {"id": "m9"}}},
+    )
     remotecli.run(
         hubcli.parser().parse_args(
             ["thread", "upload", "T1", str(path), "--text", "Q3 numbers", "--to", "human:ben", "--under", "m7"]
         )
     )
-    client.post_multipart.assert_called_once_with(
-        "uploads/threads/T1/messages",
-        {"file": path},
-        {"text": "Q3 numbers", "to": "human:ben", "parent_message_id": "m7"},
-        key=None,
+    (sent,) = wire.writes()
+    assert sent.path == "/api/v2/uploads/threads/T1/messages"
+    assert sent.body == {
+        "text": "Q3 numbers",
+        "to": "human:ben",
+        "parent_message_id": "m7",
+        "files": {"filename": "report.pdf", "content": b"%PDF-1.4 test"},
+    }
+
+
+def test_thread_post_attaches_files_already_in_tico(monkeypatch):
+    """`tico thread post --file ID@VERSION` (repeatable) sends them as the post's attachments, which the thread's
+    readers open from the message (backend/thread_api.py shared_files)."""
+    from clients import remotecli
+
+    wire = cli_wire(monkeypatch, {"GET me": {"actor": "bot:legal"}, "POST threads/T1/messages": {"id": "m9"}})
+    remotecli.run(hubcli.parser().parse_args(["thread", "post", "T1", "The draft", "--file", "f1@2", "--file", "f2@1"]))
+    (sent,) = wire.writes()
+    assert (sent.path, sent.body) == (
+        "/api/v2/threads/T1/messages",
+        {"text": "The draft", "kind": "say", "attachments": ["f1@2", "f2@1"]},
     )
 
 
 def test_thread_slack_resume_posts_to_the_link_resume_route(monkeypatch):
     """`tico thread slack-resume` runs `tico_thread_slack_resume`: POST on the link's resume route, as the person asking."""
     from clients import remotecli
-    from unittest.mock import Mock
 
-    client = Mock()
-    client.get.return_value = {"actor": "human:ana", "role": "owner", "kind": "owner"}
-    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
-    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    wire = cli_wire(
+        monkeypatch,
+        {
+            "GET me": {"actor": "human:ana", "role": "owner", "kind": "owner"},
+            "POST slack/links/L1/resume": {},
+        },
+    )
     remotecli.run(hubcli.parser().parse_args(["thread", "slack-resume", "L1"]))
-    client.post.assert_called_once_with("slack/links/L1/resume", {}, key=None)
+    (sent,) = wire.writes()
+    assert (sent.method, sent.path, sent.body) == ("POST", "/api/v2/slack/links/L1/resume", {})
 
 
 def test_rules_withdraw_posts_an_empty_body_to_the_hold_withdraw_route(monkeypatch):
     """`tico rules withdraw <hold-id>` runs `tico_rules_withdraw`: POST rule-holds/{id}/withdraw with an empty body."""
     from clients import remotecli
-    from unittest.mock import Mock
 
-    client = Mock()
-    client.get.return_value = {"actor": "bot:ops"}
-    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
-    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    wire = cli_wire(monkeypatch, {"GET me": {"actor": "bot:ops"}, "POST rule-holds/h7/withdraw": {}})
     remotecli.run(hubcli.parser().parse_args(["rules", "withdraw", "h7"]))
-    client.post.assert_called_once_with("rule-holds/h7/withdraw", {}, key=None)
+    (sent,) = wire.writes()
+    assert (sent.method, sent.path, sent.body) == ("POST", "/api/v2/rule-holds/h7/withdraw", {})
 
 
 def test_assistant_withdraw_posts_the_reason_to_the_card_route(monkeypatch):
     """`tico assistant withdraw <id> --reason ...` runs `tico_assistant_withdraw`: POST assistant/actions/{id}/withdraw."""
     from clients import remotecli
-    from unittest.mock import Mock
 
-    client = Mock()
-    client.get.return_value = {"actor": "bot:botops"}
-    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
-    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    wire = cli_wire(
+        monkeypatch,
+        {"GET me": {"actor": "bot:botops"}, "POST assistant/actions/a7/withdraw": {}},
+    )
     remotecli.run(hubcli.parser().parse_args(["assistant", "withdraw", "a7", "--reason", "Wrong person"]))
-    client.post.assert_called_once_with("assistant/actions/a7/withdraw", {"reason": "Wrong person"}, key=None)
+    (sent,) = wire.writes()
+    assert (sent.method, sent.path, sent.body) == (
+        "POST",
+        "/api/v2/assistant/actions/a7/withdraw",
+        {"reason": "Wrong person"},
+    )
 
 
 def test_assistant_proposals_lists_the_callers_waiting_cards(monkeypatch):
     """`tico assistant proposals` runs `tico_assistant_proposals`: GET assistant/proposals."""
     from clients import remotecli
-    from unittest.mock import Mock
 
-    client = Mock()
-    client.get.return_value = {"actions": []}
-    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
-    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    wire = cli_wire(monkeypatch, {"GET me": {"actor": "human:ana"}, "GET assistant/proposals": {"actions": []}})
     remotecli.run(hubcli.parser().parse_args(["assistant", "proposals"]))
-    client.get.assert_called_with("assistant/proposals")
+    assert wire.sent[-1].method == "GET" and wire.sent[-1].path == "/api/v2/assistant/proposals"
 
 
 def test_assistant_shared_read_reads_the_chat_a_person_shared(monkeypatch):
     """`tico assistant shared-read human:ana --before m1` runs `tico_assistant_shared_read`: GET that person's page."""
     from clients import remotecli
-    from unittest.mock import Mock
 
-    client = Mock()
-    client.get.return_value = {"messages": []}
-    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
-    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    wire = cli_wire(
+        monkeypatch,
+        {
+            "GET me": {"actor": "human:ana"},
+            "GET assistant/shared/human:ana": {"messages": []},
+            "GET assistant/shared": {"messages": []},
+        },
+    )
     remotecli.run(hubcli.parser().parse_args(["assistant", "shared-read", "human:ana", "--before", "m1"]))
-    client.get.assert_called_with("assistant/shared/human:ana", before="m1")
+    assert wire.sent[-1].path == "/api/v2/assistant/shared/human:ana?before=m1"
     remotecli.run(hubcli.parser().parse_args(["assistant", "shared"]))
-    client.get.assert_called_with("assistant/shared")
+    assert wire.sent[-1].path == "/api/v2/assistant/shared"
 
 
 def test_tool_index_reaches_the_tool_index_route_with_its_paging(monkeypatch):
     """`tico tool index --limit 5 --cursor c2` runs `tico_tool_index`: GET tool-index with the page."""
     from clients import remotecli
-    from unittest.mock import Mock
 
-    client = Mock()
-    client.get.side_effect = lambda path, **kw: {"actor": "bot:ops"} if path == "me" else {"items": [], "next": None}
-    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
-    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    wire = cli_wire(
+        monkeypatch,
+        {"GET me": {"actor": "bot:ops"}, "GET tool-index": {"items": [], "next": None}},
+    )
     remotecli.run(hubcli.parser().parse_args(["tool", "index", "--limit", "5", "--cursor", "c2"]))
-    from unittest.mock import call
-
-    assert call("tool-index", limit=5, cursor="c2") in client.get.call_args_list
+    assert "/api/v2/tool-index?limit=5&cursor=c2" in [s.path for s in wire.sent]
 
 
 def test_the_background_card_names_its_person_on_the_wire(monkeypatch):
     """`tico assistant propose --for human:<id>` reaches the server as the body's `for`: remotecli.run used to drop it."""
     from clients import hubcli, remotecli
 
-    client = mock.Mock()
-    client.post.return_value = {"action": {"id": "a1"}}
-    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
-    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    wire = cli_wire(
+        monkeypatch,
+        {"GET me": {"actor": "bot:botops"}, "POST assistant/actions": {"action": {"id": "a1"}}},
+    )
     remotecli.run(
         hubcli.parser().parse_args(
             [
@@ -2108,39 +2204,38 @@ def test_the_background_card_names_its_person_on_the_wire(monkeypatch):
             ]
         )
     )
-    path, body = client.post.call_args.args[0], client.post.call_args.args[1]
-    assert path == "assistant/actions"
-    assert body["for"] == "human:ana" and body["path"] == "/api/v2/bots/ops/archive" and body["method"] == "POST"
+    (sent,) = wire.writes()
+    assert sent.path == "/api/v2/assistant/actions"
+    assert sent.body["for"] == "human:ana"
+    assert sent.body["path"] == "/api/v2/bots/ops/archive" and sent.body["method"] == "POST"
 
 
 def test_a_propose_without_for_sends_no_recipient(monkeypatch):
     from clients import hubcli, remotecli
 
-    client = mock.Mock()
-    client.post.return_value = {"action": {"id": "a1"}}
-    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
-    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    wire = cli_wire(
+        monkeypatch,
+        {"GET me": {"actor": "bot:botops"}, "POST assistant/actions": {"action": {"id": "a1"}}},
+    )
     remotecli.run(
         hubcli.parser().parse_args(
             ["assistant", "propose", "--summary", "Archive", "--path", "/api/v2/bots/ops/archive"]
         )
     )
-    assert "for" not in client.post.call_args.args[1]
+    (sent,) = wire.writes()
+    assert "for" not in sent.body
 
 
 def test_the_morning_message_posts_its_person_and_body_to_the_assistant(monkeypatch):
     """`tico assistant morning --for human:<id> --body <text>` reaches the server as assistant/morning with both fields."""
     from clients import hubcli, remotecli
 
-    client = mock.Mock()
-    client.post.return_value = {"message_id": "m1"}
-    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
-    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    wire = cli_wire(monkeypatch, {"GET me": {"actor": "bot:botops"}, "POST assistant/morning": {"message_id": "m1"}})
     args = hubcli.parser().parse_args(["assistant", "morning", "--for", "human:ana", "--body", "Hi"])
     assert args.fn == "assistant morning"
     remotecli.run(args)
-    assert client.post.call_args.args[0] == "assistant/morning"
-    assert client.post.call_args.args[1] == {"for": "human:ana", "body": "Hi"}
+    (sent,) = wire.writes()
+    assert (sent.path, sent.body) == ("/api/v2/assistant/morning", {"for": "human:ana", "body": "Hi"})
 
 
 @pytest.mark.parametrize(
@@ -2156,15 +2251,12 @@ def test_an_alias_runs_the_same_calls_as_the_command_it_names(alias, canonical, 
     """The parser keeps the spelling typed, so dispatch renames an alias first: `tico tasks list` makes the calls of
     `tico task list` and never reaches the "unsupported" fallback."""
     from clients import remotecli
-    from unittest.mock import MagicMock
 
-    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
     made = []
     for words in (alias, canonical):
-        client = MagicMock()
-        monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+        wire = cli_wire(monkeypatch, {"GET me": {"actor": "human:ana"}, "GET tasks": {"tasks": []}}, default={})
         remotecli.run(hubcli.parser().parse_args(words))
-        made.append(client.mock_calls)
+        made.append([(s.method, s.path, s.body) for s in wire.sent])
     assert made[0] == made[1] and made[0]
 
 

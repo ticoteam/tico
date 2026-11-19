@@ -20,6 +20,7 @@ A requirement never waits on a person who left, was removed or cannot sign in (`
 """
 
 import json
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
@@ -228,6 +229,56 @@ def prime(conn: "sqlite3.Connection", tasks: Iterable[Row]) -> None:
         unread = sorted(key for key in keys if (what, key) not in values)
         for key, rows in _by(conn, sql, column, unread).items():
             values.setdefault((what, key), rows)
+    _prime_pages(conn, tasks)
+    _prime_linked_done(conn, tasks)
+
+
+def _prime_pages(conn: "sqlite3.Connection", tasks: list[Row]) -> None:
+    """What a page requirement's standing (`_page`, `_one_page`) reads of each of these tasks, together: the pages
+    attached on its open visit, Jev's verdict on each, its newest send back on the visit, and the task's PRs. A few
+    statements however many pages, where each page read them one by one."""
+    from . import page_verdicts as V
+    from . import task_pages as P
+    from .item_sources import github as F
+
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+
+    documents: dict[str, str | None] = {}
+
+    def page_ids(what: str, key: str) -> list[str]:
+        # The rows `prime` just kept, read in place: copying and loading each task's requirements costs more here
+        # than the pages it finds. Only a page row's settings are loaded, once a requirement, for its document.
+        found = [r for r in values.get((what, key)) or () if r["kind"] == "page"]
+        for r in found:
+            if str(r["id"]) not in documents:
+                documents[str(r["id"])] = document_of(_loaded(dict(r)))
+        return [str(r["id"]) for r in found]
+
+    on_stage: dict[str, list[str]] = {}
+    pairs: list[tuple[str, str]] = []
+    paged: list[str] = []
+    approvals: list[tuple[str, str]] = []
+    for task in tasks:
+        visit = task.get("visit")
+        if not visit:
+            continue
+        stage_id = str(visit["stage_id"])
+        if stage_id not in on_stage:
+            on_stage[stage_id] = page_ids("requirements_on_stage", stage_id)
+        pages = on_stage[stage_id] + page_ids("requirements_on_visit", str(visit["id"]))
+        if pages:
+            pairs += [(str(visit["id"]), requirement_id) for requirement_id in pages]
+            paged.append(str(task["id"]))
+            approvals += [(str(task["id"]), d) for d in (documents[r] for r in pages) if d]
+    if not pairs:
+        return
+    P.prime_live_documents(conn, approvals)  # a document approval's live pages in its role (`_page`)
+    found = P.prime_current(conn, pairs)
+    V.prime(conn, [(str(p["file_id"]), int(p["version"]), str(p.get("rubric_hash") or "")) for p in found])
+    prime_sent_back(conn, pairs)
+    cast("Any", F).prime_prs(conn, paged)
 
 
 def on_stage(conn: "sqlite3.Connection", stage_id: str) -> list[Row]:
@@ -278,20 +329,63 @@ def person_of(conn: "sqlite3.Connection", requirement: Row, visit_id: str) -> st
     return None
 
 
+_FILED = (
+    "SELECT l.to_task_id AS id, COALESCE(t.title, 'A deleted task') AS title, "
+    "COALESCE(t.status, 'closed') AS status, t.number, t.id IS NULL AS deleted, "
+    "t.owner_id AS owner_id, t.conversation_id AS conversation_id, "
+    "CASE WHEN t.id IS NULL THEN 'It was deleted' ELSE "
+    "(SELECT v.why FROM visits v WHERE v.task_id = t.id AND v.how = 'closed' ORDER BY v.left_at DESC LIMIT 1) "
+    "END AS why%s FROM links l LEFT JOIN tasks t ON t.id = l.to_task_id WHERE l.visit_id%s "
+    "ORDER BY l.created_at, l.id"
+)
+FILED_SQL = _FILED % ("", "=?")
+# Many visits' filed tasks: FILED_SQL's columns and order, then the visit each was filed on (dropped from the rows).
+FILED_MANY_SQL = _FILED % (", l.visit_id AS filed_on", " IN (SELECT value FROM json_each(?))")
+
+
 def _filed(conn: "sqlite3.Connection", visit_id: str) -> list[Row]:
     """The tasks filed during a visit, with how each stands. One that was deleted since counts as closed: it is not
-    work that got done."""
-    return _rows(
-        conn.execute(
-            "SELECT l.to_task_id AS id, COALESCE(t.title, 'A deleted task') AS title, "
-            "COALESCE(t.status, 'closed') AS status, t.number, t.id IS NULL AS deleted, "
-            "CASE WHEN t.id IS NULL THEN 'It was deleted' ELSE "
-            "(SELECT v.why FROM visits v WHERE v.task_id = t.id AND v.how = 'closed' ORDER BY v.left_at DESC LIMIT 1) "
-            "END AS why FROM links l LEFT JOIN tasks t ON t.id = l.to_task_id WHERE l.visit_id=? "
-            "ORDER BY l.created_at, l.id",
-            (visit_id,),
+    work that got done. A visit `prime` read is not read again in this snapshot."""
+    values = read_cache.cache(conn)
+    primed = values.get(("filed", str(visit_id))) if values is not None else None
+    if primed is not None:
+        return [dict(row) for row in primed]
+    return _rows(conn.execute(FILED_SQL, (visit_id,)))
+
+
+def _prime_linked_done(conn: "sqlite3.Connection", tasks: list[Row]) -> None:
+    """What a linked_done requirement's standing (`_linked_done`) reads of each of these tasks, together: the tasks
+    filed on its open visit and whether its stage is a Review stage (`_at_head_gate`). Two statements however many."""
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+
+    def linked(what: str, key: str) -> bool:
+        return any(r["kind"] == "linked_done" for r in values.get((what, key)) or ())
+
+    visits: set[str] = set()
+    stages: set[str] = set()
+    for task in tasks:
+        visit = task.get("visit")
+        if not visit:
+            continue
+        if linked("requirements_on_stage", str(visit["stage_id"])) or linked("requirements_on_visit", str(visit["id"])):
+            visits.add(str(visit["id"]))
+            if task.get("stage_id") is not None:
+                stages.add(str(task["stage_id"]))
+    unread = sorted(v for v in visits if ("filed", v) not in values)
+    if unread:
+        found: dict[str, list[Row]] = {visit_id: [] for visit_id in unread}
+        for row in _rows(conn.execute(FILED_MANY_SQL, (json.dumps(unread),))):
+            found[str(row.pop("filed_on"))].append(row)
+        for visit_id, rows in found.items():
+            values.setdefault(("filed", visit_id), tuple(rows))
+    unread_gates = sorted(s for s in stages if ("one", AT_HEAD_SQL, (s,)) not in values)
+    if unread_gates:
+        gated = {str(row[0]) for row in conn.execute(AT_HEAD_MANY_SQL, (json.dumps(unread_gates),))}
+        read_cache.prime(
+            conn, AT_HEAD_SQL, {(stage_id,): (1,) if stage_id in gated else None for stage_id in unread_gates}
         )
-    )
 
 
 def _owner_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
@@ -319,6 +413,8 @@ def _ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | N
 
 def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     filed = _filed(conn, task["visit"]["id"])
+    if _at_head_gate(conn, task):
+        return _second_review(conn, task, requirement, filed)
     if not filed:
         return Standing(requirement, NOT_MET, task.get("owner_id"), "No task filed yet")
     still_open = [f for f in filed if f["status"] == "open"]
@@ -335,6 +431,166 @@ def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer
         line = f"{title} was closed: {why}" if why else f"{title} was closed"
         return Standing(requirement, NOT_MET, task.get("owner_id"), line, first["id"])
     return Standing(requirement, MET, line="Done")
+
+
+# How a review request names the commit it reads: "<PR> at <commit>", where the PR is its GitHub link, owner/repo#N or
+# #N. A commit is 7 to 40 hex characters with at least one digit, so an English word never reads as one.
+_SHA = r"(?=[0-9a-f]*[0-9])[0-9a-f]{7,40}"
+_PR_AT_RE = re.compile(
+    r"(?:https://github\.com/(?P<url>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/|(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#)"
+    rf"(?P<number>\d+)\s+(?:at|@)\s+(?:commit\s+)?(?P<sha>{_SHA})\b",
+    re.IGNORECASE,
+)
+_BARE_SHA_RE = re.compile(rf"\b{_SHA}\b", re.IGNORECASE)
+
+
+def requested_commits(text: str, refs: Iterable[str] = ()) -> dict[str, str]:
+    """{pr_ref: commit} a review request names. `refs` are the PRs linked to the task under review: "#N at <commit>"
+    names the one numbered N, and with exactly one PR linked a lone commit in the text names it. Anything else names
+    nothing: no commit is ever guessed."""
+    from .item_sources import github as F
+
+    refs = list(refs)
+    body = str(text or "")
+    out: dict[str, str] = {}
+    for m in _PR_AT_RE.finditer(body):
+        number, sha = int(m["number"]), m["sha"].lower()
+        repo = m["url"] or m["repo"]
+        if repo:
+            out[F.pr_ref(repo, number)] = sha
+            continue
+        same = [ref for ref in refs if ref.endswith(f"#{number}")]
+        if len(same) == 1:
+            out[same[0]] = sha
+    if not out and len(refs) == 1:
+        lone = {sha.lower() for sha in _BARE_SHA_RE.findall(body)}
+        if len(lone) == 1:
+            out[refs[0]] = lone.pop()
+    return out
+
+
+def _at_head_gate(conn: "sqlite3.Connection", task: Row) -> bool:
+    """Whether the task's stage is a Review stage: its page is read at the newest commit (`at_head`). Its linked_done
+    gate is the second review (`_second_review`), not any task filed on the visit."""
+    return read_cache.one(conn, AT_HEAD_SQL, (task.get("stage_id"),)) is not None
+
+
+_AT_HEAD = (
+    "FROM requirements WHERE stage_id%s AND kind='page' AND withdrawn_at IS NULL "
+    "AND json_extract(settings, '$.at_head')=1"
+)
+AT_HEAD_SQL = "SELECT 1 " + _AT_HEAD % "=?" + " LIMIT 1"
+# The stages of many that are Review stages: the same test as AT_HEAD_SQL, one statement for all of them.
+AT_HEAD_MANY_SQL = "SELECT DISTINCT stage_id " + _AT_HEAD % " IN (SELECT value FROM json_each(?))"
+
+
+def _reviews(conn: "sqlite3.Connection", filed: list[Row]) -> list[Row]:
+    """The filed tasks that are second reviews: subtasks filed with a review check model (`--role review`,
+    backend/check_models.py), whoever owns them. A routing, repair or build task filed on the visit is none."""
+    ids = [f["id"] for f in filed if not f["deleted"]]
+    if not ids:
+        return []
+    marks = ",".join("?" * len(ids))
+    review = {
+        row[0]
+        for row in conn.execute(
+            f"SELECT task_id FROM task_check_models WHERE role='review' AND task_id IN ({marks})", ids
+        ).fetchall()
+    }
+    return [f for f in filed if f["id"] in review]
+
+
+def _named_commits(conn: "sqlite3.Connection", review: Row, refs: Iterable[str]) -> list[tuple[str, str]]:
+    """(PR ref, commit) pairs the review was asked to read: those its request named when it was filed
+    (check_models.record), then those named in a message about the review, whoever wrote it. Nothing else: a review
+    that names no commit reads none, and the PR's head is never taken for it."""
+    from .hubdb import MESSAGE_TASK_SQL
+
+    named: list[tuple[str, str]] = []
+    for (data,) in conn.execute(
+        "SELECT data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model' "
+        "AND data IS NOT NULL ORDER BY created_at, id",
+        (review["id"],),
+    ).fetchall():
+        requested = _json_object(data).get("requested")
+        if isinstance(requested, dict):
+            saved = cast("dict[str, object]", requested)
+            named.extend((ref, str(sha).lower()) for ref, sha in saved.items() if sha)
+    # Only messages about this review: a conversation several tasks share carries other tasks' PRs and commits too.
+    for (body,) in conn.execute(
+        "SELECT m.body FROM messages m LEFT JOIN conversations cv ON cv.id = m.conversation_id "
+        "WHERE m.conversation_id=? AND m.kind='say' AND m.deleted_at IS NULL AND m.superseded_at IS NULL "
+        f"AND {MESSAGE_TASK_SQL}=? ORDER BY m.created_at, m.id",
+        (review["conversation_id"], review["id"]),
+    ).fetchall():
+        named.extend(requested_commits(str(body or ""), refs).items())
+    return named
+
+
+def _json_object(text: object) -> dict[str, Any]:
+    try:
+        value = json.loads(str(text))
+    except ValueError:
+        return {}
+    return cast("dict[str, Any]", value) if isinstance(value, dict) else {}
+
+
+def _names_heads(named: list[tuple[str, str]], heads: dict[str, str | None]) -> bool:
+    """Whether the (PR ref, commit) pairs name the newest commit of every PR in `heads`. No PR linked: any review does."""
+    return all(
+        any(ref == name and head is not None and head.startswith(sha) for name, sha in named)
+        for ref, head in heads.items()
+    )
+
+
+def _second_review(conn: "sqlite3.Connection", task: Row, requirement: Row, filed: list[Row]) -> Standing:
+    """The Review stage's gate. Only a second review counts (`_reviews`), and only when it is Done and reads the newest
+    commit of every PR linked to the task (no PR linked: Done is enough). A Done review of the newest commit meets it
+    even while an older one is open; the gate waits only on an open review of the newest commit (or one naming no commit
+    yet, which can still name one). A Done review that names no commit never meets it. Any other filed task, a review of an older commit, or an unread PR head leaves it not met."""
+    from .item_sources import github as F
+
+    reviews = _reviews(conn, filed)
+    if not reviews:
+        return Standing(requirement, NOT_MET, task.get("owner_id"), "No second review filed yet")
+    heads = F.heads(conn, task["id"])
+    if any(head is None for head in heads.values()):
+        return Standing(requirement, NOT_MET, task.get("owner_id"), "The newest commit of a linked PR is not read yet")
+    named = {f["id"]: _named_commits(conn, f, heads) for f in reviews}
+    at_head = [f for f in reviews if _names_heads(named[f["id"]], heads)]
+    if any(f["status"] == "done" for f in at_head):
+        return Standing(requirement, MET, line="Done")
+    waiting = [f for f in reviews if f["status"] == "open" and (f in at_head or not named[f["id"]])]
+    if waiting:
+        first = waiting[0]
+        return Standing(requirement, WAITING, first["id"], first.get("title") or "", first["id"])
+    unbound = [f for f in reviews if f["status"] == "done" and not named[f["id"]]]
+    if unbound and heads:
+        first = unbound[0]
+        title = first.get("title") or "The second review"
+        return Standing(
+            requirement,
+            NOT_MET,
+            task.get("owner_id"),
+            f"{title} names no commit it read: file a second review that says PR <link> at <commit>",
+            first["id"],
+        )
+    stale = [f for f in reviews if f["status"] in ("open", "done")]
+    if stale:
+        first = stale[0]
+        title = first.get("title") or "The second review"
+        return Standing(
+            requirement,
+            NOT_MET,
+            task.get("owner_id"),
+            f"{title} did not read the newest commit: file a second review of it",
+            first["id"],
+        )
+    first = reviews[0]
+    why = (first.get("why") or "").strip()
+    title = first.get("title") or "A second review"
+    line = f"{title} was closed: {why}" if why else f"{title} was closed"
+    return Standing(requirement, NOT_MET, task.get("owner_id"), line, first["id"])
 
 
 # The five kinds the Product and Engineering pipelines bring. Each is its own function so each lands on its own:
@@ -639,7 +895,7 @@ def ok_kept(conn: "sqlite3.Connection", task: Row, requirement: Row, page: Row) 
 
 
 def document_of(requirement: Row) -> str | None:
-    """The task document a stage's page requirement approves (`settings.document`: Spec, QA report, Release report or
+    """The task document a stage's page requirement approves (`settings.document`: one of APPROVED, such as Spec or
     Invoice), or None for a page attached by hand. A bot writing that document while the task is in the stage submits
     it (task_pages.submit)."""
     settings: Row = requirement.get("settings") or {}
@@ -674,18 +930,54 @@ def last_sent_back(
     """The newest send back of a requirement that is not undone, on one visit, on any visit of one task, or on any
     visit: {id, visit_id, by_id, notes, page_version, created_at}, or None. Every reader of "the last send back" reads
     it here, so how a send back is stored is read in one place."""
-    sql = (
-        "SELECT a.id, a.visit_id, a.by_id, a.notes, a.page_version, a.created_at FROM answers a "
-        "JOIN visits v ON v.id = a.visit_id WHERE a.requirement_id=? AND a.answer='no' AND a.undone_at IS NULL"
-    )
+    sql = SENT_BACK_SQL
     args: list[str] = [requirement_id]
     if visit_id is not None:
         sql, args = sql + " AND a.visit_id=?", [*args, visit_id]
     if task_id is not None:
         sql, args = sql + " AND v.task_id=?", [*args, task_id]
+    # One visit's is kept for the read snapshot (`prime_sent_back` reads many visits' together).
+    values = read_cache.cache(conn) if visit_id is not None and task_id is None else None
+    key = (SENT_BACK_SQL, str(requirement_id), str(visit_id))
+    if values is not None and key in values:
+        kept: Row | None = values[key]
+        return dict(kept) if kept else None
     cursor = conn.execute(sql + " ORDER BY a.created_at DESC, a.id DESC LIMIT 1", args)
     found = cursor.fetchone()
-    return dict(zip([d[0] for d in cursor.description], found, strict=True)) if found else None
+    out = dict(zip([d[0] for d in cursor.description], found, strict=True)) if found else None
+    if values is not None:
+        values[key] = dict(out) if out else None
+    return out
+
+
+SENT_BACK_SQL = (
+    "SELECT a.id, a.visit_id, a.by_id, a.notes, a.page_version, a.created_at FROM answers a "
+    "JOIN visits v ON v.id = a.visit_id WHERE a.requirement_id=? AND a.answer='no' AND a.undone_at IS NULL"
+)
+SENT_BACK_MANY_SQL = (
+    "SELECT a.requirement_id, a.id, a.visit_id, a.by_id, a.notes, a.page_version, a.created_at FROM answers a "
+    "JOIN visits v ON v.id = a.visit_id WHERE a.visit_id IN (SELECT value FROM json_each(?)) AND a.answer='no' "
+    "AND a.undone_at IS NULL ORDER BY a.created_at DESC, a.id DESC"
+)
+
+
+def prime_sent_back(conn: "sqlite3.Connection", pairs: Iterable[tuple[str, str]]) -> None:
+    """`last_sent_back(requirement, visit_id=visit)` of many (visit id, requirement id) pairs in one statement, misses
+    too, for the reads that follow in this snapshot. Nothing outside a snapshot."""
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+    wanted = {(str(v), str(r)) for v, r in pairs if (SENT_BACK_SQL, str(r), str(v)) not in values}
+    if not wanted:
+        return
+    newest: dict[tuple[str, str], Row] = {}
+    cursor = conn.execute(SENT_BACK_MANY_SQL, (json.dumps(sorted({v for v, _ in wanted})),))
+    names = [d[0] for d in cursor.description][1:]
+    for raw in cursor.fetchall():
+        row = dict(zip(names, tuple(raw)[1:], strict=True))  # the columns `last_sent_back` reads, without the key
+        newest.setdefault((str(row["visit_id"]), str(raw[0])), row)  # newest first
+    for visit_id, requirement_id in wanted:
+        values.setdefault((SENT_BACK_SQL, requirement_id, visit_id), newest.get((visit_id, requirement_id)))
 
 
 def _sent_back(conn: "sqlite3.Connection", visit_id: str, requirement_id: str) -> Row | None:
@@ -1058,7 +1350,7 @@ KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standi
 # - related_input: `bar` (Jev's score a bot needs to be asked, 0 to 1), `most` (bots asked at most), `wait_hours` (how
 #   long the stage waits for their comments before it is met anyway). Defaults in backend/related_input.py.
 # The documents a stage may name for a person to approve (task_documents: the fixed names a stage approves).
-APPROVED = ("Spec", "QA report", "Release report", "Invoice")
+APPROVED = ("Spec", "QA report", "Release report", "Invoice", "Proposal", "Results", "Checked in production")
 SETTINGS: dict[str, tuple[str, ...]] = {
     "owner_done": (),
     "ok": (),

@@ -107,6 +107,12 @@ def choose(c, settings, bot, spec, role, authors=()):
         raise CheckModelError("check_model", str(exc).replace("default model", "check model")) from None
     if not runtime:
         raise CheckModelError("check_model", "Enable an AI provider in Settings before naming a check model")
+    if providers.gateway_check_refused(record, model):
+        raise CheckModelError(
+            "check_model",
+            f"{model} runs on the Tico AI Gateway, and this company's models choice keeps reviews and checks on "
+            "subscriptions: name a subscription model, or list it in Settings > Computers check models",
+        )
     row = providers.MODEL_BY_ID.get(model) or {}
     effort = str(row.get("default_effort") or "")
     harnesses = tuple(row.get("harnesses") or (runtime,))
@@ -124,7 +130,10 @@ def choose(c, settings, bot, spec, role, authors=()):
     }
 
 
-def record(c, actor, task_id, check):
+def record(c, actor, task_id, check, parent_id=None, request=""):
+    """Save the subtask's check model. A review keeps, in its history, the commit of each PR its request asks it to
+    read (task_requirements.requested_commits), which the Review stage's gate matches. A request that names no commit
+    binds none: the gate never infers one from the PR's head at filing, which may already be newer."""
     c.execute(
         "INSERT INTO task_check_models(task_id,runtime,model,harness,effort,role,created_by,created_at) "
         "VALUES(?,?,?,?,?,?,?,?)",
@@ -138,7 +147,20 @@ def record(c, actor, task_id, check):
         None,
         f"{check['runtime']}:{check['model']}",
         check["role"] + (f"; {check['note']}" if check.get("note") else ""),
+        data=_requested(c, check, parent_id, request),
     )
+
+
+def _requested(c, check, parent_id, request):
+    """{"requested": {pr_ref: commit}} for a review whose request names commits, else None."""
+    from .item_sources import github as F
+    from .task_requirements import requested_commits
+
+    if check["role"] != "review":
+        return None
+    refs = list(F.heads(c, parent_id)) if parent_id else []
+    named = requested_commits(request, refs)
+    return {"requested": named} if named else None
 
 
 def prime(c, pairs):
@@ -180,9 +202,20 @@ def of(c, task_id, bot):
         moved
         and _default_login(c, bot, first, moved["runner_id"])
         and _out_of_quota(c, moved["runner_id"], first["runtime"])
+        and not _gateway_refused(c, moved)
     ):
         return {k: moved[k] for k in ("runtime", "model", "harness", "effort", "role")}
+    if first and _gateway_refused(c, first):
+        return None  # saved before the company's choice stopped Gateway checks: the bot's own model runs it
     return first
+
+
+def _gateway_refused(c, check):
+    """A check saved on a Gateway model the company's choice no longer allows (providers.gateway_check_refused):
+    filed or moved there before the choice changed. Only a Gateway model reads the company's record."""
+    return providers.gateway_model(check.get("model")) and providers.gateway_check_refused(
+        providers.load(c), check["model"]
+    )
 
 
 def _default_login(c, bot, check, runner_id):

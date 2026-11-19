@@ -406,7 +406,14 @@ def org_reports_to(api, args):
         return who.post(f"humans/{quote(ref, safe='')}", {"reports_to": boss.removeprefix("human:")}, key=_key(args))
     if kind != "bot" or not ref:
         raise ValueError("Name the teammate as bot:<slug> or human:<id>")
-    row = next((b for b in api.get("bots") if ref in (b.get("id"), b.get("slug") or b.get("name"))), None)
+    row = next(
+        (
+            b
+            for b in api.get("bots", fields="id,slug,name,revision")
+            if ref in (b.get("id"), b.get("slug") or b.get("name"))
+        ),
+        None,
+    )
     if not row:
         raise ValueError("No bot " + ref)
     return who.post(
@@ -550,7 +557,7 @@ def settings_set(api, args):
     if "run" not in planned:
         return planned  # the Confirm card
     run = planned["run"]
-    who.call(run["method"], run["path"], run["body"], _key(args))
+    answer = who.call(run["method"], run["path"], run["body"], _key(args))
     # The value read back after the change, where Settings shows one; else the value sent.
     shown = settings_show(api, {"key": args["key"], **_setting_query(args)})
     return {
@@ -558,6 +565,8 @@ def settings_set(api, args):
         "name": planned["setting"]["name"],
         "where": planned["setting"]["where"],
         "value": shown["value"] if "value" in shown else planned["value"],
+        # Advice the route gave with the change (a cloud machine size Tico does not recommend, and why).
+        **({"note": answer["note"]} if isinstance(answer, dict) and answer.get("note") else {}),
     }
 
 

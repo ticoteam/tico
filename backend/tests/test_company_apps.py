@@ -21,7 +21,7 @@ ENTRY = {
 def no_icon_retry_waits(monkeypatch):
     from scripts import company_apps
 
-    monkeypatch.setattr(company_apps.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(company_apps, "_sleep", lambda seconds: None)
 
 
 def test_private_matrix_and_all_dry_runs_expose_only_hashes(monkeypatch, capsys):
@@ -165,7 +165,7 @@ def test_icon_download_recovers_from_restart_and_interrupted_body(monkeypatch, c
             return Body()
 
     monkeypatch.setattr(company_apps, "build_opener", lambda *args: Opener())
-    monkeypatch.setattr(company_apps.time, "sleep", delays.append)
+    monkeypatch.setattr(company_apps, "_sleep", delays.append)
     assert company_apps.download_icon(icon_url) == icon
     assert delays == [30, 60, 90, 120, 120, 120, 120]
     output = capsys.readouterr()
@@ -196,7 +196,7 @@ def test_icon_outage_is_bounded_and_keeps_private_errors_out_of_logs(
             raise URLError(ENTRY["url"])
 
     monkeypatch.setattr(company_apps, "build_opener", lambda *args: Opener())
-    monkeypatch.setattr(company_apps.time, "sleep", delays.append)
+    monkeypatch.setattr(company_apps, "_sleep", delays.append)
     assert main(["configure", "--company", key(ENTRY)]) == 1
     assert len(attempts) == 8
     assert delays == [30, 60, 90, 120, 120, 120, 120]
@@ -218,7 +218,7 @@ def test_icon_permission_error_fails_without_retry(monkeypatch):
             raise HTTPError(request.full_url, 403, "Forbidden", {}, None)
 
     monkeypatch.setattr(company_apps, "build_opener", lambda *args: Opener())
-    monkeypatch.setattr(company_apps.time, "sleep", lambda *args: pytest.fail("Permanent errors must not retry"))
+    monkeypatch.setattr(company_apps, "_sleep", lambda *args: pytest.fail("Permanent errors must not retry"))
     with pytest.raises(HTTPError):
         company_apps.download_icon(ENTRY["url"] + ENTRY["icon_url"])
 
@@ -292,7 +292,7 @@ def test_icon_server_outage_retries_then_skips_company_with_warning(tmp_path, mo
             raise HTTPError(request.full_url, 503, private, {}, None)
 
     monkeypatch.setattr(company_apps, "build_opener", lambda *args: Opener())
-    monkeypatch.setattr(company_apps.time, "sleep", delays.append)
+    monkeypatch.setattr(company_apps, "_sleep", delays.append)
     assert main(["icon", "--company", key(ENTRY)]) == 0
     assert len(attempts) == 8
     assert delays == [30, 60, 90, 120, 120, 120, 120]
@@ -324,7 +324,7 @@ def test_icon_tls_certificate_failure_is_not_retried_and_skips_company(tmp_path,
             raise URLError(ssl.SSLCertVerificationError(1, private))
 
     monkeypatch.setattr(company_apps, "build_opener", lambda *args: Opener())
-    monkeypatch.setattr(company_apps.time, "sleep", lambda *args: pytest.fail("Certificate failures must not retry"))
+    monkeypatch.setattr(company_apps, "_sleep", lambda *args: pytest.fail("Certificate failures must not retry"))
     assert main(["icon", "--company", key(ENTRY)]) == 0
     assert len(attempts) == 1
     assert (tmp_path / "output").read_text() == "available=false\n"

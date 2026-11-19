@@ -64,6 +64,12 @@ from . import visuals as V
 from .store import H, Problem, encode
 from .api_contract import api_v2, ref as schema_ref
 
+
+def _monotonic():
+    """The deadline clock: a test replaces this and not time.monotonic for the whole process."""
+    return time.monotonic()
+
+
 TOPICS = (
     "tasks",
     "messages",
@@ -105,7 +111,7 @@ LEAD_SECONDS = 0.02  # a ring after a quiet window waits only this long, for the
 def gathered(window, read_at):
     """How long a stream waits after a ring before it reads: at most one read per `window`, but a ring after
     a quiet window is read almost at once instead of a full window later (a chat reply, a job for a computer)."""
-    return max(LEAD_SECONDS, window - (time.monotonic() - read_at))
+    return max(LEAD_SECONDS, window - (_monotonic() - read_at))
 
 
 BATCH = 500
@@ -883,6 +889,7 @@ RUNNER_KINDS = (
     "subscription_refresh",
     "screen_open",
     "browser_exit",
+    "pushed",  # only to a computer that takes it (backend/github.py tell_pushed)
 )
 _BOT_RUNNER = "SELECT runner_id AS rid FROM assignments WHERE bot={bot}"
 # Credentials and repositories are rare company-wide changes: every computer re-reads its share.
@@ -2139,7 +2146,23 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
             row["quarantine"]["review"] = review
     from . import holds
 
-    return holds.overlay(c, usage_limits.overlay(c, row, usage_limits.company(c) if default is None else default))
+    row = holds.overlay(c, usage_limits.overlay(c, row, usage_limits.company(c) if default is None else default))
+    return credit_overlay(c, row)
+
+
+CREDIT_FOCUS = "Its cloud machine is stopped: add credit to start it"
+
+
+def credit_overlay(c, row):
+    """A cloud-mode bot whose machine is stopped for credit (cloud_machines.out_of_credit) reads stopped, out of
+    credit, not idle with its turns queued. A running turn, a quarantine and Tico's own stops keep theirs."""
+    if not row or row.get("state") in ("running", "quarantined") or row.get("stopped"):
+        return row
+    from . import cloud_machines
+
+    if not cloud_machines.out_of_credit(c, row["bot"]):
+        return row
+    return {**row, "state": "paused", "focus": CREDIT_FOCUS, "stopped": "out_of_credit"}
 
 
 def _trashed_visible(c, who, task_id):

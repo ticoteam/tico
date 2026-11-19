@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from .store import H, Problem, encode, repo_url
 from . import profiles
 from . import bot_settings as BS
+from . import read_cache
 
 # What a branch takes from its original at every claim. Everything else (its name, its person,
 # its computer) is the branch's own.
@@ -47,7 +48,7 @@ def _json(value):
 def declared(c, bot):
     if not H._has_table(c, "bot_config"):
         return {}
-    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
+    row = read_cache.one(c, BS.ONE_SQL, (bot,))
     return _json(row[0]) if row else {}
 
 

@@ -51,9 +51,17 @@ def private_work(api, title="Zip triage", owner="bot:ops"):
 
 def correction(api, body, token, check):
     r = api.post("/api/v2/tasks", json=body, headers=headers(token))
-    assert r.status_code == 422 and check in r.json()["error"]["detail"], r.text
     assert "vendor" not in r.json()["error"]["detail"] and "ghp_" not in r.json()["error"]["detail"]
-    assert any(check in p for p in dry_run(api, body, token))
+    if check == "secret-shaped" and r.json()["error"]["code"] == "looks_like_key":
+        # A key the detector rates certain in a text field is refused by the task-text key guard before this route's
+        # own check runs (backend/task_text_keys.py), on the dry run too: nothing filed. One in an object's key (a
+        # role's name) is the route's own check's.
+        assert r.status_code == 422, r.text
+        dry = api.post("/api/v2/tasks/dry-run", json=body, headers=headers(token))
+        assert dry.status_code == 422 and dry.json()["error"]["code"] == "looks_like_key", dry.text
+    else:
+        assert r.status_code == 422 and check in r.json()["error"]["detail"], r.text
+        assert any(check in p for p in dry_run(api, body, token))
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM refusals WHERE actor='bot:ops'").fetchone()
         assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:finance'").fetchone()

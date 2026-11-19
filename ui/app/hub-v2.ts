@@ -53,6 +53,15 @@ interface SourceLineOptions {
   cls?: string | undefined;
   attrs?: string | undefined;
   tail?: string | undefined;
+  lead?: string | undefined;
+}
+interface ChatTaskActivity {
+  id: string;
+  seq: number;
+  created_at: string;
+  task_id: string;
+  title: string;
+  excerpt: string;
 }
 /** The task fields the task text helpers read. */
 interface HubTask {
@@ -200,12 +209,32 @@ function sourceLeadHTML(src: RowSource) {
 }
 // One gray line for a row no person or bot wrote. `cls` and `attrs` let each surface keep its own row hooks; the
 // hover says what made it and when, and the whole text when the line may be cut.
-function sourceLineHTML(m: SourceRow, {src = rowSource(m), at = m.created_at, text = m.body, cls = '', attrs = '', tail = ''}: SourceLineOptions = {}) {
+function sourceLineHTML(m: SourceRow, {src = rowSource(m), at = m.created_at, text = m.body, cls = '', attrs = '', tail = '', lead = sourceLeadHTML(src)}: SourceLineOptions = {}) {
   const words = sourcePlain(text || ''), first = words.split('\n').map(s => s.trim()).find(Boolean) || '';
   const tip = [src.name, at ? fmt(at) : ''].filter(Boolean).join(' · ') + (words.length > first.length || first.length > 60 ? '\n\n' + words.slice(0, 600) : '');
   const when = at ? `<time class="src-time" data-ago="${esc(at)}">${esc(ago(at))}</time>` : '';
   return `<div class="src-line src-${esc(src.kind)}${cls ? ' ' + cls : ''}"${m.id ? ` data-message="${esc(m.id)}"` : ''}${attrs} title="${esc(tip)}">${
-    sourceLeadHTML(src)}<span class="src-text">${esc(first)}</span>${when}${tail}</div>`;
+    lead}<span class="src-text">${esc(first)}</span>${when}${tail}</div>`;
+}
+const sourceActivityRow = (activity: ChatTaskActivity) => ({
+  id: 'task-activity:' + activity.id, seq: activity.seq, created_at: activity.created_at, body: activity.excerpt,
+  source: {kind: 'task_update', name: '', link: null}, task_activity: activity,
+});
+function sourceActivityLineHTML(m: SourceRow, activity: ChatTaskActivity) {
+  return sourceLineHTML(m, {
+    lead: `<a class="src-name" href="#/task/${esc(encodeURIComponent(activity.task_id))}">${esc(activity.title)}</a>`,
+  });
+}
+// Keep the chat's own ordering while inserting the activity from the same page window.
+function sourceMergeActivity<T>(messages: T[], activity: T[], before: (a: T, m: T) => boolean): T[] {
+  if (!activity.length) return messages;
+  const rows: T[] = [];
+  let i = 0;
+  for (const m of messages) {
+    while (i < activity.length && before(activity[i]!, m)) rows.push(activity[i++]!);
+    rows.push(m);
+  }
+  return rows.concat(activity.slice(i));
 }
 // Consecutive task updates (two or more) are one gray "N task updates" row, shut by default; open shows a line each.
 // Every other row is drawn by `draw`. `open(run)` says whether a group is open, so a redraw keeps it: the surface keeps
@@ -226,7 +255,7 @@ function sourceRunsHTML<T extends SourceRunRow>(items: T[], {line, draw, open = 
     else {
       const key = String(first.id || first.message?.id || ''), last = run.at(-1)!, at = last.created_at || last.ts || last.message?.created_at;
       out.push(`<details class="src-group" data-src-group="${esc(key)}"${open(run) ? ' open' : ''}><summary class="src-line src-task_update">${
-        run.length} ${esc(noun)}<span class="src-chev" aria-hidden="true">▸</span>${at ? `<time class="src-time" data-ago="${esc(at)}" title="${esc(fmt(at))}">${esc(ago(at))}</time>` : ''}</summary>${
+        run.length} ${esc(run.length === 1 ? 'task update' : noun)}<span class="src-chev" aria-hidden="true">▸</span>${at ? `<time class="src-time" data-ago="${esc(at)}" title="${esc(fmt(at))}">${esc(ago(at))}</time>` : ''}</summary>${
         run.map(line).join('')}</details>`);
     }
     i = end;
@@ -309,14 +338,15 @@ function needsWakeAt(until: string | null) {
   // A browser timer holds at most ~24.8 days; a later end is set again when that one fires and reads the list.
   NEEDS_WAKE = window.setTimeout(() => { NEEDS_WAKE = 0; void v2Refresh(); }, Math.min(Math.max(at - Date.now(), 0) + 1000, 2 ** 31 - 1));
 }
-// The next page, one read at a time. Resolves true when the list grew (or was read again because it moved).
+// The next page (`limit` items, NEEDS_PAGE by default), one read at a time: a read already out is shared, whatever its
+// size. Resolves true when the list grew (or was read again because it moved).
 let NEEDS_MORE: Promise<boolean> | null = null;
-function v2NeedsMore() {
+function v2NeedsMore(limit = NEEDS_PAGE) {
   if (needsAll()) return Promise.resolve(false);
   return NEEDS_MORE ||= (async () => {
     try {
       const cursor = S.v2.needsNext, read = NEEDS_READ;
-      const r = await v2Get<NeedsRead>(`/v2/needs-you?limit=${NEEDS_PAGE}&cursor=${encodeURIComponent(cursor!)}`, {fresh: true});
+      const r = await v2Get<NeedsRead>(`/v2/needs-you?limit=${Math.min(limit, NEEDS_PAGE_MAX)}&cursor=${encodeURIComponent(cursor!)}`, {fresh: true});
       // A newer read owns the next snapshot even before it lands; this older page must not invalidate it.
       if (!r || read !== NEEDS_READ || S.v2.needsNext !== cursor) return false;
       if (r.restart || r.version !== S.v2.needsVersion) { await v2NeedsRead(); return true; }
@@ -459,6 +489,8 @@ document.addEventListener('click', async ev => {
 function pausedNotice(slug: string) {
   const s: Partial<V2BotState> = v2StatusOf(slug) || {};
   // Tico's own words for the stop, as the server sends them: what happened and what to check.
+  // Stopped for credit: adding credit starts its machine again; Release would not.
+  if (s.stopped === 'out_of_credit') return `${esc(s.focus || 'Out of credit')}${typeof cloudCreditLinkHTML === 'function' ? cloudCreditLinkHTML() : ''}`;
   if (s.stopped) return `${esc(s.focus || `Tico stopped ${empName(slug)}`)}${botReleaseButton(slug)}`;
   if (s.backoff) return esc(s.backoff);
   const when = (since: string | null | undefined) => since ? ` since ${clockTime(since)}` : '';
@@ -538,6 +570,8 @@ function v2StatePill(slug: string) {
   if (!s) return botStatePill(slug);
   // A back-off keeps the bot's state; its wait is the line beside it until the next try.
   const line = s.backoff || s.focus;
+  // A cloud machine stopped for credit (backend/events.py credit_overlay) says so, with Add credit, never Idle.
+  if (s.stopped === 'out_of_credit') return `<span class="pill fail">Out of credit</span>${line ? ` <span class="muted">${esc(line)}</span>` : ''}${typeof cloudCreditLinkHTML === 'function' ? cloudCreditLinkHTML() : ''}`;
   return `<span class="pill ${V2_PILL[s.state] ?? ''}">${esc(s.stopped ? 'Stopped' : V2_WORD[s.state] || s.state || 'Unknown')}</span>${
     line ? ` <span class="muted">${esc(line)}</span>` : ''}`;
 }

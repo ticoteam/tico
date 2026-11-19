@@ -42,7 +42,7 @@ pub fn present(checkout: &Path) -> bool {
 }
 
 /// Claude Code's auto memory folder for a turn in `checkout`: `memory/claude/` in it, or None when the turn keeps
-/// none (`off`: a stateless bot, a private meeting's copy) or runs outside a git checkout.
+/// none (`off`: a stateless bot or a disposable checkout) or runs outside a git checkout.
 pub fn memory_dir(checkout: &Path, off: bool) -> Option<String> {
     (!off && crate::bot_files::is_checkout(checkout))
         .then(|| checkout.join(MEMORY_DIR).display().to_string())

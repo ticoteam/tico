@@ -134,6 +134,11 @@ SCHEMAS.update(
                 "description": "On the task's own read, when it entered its current open visit, or null if it has none. "
                 "On a list row, when it entered its stage, falling back to when it was filed.",
             },
+            visit_id={
+                "type": ["string", "null"],
+                "description": "Its open visit: on the task's own read, null when it has none; on a list row, only when "
+                "its turn is an ask. With a requirement id it names that ask in Needs you (`ids=<visit>:<requirement>`)",
+            },
             waits=items(ref("TaskWait")) | {"description": "On the task's own read: every wait, headline first"},
             to_leave=items(ref("TaskRequirement"))
             | {"description": "On the task's own read: every requirement of the stage and each added to this visit"},
@@ -569,7 +574,7 @@ SCHEMAS.update(
 SCHEMAS["Task"]["properties"]["tags"] = items(ref("Tag"))
 
 # A task's documents (backend/task_documents.py), on GET /api/v2/tasks/{id} only: newest change first, each version
-# readable at /api/v2/files/{file_id}?v=<n>. Written with POST /api/v2/tasks/{id}/files and `document`.
+# readable at /api/v2/files/{file_id}?v=<n>; `created` is when the document first appeared, the order its tabs keep. Written with POST /api/v2/tasks/{id}/files and `document`.
 SCHEMAS["TaskDocument"] = obj(
     {
         "name": {
@@ -586,9 +591,10 @@ SCHEMAS["TaskDocument"] = obj(
         "version": "i",
         "by": "s",
         "at": "s",
+        "created": "s",
         "versions": items(obj({"n": "i", "by": "s", "at": "s", "note": "n"})),
     },
-    required=["name", "file_id", "version", "by", "at", "versions"],
+    required=["name", "file_id", "version", "by", "at", "created", "versions"],
 )
 
 SCHEMAS["Task"]["properties"]["documents"] = items(ref("TaskDocument"))

@@ -87,7 +87,7 @@ _RULE_NAMES = {
     "bots_go_ahead": ("Bots go ahead on their recommendation when nobody answers", "confirm", ""),
     "support_access": ("Owners and admins may let Tico support in", "confirm", ""),
     "health_monitor_reports": ("Health monitor reports", "direct", ""),
-    "bot_reports_direct": ("Bots send reports to the Tico team without asking", "confirm", ""),
+    "bot_reports_direct": ("Bots send reports to Tico support without asking", "confirm", ""),
     "topic_fresh": ("Keep topics fresh", "direct", ""),
     "org_rule_checks": ("Check bot outputs against rules", "direct", ""),
 }
@@ -1086,14 +1086,16 @@ ENTRIES = TEAM_RULES + [
     S(
         "bot.cloud_machine",
         "Cloud machine",
-        BOTS + " > Bot editor",
+        BOTS + " > Bot editor > Computer",
         "bot",
         "confirm",
         "POST",
         "bots/{bot}/cloud-machine",
         value="json",
         card=_card("bots"),
-        words="cloud machine shared own size always on pause after minutes computer grow storage disk",
+        bot_card="#/bot/{bot}/settings",  # its Computer rows, where Size is
+        words="cloud machine shared own size xlarge large bigger machine more room cpu always on pause after minutes "
+        "computer grow storage disk",
     ),
     S(
         "bot.cloud_machine.replace",
@@ -1110,14 +1112,15 @@ ENTRIES = TEAM_RULES + [
     S(
         "cloud.shared_machine",
         "Shared cloud machine",
-        BOTS + " > Bot editor",
+        BOTS + " > Bot editor > Computer",
         "admin",
         "confirm",
         "POST",
         "cloud-machines/shared",
         value="json",
         card=_card("bots"),
-        words="shared cloud machine size always on pause after minutes grow storage disk",
+        words="shared cloud machine size xlarge large bigger machine more room cpu always on pause after minutes grow "
+        "storage disk",
     ),
     S(
         "cloud.shared_machine.replace",

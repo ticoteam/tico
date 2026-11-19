@@ -184,7 +184,7 @@ All under `/api/v2/calendar`. Callers: people, owner, bots. Reads use `store.rea
 - `POST /absences` body `{human?: id, starts_on, ends_on, note}` (self, or owner/admin for anyone).
 - Live: a new `calendar` topic in backend/events.py TOPICS; every Tico calendar write publishes `{calendar_id,
   occurrence_id?, event_id}` to it. The page refetches Google calendars on open, focus, and every 3 min while visible.
-- Links: a live meeting started with `calendar_event: <occurrence_id>` (the Recorder sends it) records a
+- Links: a live meeting started with `calendar_event: <occurrence_id>` records a
   `calendar_event_links` row (`meeting`); `links.meeting` is then filled on reads.
 - Old routes (`/calendar/appointments`, `/calendar/upcoming`, actions) keep their shapes: a Google calendar is read
   live (60 s cache) and a booking is made on Google in the request, its `calendar_actions` row the receipt.
@@ -217,17 +217,12 @@ All under `/api/v2/calendar`. Callers: people, owner, bots. Reads use `store.rea
 - `ui/app/calendar.ts` (page, route `#/calendar`, query `?who=…&view=day|3day|week|month|list&date=YYYY-MM-DD&q=…`),
   `ui/app/calendar-row.ts` (sidebar row), `ui/styles/calendar.css`; registered in `ui/app/router.ts` and
   `ui/index.html`. Spec §12.
-- Sidebar order (decision 2): Finish setup (when shown), Tasks, Calendar, Threads, Updates, Company (Strategy,
-  Finance, Growth, Automations, Rules), Library (Docs, Files, Skills, Tools, Meetings), Pipelines pins, Team.
-  Directory leaves Library: an icon on the Team header opens `#/library/directory`. The Rules folder becomes one
+- Sidebar order (decision 2): Finish setup (when shown), Tasks, Calendar, Threads, Updates, Meetings, Company
+  (Strategy, Finance, Growth, Automations, Rules), Library (Docs, Files, Skills, Contacts, Tools), Pipelines pins, Team.
+  Meetings is a top-level place of its own (calls and meetings), not a Library page.
+  Directory is Contacts, a Library row (`#/library/contacts`; the old `#/library/directory` still opens it). The Rules folder becomes one
   Rules row under Company (its Internal/External/Due/Suggested pages stay reachable from the Rules page).
-- Join (row, bubble, page, card): opens `meeting_url` in a new tab and, on a Mac desktop browser or the Tico desktop
-  app, `tico-recorder://record?server=<origin>&title=<title>&event=<occurrence_id>` (Recorder on by default; a
-  per-person "Record calls I join" toggle in the page's ⋯ menu, stored in localStorage + `/calendar/settings`
-  field `record_on_join` default true).
-  The Recorder records only an occurrence `GET /events/{occurrence_id}` shows with `can.join`, from 15 min before
-  its start to its end, under that title; signed in already it starts at once, after a sign-in it asks "Record
-  <title>?" once, as for a Tico call (meet-calls contract).
+- Join (row, bubble, page, card): opens `meeting_url` in a new tab.
 - Who bots may book: one control on Rules > reach (track reach).
 
 ## Rules for every track

@@ -276,6 +276,7 @@ function settingsEditBot(slug = '', inline = false) {
         stage('cloud', 'computer', changed(machine) && !!pick && cloudMachineRun(slug, {mode: 'cloud', placement: pick}));
       }
       const cloudSize = eventElement(event)?.closest<HTMLSelectElement>('[data-bot-cloud-size]');
+      if (cloudSize) cloudSizeNoteShow(cloudSize);
       if (cloudSize) stage('cloud-size', 'size', changed(cloudSize) && cloudMachineRun(slug, {size: cloudSize.value}, cloudSize));
       const cloudPause = eventElement(event)?.closest<HTMLInputElement>('[data-bot-cloud-pause]');
       if (cloudPause) {

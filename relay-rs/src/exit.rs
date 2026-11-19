@@ -1280,8 +1280,8 @@ mod tests {
             hub: Arc::new(Mutex::new(Hub::new())),
             key: Arc::new("k".repeat(32)),
             python: Arc::new(python_url),
-            http: reqwest::Client::new(),
-            proxy: reqwest::Client::new(),
+            http: crate::tls::http_builder().build().unwrap(),
+            proxy: crate::tls::http_builder().build().unwrap(),
             trusted_proxies: Arc::new(gateway::trusted_proxies("127.0.0.1/32").unwrap()),
             client_ip_header: gateway::ClientIpHeader::XForwardedFor,
         };
@@ -1331,7 +1331,7 @@ mod tests {
             "http{}/api/v2/runners/me/browser-exit/seen",
             relay.trim_start_matches("ws")
         );
-        let http = reqwest::Client::new();
+        let http = crate::tls::http_builder().build().unwrap();
         let refused = http.get(&seen_url).send().await.unwrap();
         assert_eq!(refused.status(), StatusCode::FORBIDDEN);
         let answer: Value = http

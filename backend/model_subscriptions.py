@@ -2,8 +2,8 @@
 
 A subscription is one of the company's model logins or keys, saved once in Tico rather than on a computer: a Claude
 setup-token (`claude setup-token`), a ChatGPT login (Codex's `auth.json` from a `codex login`), or an Anthropic or
-OpenAI API key. It belongs to the company; `added_by` only says who saved it. A plan (Claude or ChatGPT) has an owner
-(`owner_id`), the person whose plan it is: the one who adds it, unless an owner or admin names another active person of
+OpenAI API key. It belongs to the company. `added_by` identifies the person who saved it and can remove it. A plan
+(Claude or ChatGPT) has an owner (`owner_id`), the person who adds it unless an owner or admin names another active person of
 the company, then or later. A plan is meant for its owner's own bots, not shared ones (the Add pop-up says so). An API
 key bills per use and has no owner; a company may save many. The value is a service row of the credential vault
 (`credential_id`, CREDENTIAL + the subscription's id; backend/credentials.py `keep_service`), never shown again, never
@@ -87,7 +87,7 @@ from pydantic import Field, SecretStr
 
 from . import bot_settings as BS
 from . import hubdb as H
-from .credentials import SERVICE, keep_service
+from .credentials import SERVICE, keep_service, may_remove
 from .models import Contract, ID
 from .store import Problem, readiness_document
 from .api_contract import api_v2
@@ -591,6 +591,18 @@ def held_plan(c, runner_id, runtime, loads=None, profile=""):
     if not runner or (own if isinstance(own, dict) else row).get("authenticated") == SIGNED_IN:
         return None
     return login_holds.subscription_login(sub["id"])
+
+
+def company_plan(c, runtime):
+    """The label of the company's plan for `runtime` ("Claude plan"), when it holds one a computer could be given, else
+    '': a computer signed out of a runtime the company has a plan for needs that plan, not a sign-in (readiness.can_run)."""
+    kinds = [k for k, spec in KINDS.items() if spec["runtime"] == runtime and spec.get("billing") == "subscription"]
+    if not kinds or not _present(c):
+        return ""
+    found = c.execute(
+        f"SELECT kind FROM model_subscriptions WHERE kind IN ({','.join('?' * len(kinds))}) LIMIT 1", kinds
+    ).fetchone()
+    return KINDS[found["kind"]]["label"] if found else ""
 
 
 def passed_over(c, runner_id, runtime, loads=None):
@@ -1121,15 +1133,18 @@ def _reader(who):
         raise Problem("forbidden", "Only a person reads the company's subscriptions", 403)
 
 
+def _may_manage(auth, who):
+    return (
+        who.role in ("human", "owner")
+        and str(who.actor).startswith("human:")
+        and not who.support
+        and auth.bot_admin(who)
+    )
+
+
 def _admin(auth, who, secret=False):
-    """An owner or admin. A secret is pasted by the person themselves: never through the Assistant or BotOps acting
-    for them, a bot run, or a Tico support session; support changes nothing here."""
-    if (
-        who.role not in ("human", "owner")
-        or not str(who.actor).startswith("human:")
-        or who.support
-        or not auth.bot_admin(who)
-    ):
+    """An owner or admin. A person pastes their own secret into Settings."""
+    if not _may_manage(auth, who):
         raise Problem("forbidden", "Only an owner or admin changes the company's subscriptions", 403)
     if secret and (who.via or who.attempt_id):
         raise Problem("forbidden", "Save a subscription yourself in Settings > Models", 403)
@@ -1479,6 +1494,8 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
             stopped = sum(_restart(c, settings, runner_id, runtime)["stopped"] for runner_id, runtime in given)
             H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": True, "stopped": stopped})
             spread(c, settings, sid, who.actor, signed_on)  # one that needed reconnecting works again
+            if kind == "claude_login":
+                claude_login.read_soon(c, sid)
             _follow(c, settings, who.actor)
             return view(c, row(c, sid))
         H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": False})
@@ -1502,6 +1519,8 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
     H.event(c, who.actor, "subscription.created", sid, {"kind": body.kind})
     _tick_provider(c, settings, who.actor, body.kind)
     spread(c, settings, sid, who.actor, signed_on)
+    if body.kind == "claude_login":
+        claude_login.read_soon(c, sid)
     _follow(c, settings, who.actor)
     return view(c, row(c, sid))
 
@@ -1676,6 +1695,34 @@ def _set(c, runner_id, runtime, subscription_id, actor, person=""):
         "person=excluded.person",
         (runner_id, runtime, subscription_id, actor, H.now(), person),
     )
+
+
+def carry_over(c, old_id, new_id):
+    """A computer made in place of one that is gone (a cloud machine replaced or made again: cloud_machines.enrolled)
+    takes what the old one was given, runtime by runtime: the same subscription, or the same person's plans, with who
+    set it. Nothing it already has is replaced, and a subscription removed since is not brought back. Nothing is
+    stopped or reset: the new computer has run nothing yet. Returns the runtimes carried over."""
+    carried = []
+    for r in c.execute(
+        "SELECT runtime,subscription_id,person,set_by FROM computer_subscriptions WHERE runner_id=? ORDER BY runtime",
+        (old_id,),
+    ).fetchall():
+        if not r["person"] and not row(c, r["subscription_id"]):
+            continue
+        if c.execute(
+            "SELECT 1 FROM computer_subscriptions WHERE runner_id=? AND runtime=?", (new_id, r["runtime"])
+        ).fetchone():
+            continue
+        _set(c, new_id, r["runtime"], r["subscription_id"], r["set_by"], r["person"])
+        H.event(
+            c,
+            H.TICO_ACTOR,
+            "subscription.carried_over",
+            r["person"] or r["subscription_id"],
+            {"runner": new_id, "from": old_id, "runtime": r["runtime"]},
+        )
+        carried.append(r["runtime"])
+    return carried
 
 
 def _why_moved(c, entry, runtime):
@@ -2507,7 +2554,11 @@ def install(app, store, auth, mutate, settings):
         auth.domain(who)
         _reader(who)
         with store.read() as c:
-            return {"subscriptions": listed(c), "kinds": kinds(), "connect": connect_ready(c)}
+            manages = _may_manage(auth, who)
+            subscriptions = [
+                sub | {"can_remove": may_remove(who, sub["added_by"], manages=manages)} for sub in listed(c)
+            ]
+            return {"subscriptions": subscriptions, "kinds": kinds(), "connect": connect_ready(c)}
 
     @app.post(
         "/api/v2/model-subscriptions",
@@ -2563,7 +2614,8 @@ def install(app, store, auth, mutate, settings):
         **api_v2(
             "Model subscriptions",
             "removeModelSubscription",
-            "Remove a subscription and take it off every computer; 409 `confirm_restart` while runs would stop unless `confirm=1`",
+            "Remove a subscription from every computer (its adder or an admin). "
+            "Returns 409 `confirm_restart` if runs would stop without `confirm=1`",
             "ModelSubscriptionDeleted",
         ),
     )
@@ -2572,7 +2624,11 @@ def install(app, store, auth, mutate, settings):
 
         def work(c):
             auth.domain(who)
-            _admin(auth, who)
+            if not _may_manage(auth, who):
+                _reader(who)
+                sub = row(c, sid)
+                if sub is None or not may_remove(who, sub["added_by"]):
+                    _admin(auth, who)
             return remove(c, settings, who, sid, confirm)
 
         return mutate(request, Empty(), work)

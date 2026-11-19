@@ -13,7 +13,7 @@ file. Create one with `python3 scripts/new_migration.py name` (add `--py` for `u
 if a newer version has already run. A migration must not depend on another unmerged migration's schema: each stands
 alone, so parallel PRs may merge in either order. CI requires new files to use unique UTC timestamps.
 
-The compatibility floor is v0.6.0-rc.1: the oldest database this code opens is one that release made or upgraded,
+The compatibility floor is v0.6.0: the oldest database this code opens is one that release made or upgraded,
 which has the newest migration file that release shipped recorded. Those files are gone (`retired.txt` lists them):
 such a database recorded them, a new one has their changes in the baseline, and neither runs them again. A database below
 the floor (Tico 0.5 and older, or a file this Tico did not make) is refused before anything is written to it.

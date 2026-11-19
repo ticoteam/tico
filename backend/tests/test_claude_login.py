@@ -499,6 +499,30 @@ def test_usage_is_read_on_a_schedule_waits_out_a_429_and_orders_a_plan_near_its_
     assert sub_row(api, sid)["account"].startswith("bo@")
 
 
+def test_a_new_login_tells_its_computers_to_read_its_usage_now(api):
+    """A computer polls its full logins every five minutes while its live stream is up, so a new login's first reading
+    waited that long and the plan looked broken. Signing in tells its computers to poll now (a `subscription_refresh`
+    change, runner-rs events.rs), as ↻ already does."""
+    setup(api)
+    company(api)
+    sid = add(api, "claude_login", full(), name=None)["id"]
+    m = computer(api)
+    give(api, m, "claude", sid)
+
+    def told():
+        with api.app.state.store.read() as c:
+            return c.execute(
+                "SELECT count(*) FROM changes WHERE topic='runner' AND kind='subscription_refresh' AND subject_id=?",
+                (m["runner_id"],),
+            ).fetchone()[0]
+
+    before = told()
+    post(api, f"model-subscriptions/{sid}", {"secret": full("bo@acme.example", n=5), "confirm": True})
+    assert told() > before
+    [job] = poll(api, m)["usage"]
+    assert job["subscription"] == sid and job["token"] == access(5)
+
+
 def test_a_plan_near_a_limit_comes_last_only_until_that_window_resets():
     week = {"used_percent": 40, "resets_at": at(days=3)}
     meta = {"near": True, "reading": week, "five_hour": {"used_percent": 96, "resets_at": at(hours=2)}}

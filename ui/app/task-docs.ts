@@ -5,12 +5,12 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// A document as GET /v2/tasks/{id} lists it (`task.documents`), newest change first, its versions newest first. A
-// document is a linked page or a Markdown file. A linked page shows its links and whether the task OK'd an older version.
+// A document as GET /v2/tasks/{id} lists it (`task.documents`), newest change first, its versions newest first, with
+// when it first appeared (`created`). A document is a linked page or a Markdown file. A linked page shows its links and whether the task OK'd an older version.
 interface TaskDocVersion { n: number; by: string; at: string; note?: string | null; }
 interface TaskDocLink { target: string; role: string; name?: string | null; by?: string | null; }
 interface TaskDoc {
-  name: string; file_id: string; page_id?: string | null; title?: string | null; version: number; by: string; at: string;
+  name: string; file_id: string; page_id?: string | null; title?: string | null; version: number; by: string; at: string; created?: string;
   versions: TaskDocVersion[]; links?: TaskDocLink[] | null; changed_since_ok?: boolean | null; kind?: 'html' | 'markdown';
 }
 // One tab: Chat, a document, or (Flow) what an approval shows when it is no document of the task.
@@ -26,10 +26,14 @@ const docTab = (doc: TaskDoc, docs: TaskDoc[]): DocTab => ({
   key: docKey(doc, docs),
   label: docs.filter(other => other.name === doc.name).length > 1 ? doc.title || doc.name : doc.name,
 });
-/** The tabs: Chat first, then each document, most recently changed first (as the server lists them), then `extra`.
-    None at all, not even Chat, when there is nothing beside the chat. */
+/** The documents in the order they first appeared, oldest first: a new one joins at the end and a bot writing one
+    moves none, so a tab (and a line of ⋯'s menu) stays where it was while a person taps through them. The server
+    lists them newest change first; those it gives no `created` keep that order. */
+const docsInPlace = (docs: TaskDoc[]): TaskDoc[] => [...docs].sort((a, b) => (a.created || '').localeCompare(b.created || ''));
+/** The tabs: Chat first, then each document in the order it first appeared (docsInPlace), then `extra`. None at all,
+    not even Chat, when there is nothing beside the chat. */
 function docTabs(docs: TaskDoc[] | null | undefined, extra: DocTab[] = [], chatDot = false): DocTab[] {
-  const rest = [...(docs || []).map((d, _, shown) => docTab(d, shown)), ...extra];
+  const rest = [...docsInPlace(docs || []).map((d, _, shown) => docTab(d, shown)), ...extra];
   return rest.length ? [{key: 'chat', label: 'Chat', dot: chatDot}, ...rest] : [];
 }
 /** The Spec cards under a task's title: one card per page the task has as its Spec, each opening the page. A card shows
@@ -55,18 +59,50 @@ function taskSpecsHTML(docs: TaskDoc[] | null | undefined, taskId: string, title
   });
   return `<section class="task-specs" data-task-specs aria-label="Spec">${cards.join('')}</section>`;
 }
-/** The tab row, a segmented control that scrolls sideways when the tabs do not fit; '' with no tabs. `attrs` gives each
-    tab's own attributes (the task window's data-task-tab, Flow's data-dc-tab). */
-function docTabsHTML(tabs: DocTab[], on: string, attrs: (key: string) => string, label = 'Show'): string {
-  if (!tabs.length) return '';
-  const tab = (t: DocTab) => `<button type="button" role="tab" class="doc-tab" ${attrs(t.key)} aria-selected="${t.key === on}" tabindex="${t.key === on ? 0 : -1}" title="${esc(t.label)}">`
-    + `<span class="doc-tab-t">${esc(t.label)}</span>${t.dot ? '<span class="tw-dot" role="img" aria-label="Waiting on you"></span>' : ''}</button>`;
-  return `<span class="doc-tabs" role="tablist" aria-label="${esc(label)}">${tabs.map(tab).join('')}</span>`;
+/** The documents that show as tabs; more than this and one shows (the one open, else the first) and +N lists them all. */
+const DOC_TABS_MAX = 2;
+const docTabIsDoc = (key: string) => key.startsWith('doc:');
+/** Short names for a row of documents: a leading run of words that three or more of them share is left out ("Queue
+    2026 11 18 pr4233 cce40e0" reads "pr4233 cce40e0"). A name nothing shares, or only one other, stays whole. */
+function docTabShort(labels: string[]): Map<string, string> {
+  const out = new Map<string, string>(), words = labels.map(l => l.split(' '));
+  words.forEach((w, i) => {
+    for (let k = w.length - 1; k >= 1; k--) {
+      const head = w.slice(0, k).join(' ');
+      if (words.filter((o, j) => j !== i && o.length > k && o.slice(0, k).join(' ') === head).length >= 2) { out.set(labels[i]!, w.slice(k).join(' ')); break; }
+    }
+  });
+  return out;
 }
-/** ←/→, Home and End move along a tab row, as a tablist does; `show` opens the tab moved to. */
+/** The tab row, a segmented control that never scrolls: Chat (and Files, or Flow's approval) keep their size, a
+    document's name gives way first. With more than DOC_TABS_MAX documents one shows and +N beside the tabs (how many
+    more; not ⋯, which is the task's own menu beside it) lists every document. '' with no tabs. `attrs` gives each tab its own attributes (the task window's data-task-tab, Flow's
+    data-dc-tab). `place`: the document the row being drawn again had in its place (docTabsPlace), kept there while
+    `on` is no document, so a bot writing one leaves the row as it was. */
+function docTabsHTML(tabs: DocTab[], on: string, attrs: (key: string) => string, label = 'Show', place = ''): string {
+  if (!tabs.length) return '';
+  const docs = tabs.filter(t => docTabIsDoc(t.key)), fold = docs.length > DOC_TABS_MAX;
+  const short = docTabShort(docs.map(t => t.label));
+  const slot = fold ? (docs.find(t => t.key === on) || docs.find(t => t.key === place) || docs[0]!).key : '';
+  const tab = (t: DocTab) => {
+    const doc = docTabIsDoc(t.key), text = doc ? short.get(t.label) ?? t.label : t.label;
+    return `<button type="button" role="tab" class="doc-tab${doc ? ' doc-tab-d' : ' doc-tab-fix'}" ${attrs(t.key)} data-doc-short="${esc(text)}" aria-selected="${t.key === on}" tabindex="${t.key === on ? 0 : -1}" title="${esc(t.label)}"${fold && doc && t.key !== slot ? ' hidden' : ''}>`
+      + `<span class="doc-tab-t">${esc(text)}</span>${t.dot ? '<span class="tw-dot" role="img" aria-label="Waiting on you"></span>' : ''}</button>`;
+  };
+  // +N sits beside the tabs, not among them: it opens a menu, it is no tab.
+  const more = fold ? `<button type="button" class="doc-tab-more" data-doc-more aria-haspopup="menu" aria-expanded="false" aria-label="${docs.length} documents" title="${docs.length} documents"><span aria-hidden="true">+${docs.length - 1}</span></button>` : '';
+  return `<span class="doc-tabs"><span class="doc-tabs-l" role="tablist" aria-label="${esc(label)}">${tabs.map(tab).join('')}</span>${more}</span>`;
+}
+/** The key of the document in a folded row's one place ('' unfolded or none): `keyOf` reads a tab's key. */
+function docTabsPlace(row: ParentNode | null | undefined, keyOf: (tab: HTMLElement) => string | undefined): string {
+  const tab = row?.querySelector('[data-doc-more]') ? row.querySelector<HTMLElement>('.doc-tab-d:not([hidden])') : null;
+  return (tab && keyOf(tab)) || '';
+}
+/** ←/→, Home and End move along the tabs that show, as a tablist does; +N lists every document; `show` opens the tab
+    moved to or picked. */
 function docTabsKeys(row: HTMLElement, show: (tab: HTMLElement) => void) {
   row.onkeydown = (ev: KeyboardEvent) => {
-    const tabs = [...row.querySelectorAll<HTMLElement>('[role="tab"]')], at = tabs.indexOf(ev.target as HTMLElement);
+    const tabs = [...row.querySelectorAll<HTMLElement>('[role="tab"]')].filter(b => !b.hidden), at = tabs.indexOf(ev.target as HTMLElement);
     if (at < 0) return;
     const to = ev.key === 'ArrowRight' ? at + 1 : ev.key === 'ArrowLeft' ? at - 1 : ev.key === 'Home' ? 0 : ev.key === 'End' ? tabs.length - 1 : null;
     if (to === null) return;
@@ -74,19 +110,27 @@ function docTabsKeys(row: HTMLElement, show: (tab: HTMLElement) => void) {
     const next = tabs[(to + tabs.length) % tabs.length]!;
     show(next); next.focus();
   };
+  const more = row.querySelector<HTMLElement>('[data-doc-more]');
+  if (more) more.onclick = () => {
+    const docs = [...row.querySelectorAll<HTMLElement>('.doc-tab-d')];
+    // The menu goes inside the window: outside a modal dialog it could not be reached.
+    const host = row.closest<HTMLElement>('dialog') || row.closest<HTMLElement>('.decide') || document.body;
+    propMenu(host, more, {label: 'Documents', find: docs.length > 8 ? 'Find a document' : '',
+      items: docs.map(b => ({text: b.title, html: `<span class="tl-mi-t" title="${esc(b.title)}">${esc(b.dataset.docShort || b.title)}</span>`,
+        checked: !b.hidden && b.getAttribute('aria-selected') === 'true', tab: b})),
+      onPick: it => { show(it.tab); if (it.tab.isConnected && !it.tab.hidden) it.tab.focus({preventScroll: true}); }});
+  };
 }
-/** Marks the tab `on` selected in a row, and scrolls the row (only the row) so it shows: Chat, first, from the start.
-    `shown` false: something else covers the tabs' pane (a task's Details), so none looks selected; `on` keeps the
-    keyboard's stop. */
+/** Marks the tab `on` selected in a row. A row with +N shows the document `on` in its one document place, and keeps the
+    one there under Chat or Files. `shown` false: something else covers the tabs' pane (a task's Details), so none looks
+    selected; `on` keeps the keyboard's stop. */
 function docTabsPaint(row: ParentNode, on: string, keyOf: (tab: HTMLElement) => string | undefined, shown = true) {
-  for (const b of row.querySelectorAll<HTMLElement>('.doc-tabs [role="tab"]')) {
+  const tabs = [...row.querySelectorAll<HTMLElement>('.doc-tabs [role="tab"]')];
+  const swap = !!row.querySelector('[data-doc-more]') && tabs.some(b => b.classList.contains('doc-tab-d') && keyOf(b) === on);
+  for (const b of tabs) {
     const yes = keyOf(b) === on;
     b.setAttribute('aria-selected', String(yes && shown)); b.tabIndex = yes ? 0 : -1;
-    const strip = b.parentElement;
-    if (!yes || !strip) continue;
-    const left = b.getBoundingClientRect().left - strip.getBoundingClientRect().left + strip.scrollLeft, right = left + b.offsetWidth;
-    if (b === strip.firstElementChild || left < strip.scrollLeft) strip.scrollLeft = b === strip.firstElementChild ? 0 : left - 2;
-    else if (right > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = right - strip.clientWidth + 2;
+    if (swap && b.classList.contains('doc-tab-d')) b.hidden = !yes;
   }
 }
 

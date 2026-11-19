@@ -15,12 +15,6 @@ interface SettingsAccessPerson {
   create_bots?: boolean;
   add_people?: boolean;
 }
-// The Tico Recorder a person used last (backend/recorder_installs.py).
-interface SettingsRecorder {
-  version?: string | null;
-  last_seen_at?: string | null;
-  update_available?: boolean;
-}
 // GET /v2/access: who is on the roster, how they join and what the owner has set.
 interface SettingsAccessView {
   revision: number;
@@ -34,7 +28,6 @@ interface SettingsAccessView {
   allowed: string[];
   allowed_domains: string[];
   invites?: Record<string, string>;
-  recorders?: Record<string, SettingsRecorder | null>;
   member_bot_limit: number;
   rules?: Record<string, unknown>;
   owner: {revision: number};
@@ -89,14 +82,6 @@ function peopleMenu(p: SettingsAccessPerson, view: SettingsAccessView | null | u
   if (owner && p.owner && p.id === S.me?.id) items.push('<button type="button" role="menuitem" data-person-act="email">Change my sign-in email</button>');
   return items.join('');
 }
-// The Tico Recorder this person used last (backend/recorder_installs.py): its version, or nothing.
-function peopleRecorderCell(r: SettingsRecorder | null | undefined): string {
-  if (!r?.version) return '<div class="people-cell-recorder"></div>';
-  const seen = r.last_seen_at ? `Last seen ${agoSaid(r.last_seen_at)}` : '';
-  return `<div class="people-cell-recorder${r.update_available ? ' is-old' : ''}" data-recorder-version title="${esc([seen, r.update_available ? 'Update available' : ''].filter(Boolean).join(' · '))}"><span class="people-recorder-label">Recorder </span><span class="tnum">${esc(r.version)}</span></div>`;
-}
-// The Recorder column shows only when someone has used one: a column empty on every row says nothing.
-const peopleHasRecorder = (view: SettingsAccessView): boolean => Object.values(view?.recorders || {}).some(r => !!r?.version);
 function peopleRow(p: SettingsAccessPerson, view: SettingsAccessView): string {
   const owner = S.me?.role === 'owner', menu = peopleMenu(p, view), local = !!S.config?.local;
   const invited = view?.invites?.[p.id];
@@ -110,7 +95,6 @@ function peopleRow(p: SettingsAccessPerson, view: SettingsAccessView): string {
     <div class="people-cell-role">${role}</div>
     ${p.owner ? '<div class="people-cell-signin"><span class="muted" title="The owner can always sign in">Always</span></div>'   /* the owner's own sign-in is not a switch */
       : `<label class="people-cell-signin">${peopleSwitch('data-person-signin', p.can_sign_in, locked, local ? 'Sign-in access when configured' : 'Can sign in')}<span class="people-switch-label">${local ? 'When configured' : 'Can sign in'}</span></label>`}
-    ${peopleHasRecorder(view) ? peopleRecorderCell(view?.recorders?.[p.id]) : ''}
     <div class="people-cell-more">${menu ? `<button class="people-more" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button><div class="people-menu" role="menu" hidden>${menu}</div>` : ''}</div>
   </li>`;
 }
@@ -161,10 +145,10 @@ async function renderSettingsPeople() {
           `<li class="allow-chip" data-allow="${esc(x)}">${esc(x)}${owner ? `<button type="button" class="people-chip-x" data-allow-remove="${esc(x)}" aria-label="Remove ${esc(x)}">×</button>` : ''}</li>`).join('')}</ul></div>` : ''}
       </section>
       <div id="people-from-setup"></div>
-      <section class="card people-list-card${peopleHasRecorder(view) ? '' : ' people-no-recorder'}">
+      <section class="card people-list-card">
         <header><h2>People</h2><span class="muted tnum">${active.length}</span></header>
         ${owner ? '' : settingsWhoCanHTML('roles')}
-        <div class="people-head" aria-hidden="true"><span>Person</span><span>Role</span><span>${S.config?.local ? 'Sign-in' : 'Can sign in'}</span>${peopleHasRecorder(view) ? '<span>Recorder</span>' : ''}<span></span></div>
+        <div class="people-head" aria-hidden="true"><span>Person</span><span>Role</span><span>${S.config?.local ? 'Sign-in' : 'Can sign in'}</span><span></span></div>
         <ul class="people-list">${active.map(p => peopleRow(p, view)).join('')}</ul>
         ${left.length ? `<details class="people-left"><summary>Left <span class="tnum">${left.length}</span></summary><ul class="people-list">${left.map(p => `<li class="people-row is-left" data-person="${esc(p.id)}">
           <div class="people-who">${personAvatar(p, 32)}<div class="people-id"><div class="people-name">${esc(p.name)}</div><div class="people-email">${esc(p.email || 'No email')}</div></div></div>

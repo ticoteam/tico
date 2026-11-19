@@ -1,27 +1,19 @@
 ---
 name: read-cost-per-customer-for-a-segment
-description: Compute one customer segment's new customers and cost per customer for a month from Tico's per-channel numbers, splitting each channel's spend and customers by a named method, labelling every estimate, and reconciling the segments back to the channel totals.
+description: Read one customer segment's new customers, direct and loaded cost per customer, retention and observed LTV for a month from Growth, which computes them by segment, and write the reading with its counts and health.
 ---
 # Read a segment's cost per customer
 
-When to use: each weekly segment growth review, and before any cost per customer, split or change in either goes into a review, an ask or a message.
+When to use: each weekly segment growth review, and before any cost per customer, or a change in it, goes into a review, an ask or a message.
+
+Growth computes these by segment. Never split spend or customers by hand.
 
 Steps:
-1. Pull the channel rows for the month with `tico growth cohort list --month YYYY-MM`: one row per channel, plus Unknown. Write each channel's spend, bot cost and new customers. A month with no inputs is blank.
-2. Count the segment's new customers for the month by the counting rule in `knowledge/segment.md`, from the sign-up export on the task or the CRM segment field where it is connected. Write the source and its date.
-3. For each channel that spends on the segment, pick one split method, in this order of preference, and write which one:
-   - **Direct, actual.** The channel's spend and customers are for this segment alone. Use the figure from the source `tico growth source list` names for it.
-   - **Audience split, estimate.** The channel serves more than one segment, and its own targeting report gives a share. Multiply the channel's spend and bot cost by that share.
-   - **Share of new customers, estimate.** No targeting split exists. Multiply by the segment's share of that channel's new customers. This assumes the segments cost the same to win, so say so.
-4. Add up the segment's spend, bot cost and new customers across its channels. Keep a row for customers with no segment.
-5. Compute cost per customer = (spend + bot cost) ÷ new customers, rounded to whole dollars. Leave it blank when there are no new customers.
-6. Reconcile. The segments' new customers, plus the no-segment row, equal each channel's total for the month in step 1. Spend and bot cost reconcile the same way. Write any gap with its size and do not force it.
-7. Compare with the goal, floor and ceiling in `knowledge/segment.md`, read from `tico kpi show <id>`. Write the reading: the value, the counts, the split methods, the no-segment share, the month and the source dates.
+1. Run `tico growth segment show <slug>`. Write the month, new customers, direct CAC, loaded CAC, kept at 30 and 90 days and the observed LTV it shows, with the counts behind each.
+2. Name the two costs. **Direct** is the spend of the channels set to this segment. **Loaded** adds company-wide spend in proportion to this segment's share of new customers. Use direct for payback, and loaded when you compare segments.
+3. Write the health line: customers with **no segment**, and the **mismatch** count (customers whose channel's spend is for another segment). If either is above 20% of new customers, ask the Growth Manager (`growth-manager`) before you read the cost as true.
+4. If the read says spend is not split by segment, the team has no segments yet. Ask the Growth Manager (`growth-manager`) to set them up in Growth, and write the cost per customer as blank.
+5. A figure that says not yet, too few or no spend is written that way, never as 0. Retention waits for the segment's churn days, so a recent month fills later than its channel's.
+6. To compare with other segments or weeks, use `tico growth cohort list --by segment --month YYYY-MM`. Compare with the goal and ceiling in `knowledge/segment.md`, read from `tico kpi show <id>`.
 
-Checks before you finish:
-- Every estimate says "estimate" beside its number.
-- Blank is written as blank, not as 0.
-- The reconciliation is written, with any gap.
-- The no-segment share is named, with the range it implies if it is above zero.
-
-Example (invented, for illustration): "Creators, October 2026. Search Ads: spend $3,100, direct actual, 58 creators. Social Ads: spend $2,000, audience split estimate at 60%, so $1,200, and 26 creators. Bot cost $380, split by new customers, estimate. Cost per creator ($4,300 + $380) ÷ 84 = $56, against a $60 ceiling. Reconciled: 84 creators + 57 other segments + 9 with no segment = 150 channel new customers."
+Example (invented, for illustration): "Rental, September 2026: 20 new customers. Direct CAC $20 (partners), loaded $31.67 with brand's company-wide spend. Day 30 is not yet, it fills on 29 November (30 churn days). Health: 10 with no segment, 2 mismatched. Against a $40 ceiling."

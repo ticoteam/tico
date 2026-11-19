@@ -416,9 +416,9 @@ what they print with the runner's own code (`runner-rs/src/cli_contract.rs`):
 - `--version` is readable, and every command and flag the runner passes still exists;
 - signed out, `claude auth status --json` and `codex login status` answer in the words the status check reads;
 - `claude setup-token`, in the terminal the runner opens, shows a link and a prompt for the code; a made-up code is
-  masked and gives the "OAuth error … Press Enter to retry" screen;
+  never in what the runner reports or logs (masked or drawn) and gives the "OAuth error … Press Enter to retry" screen;
 - `claude auth login --claudeai` (a full Claude login's Connect) shows a link back to the manual-code page and a
-  prompt; a made-up code is masked;
+  prompt; a made-up code is never in what the runner reports or logs, though Claude Code 2.1.327 draws it;
 - `codex login --device-auth` shows a link and a one-time code (never entered);
 - a turn with no login ends as a refused sign-in for both, not as a general failure.
 

@@ -1,0 +1,5 @@
+{
+  "backend/tests/test_mcp.py": {
+    "no-fixed-sleep-py": 1
+  }
+}

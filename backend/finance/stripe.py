@@ -33,7 +33,7 @@ class Provider(Protocol):
 
     def account(self) -> Answer: ...
     def balance(self) -> Answer: ...
-    def transactions(self, starting_after: str | None, limit: int = PAGE) -> Answer: ...
+    def transactions(self, starting_after: str | None, limit: int = PAGE, created_gte: int | None = None) -> Answer: ...
 
 
 def base_url() -> str:
@@ -100,11 +100,14 @@ class Stripe:
     def balance(self) -> Answer:
         return self._get("/balance", [])
 
-    def transactions(self, starting_after: str | None, limit: int = PAGE) -> Answer:
-        """Balance transactions newest first; `starting_after` is the last id of the page before (older ones next)."""
+    def transactions(self, starting_after: str | None, limit: int = PAGE, created_gte: int | None = None) -> Answer:
+        """Balance transactions newest first; `starting_after` is the last id of the page before (older ones next), and
+        `created_gte` (unix seconds), when given, keeps the ones created at or after it."""
         params = [("limit", str(limit)), *(("expand[]", e) for e in EXPAND)]
         if starting_after:
             params.append(("starting_after", starting_after))
+        if created_gte is not None:
+            params.append(("created[gte]", str(created_gte)))
         return self._get("/balance_transactions", params)
 
 

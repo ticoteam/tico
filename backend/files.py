@@ -1372,11 +1372,6 @@ class Files:
             raise Problem("validation", "scope is task or bot", 422)
         if who.role == "runner":
             task, wanted = "", ""  # what the runner publishes stays where the turn ran
-        if attempt and privacy.private_meetings(c, privacy.meeting_sources(c).attempt(attempt)):
-            # Reusing unchanged bytes must not retitle an older, wider-scoped file version.
-            if task or wanted == "bot" or not conversation:
-                raise Problem("privacy", "Private meeting files stay in their meeting conversation", 403)
-            return "conversation:" + conversation, None, conversation, attempt
         if task:
             acting = (
                 who if who.role == "bot" else Identity("bot:" + bot, "bot", runner_id=who.runner_id, attempt_id=attempt)
@@ -1876,9 +1871,9 @@ class Files:
             return ""
         task_id = self.auth.resolve_task(c, who, task)
         if role:
-            from .task_reads import comment_rights
+            from .task_reads import page_rights
 
-            comment_rights(c, self.auth, who, task_id)
+            page_rights(c, self.auth, who, task_id)
         else:
             self.auth.task(c, who, task_id)
         return task_id
@@ -2021,13 +2016,7 @@ class Files:
                 )
                 attempt = who.attempt_id
                 if who.role in ("bot", "runner"):
-                    turn_conversation, _, attempt = self.write_turn(c, who, bot, fields)
-                    if (
-                        attempt
-                        and privacy.private_meetings(c, privacy.meeting_sources(c).attempt(attempt))
-                        and (not turn_conversation or scope != "conversation:" + turn_conversation)
-                    ):
-                        raise Problem("privacy", "Private meeting files stay in their meeting conversation", 403)
+                    _, _, attempt = self.write_turn(c, who, bot, fields)
             elif human_page:
                 task = linked_task or None
                 scope, conversation, attempt = ("task:" + task if task else "bot"), None, ""
@@ -2436,7 +2425,8 @@ class Files:
                 cache[task_id] = None
         return cache[task_id]
 
-    def view(self, c, who, row, caches):
+    def view(self, c, who, row, caches, page=None):
+        """One file as the Files rail lists it; `page` when the caller already knows whether it is a page."""
         version = c.execute(
             "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (row["id"], row["current_version"])
         ).fetchone()
@@ -2462,6 +2452,7 @@ class Files:
             "bot": row["bot_id"],
             "title": row["title"],
             "kind": row["kind"],
+            "library_kind": file_library.library_kind(row["kind"], self.is_page(c, row) if page is None else page),
             "mime": row["mime"],
             "locator": row["locator"],
             "scope": row["scope"].partition(":")[0],
@@ -2502,6 +2493,14 @@ class Files:
         }
         return value
 
+    @staticmethod
+    def is_page(c, row):
+        """Whether the file is a page, as the `kind=page` filter reads it (a pages row), from the listing's join when
+        it has one."""
+        if "is_page" in row.keys():
+            return bool(row["is_page"])
+        return c.execute("SELECT 1 FROM pages WHERE file_id=?", (row["id"],)).fetchone() is not None
+
     def github_url(self, c, bot, version, caches):
         if not version or not version["commit_sha"] or not version["repo_path"]:
             return None
@@ -2541,7 +2540,8 @@ class Files:
             self.bot_row(c, who, bot)
             cache, caches = {}, {"task": {}, "repo": {}}
             rows = c.execute(
-                "SELECT f.*,v.repo_path AS repo_path FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id "
+                "SELECT f.*,v.repo_path AS repo_path,p.file_id IS NOT NULL AS is_page FROM bot_files f "
+                "LEFT JOIN pages p ON p.file_id=f.id "
                 "LEFT JOIN bot_file_versions v ON v.file_id=f.id AND v.version=f.current_version "
                 "WHERE f.bot_id=? AND f.archived=0 AND (" + kind_sql + ") "
                 "AND (f.identity NOT LIKE 'task-file:%' OR EXISTS (SELECT 1 FROM bot_file_versions o "
@@ -2685,23 +2685,30 @@ class Files:
             rows = [r for r in rows if not r["task_id"] or privacy.task_readable(c, who, H.task(c, r["task_id"]))]
             return {"file": fid, "activity": rows}
 
+    def readable_version(self, c, who, fid, version=None):
+        """The stored version (`stored_version`) `who` may read the bytes of: version `version` of the file, else its
+        current one. Refused as its download is (version_refusal), each refusal logged (refuse_serve). For every caller
+        that serves or hands on those bytes: the download, an email draft's attachment."""
+        row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+        if not row:
+            refuse_serve(c, who, fid, version, "no_row")
+        # Adopted legacy blob IDs keep their original bytes at an unversioned URL.
+        number = (row["current_version"] if is_file_id(fid) else 1) if version is None else version
+        v = stored_version(c, fid, number)
+        refused = version_refusal(c, self.auth, who, row, number, v)
+        if refused == "audience":
+            refuse_serve(c, who, fid, version, refused)
+        elif refused == "no_version":
+            message = "This file has no stored copy to open" if not v else "File not found"
+            refuse_serve(c, who, fid, number, refused, message=message)
+        elif refused:
+            refuse_serve(c, who, fid, number, refused, v if refused in ("blob_fence", "file_fence") else None)
+        return v
+
     def serve(self, who, fid, version=None, meta=False, request=None, derivative=None):
         """The bytes of one version through Tico, never a storage address. Each refusal logs its check (refuse_serve)."""
         with self.store.read() as c:
-            row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
-            if not row:
-                refuse_serve(c, who, fid, version, "no_row")
-            # Adopted legacy blob IDs keep their original bytes at an unversioned URL.
-            number = (row["current_version"] if is_file_id(fid) else 1) if version is None else version
-            v = stored_version(c, fid, number)
-            refused = version_refusal(c, self.auth, who, row, number, v)
-            if refused == "audience":
-                refuse_serve(c, who, fid, version, refused)
-            elif refused == "no_version":
-                message = "This file has no stored copy to open" if not v else "File not found"
-                refuse_serve(c, who, fid, number, refused, message=message)
-            elif refused:
-                refuse_serve(c, who, fid, number, refused, v if refused in ("blob_fence", "file_fence") else None)
+            v = self.readable_version(c, who, fid, version)
             if meta:
                 return {
                     "id": fid,
@@ -2856,7 +2863,7 @@ def install_files(app, store, auth, blobs, mutate):
         **api_v2(
             "Files",
             "listBotFiles",
-            "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page; q (every word, in the name, text or path) and kind (a Library kind: page, document, image, data, media, other) narrow the same list",
+            "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page; q (every word, in the name, text or path) and kind (a Library kind: page, document, image, data, media, other; each file's library_kind, not its stored kind) narrow the same list",
             "BotFileList",
         ),
     )

@@ -34,7 +34,8 @@ class FinanceAdRunRequest(Contract):
 
 
 class FinanceAdAccountPatch(Contract):
-    """The bot an ad account's spend counts for; null when no bot."""
+    """The bot an ad account's spend counts for, by its slug or id (it is kept and answered as the id); null when no
+    bot."""
 
     bot_slug: str | None = Field(..., max_length=120)
 

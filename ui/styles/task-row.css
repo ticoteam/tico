@@ -68,3 +68,8 @@
 .tk-blocks{flex:none;padding:0 6px;border-radius:999px;background:var(--fail-bg);color:var(--fail);font-size:var(--t-2xs);line-height:16px;white-space:nowrap}
 /* Visible to, on a task in a pipeline: who still reads it if made private (Product #449). */
 .prop-vis{display:flex;flex-direction:column;gap:2px;min-width:0}.prop-vis-note{color:var(--muted);font-size:12px;line-height:1.4;white-space:normal;max-width:300px}
+/* The task a search's number names, first over the view (tasks-page.ts tasksJumpPaint). */
+.tk-jump{border-bottom:1px solid var(--line)}
+.tk-jump .tk-row{background:var(--surface2)}
+.tk-jump .tk-ref{flex:none;font-family:var(--mono);color:var(--muted)}
+.tk-jump .pill,.tk-jump kbd{flex:none}

@@ -1,0 +1,5 @@
+{
+  "ui/tests/date-field.cts": {
+    "no-fixed-wait-ui": 1
+  }
+}

@@ -360,9 +360,8 @@ def test_every_filter_the_list_takes_still_answers(api):
         "late": "false",
         "after": base64.urlsafe_b64encode(json.dumps([0, 1, "", ""]).encode()).decode().rstrip("="),  # a queue key
         "on_behalf_of": "default",
-        "type": "bug",  # installed Recorder builds send it; accepted and ignored
     }
-    assert set(values) == task_list_routes.LIST_FILTERS | {"on_behalf_of", "type"}
+    assert set(values) == task_list_routes.LIST_FILTERS | {"on_behalf_of"}
     for name, value in values.items():
         r = api.get(f"/api/v2/tasks?{name}={value}", headers=headers())
         assert r.status_code == 200, (name, r.text)
@@ -376,9 +375,22 @@ def test_the_filter_list_is_what_the_route_declares(api):
     assert {p.alias for p in route.dependant.query_params} == task_list_routes.LIST_FILTERS
 
 
-def test_an_installed_recorder_type_search_still_answers(api):
-    """Recorder builds from 0.5.181 send `type=<task type>` with a picker search: it answers the search, unnarrowed."""
-    made = post(api, "tasks", {"owner": "ben", "title": "Review pricing", "body": "Please."})
-    r = api.get("/api/v2/tasks?q=pricing&limit=30&brief=true&offset=0&type=bug", headers=headers())
-    assert r.status_code == 200, r.text
-    assert [t["id"] for t in r.json()["tasks"]] == [made["id"]]
+def test_a_task_asking_the_reader_names_its_visit_so_needs_you_reads_that_one_ask_by_id(api):
+    """The app opens a task's ask without paging through Needs you: the task's read and its list row carry the open
+    visit (a row only while its turn is an ask), and `needs-you?ids=<visit>:<requirement>` sends that ask alone."""
+    from backend import task_engine as TE
+
+    plain = post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
+    row = post(api, "tasks", {"owner": "bot:ops", "title": "Review the plan", "body": "Please review."})
+    with api.app.state.store.transaction() as c:
+        version = H.task(c, row["id"])["version"]
+        TE.add_requirement(c, row["id"], "human:ana", "ok", "human:ana", "Ready?", seen_version=version)
+        (visit,) = c.execute("SELECT id FROM visits WHERE task_id=? AND left_at IS NULL", (row["id"],)).fetchone()
+    task = get(api, f"tasks/{row['id']}")["task"]
+    assert task["visit_id"] == visit
+    [rid] = [w["requirement_id"] for w in task["waits"] if w["ask"] and w["who"] == "human:ana"]
+    rows = {r["id"]: r for r in tasks(api, f"{ACTIVE}&brief=1")["tasks"]}
+    assert rows[row["id"]]["turn"]["ask"] and rows[row["id"]]["visit_id"] == visit
+    assert "visit_id" not in rows[plain["id"]], "a row whose turn is no ask carries none"
+    one = get(api, f"needs-you?ids={visit}:{rid}")
+    assert [x["id"] for x in one["items"]] == [f"{visit}:{rid}"] and one["items"][0]["task_id"] == row["id"]

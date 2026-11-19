@@ -1,0 +1,5 @@
+{
+  "backend/tests/helpers/events.py": {
+    "no-fixed-sleep-py": 1
+  }
+}

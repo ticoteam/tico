@@ -14,10 +14,12 @@ mod bridge;
 mod config;
 mod cookies;
 mod hub;
+#[cfg(target_os = "macos")]
+mod media;
 mod orgs;
-mod recorder;
 mod signin;
 mod timing;
+mod tls;
 mod visual_origin;
 mod windows;
 
@@ -126,6 +128,7 @@ fn opener_plugin<R: tauri::Runtime>() -> impl tauri::plugin::Plugin<R> {
 
 fn main() {
     applog::init();
+    tls::install_default_provider();
     // Read before the builder: the autostart plugin needs the identifier, which only the context carries.
     let context = tauri::generate_context!();
     let identifier = context.config().identifier.clone();
@@ -135,6 +138,8 @@ fn main() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build());
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_permission_request(|_, kind| media::default_permission(kind));
     builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_window(app);
@@ -682,13 +687,8 @@ fn only_rail(webview: &tauri::Webview) -> Result<(), String> {
 }
 
 // ----------------------------------------------------------------------------- deep links
-// tico://meetings/<id> and any other hub path land on the page in the app rather than a browser. tico://open is Tico
-// Recorder asking to show an org's approval page (recorder.rs).
+// tico://meetings/<id> and any other hub path land on the page in the app rather than a browser.
 fn open_deep_link(app: &App, url: &url::Url) {
-    if url.host_str() == Some("open") {
-        recorder::open_link(app, url);
-        return;
-    }
     let path = format!("{}{}", url.host_str().unwrap_or(""), url.path())
         .trim_matches('/')
         .to_string();

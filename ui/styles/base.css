@@ -61,7 +61,7 @@ html.strip #main.chat-layout{height:calc(100dvh - var(--demo-h))}
 /* Tico Cloud (ui/app/cloud-access.ts): Out of credit, a strip like the demo's; Pay to continue, the whole page. */
 #cloud-banner,#cloud-lock{display:none}
 #cloud-banner[hidden],#cloud-lock[hidden]{display:none!important}
-html.cloud-frozen:not(.demo) #cloud-banner{position:fixed;top:0;left:0;right:0;z-index:3000;height:var(--demo-h);display:flex;align-items:center;justify-content:center;gap:10px;padding:0 12px;background:var(--wait-bg);color:var(--wait-ink);border-bottom:1px solid var(--wait);font-size:var(--t-sm);line-height:var(--lh-tight);white-space:nowrap}
+html.cloud-frozen:not(.demo) #cloud-banner,html.cloud-low:not(.demo) #cloud-banner{position:fixed;top:0;left:0;right:0;z-index:3000;height:var(--demo-h);display:flex;align-items:center;justify-content:center;gap:10px;padding:0 12px;background:var(--wait-bg);color:var(--wait-ink);border-bottom:1px solid var(--wait);font-size:var(--t-sm);line-height:var(--lh-tight);white-space:nowrap}
 #cloud-banner strong{color:var(--ink);font-weight:600}
 #cloud-banner a{color:var(--ink);font-weight:600}
 #cloud-banner button{white-space:nowrap;font-size:inherit}

@@ -691,7 +691,14 @@ class SettingsAdmin:
             ),
         )
         BS.write(c, bot_id, config, now)
-        if body.repo:
+        if body.moved_from.strip():
+            from .repositories import note_chosen
+
+            # A bot moving from another server keeps the repository it had there: GitHub made it before this bot, so
+            # without this Homes reads it as another company's and the bot commits on its computer only.
+            note_chosen(c, repo, self.settings.github_owner)
+            H.event(c, who.actor, "bot.moved_in", bot_id, {"from": body.moved_from.strip(), "repo": repo})
+        elif body.repo:
             from .repositories import note_named
 
             # A repository someone named is chosen, as a definition save records it: Tico clones it even when GitHub

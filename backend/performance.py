@@ -747,6 +747,22 @@ def summary(overloads, days, label=lambda b: b):
     return text + ("; each time " + " and ".join(common) if common else "; no single cause ran every time") + "."
 
 
+def advice(overloads, bots):
+    """What to do about repeated overloads on a computer several bots share: {"text", "bots"} naming the bots (two at
+    most, busiest first in the newest, by the names in `overloads`) that ran in every one of 2 or more overloads, to give their own Large machine
+    rather than a bigger one; None when there are fewer overloads, no bot in all of them, or no other bot ran here in
+    the window (`bots`, Busiest bots), since a machine of its own is what such a bot has already."""
+    if len(overloads) < 2:
+        return None
+    common = set.intersection(*[{b["bot"] for b in o["bots"] if b["bot"]} for o in overloads])
+    every = [b["bot"] for b in overloads[-1]["bots"] if b["bot"] in common][:2]  # the newest one's busiest first
+    if not every or not {b["bot"] for b in bots if b["bot"]} - set(every):
+        return None
+    if len(every) == 1:
+        return {"text": f"Give {every[0]} its own Large machine.", "bots": every}
+    return {"text": f"Give {every[0]} and {every[1]} their own Large machine.", "bots": every}
+
+
 # ------------------------------------------------------------------------------------------------ reading
 def _window(c, runner_id, since, span):
     """Points from both resolutions at `since` or later, folded into `span`-second buckets."""
@@ -879,6 +895,7 @@ def view(c, runner_id, hours, now=None, label=lambda b: b, access=None):
         "busiest": {"bots": bots, "processes": procs},
         "overloads": overloads,
         "summary": summary(overloads, hours / 24, lambda b: b or "another bot"),
+        "advice": advice(overloads, bots),
     }
 
 

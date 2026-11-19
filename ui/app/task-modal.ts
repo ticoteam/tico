@@ -51,6 +51,8 @@ interface ModalDialog extends TfDialog {
   taskActivity?: boolean;
   /** The task's documents as its last full read listed them: a redraw from a list row or a save keeps its tabs. */
   taskDocs?: TaskDoc[] | null;
+  /** Where a page open in the window (`page:<id>`) came from: a Spec card ('chat') or the Files tab ('files'). */
+  taskPageFrom?: TaskTab;
 }
 // GET /v2/tasks/{id} as the dialog and its conversation read it.
 interface ModalDetail {
@@ -110,6 +112,20 @@ function taskDialogWire(d: ModalDialog) {
     const url = new URL(anchor.href, location.href);
     const match = url.origin === location.origin && url.pathname.match(/^\/api\/v2\/files\/([^/]+)$/);
     if (match && tfOpen(d, decodeURIComponent(match[1]!), url.searchParams.get('v'))) ev.preventDefault();
+  });
+  // A Spec card or a page row of Files opens the page in the window, in place of the chat (taskPageDocOf); a Spec card
+  // that is open goes back to the chat. A click for a new tab or window still opens the page's own view.
+  d.addEventListener('click', ev => {
+    if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+    const el = eventElement(ev)?.closest<HTMLElement>('[data-task-spec], [data-tft-page]');
+    if (!el || el.closest('dialog') !== d) return;
+    const key = 'page:' + (el.dataset.taskSpec || el.dataset.tftPage || '');
+    if (!taskPageDocOf(d, key)) return;
+    ev.preventDefault();
+    const spec = el.hasAttribute('data-task-spec');
+    if (spec && d.taskTab === key) { taskTabShow(d, 'chat'); return; }
+    d.taskPageFrom = spec ? 'chat' : TASK_FILES_TAB;
+    taskTabShow(d, key);
   });
   d.addEventListener('issue-acted', () => d.close());
   d.addEventListener('close', () => {
@@ -661,6 +677,30 @@ interface TaskChatState {
   reach?: ComposeReach; goalOnce?: boolean; openLines?: Set<string>; count?: number;
   /** How many of the newest lines are drawn (taskChatEarlier adds a page), and whether a page is being added. */
   shown?: number; earlier?: boolean;
+  /** When the read of the whole task drawn last began, and when the read of the run's line drawn last began
+   *  (performance.now()): of the two, the line from the later one is on screen (taskExecutionRead). */
+  wholeAt?: number; executionAt?: number;
+  /** When the whole read being drawn began (taskChatRead), for taskCommentsRender. */
+  drawing?: number | undefined;
+  /** A read of the run's line is on its way, and another was asked for meanwhile. */
+  executionReading?: boolean; executionAgain?: boolean;
+  /** The newest change seen (performance.now()): a read of the task begun after it has it. */
+  changedAt?: number;
+  /** A change came while the tab was hidden: it is read when the tab shows again. */
+  hiddenChange?: boolean;
+}
+const TASK_EXECUTION_ONLY = new WeakSet<ModalDetail>();   // a last read's copy with only its run's line read again
+// The open task's own stream (taskLiveStart) reads the whole task again on each change of it, with its files
+// (taskLiveRead, taskModalShow): the page's task events need not read it a second time. Only while that stream is
+// open: one still connecting, or one that failed (refused, not a stream) and so never reconnects, carries nothing, and
+// the page's own events (a document, an ask, a link added) are then the only word of the change.
+function taskChatFollowsItself(state: TaskChatState): boolean {
+  const live = state.dialog.taskLive;
+  return state.dialog.open && live?.shared?.source?.readyState === EventSource.OPEN && String(live.id) === String(state.id);
+}
+// A change of the open task from the page's own stream (refresh.ts): read once, unless the task's stream reads it.
+function taskChatOthersChange(state: TaskChatState): void {
+  if (!taskChatFollowsItself(state)) taskChatLive(state);
 }
 let TASK_JUMP = ENTRY_JUMP?.task ? {task: ENTRY_JUMP.task, id: ENTRY_JUMP.id} : null;   // {task, id}: a link's message, once that task's conversation shows
 function taskChatStop() {
@@ -672,8 +712,15 @@ function taskChatStop() {
 // its files (a new file or version, or an answer on one), once per burst.
 function taskChatLive(state: TaskChatState) {
   if (!taskChatCurrent(state) || state.stopped) { if (TASK_CHAT === state && !state.dialog.open) taskChatStop(); return; }
+  if (document.hidden) { state.hiddenChange = true; return; }
+  state.changedAt = performance.now();
   liveSoon('task:' + state.id, () => {
     if (!taskChatCurrent(state) || state.stopped) return;
+    if (document.hidden) { state.hiddenChange = true; return; }
+    // A comment changes the task too: the task's own stream has read it since the newest change, or will once its
+    // read on the way lands.
+    const live = state.dialog.taskLive;
+    if (taskChatFollowsItself(state) && live && (live.again || (live.readStarted ?? -1) >= (state.changedAt ?? Infinity))) return;
     void taskChatRead(state);
     tfLoad(state.dialog, state.id).catch(() => {});
     void taskFilesTabLoad(state.dialog, state.id);
@@ -987,7 +1034,7 @@ function taskStateHTML(state: TaskChatState, data: ModalDetail, sent = '') {
   // asked when the ask says (its `asked_by`), else it leads with "Waiting on you".
   const asker = yours && t && turn ? String((t.to_leave || []).find(r => String(r.requirement_id) === String(turn.requirement_id))?.asked_by || '') : '';
   const ask = yours && t && turn ? row(asker.includes(':') && asker !== me ? asker : '', 'waiting on you', clipLine(turn.line, 400), 'th-status-ask task-need', taskCauseLinkHTML(turn.href),
-    `<button type="button" class="primary small th-status-act" data-task-yours data-task-answer="${esc(String(turn.requirement_id))}">Answer</button>`) : '';
+    `<button type="button" class="primary small th-status-act" data-task-yours data-task-answer="${esc(String(turn.requirement_id))}" data-task-visit="${esc(String(t.visit_id || ''))}">Answer</button>`) : '';
   return deferred + now + ask;
 }
 // Whether the draft @mentions one of `names`, as the server reads an @mention (backend/hubdb.py _at): the name, not
@@ -1185,6 +1232,13 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
       if (open && taskChatCurrent(state)) { ev.preventDefault(); void taskModalOpen(open.dataset.taskWaitOpen!, state.dialog); }
     });
   }
+  if (data !== state.data && !TASK_EXECUTION_ONLY.has(data)) {
+    // A whole read begun before the run's line on screen was read keeps that newer line (a redraw of what is on
+    // screen, as "earlier" asks, is no read).
+    const began = state.drawing ?? state.dialog.taskLive?.readStarted ?? performance.now();
+    if (state.data && (state.executionAt ?? -1) > began) data = {...data, execution: state.data.execution ?? null};
+    state.wholeAt = Math.max(state.wholeAt ?? -1, began);
+  }
   state.data = data;
   taskYoursDotSync(state.dialog, data.task);
   taskDocsSync(state.dialog, data.task);
@@ -1257,7 +1311,7 @@ function taskYoursDotSync(d: ModalDialog, t: ModalTask | null | undefined) {
 // Answer (the reader's own ask, the chat's last row) opens the ask's card.
 async function taskAnswerOpen(state: TaskChatState, answer: HTMLButtonElement) {
   answer.disabled = true;
-  try { await decideOpenAsk(String(state.id), String(answer.dataset.taskAnswer)); } finally { answer.disabled = false; }
+  try { await decideOpenAsk(String(state.id), String(answer.dataset.taskAnswer), false, answer.dataset.taskVisit || ''); } finally { answer.disabled = false; }
 }
 // An ask of this task was answered in the Needs you card: read the open task again so its banner goes.
 function taskAskSettled(taskId: string | number): void {
@@ -1266,11 +1320,15 @@ function taskAskSettled(taskId: string | number): void {
 async function taskChatRead(state: TaskChatState) {
   if (!taskChatCurrent(state) || state.sending || state.reading) return;
   state.reading = true;
+  const began = performance.now();
   try {
     const data = await get<ModalDetail>(state.path);
     await taskStagesFor(data);
     if (data?.task?.conversation_id) state.cid = data.task.conversation_id;
-    if (taskChatCurrent(state) && !state.sending) taskCommentsRender(state, data);
+    if (taskChatCurrent(state) && !state.sending) {
+      state.drawing = began;
+      try { taskCommentsRender(state, data); } finally { state.drawing = undefined; }
+    }
   } catch (e) {
     if (!taskChatCurrent(state)) return;
     if ([403, 404].includes(errorStatus(e) ?? 0)) {
@@ -1287,6 +1345,38 @@ async function taskChatRead(state: TaskChatState) {
     else state.host.innerHTML = `<p class="err" role="status">Conversation unavailable: ${esc(errorMessage(e, ''))}</p>`;
   } finally { state.reading = false; }
 }
+// A run's step moves only its line (`execution`, the run the task follows), so only that is read
+// (GET /v2/tasks/{id}/execution answers the task page's own `execution`) and drawn with the rest as last read. One is
+// on its way at a time, and one asked for meanwhile follows it, so the last step is always read. An answer is drawn
+// only when its read began after the whole read on screen. Without a whole read yet, the whole task is read.
+async function taskExecutionRead(state: TaskChatState) {
+  if (!state.data) { void taskChatRead(state); return; }
+  if (state.sending) return;
+  if (state.executionReading) { state.executionAgain = true; return; }
+  state.executionReading = true;
+  const began = performance.now();
+  try {
+    const r = await get<{execution?: ModalExecution | null}>(`${state.path}/execution`, {fresh: true});
+    if (!taskChatCurrent(state) || state.stopped || state.sending || !state.data || began <= (state.wholeAt ?? -1)) return;
+    const data = {...state.data, execution: r.execution ?? null};
+    TASK_EXECUTION_ONLY.add(data);
+    state.executionAt = began;
+    taskCommentsRender(state, data);
+  } catch (e) {
+    if (taskChatCurrent(state) && [403, 404].includes(errorStatus(e) ?? 0)) void taskChatRead(state);   // its own read says why
+  } finally {
+    state.executionReading = false;
+    if (state.executionAgain && taskChatCurrent(state) && !state.stopped) { state.executionAgain = false; void taskExecutionRead(state); }
+  }
+}
+// A change that came while the tab was hidden is read once it shows (taskChatLive); the task's own stream reads it
+// then if it follows the task (shared-edit.ts sharedPlaceStart).
+document.addEventListener('visibilitychange', () => {
+  const state = TASK_CHAT;
+  if (document.hidden || !state?.hiddenChange) return;
+  state.hiddenChange = false;
+  taskChatOthersChange(state);
+});
 async function taskChatLoad(id: string | number, dialog: ModalDialog, data: ModalDetail | null = null) {
   const state: TaskChatState = TASK_CHAT = {dialog, host: $('.task-chat', dialog),
     path: `/v2/tasks/${encodeURIComponent(id)}`, id, sending: false, reading: false};
@@ -1302,8 +1392,8 @@ async function taskChatLoad(id: string | number, dialog: ModalDialog, data: Moda
     liveOn('runs', (d: {conversation_id?: string; output?: unknown}) => {
       if (d.conversation_id !== cid) return;
       if (!d.output) { taskChatLive(state); return; }
-      // Output moves the "Working" line on: the thread alone, at most every 1.5 s and not while the tab is hidden.
-      liveThrottle('task-run:' + state.id, () => { if (taskChatCurrent(state) && !state.stopped) void taskChatRead(state); }, 1500);
+      // Output moves the "Working" line on: that run's line alone, at most every 1.5 s and not while the tab is hidden.
+      liveThrottle('task-run:' + state.id, () => { if (taskChatCurrent(state) && !state.stopped) void taskExecutionRead(state); }, 1500);
     })] : [];
   state.liveOff = () => { offs.forEach(off => off()); state.liveOff = null; };
 }
@@ -1382,7 +1472,7 @@ function taskCauseLinkHTML(href: string | null | undefined): string {
 // then the documents; a Spec is a card under the title, taskSpecsHTML); or Details (what it is, what it needs to leave
 // its stage and a short list of facts), from its icon in the head, which closes back to what showed before. The
 // style guide's Task window; kept on the dialog across redraws.
-type TaskTab = string;   // 'chat', 'files', 'details' or a document's key
+type TaskTab = string;   // 'chat', 'files', 'details', a document's key or a page open in the window (`page:<id>`)
 /** The documents the window draws: the task's own read's, else the last read's for the same task. */
 const taskTabRow = (d: ModalDialog) => d.querySelector<HTMLElement>('.tw-tabs');
 const taskDetailsButton = (d: ModalDialog) => d.querySelector<HTMLElement>('[data-task-tab="details"]');
@@ -1391,13 +1481,19 @@ function taskDocsOf(d: ModalDialog, t: ModalTask): TaskDoc[] {
   return d.taskDocs || [];
 }
 function taskTabPaint(d: ModalDialog) {
-  // A document that is gone (archived, unreadable now), or a Spec (its card sits under the title), shows the chat instead.
-  if (d.taskTab?.startsWith('doc:') && !taskDocOf(d, d.taskTab)) d.taskTab = 'chat';
-  if (d.taskTabBack?.startsWith('doc:') && !taskDocOf(d, d.taskTabBack)) d.taskTabBack = 'chat';
-  const tab = d.taskTab || 'chat', body = $('.task-layout', d), doc = taskDocOf(d, tab);
+  // A document or page that is gone (archived, unreadable now), or a Spec as a document key (its card sits under the
+  // title and opens it as a page), shows the chat instead.
+  const gone = (key: TaskTab | undefined) => (key?.startsWith('doc:') && !taskDocOf(d, key)) || (key?.startsWith('page:') && !taskPageDocOf(d, key));
+  if (gone(d.taskTab)) d.taskTab = 'chat';
+  if (gone(d.taskTabBack)) d.taskTabBack = 'chat';
+  const tab = d.taskTab || 'chat', body = $('.task-layout', d), doc = taskDocOf(d, tab) || taskPageDocOf(d, tab);
   if (body) body.dataset.taskTabShown = doc ? 'doc' : tab;
+  // The tab lit: under Details or an open page, the tab it came from; a Spec's page lights its card, no tab.
+  const under = tab === 'details' ? d.taskTabBack || 'chat' : tab, page = under.startsWith('page:') ? under.slice(5) : null;
+  const lit = page ? d.taskPageFrom || 'chat' : under;
   const row = taskTabRow(d);
-  if (row) docTabsPaint(row, tab === 'details' ? d.taskTabBack || 'chat' : tab, b => b.dataset.taskTab, tab !== 'details');   // Details covers them: none selected
+  if (row) docTabsPaint(row, lit, b => b.dataset.taskTab, tab !== 'details' && !(page && lit === 'chat'));   // Details covers them: none selected
+  for (const card of d.querySelectorAll<HTMLElement>('[data-task-spec]')) card.setAttribute('aria-current', String(tab === 'page:' + card.dataset.taskSpec));
   taskDetailsButton(d)?.setAttribute('aria-pressed', String(tab === 'details'));
   const pane = $('.task-doc', d) as HTMLElement | null;
   if (pane && doc) docViewMount(pane, doc);
@@ -1427,28 +1523,36 @@ function taskTabsBind(d: ModalDialog) {
   if (details) details.onclick = () => taskTabShow(d, d.taskTab === 'details' ? d.taskTabBack || 'chat' : 'details');
 }
 // Spec pages have cards under the title. Every other document gets a tab after Files.
-const taskTabDocs = (docs: TaskDoc[] | null | undefined): TaskDoc[] => (docs || []).filter(d => d.name !== 'Spec' || d.kind === 'markdown');
+// The documents with a tab (a Spec page is a card instead), in the order they first appeared (docsInPlace).
+const taskTabDocs = (docs: TaskDoc[] | null | undefined): TaskDoc[] => docsInPlace((docs || []).filter(d => d.name !== 'Spec' || d.kind === 'markdown'));
 const taskDocOf = (d: ModalDialog, key: string | null | undefined): TaskDoc | null => docOf(taskTabDocs(d.taskDocs), key);
+/** A page open in the window (`page:<id>`): one of the task's Spec pages, else a page row of its Files tab. */
+function taskPageDocOf(d: ModalDialog, key: string | null | undefined): TaskDoc | null {
+  if (!key?.startsWith('page:')) return null;
+  const id = key.slice(5);
+  return (d.taskDocs || []).find(x => x.name === 'Spec' && x.kind !== 'markdown' && (x.page_id || x.file_id) === id) || TFT_PAGES.get(id) || null;
+}
 /** The tabs on the title row, and the change of a document as the task is read again: a new tab, a new version, one gone. */
-function taskDocTabsHTML(t: ModalTask, docs: TaskDoc[] | null | undefined, tab: TaskTab | undefined) {
+function taskDocTabsHTML(t: ModalTask, docs: TaskDoc[] | null | undefined, tab: TaskTab | undefined, place = '') {
   const on = tab === 'details' || !tab ? 'chat' : tab, shown = taskTabDocs(docs);
   const tabs: DocTab[] = [{key: 'chat', label: 'Chat', dot: taskYours(t)}, {key: TASK_FILES_TAB, label: taskFilesLabel(TFT_COUNT.get(String(t.id)))},
     ...shown.map(x => docTab(x, shown))];
   const valid = tabs.some(x => x.key === on);
-  return docTabsHTML(tabs, valid ? on : 'chat', key => `data-task-tab="${esc(key)}"`, 'Task').replace('class="doc-tabs"', 'class="doc-tabs tw-tabs"');
+  return docTabsHTML(tabs, valid ? on : 'chat', key => `data-task-tab="${esc(key)}"`, 'Task', place).replace('class="doc-tabs"', 'class="doc-tabs tw-tabs"');
 }
 function taskDocsSync(d: ModalDialog, t: ModalTask | null | undefined) {
   if (!t || String(t.id) !== String(d.dataset.task) || !Array.isArray(t.documents) || d.classList.contains('thread')) return;
   const was = JSON.stringify(d.taskDocs || []);
   d.taskDocs = t.documents;
   if (JSON.stringify(t.documents) === was) return;
-  const row = taskTabRow(d), html = taskDocTabsHTML(t, t.documents, d.taskTab);
+  const row = taskTabRow(d), html = taskDocTabsHTML(t, t.documents, d.taskTab, docTabsPlace(row, b => b.dataset.taskTab));
   if (row) row.outerHTML = html;
   else $('.tw-head .tmodal-title', d)?.insertAdjacentHTML('afterend', html);
   // the Spec cards under the title
   const specs = taskSpecsHTML(t.documents, String(t.id), TFT_TITLES), card = d.querySelector<HTMLElement>('[data-task-specs]');
   if (card) { if (specs) card.outerHTML = specs; else card.remove(); }
   else if (specs) d.querySelector<HTMLElement>('.tmodal-head')?.insertAdjacentHTML('afterend', specs);
+  taskFilesPaint(d as unknown as TftHost, String(t.id));   // a page that became a document leaves the Files list
   taskTabsBind(d);
 }
 // The tab a task opens on, once its conversation is read: Chat, where the box is and what is happening now. A tab the

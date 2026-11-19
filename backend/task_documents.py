@@ -279,6 +279,7 @@ def listing(c: Any, files: Any, who: Any, task_id: str) -> list[dict[str, Any]]:
             "version": latest["n"],
             "by": latest["by"],
             "at": latest["at"],
+            "created": row["first_activity_at"],
             "versions": versions,
         }
         if kind == "html":

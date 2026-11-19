@@ -164,6 +164,8 @@ function botAlertHTML(slug: string) {
   let word: string | undefined = '', why = '';
   if (s?.state === 'crashed' && s.last_stop) return lastStopHTML(slug);
   // Tico stopped it (failed runs, or over its run budget): the words are the server's, Release lifts it.
+  // Stopped for credit: Release lifts holds, not HQ's refusal, so the way out is adding credit.
+  if (s?.stopped === 'out_of_credit') return `<span class="bot-alert" role="status" data-bot-stopped="out_of_credit"><span aria-hidden="true">⚠</span> Out of credit</span> <span class="muted">${esc(s.focus || '')}</span>${typeof cloudCreditLinkHTML === 'function' ? cloudCreditLinkHTML() : ''}`;
   if (s?.stopped) return `<span class="bot-alert" role="status" title="${esc(s.focus || '')}" data-bot-stopped="${esc(s.stopped)}"><span aria-hidden="true">⚠</span> Stopped</span>${botReleaseButton(slug, 'primary bot-alert-resume')}`;
   if (s && ['crashed', 'quarantined', 'limited'].includes(s.state)) {
     word = s.state === 'crashed' ? 'Last run stopped' : s.state === 'quarantined' && s.quarantine?.auto ? 'Quarantined' : V2_WORD[s.state]; why = s.state === 'quarantined' ? quarantineWhy(slug) : s.focus || '';

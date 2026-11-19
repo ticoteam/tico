@@ -51,6 +51,17 @@ import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+
+def _sleep(seconds):
+    """Every pause goes through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
+
+
+def _now():
+    """The wall clock (epoch seconds): a test replaces this and not time.time for the whole process."""
+    return time.time()
+
+
 PROJECT = os.environ.get("TICO_PROJECT_DIR", "/project")
 TOKEN_FILE = os.environ.get("TICO_UPDATER_TOKEN_FILE", "/control/updater-token")
 MODE = "runner" if os.environ.get("TICO_UPDATER_MODE") == "runner" else "server"
@@ -426,7 +437,7 @@ def check_switched(version, release, seconds=None):
     A build that reports no release (a local or edge image) is not held to one. A check that cannot be made
     (a slow first request, a quick restart) is tried again until the health window ends; only a real
     mismatch, or no answer in the whole window, rolls back."""
-    deadline = time.time() + (HEALTH_SECONDS if seconds is None else seconds)
+    deadline = _now() + (HEALTH_SECONDS if seconds is None else seconds)
     while True:
         try:
             if running_image()[0] != inspect(IMAGE + ":" + version)["Id"]:
@@ -440,15 +451,15 @@ def check_switched(version, release, seconds=None):
         except Mismatch as exc:
             raise RuntimeError(str(exc))
         except (OSError, ValueError, KeyError, IndexError, AttributeError, subprocess.SubprocessError) as exc:
-            if time.time() >= deadline:
+            if _now() >= deadline:
                 raise RuntimeError("could not check the new version (%s)" % exc)
-        time.sleep(POLL_SECONDS)
+        _sleep(POLL_SECONDS)
 
 
 def container_healthy(seconds):
     """The runner image has a HEALTHCHECK; the container must report `healthy`, not merely be running."""
-    deadline = time.time() + seconds
-    while time.time() < deadline:
+    deadline = _now() + seconds
+    while _now() < deadline:
         try:
             container = compose("ps", "-q", SERVICE, timeout=INSPECT_SECONDS).split()
             state = (
@@ -467,7 +478,7 @@ def container_healthy(seconds):
                 return False
         except (RuntimeError, OSError, subprocess.SubprocessError):
             pass
-        time.sleep(POLL_SECONDS)
+        _sleep(POLL_SECONDS)
     return False
 
 
@@ -518,9 +529,9 @@ def healthy(seconds):
     HEALTH_GAVE_UP = ""
     if MODE == "runner":
         return container_healthy(seconds)
-    deadline = time.time() + seconds
+    deadline = _now() + seconds
     restarts = None
-    while time.time() < deadline:
+    while _now() < deadline:
         try:
             with urllib.request.urlopen(HEALTH_URL, timeout=3) as reply:
                 if reply.status == 200:
@@ -532,7 +543,7 @@ def healthy(seconds):
             HEALTH_GAVE_UP = reason
             print("tico-updater: %s; not waiting the full %d seconds" % (reason, seconds), flush=True)
             return False
-        time.sleep(POLL_SECONDS)
+        _sleep(POLL_SECONDS)
     return False
 
 
@@ -765,7 +776,7 @@ def selected_tunnel():
 
 def hold_ready(seconds):
     """One running hold that answers: a request to its own port reaches the healthy server's /healthz through it."""
-    deadline = time.time() + seconds
+    deadline = _now() + seconds
     while True:
         try:
             ids = [cid for cid, (oneoff, _) in containers_of_service("hold").items() if not oneoff]
@@ -785,9 +796,9 @@ def hold_ready(seconds):
                 return True
         except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
             pass
-        if time.time() >= deadline:
+        if _now() >= deadline:
             return False
-        time.sleep(POLL_SECONDS)
+        _sleep(POLL_SECONDS)
 
 
 def reconcile_tunnel(tag, settling=False):
@@ -1158,7 +1169,7 @@ def settle(tag, outcome):
         except Exception as exc:  # anything: only a confirmed recreate may end the hold
             set_status(message="Not settled: %s. Holding new work: %s." % (outcome, exc))
         save_status()
-        time.sleep(SETTLE_RETRY_SECONDS)
+        _sleep(SETTLE_RETRY_SECONDS)
 
 
 def inspect(ref):
@@ -1245,14 +1256,14 @@ def updater_stays_up(old_id, seconds=12):
     container = compose("ps", "-q", "updater").split()
     if not container:
         return False
-    deadline = time.time() + seconds
+    deadline = _now() + seconds
     while True:
         state = inspect(container[0])
         if not state["State"]["Running"] or state["State"].get("Restarting") or state["Image"] == old_id:
             return False
-        if time.time() >= deadline:
+        if _now() >= deadline:
             return True
-        time.sleep(2)
+        _sleep(2)
 
 
 def pin_updater_tag(tag):

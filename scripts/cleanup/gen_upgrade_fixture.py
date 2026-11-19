@@ -2,7 +2,7 @@
 with the rows a new database of that release starts with. A dump of a fresh hub at that tag, plus the tables and
 columns its source makes on first use.
 
-    python3 scripts/cleanup/gen_upgrade_fixture.py v0.6.0-rc.1
+    python3 scripts/cleanup/gen_upgrade_fixture.py v0.6.0
 
 Run it on the release the floor names (backend/migrations/retired.txt lists the files it shipped) whenever the floor
 moves. It checks the tag out in a new folder and starts its code only against a new empty database there.

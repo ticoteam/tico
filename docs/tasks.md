@@ -60,6 +60,9 @@ caller's rights; a task that can't change stays, and the board says how many and
   normal entry: its owner rule, stage rules, limit and wake apply (a by-hand stage wakes nobody).
 - The task keeps its label: D18450 stays D18450 on the Backlog board, and `D18450` still finds it. The prefix is the
   task's own, from the pipeline it was made in.
+- Numbers are one sequence for the whole team. A task gets the next one when it is made in a pipeline with a prefix
+  (General's is G). A pipeline that gets a prefix later numbers the tasks it already holds, open, done and closed,
+  oldest first, each with one history line ("Numbered when General got the prefix G"); a number never changes.
 - The old stage's open asks are withdrawn, a snooze ends, and what the old stage did on entering is undone as a back
   move undoes it. Sub-tasks stay in their own pipelines, linked as they were.
 - A Done or Closed task lands in the new pipeline's Done or Closed, never reopened.
@@ -176,6 +179,12 @@ tico task create --pipeline product --owner bot:pm --title "Export to CSV" --for
 ```
 
 It is refused unless that person sent the message and the bot can read its conversation.
+
+## Finding a task by its number
+
+Type a task's number in the Tasks search (`556`, `#556` or its label, `P556`) and that task is the first row, from any
+pipeline and whether it is open, snoozed, done or closed, if you may read it. Enter opens it. A search with words in it
+looks in the view on screen only. Bots and the CLI take `#556` wherever they take a task.
 
 ## Done, closed and reopen
 
@@ -457,6 +466,10 @@ Turn on **Private** to limit reads to the requester, the owner, its readers and 
 the person who asked for it can make it company-visible again; a bot never can. Reassigning a private task gives the
 new owner access and takes it from the old one, unless they are still the requester, a reader or a manager.
 
+A bot's run on a private task writes its own task and thread, not company-wide resources; a refusal names the route.
+Mail is not held back by it: the bot drafts, checks and queues email in any mailbox it may write, and a send that needs
+an OK asks it, on a private task of its own, of the inbox's approver alone.
+
 ### Who can see a private task
 
 A private task is seen by its requester, its owner and its **readers**: people, bots and groups listed on it. A group
@@ -514,7 +527,8 @@ tico task restore <id>
 `POST /api/v2/tasks/{id}/delete`, `GET /api/v2/deleted-tasks` and `POST /api/v2/tasks/{id}/restore` do the same.
 Deleting moves the task to the trash with its thread, links, labels and relations; it leaves every list and every
 bot's context at once, and keeps its number. A restore puts it back open on a new visit to the stage it was in (the
-first stage if that one is gone), or Done or Closed as it ended. Its old asks and wakes are not replayed.
+first stage if that one is gone), or Done or Closed as it ended. Its old asks and wakes are not replayed. A task
+that had no number gets the next one if its pipeline has a prefix.
 
 To delete many at once, such as a bulk import run twice, the owner runs the offline command on the server after a
 snapshot:

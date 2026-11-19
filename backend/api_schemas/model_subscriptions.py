@@ -49,6 +49,7 @@ SCHEMAS['ModelSubscription'] = obj(
         },
         'added_by': 's',
         'added_by_name': 's',
+        'can_remove': 'b',
         'owner_id': 's',
         'owner_name': 's',
         'created_at': 's',

@@ -4,6 +4,8 @@
 //! when no steer is unread and no background task of the session still runs, and then stdin closes and the process
 //! exits. Claude stays up for its background tasks either way; open stdin lets a follow-up in meanwhile. Steers and
 //! stops go in as the Agent SDK sends them: a user message with priority "now", and an `interrupt` control request.
+//! Once the process is gone, whatever the turn started and left running is stopped (crate::turn_sweep), except the
+//! shells a turn that ended on its wait keeps.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
@@ -172,6 +174,93 @@ pub fn interrupt_line(request_id: &str) -> String {
     py_dumps(&json!({"type": "control_request", "request_id": request_id,
                      "request": {"subtype": "interrupt", "cancel_queued": true}}))
         + "\n"
+}
+
+pub(crate) struct VoiceSession {
+    stdin: tokio::process::ChildStdin,
+    stdout: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    stopper: super::Stopper,
+    exited: tokio::sync::oneshot::Receiver<std::io::Result<std::process::ExitStatus>>,
+    usage: Usage,
+}
+
+impl VoiceSession {
+    pub(crate) async fn send(&mut self, text: &str) -> Result<(), HostError> {
+        self.write(&user_line(&uuid::Uuid::new_v4().to_string(), text, None))
+            .await
+    }
+
+    pub(crate) async fn cancel(&mut self) -> Result<(), HostError> {
+        self.write(&interrupt_line(&uuid::Uuid::new_v4().to_string()))
+            .await
+    }
+
+    async fn write(&mut self, line: &str) -> Result<(), HostError> {
+        self.stdin
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|e| failed(e.to_string()))
+    }
+
+    pub(crate) async fn frame(&mut self) -> Result<Value, HostError> {
+        while let Some(line) = self
+            .stdout
+            .next_line()
+            .await
+            .map_err(|e| failed(e.to_string()))?
+        {
+            if let Ok(value) = serde_json::from_str::<Value>(&line) {
+                if let Some((id, tokens)) = request_usage(&value) {
+                    self.usage.record_request(&value, id, tokens);
+                }
+                if value["type"] == "result" && value["parent_tool_use_id"].is_null() {
+                    self.usage.add_result_counts(&value);
+                }
+                return Ok(value);
+            }
+        }
+        Err(failed("Claude closed the voice session"))
+    }
+
+    pub(crate) fn take_usage(&mut self) -> (i64, Value) {
+        let mut u = std::mem::take(&mut self.usage);
+        if u.input == 0 && u.output == 0 {
+            // When a process is stopped before its result, the requests it reported still cost tokens.
+            for (_, r, _) in &u.requests {
+                u.input += r[0] + r[1];
+                u.cached += r[1];
+                u.output += r[2];
+            }
+        }
+        (u.context_tokens(), u.token_event())
+    }
+
+    pub(crate) async fn stop_for_restart(&mut self, grace: Duration) -> Result<(), HostError> {
+        self.stopper.terminate(grace);
+        tokio::time::timeout(Duration::from_secs(2), &mut self.exited)
+            .await
+            .map_err(|_| failed("Claude did not stop for the voice session restart"))?
+            .map_err(|e| failed(e.to_string()))?
+            .map_err(|e| failed(e.to_string()))?;
+        Ok(())
+    }
+}
+
+impl Drop for VoiceSession {
+    fn drop(&mut self) {
+        self.stopper.terminate(STOP_TIMEOUT);
+    }
+}
+
+pub(crate) fn voice_delta(frame: &Value) -> Option<&str> {
+    let event = &frame["event"];
+    (frame["type"] == "stream_event"
+        && frame["parent_tool_use_id"].is_null()
+        && event["type"] == "content_block_delta"
+        && event["delta"]["type"] == "text_delta")
+        .then(|| event["delta"]["text"].as_str())
+        .flatten()
+        .filter(|text| !text.is_empty())
 }
 
 #[derive(Clone)]
@@ -472,6 +561,57 @@ struct Usage {
     requests: Vec<(String, [i64; 3], bool)>,
     /// The request each stream (the bot's, or a subagent's by its `parent_tool_use_id`) is in, for its `message_delta`.
     streaming: HashMap<String, String>,
+}
+
+impl Usage {
+    fn add_result_counts(&mut self, result: &Value) {
+        let usage = &result["usage"];
+        let (input, output) = usage_tokens(usage);
+        self.input += input;
+        self.output += output;
+        self.cached += count(usage, "cache_read_input_tokens");
+        self.cache_write += count(usage, "cache_creation_input_tokens");
+    }
+
+    fn record_request(&mut self, msg: &Value, id: Option<&str>, tokens: [i64; 3]) {
+        let stream = msg["parent_tool_use_id"].as_str().unwrap_or_default();
+        let id = match id {
+            Some(id) => {
+                self.streaming.insert(stream.to_owned(), id.to_owned());
+                Some(id)
+            }
+            None => self.streaming.get(stream).map(String::as_str),
+        };
+        if let Some(id) = id {
+            match self.requests.iter_mut().find(|(seen, _, _)| seen == id) {
+                Some((_, had, _)) => (0..3).for_each(|i| had[i] = had[i].max(tokens[i])),
+                None => self
+                    .requests
+                    .push((id.to_owned(), tokens, stream.is_empty())),
+            }
+        }
+    }
+
+    fn context_tokens(&self) -> i64 {
+        self.requests
+            .iter()
+            .rev()
+            .find(|(_, _, main)| *main)
+            .map_or(self.input + self.output, |(_, r, _)| r.iter().sum())
+    }
+
+    fn token_event(&self) -> Value {
+        json!({
+            "input": self.input, "output": self.output, "total": self.input + self.output,
+            "cost_usd": self.cost,
+            "usage": {
+                "input": self.input, "cached": self.cached, "cache_write": self.cache_write, "output": self.output,
+                // The fourth count tells the server which requests describe the main context.
+                "requests": self.requests.iter().map(|(_, r, main)| json!([r[0], r[1], r[2], i64::from(*main)]))
+                    .collect::<Vec<_>>()
+            }
+        })
+    }
 }
 
 #[derive(Default)]
@@ -883,6 +1023,7 @@ impl ClaudeHost {
         thread_id: &str,
         t: &Thread,
         effort: Option<&str>,
+        mark: &str,
     ) -> std::io::Result<(
         Child,
         crate::run_diagnostics::Stderr,
@@ -938,6 +1079,8 @@ impl ClaudeHost {
             .stderr(Stdio::piped())
             .current_dir(&t.settings.cwd);
         command.env_clear().envs(turn_env(&t.settings));
+        // Inherited by all the turn starts, a job that leaves its session too: what is left when it ends is stopped.
+        command.env(crate::turn_sweep::MARK_ENV, mark);
         #[cfg(test)]
         if let Some(path) = &reaping {
             let mut args = vec![json!(path), json!("--")];
@@ -952,6 +1095,58 @@ impl ClaudeHost {
             &turn_env(&t.settings),
         );
         Ok((child, stderr, reaping))
+    }
+
+    pub(crate) fn start_voice(
+        &self,
+        thread_id: &str,
+        effort: Option<&str>,
+        aid: &str,
+    ) -> Result<VoiceSession, HostError> {
+        self.open_voice(thread_id, thread_id, effort, aid)
+    }
+
+    pub(crate) fn restart_voice(
+        &self,
+        thread_id: &str,
+        effort: Option<&str>,
+        aid: &str,
+    ) -> Result<VoiceSession, HostError> {
+        self.open_voice(thread_id, &uuid::Uuid::new_v4().to_string(), effort, aid)
+    }
+
+    fn open_voice(
+        &self,
+        thread_id: &str,
+        session_id: &str,
+        effort: Option<&str>,
+        aid: &str,
+    ) -> Result<VoiceSession, HostError> {
+        let mut thread = self
+            .inner()
+            .threads
+            .get(thread_id)
+            .cloned()
+            .ok_or_else(|| failed("Unknown Claude voice session"))?;
+        thread.settings.background_wait = None;
+        if session_id != thread_id {
+            thread.started = false;
+            thread.fork_from = None;
+            thread.session_id = None;
+        }
+        let (mut child, _stderr, _) = self
+            .launch(session_id, &thread, effort, aid)
+            .map_err(|e| failed(format!("Could not open Claude voice session: {e}")))?;
+        let stdin = child.stdin.take().expect("Claude stdin is piped");
+        let stdout = BufReader::new(child.stdout.take().expect("Claude stdout is piped")).lines();
+        let (stopper, exited) = super::own(child);
+        Ok(VoiceSession {
+            stdin,
+            stdout,
+            stopper,
+            exited,
+            usage: Usage::default(),
+        })
     }
 
     pub fn start_turn(
@@ -981,7 +1176,7 @@ impl ClaudeHost {
                 inner.goal_offsets.insert(thread_id.into(), size);
             }
             let (child, stderr, reaping) = self
-                .launch(thread_id, &t, effort)
+                .launch(thread_id, &t, effort, &turn)
                 .map_err(|e| failed(format!("could not start claude: {e}")))?;
             inner.reaping = reaping;
             inner.turn = Some((thread_id.into(), turn.clone()));
@@ -1097,10 +1292,13 @@ impl ClaudeHost {
         let mut recovered = false;
         // What a restarted session is told after its prompt: the follow-ups the missing one never read.
         let mut requeued: Vec<String> = vec![];
+        // Each Claude process of the turn (a restored session has two): the groups and scopes it left.
+        let mut launched: Vec<u32> = vec![];
         loop {
             let stdout = child.stdout.take();
             let stdin = child.stdin.take();
             let pid = child.id();
+            launched.extend(pid);
             let (stopper, exited) = super::own(child);
             self.open_pipe(
                 &tid,
@@ -1280,7 +1478,7 @@ impl ClaudeHost {
                             t.session_id = None;
                             t.restored = true;
                             let t = t.clone();
-                            self.launch(&tid, &t, effort.as_deref())
+                            self.launch(&tid, &t, effort.as_deref(), &turn)
                                 .ok()
                                 .map(|(c, s, r)| {
                                     inner.reaping = r;
@@ -1313,9 +1511,65 @@ impl ClaudeHost {
                     continue;
                 }
             }
+            self.sweep(&tid, &turn, &launched).await;
             self.finish(&tid, &turn, result, rc, &tail, failure);
             return;
         }
+    }
+
+    /// Stops what the ended turn left running (crate::turn_sweep) and says so on the turn. Claude has exited, or was
+    /// killed on its wait: then the shells it kept stay with what they run, and their reaping parent stays for them.
+    async fn sweep(&self, tid: &str, turn: &str, launched: &[u32]) {
+        let target = {
+            let inner = self.inner();
+            let stem = inner.threads.get(tid).and_then(|t| {
+                turn_env(&t.settings)
+                    .get(crate::turn_limits::SCOPE_ENV)
+                    .cloned()
+            });
+            let (keep, keep_trees) = match inner
+                .pipe
+                .as_ref()
+                .and_then(|p| p.kept.as_ref().map(|k| (p, k)))
+            {
+                Some((p, kept)) => (
+                    p.reaping.as_ref().and(p.pid).into_iter().collect(),
+                    kept.iter()
+                        .filter_map(|k| k["pid"].as_u64())
+                        .map(|pid| pid as u32)
+                        .collect(),
+                ),
+                None => (vec![], vec![]),
+            };
+            crate::turn_sweep::Turn {
+                mark: turn.to_string(),
+                groups: launched.to_vec(),
+                cgroups: launched
+                    .iter()
+                    .filter_map(|&pid| crate::turn_limits::scope_dir(stem.as_deref(), pid))
+                    .collect(),
+                keep,
+                keep_trees,
+            }
+        };
+        let stopped = tokio::task::spawn_blocking(move || crate::turn_sweep::sweep(&target))
+            .await
+            .unwrap_or_default();
+        if stopped.is_empty() {
+            return;
+        }
+        log(&format!(
+            "claude[{}]: turn ended: stopped {} processes it left running ({})",
+            self.0.bot,
+            stopped.len(),
+            crate::turn_sweep::programs(&stopped)
+        ));
+        self.emit(event(
+            "diagnostic",
+            Some(tid),
+            Some(turn),
+            crate::turn_sweep::report(&stopped),
+        ));
     }
 
     /// Claude read message `mid`; one missing or not written here stands for the oldest unread message.
@@ -1475,16 +1729,12 @@ impl ClaudeHost {
 
     /// A `result` arrived: the turn is over when Claude read every message written to it.
     fn settle(&self, turn: &str, result: &Value) {
-        let (inp, out) = usage_tokens(&result["usage"]);
         let mut inner = self.inner();
         let cost = result["total_cost_usd"].as_f64();
         let text = result["result"].as_str().unwrap_or_default().to_string();
         let mut pipe_cost = inner.pipe.as_ref().map_or(0.0, |p| p.cost);
         let u = inner.usage.entry(turn.into()).or_default();
-        u.input += inp;
-        u.output += out;
-        u.cached += count(&result["usage"], "cache_read_input_tokens");
-        u.cache_write += count(&result["usage"], "cache_creation_input_tokens");
+        u.add_result_counts(result);
         if let Some(c) = cost {
             u.cost = Some(u.cost.unwrap_or(0.0) + (c - pipe_cost).max(0.0));
             pipe_cost = c;
@@ -1515,27 +1765,11 @@ impl ClaudeHost {
             self.on_tools(msg, tid, turn);
         }
         if let Some((id, tokens)) = request_usage(msg) {
-            // Some models price each request by its prompt length (backend/providers.py LONG_PROMPT), subagents' too.
-            let stream = msg["parent_tool_use_id"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
-            let main = stream.is_empty();
-            let mut inner = self.inner();
-            let u = inner.usage.entry(turn.into()).or_default();
-            let id = match id {
-                Some(id) => {
-                    u.streaming.insert(stream, id.to_string());
-                    Some(id.to_string())
-                }
-                None => u.streaming.get(&stream).cloned(),
-            };
-            if let Some(id) = id {
-                match u.requests.iter_mut().find(|(seen, _, _)| *seen == id) {
-                    Some((_, had, _)) => (0..3).for_each(|i| had[i] = had[i].max(tokens[i])),
-                    None => u.requests.push((id, tokens, main)),
-                }
-            }
+            self.inner()
+                .usage
+                .entry(turn.into())
+                .or_default()
+                .record_request(msg, id, tokens);
         }
         if !msg.is_object() || crate::util::truthy(msg.get("parent_tool_use_id")) {
             return false; // subagent traffic is not the bot's reply
@@ -1552,7 +1786,7 @@ impl ClaudeHost {
                 let ev = &msg["event"];
                 let delta = &ev["delta"];
                 if ev["type"] == "content_block_delta" && delta["type"] == "text_delta" {
-                    if let Some(text) = delta["text"].as_str().filter(|t| !t.is_empty()) {
+                    if let Some(text) = voice_delta(msg) {
                         self.emit(event(
                             "delta",
                             Some(tid),
@@ -1906,12 +2140,7 @@ impl ClaudeHost {
             if let Some(u) = usage.as_ref() {
                 // The newest of the bot's own requests is the session's context; without them, the turn's whole usage
                 // is more than it, never less.
-                let last = u
-                    .requests
-                    .iter()
-                    .rev()
-                    .find(|(_, _, main)| *main)
-                    .map_or(u.input + u.output, |(_, r, _)| r[0] + r[1] + r[2]);
+                let last = u.context_tokens();
                 if last > 0 {
                     inner.context.insert(tid.into(), last);
                 }
@@ -1919,17 +2148,7 @@ impl ClaudeHost {
             (inner.interrupted.contains(turn), usage, reply, limited)
         };
         if let Some(u) = usage.as_ref().filter(|u| u.input + u.output > 0) {
-            self.emit(event(
-                "tokens",
-                Some(tid),
-                Some(turn),
-                json!({"input": u.input, "output": u.output, "total": u.input + u.output, "cost_usd": u.cost,
-                       "usage": {"input": u.input, "cached": u.cached, "cache_write": u.cache_write, "output": u.output,
-                                 // The fourth count marks the bot's own requests (1) from its subagents' (0): the
-                                 // newest of the bot's own is the session's context size (backend/topic_change.py).
-                                 "requests": u.requests.iter().map(|(_, r, main)| json!([r[0], r[1], r[2], i64::from(*main)]))
-                                     .collect::<Vec<_>>()}}),
-            ));
+            self.emit(event("tokens", Some(tid), Some(turn), u.token_event()));
         }
         self.poll_goal(tid);
         let ok = result
@@ -2782,7 +3001,7 @@ mod tests {
             .insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
         let thread = host.start_thread(&settings);
         let t = host.inner().threads[&thread].clone();
-        let (mut child, _stderr, _status) = host.launch(&thread, &t, None).unwrap();
+        let (mut child, _stderr, _status) = host.launch(&thread, &t, None, "turn").unwrap();
         drop(child.stdin.take());
         child.wait().await.unwrap();
         assert_eq!(
@@ -2944,6 +3163,65 @@ mod tests {
         }
         std::fs::remove_dir_all(dir).unwrap();
         (got, steered)
+    }
+
+    #[tokio::test]
+    async fn voice_uses_the_handed_model_effort_and_style_for_both_utterances() {
+        let dir = std::env::temp_dir().join(format!("claude-voice-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("claude");
+        crate::util::write_script(
+            &path,
+            r#"#!/bin/sh
+case "$1" in --version) echo '2.1.296 (Claude Code)'; exit 0;; esac
+echo "$$" >> launches
+printf '%s\n' "$@" > args
+IFS= read -r line || exit 1
+case "$line" in *READY*) printf '%s\n' '{"type":"result","result":"READY"}';; *) exit 2;; esac
+IFS= read -r line || exit 1
+case "$line" in *First*) printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Here."}}}' '{"type":"result","result":"Here."}';; *) exit 3;; esac
+IFS= read -r line || exit 1
+case "$line" in *Second*) printf '%s\n' '{"type":"result","result":"Again."}';; *) exit 4;; esac
+"#,
+        );
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let thread = host.start_thread(&Settings {
+            cwd: dir.display().to_string(),
+            model: Some("synthetic-voice-model".into()),
+            effort: Some("low".into()),
+            output_style: Some("Concise".into()),
+            ..Default::default()
+        });
+        let mut resident = host.start_voice(&thread, None, "voice-attempt").unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            resident.send("Reply with READY").await.unwrap();
+            assert_eq!(resident.frame().await.unwrap()["result"], "READY");
+            resident.send("First utterance").await.unwrap();
+            assert_eq!(voice_delta(&resident.frame().await.unwrap()), Some("Here."));
+            assert_eq!(resident.frame().await.unwrap()["result"], "Here.");
+            resident.send("Second utterance").await.unwrap();
+            assert_eq!(resident.frame().await.unwrap()["result"], "Again.");
+        })
+        .await
+        .expect("the resident Claude process did not answer each input");
+        drop(resident);
+        let argv = std::fs::read_to_string(dir.join("args")).unwrap();
+        let args: Vec<_> = argv.lines().collect();
+        let value_after = |flag| args.windows(2).find(|pair| pair[0] == flag).unwrap()[1];
+        assert_eq!(value_after("--model"), "synthetic-voice-model");
+        assert_eq!(value_after("--effort"), "low");
+        let settings: Value = serde_json::from_str(value_after("--settings")).unwrap();
+        assert_eq!(settings["outputStyle"], "Concise");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("launches"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
@@ -3179,6 +3457,52 @@ mod tests {
         );
     }
 
+    /// A turn that ends on its wait keeps the shell it waited on, and stops a job the bot left behind that is no
+    /// background task of Claude's and has left Claude's tree (double-forked), which the wait's own stray stop misses.
+    #[tokio::test]
+    async fn a_turn_ended_on_its_wait_keeps_its_shell_and_stops_the_rest() {
+        let stray_file = std::env::temp_dir().join(format!(
+            "claude-wait-stray-{}.pid",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let rest = format!(
+            "( sleep 900 </dev/null >/dev/null 2>&1 & echo $! > {} )",
+            stray_file.display()
+        );
+        let first = format!(
+            "{SHELL_STARTED}\n{}\n{}\n",
+            assistant_line("m1", "Suite running."),
+            result_line("Suite running.")
+        );
+        let (got, _, pid) = wait_turn(&first, &rest, Duration::from_millis(300)).await;
+        let stray: i32 = std::fs::read_to_string(&stray_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let _ = std::fs::remove_file(&stray_file);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while alive(stray) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (shell_up, stray_up) = (alive(pid), alive(stray));
+        // SAFETY: processes this test's fake started.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+            libc::kill(stray, libc::SIGKILL);
+        }
+        assert!(shell_up, "the kept shell was stopped");
+        assert!(!stray_up, "a job the turn left outlived it");
+        let swept = got
+            .iter()
+            .find(|e| e["kind"] == "diagnostic" && e["leftover_processes"].is_object())
+            .expect("the turn says what it stopped");
+        assert!(
+            swept["text"].as_str().unwrap().contains("sleep 900"),
+            "{swept}"
+        );
+    }
+
     #[tokio::test]
     async fn a_stopped_turn_leaves_nothing_it_started_running() {
         let dir = std::env::temp_dir().join(format!(
@@ -3246,6 +3570,130 @@ mod tests {
         assert!(
             group_gone,
             "something of the turn's group outlived the stop"
+        );
+    }
+
+    /// A turn that ends on its own (the answer is in, stdin closes, Claude exits) leaves none of what it started
+    /// running: a background job, one that double-forked away, and on Linux one that left the session (`setsid`).
+    /// Nothing is stopped while the turn still runs, and a process of no turn of this one's is never stopped.
+    #[tokio::test]
+    async fn an_ended_turn_leaves_nothing_it_started_running_and_a_running_one_keeps_it() {
+        let dir = std::env::temp_dir().join(format!(
+            "claude-leftovers-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("first.jsonl"),
+            format!(
+                "{}\n{}\n",
+                assistant_line("m1", "Done."),
+                result_line("Done.")
+            ),
+        )
+        .unwrap();
+        let setsid = if cfg!(target_os = "linux") {
+            "setsid sh -c 'echo $$ > detached.pid; exec sleep 900' </dev/null >/dev/null 2>&1 &\n"
+        } else {
+            "echo 0 > detached.pid\n"
+        };
+        let path = dir.join("claude");
+        crate::util::write_script(
+            &path,
+            &format!(
+                "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\nIFS= read -r line\n\
+                 sh -c 'while :; do sleep 1; done' </dev/null >/dev/null 2>&1 &\necho $! > job.pid\n\
+                 ( sleep 900 </dev/null >/dev/null 2>&1 & echo $! > forked.pid )\n{setsid}\
+                 while [ ! -e go ]; do sleep 0.05; done\ncat first.jsonl\ncat >/dev/null\n"
+            ),
+        );
+        let mut bystander = std::process::Command::new("sleep")
+            .arg("900")
+            .spawn()
+            .unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            // As on a cloud machine: on Linux, Claude runs under its reaping parent.
+            background_wait: Some(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        let thread = host.start_thread(&settings);
+        host.start_turn(&thread, "hello", None).unwrap();
+        let read = |name: &str| {
+            std::fs::read_to_string(dir.join(name))
+                .ok()
+                .and_then(|s| s.trim().parse::<i32>().ok())
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while ["job.pid", "forked.pid", "detached.pid"]
+            .iter()
+            .any(|n| read(n).is_none())
+            && Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (job, forked, detached) = (
+            read("job.pid").unwrap(),
+            read("forked.pid").unwrap(),
+            read("detached.pid").unwrap(),
+        );
+        let running = [job, forked, detached]
+            .iter()
+            .filter(|&&p| p > 0)
+            .all(|&p| alive(p));
+        std::fs::write(dir.join("go"), "").unwrap();
+        let mut got = vec![];
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            let idle = ev["kind"] == "status" && ev["state"] == "idle";
+            got.push(ev);
+            if idle {
+                break;
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let left = || -> Vec<i32> {
+            [job, forked, detached]
+                .into_iter()
+                .filter(|&p| p > 0 && alive(p))
+                .collect()
+        };
+        while !left().is_empty() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let left = left();
+        let bystander_up = alive(bystander.id() as i32);
+        let _ = bystander.kill();
+        let _ = bystander.wait();
+        for pid in [job, forked, detached].into_iter().filter(|&p| p > 0) {
+            // SAFETY: processes this test's fake started.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        host.stop().await;
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(running, "a process was stopped while its turn still ran");
+        assert!(left.is_empty(), "outlived the turn: {left:?} of {got:?}");
+        assert!(bystander_up, "a process of no turn was stopped");
+        assert!(
+            got.iter()
+                .any(|e| e["kind"] == "turn_completed" && e["status"] == "completed"),
+            "{got:?}"
+        );
+        let swept = got
+            .iter()
+            .find(|e| e["kind"] == "diagnostic" && e["leftover_processes"].is_object())
+            .expect("the turn says what it stopped");
+        let least = if cfg!(target_os = "linux") { 3 } else { 2 };
+        assert!(
+            swept["leftover_processes"]["count"].as_u64().unwrap() >= least,
+            "{swept}"
+        );
+        assert!(
+            swept["text"].as_str().unwrap().contains("sleep 900"),
+            "{swept}"
         );
     }
 

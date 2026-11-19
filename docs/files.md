@@ -17,10 +17,12 @@ left, a chat on the right, and the top bar holds the name, Download and a clock.
 take turns, switched by two marks under the top bar. Esc or ✕ returns to the page underneath as it was; a cold link
 draws that page first (the task, the bot, else Library › Files), so closing lands there.
 
-- **The file:** the same kinds the viewer shows (pictures, video, audio, PDF, Markdown, text, CSV, HTML in its
-  sandbox), plus Word files (`.docx`), drawn in the browser by the vendored docx-preview (no LibreOffice). A Google
-  Doc, Sheet, Slides or Drive file shows Google's own `/preview` (signed in as the viewer, nothing passed but the
-  address), with Open in Google beside it. Anything else is a card with Download.
+- **The file:** the kinds the viewer shows: pictures, video, audio, PDF, Markdown, text, CSV, HTML in its sandbox,
+  and Word files (`.docx`, up to 25 MB), drawn in the browser by the vendored docx-preview (no LibreOffice). The
+  viewer, a task's Files and a file's OK in Flow draw a Word file the same way; one docx-preview cannot read shows as
+  its card with Download, and a legacy `.doc` only downloads. A Google Doc, Sheet, Slides or Drive file shows Google's
+  own `/preview` (signed in as the viewer, nothing passed but the address), with Open in Google beside it. Anything
+  else is a card with Download.
 - **The chat:** from a task, the task's thread; from a bot's page, its rail or Library, the DM with the file's bot.
   Each message carries `refs.from_page` `{page: 'file', label: <title>, item: {kind: 'file', id, name: 'v<n>'}}`
   for the version on screen (the same reference the [page chat](pages.md) uses). A file no bot owns has no chat.
@@ -114,6 +116,11 @@ tico file list
 
 A bot can write only its own files: the authenticated bot decides, never a parameter.
 
+To hand a file to the person it is talking to, a bot attaches it to its message in that thread (its Home, a DM, a
+task's thread): `tico thread post <thread> "..." --file <file id>@<version>` for a file already in Tico (the ids
+`tico file publish` and `tico file list` print), or `tico thread upload <thread> <path> --text "..."` from its checkout.
+Everyone who reads the message opens it ([Threads](threads.md)).
+
 **Automatically**, at the end of a completed run, the runner uploads new or changed files under
 the bot checkout's `reports/` and `artifacts/`, comparing against what it published before. Choose
 other folders (or none) per bot in `bot.yaml`:
@@ -186,6 +193,23 @@ activity, with the visible `total`; `q` keeps files that have every word in thei
 `PATCH /api/v2/files/{id}` (title, task, archive, promote), `GET /api/v2/files/{id}/info` (one file as its bot's Files
 lists it, 404 when the viewer cannot see it), `/activity` and `/versions`. Display names come as `actor_name` and in `actors`, as everywhere in v2.
 `POST /api/v2/files/dates` is the runner's own call, not part of the stable API.
+
+Each file in these answers (the list, `/files/mentions` and `/info`) has two kinds. `kind` is the stored kind, which
+says how the file opens (`document`, `slides`, `design`, `spreadsheet`, `data`, `image`, `video`, `audio`…).
+`library_kind` is the word the `kind` filter takes, as in the Library and Search:
+
+| `library_kind` | Stored `kind` |
+|---|---|
+| `page` | any, when the file is a page |
+| `document` | `document`, `slides`, `design` |
+| `image` | `image` |
+| `data` | `spreadsheet`, `data` |
+| `media` | `video`, `audio` |
+| `other` | anything else |
+
+Filter with a file's `library_kind`: a page whose stored kind is `document` is listed under `kind=page`, not
+`kind=document`. A stored kind that is not a filter word (`kind=spreadsheet`) is refused with 422 and the word to use.
+`tico_file_list` takes the same `kind`.
 `GET /api/v2/bots/{bot}/instructions` reads the Computer's latest Instructions snapshot with the bot's Read permission.
 It returns `content`, `published`, `updated_at` and `source`; `published: false` means the Computer has not reported content yet.
 It never substitutes the bot's description for its Instructions.

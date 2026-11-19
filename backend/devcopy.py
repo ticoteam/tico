@@ -233,8 +233,6 @@ EMPTY = (
     # Personal phone consent and paid dispatch queues belong to the source install.
     "alert_preferences",
     "personal_alerts",
-    # Which Recorder each person's computers run (backend/recorder_installs.py): per-machine, the copy starts without it.
-    "recorder_installs",
     # Browsers that take Web Push (backend/web_push.py): a copy pushes to none of the live install's.
     "push_subscriptions",
     "bills_inbound",  # emailed bills: senders, subjects and HQ delivery ids
@@ -281,6 +279,8 @@ EMPTY = (
     "calls",
     "call_participants",
     "call_holds",
+    "call_bot_notes",
+    "call_voice_options",
     # Slack links: an active link posts to Slack both ways; its queue and message map only serve that link.
     "slack_thread_links",
     "slack_link_members",
@@ -648,10 +648,10 @@ KEEP = (
             "growth_computed_choices",  # which of a typed and a computed number a channel's owner kept: no customer keys
             "growth_line_uses",  # who used the Growth line on which day: the measure's counts, no content
             "growth_origins",
+            "growth_segments",  # who the team sells to and each one's rules: no customer keys
             "growth_settings",
             "growth_sync_runs",
             "growth_setup",  # the first-run dates the activation rate is read from: the team's history, not work
-            "growth_setup_shown",  # when the Get started panel said "you're set up": history, not work
             "growth_alert_state",  # which line each channel was last on (backend/growth_brief.py): history, no customer keys
             "growth_crossings",  # each crossing and how its owner was told: history, no customer keys
             "growth_view_reads",  # how many times agents read a scoped view each day: counts only

@@ -88,6 +88,7 @@ interface ThvMessage {
   run?: ChatRun;
   refs?: ThvRefs;
   reactions?: ThvReaction[];
+  task_activity?: ChatTaskActivity;
   [key: string]: unknown;
 }
 // A message the stream or a send brings, wrapped with where it belongs.
@@ -124,6 +125,7 @@ interface ThvFileRow {
   locator?: string;
   url?: string;
   archived?: boolean;
+  library_kind?: string;  // page, document, image, data, media or other: its mark (LF_ICON)
 }
 interface ThvLibFile {
   id: string;
@@ -195,6 +197,16 @@ interface ThvOpts {
   reach?: boolean;
   // The box's words when empty, in place of the thread's name: Flow's chat says it as the task's window does.
   placeholder?: () => string;
+  // More in the attach menu, after Upload and Library file ([key, label, icon?]), and what a pick does: the meeting
+  // window's Link a task and New task (ui/app/call-window.ts). `plus`: the menu opens from a + before the words, and
+  // says Upload file and Link a file, each with its icon in front.
+  attachMore?: {items: [string, string, string?][]; pick: (key: string) => void; plus?: boolean};
+  // Messages this view leaves out (still read): the meeting window's chat leaves out the call's own posts.
+  hide?: (m: ThvMessage) => boolean;
+  // Link a file's pick, in place of a chip on the next message: the meeting window posts it at once as its card.
+  libPick?: (f: ThvLibFile) => void;
+  // A message's body drawn by the host, or null for the usual one: the meeting window's task card.
+  body?: (m: ThvMessage) => string | null;
 }
 // The composer of a bot's Home or DM or a thread: what pill.js, slash-commands.js and chat-goal.js read off it.
 interface ThvComposer {
@@ -223,6 +235,7 @@ interface ThvConv {
   thread: ThvThread | null;
   breadcrumb: ThvCrumb[];
   messages: ThvMessage[];
+  taskActivity: ChatTaskActivity[];
   next: string | null;
   state: 'loading' | 'empty' | 'ready' | 'gone' | 'error';
   execution: ChatExecution | null | undefined;
@@ -285,6 +298,7 @@ interface ThvTimeline {
   thread?: ThvThread;
   breadcrumb?: ThvCrumb[];
   messages?: ThvMessage[];
+  task_activity?: ChatTaskActivity[];
   next_cursor?: string | null;
   read_marks?: Record<string, number | string>;
   bot_status?: ThvBotRow[];
@@ -372,7 +386,7 @@ function threadMount(host: HTMLElement, opts: ThvOpts = {}): ThvView {
   return view;
 }
 // Everything that belongs to one conversation: a view that moves to another (a fresh DM) starts from this again.
-const thvConvFresh = (): ThvConv => ({id: '', thread: null, breadcrumb: [], messages: [], next: null, state: 'loading', execution: null,
+const thvConvFresh = (): ThvConv => ({id: '', thread: null, breadcrumb: [], messages: [], taskActivity: [], next: null, state: 'loading', execution: null,
   readAt: 0, openSeq: 0, readSent: new Map(), marks: new Map(), pending: [], replyTo: null, botStatus: null, openUpdates: new Set(), openLines: new Set(),
   flash: '', focus: '', error: '', memberList: null, memberMore: false, run: {openSteps: new Set(), steps: {}, openFolds: new Set()}, live: new Map()});
 function threadUnmount(view: ThvView | null | undefined) {
@@ -431,11 +445,12 @@ async function thvLoad(view: ThvView): Promise<void> {
     view.breadcrumb = r.breadcrumb || [];
     thvStatusTake(view, r);
     view.messages = thvMerge(view, r.messages || []);
+    view.taskActivity = r.task_activity || [];
     view.next = r.next_cursor || null;
     view.readAt = Number(r.read_marks?.[id] ?? view.thread?.me?.last_read_seq) || 0;
     view.openSeq = thvMaxSeq(view.messages);
     thvLearnMarks(view, r);
-    view.state = view.messages.length ? 'ready' : 'empty';
+    view.state = view.messages.length || view.taskActivity.length ? 'ready' : 'empty';
     thvDraw(view, {stick: !view.opts.focus});
     thvMarkRead(view);
     void callLoad(view);
@@ -509,8 +524,13 @@ async function thvRefresh(view: ThvView): Promise<void> {
     const olderIds = new Set(older.map(m => m.id));
     const merged = thvMerge({messages: view.messages.filter(m => !olderIds.has(m.id))}, fresh);
     view.messages = [...older, ...merged];
+    const floor = Number(r.next_cursor) || 0;
+    view.taskActivity = [
+      ...(view.olderRead ? view.taskActivity.filter(m => m.seq < floor) : []),
+      ...(r.task_activity || []),
+    ];
     if (!view.olderRead) view.next = r.next_cursor || null;
-    view.state = view.messages.length ? 'ready' : 'empty';
+    view.state = view.messages.length || view.taskActivity.length ? 'ready' : 'empty';
     thvDraw(view, {stick: thvAtBottom(view)});
     thvMarkRead(view);
   } catch (e) {
@@ -524,6 +544,8 @@ async function thvPageOlder(view: ThvView) {
   thvLearnMarks(view, r);
   const have = new Set(view.messages.map(m => m.id));
   view.messages = [...(r.messages || []).filter(m => !have.has(m.id)), ...view.messages];
+  const activityIds = new Set(view.taskActivity.map(m => m.id));
+  view.taskActivity = [...(r.task_activity || []).filter(m => !activityIds.has(m.id)), ...view.taskActivity];
   view.next = r.next_cursor || null;
   view.olderRead = true;
   return true;
@@ -650,7 +672,9 @@ async function thvDelete(view: ThvView, button: HTMLButtonElement) {
 // messages" row; two such rows meet where one page of it ends and the next begins.
 function thvRows(view: ThvView) {
   const rows: ThvRow[] = [];
-  for (const m of view.messages) {
+  const messages = sourceMergeActivity<ThvMessage>(view.messages, (view.taskActivity || []).map(sourceActivityRow),
+    (a, m) => Number(a.seq) < Number(m.seq));
+  for (const m of messages) {
     if (m.hidden) {
       const fold = m.earlier ? 'earlier' : 'hidden', last = rows[rows.length - 1];
       if (last?.fold === fold) { last.ids!.push(m.id); continue; }
@@ -791,13 +815,15 @@ function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
   const fb = !m.deleted && m.id && fbRates(m.sender_id) ? fbKey('message', m.id) : '';
   const fresh = thvIsNew(view, m), quiet = fresh && !thvAddressed(m);
   const cls = ['th-msg', cont && 'th-cont', view.focus === m.id && 'th-focus', view.flash === m.id && 'th-flash', m.refs?.follow_up && 'th-followup',
-    thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted'].filter(Boolean).join(' ');
+    thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted', view.opts.hide?.(m) && 'th-left-out'].filter(Boolean).join(' ');
   // The name line (the style guide's chat window): name, time, then what it answers. No "bot" tag, no "edited".
   const quote = m.deleted ? '' : thvQuoteHTML(thvQuoteOf(view, m), true);
   const qmark = m.deleted ? '' : qmarkHTML(m.refs);
   const head = cont ? qmark : `<div class="th-head">${relay ? `<span class="th-who">${esc(rowSource(m).name)}</span>` : thvWhoHTML(m.sender_id)}${chatTimeHTML(m.created_at)}${quote}${qmark}</div>`;
   let body;
+  const own = m.deleted ? null : view.opts.body?.(m) ?? null;
   if (m.deleted) body = '<div class="th-body muted">Deleted</div>';
+  else if (own != null) body = own;
   else if (thvIsUpdateCard(m)) body = thvUpdateHTML(m);
   else if (m.refs?.call?.card) body = callCardHTML(m);
   // The Tools owner's proposal: rows the server built, and Grant (tools-key-drop.ts).
@@ -1019,20 +1045,22 @@ function thvUpdateReveal(view: ThvView, id: string) {
 // line, or a system line has no avatar or sender row; two or more task updates in a row are one "N task updates" row,
 // shut until opened. A normal message after them starts its own group.
 const thvTaskUpdate = (row: ThvRow | undefined) => !!row?.m && !row.m.deleted && isSourceLine(row.m) && rowSource(row.m).kind === 'task_update';
-// Each task update in a run of two or more, by id, mapped to its run's key (the first one's id).
-function thvLineGroups(view: ThvView) {
-  const of = new Map<string, string>(), rows = thvRows(view).filter(r => !(view.opts.home && r.m && thvIsUpdateCard(r.m)));
+// Each folded task update, by id, mapped to its run's key (the first one's id).
+function thvLineGroups(view: ThvView, rendered = thvRows(view)) {
+  const of = new Map<string, string>(), rows = rendered.filter(r => !(view.opts.home && r.m && thvIsUpdateCard(r.m)));
   for (let i = 0; i < rows.length;) {
     if (!thvTaskUpdate(rows[i])) { i++; continue; }
     let end = i;
     while (end < rows.length && thvTaskUpdate(rows[end])) end++;
-    if (end - i > 1) for (const r of rows.slice(i, end)) of.set(r.m!.id, rows[i]!.m!.id);
+    const run = rows.slice(i, end);
+    if (run.length > 1 || run[0]?.m?.task_activity) for (const r of run) of.set(r.m!.id, rows[i]!.m!.id);
     i = end;
   }
   return of;
 }
 // The old notice about a Home's closed history keeps its Open button on the line.
-const thvLineHTML = (view: ThvView, m: ThvMessage) => sourceLineHTML(m, {cls: 'th-line' + (view.flash === m.id ? ' th-flash' : ''),
+const thvLineHTML = (view: ThvView, m: ThvMessage) => m.task_activity ? sourceActivityLineHTML(m, m.task_activity)
+  : sourceLineHTML(m, {cls: 'th-line' + (view.flash === m.id ? ' th-flash' : ''),
   attrs: ` data-mid="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}"`,
   tail: m.refs?.earlier_messages?.thread_id ? `<button type="button" class="linkish th-earlier-open" data-th-earlier="${esc(m.refs.earlier_messages.thread_id)}">Open earlier messages to Read</button>` : ''});
 // The line stands for its group: a button that opens or shuts it. Its panel is always in the markup (empty while shut),
@@ -1051,7 +1079,7 @@ function thvRowsHTML(view: ThvView) {
   if (view.state === 'loading') return '<div class="th-empty muted">Loading…</div>';
   if (view.state === 'gone') return '<div class="th-empty muted">Not found</div>';
   if (view.state === 'error') return `<div class="th-empty err">${esc(view.error || 'Could not load')}</div>`;
-  const rows = thvRows(view), out = [], groups = thvUpdateGroups(view), lineGroups = thvLineGroups(view);
+  const rows = thvRows(view), out = [], groups = thvUpdateGroups(view), lineGroups = thvLineGroups(view, rows);
   let divided = false, prev: ThvMessage | null = null, day = '';
   // One line names the day wherever it changes; the first message of a day starts with its full header.
   const dayLine = (m: ThvMessage | undefined) => {
@@ -1085,7 +1113,8 @@ function thvRowsHTML(view: ThvView) {
         ms.push(r.m);
       }
       dayLine(ms[0]);
-      out.push(sourceRunsHTML(ms, {line: (m: ThvMessage) => thvLineHTML(view, m), draw: () => '', open: (run: ThvMessage[]) => run.some(m => view.openLines.has(m.id))}));
+      out.push(sourceRunsHTML(ms, {min: 1, line: (m: ThvMessage) => thvLineHTML(view, m), draw: () => '',
+        open: (run: ThvMessage[]) => run.some(m => view.openLines.has(m.id))}));
       prev = null;
       i = end - 1;
       continue;
@@ -1308,6 +1337,8 @@ function thvContextDraw(view: ThvView) {
     + `<button type="button" class="thv-ctx-x" aria-label="${esc(`Don't send ${label}`)}" title="Don't send this">✕</button></span>`;
   (host.querySelector('.thv-ctx-x') as HTMLElement).onclick = () => { view.contextOff = true; thvContextDraw(view); view.composer?.el.querySelector<HTMLTextAreaElement>('.p-text')?.focus(); };
 }
+// The + menu's icons (names the icon font's subset holds: scripts/build-icon-font.py reads *_ICONS maps).
+const ATTACH_ICONS = {upload: 'upload', library: 'link'};
 function thvComposerDraw(view: ThvView) {
   const host = view.el.querySelector('.thv-composer') as HTMLElement;
   const can = thvCanPost(view) && !['loading', 'gone', 'error'].includes(view.state);
@@ -1320,7 +1351,8 @@ function thvComposerDraw(view: ThvView) {
   // ui/styles/task-files.css) off it. A bot's composer takes the old chat's "/" commands (slash-commands.js) through the
   // hooks below. `ways`: Send shows the person's kept way and every message names it; Set as goal is for one goal
   // (chat-goal.js reads it too).
-  const bot = view.opts.goals || null;
+  const bot = view.opts.goals || null, plus = !!view.opts.attachMore?.plus;
+  const menuIcon = (name: string): string => `<span class="nav-icon" aria-hidden="true">${name}</span>`;
   const C = view.composer = {files: [] as File[], lib: [] as ThvLibFile[], mention: null, slug: bot, thread: true, running: null, stopping: false, ways: !!bot,
     label: () => thvComposerLabel(view), buttons: () => thvComposerButtons(view), goalsOf: () => view.goals,
     clear: () => thvComposerClear(view), command: (text: string) => thvComposerCommand(view, text), task: (text: string) => thvComposerTask(view, text),
@@ -1331,8 +1363,9 @@ function thvComposerDraw(view: ThvView) {
       ${bot ? pillBotHTML(bot) : ''}
       ${bot ? '<span class="thv-goal-chip" hidden>Goal<button type="button" class="tap-mark" aria-label="Leave goal" title="Leave goal">×</button></span>' : ''}
       <textarea class="p-text" rows="1" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="Message" placeholder="Message"></textarea>
-      <span class="thv-attach-wrap"><button class="p-attach p-icon" type="button" title="Attach" aria-label="Attach" aria-haspopup="menu" aria-expanded="false">${ICON_CLIP}</button>
-        <div class="p-menu thv-attach-menu" role="menu" hidden><button type="button" role="menuitem" data-attach="upload">Upload</button>${view.opts.send ? '' : '<button type="button" role="menuitem" data-attach="library">Library file</button>'}</div></span>
+      <span class="thv-attach-wrap${plus ? ' thv-attach-plus' : ''}"><button class="p-attach p-icon" type="button" title="Attach" aria-label="Attach" aria-haspopup="menu" aria-expanded="false">${plus ? '<span class="nav-icon" aria-hidden="true">add</span>' : ICON_CLIP}</button>
+        <div class="p-menu thv-attach-menu" role="menu" hidden><button type="button" role="menuitem" data-attach="upload">${plus ? `${menuIcon(ATTACH_ICONS.upload)}Upload file` : 'Upload'}</button>${view.opts.send ? '' : `<button type="button" role="menuitem" data-attach="library">${plus ? `${menuIcon(ATTACH_ICONS.library)}Link a file` : 'Library file'}</button>`}${
+          (view.opts.attachMore?.items || []).map(([k, label, icon]) => `<button type="button" role="menuitem" data-attach="more:${esc(k)}">${icon ? menuIcon(icon) : ''}${esc(label)}</button>`).join('')}</div></span>
       <input type="file" multiple hidden class="p-file">
       ${bot ? `<button class="p-stop p-send-icon" type="button" aria-label="Stop" title="Stop" hidden>${ICON_STOP}</button>
       <span class="p-sendbox"><button class="p-way p-icon" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Ways to send" title="Ways to send"><span class="nav-icon" aria-hidden="true">expand_more</span></button>` : ''}
@@ -1376,7 +1409,10 @@ function thvComposerDraw(view: ThvView) {
   menu.onclick = ev => {
     const b = eventElement(ev)?.closest<HTMLElement>('[data-attach]'); if (!b) return;
     menu.hidden = true; attach.setAttribute('aria-expanded', 'false');
-    if (b.dataset.attach === 'upload') file.click(); else void thvLibOpen(view);
+    const kind = b.dataset.attach || '';
+    if (kind === 'upload') file.click();
+    else if (kind.startsWith('more:')) view.opts.attachMore?.pick(kind.slice(5));
+    else void thvLibOpen(view);
   };
   file.onchange = () => { C.files.push(...file.files!); file.value = ''; thvChips(view); };
   (C.el.querySelector('.p-chips') as HTMLElement).onclick = ev => {
@@ -1830,7 +1866,7 @@ async function thvClick(view: ThvView, ev: Event) {
   const arch = t.closest<HTMLButtonElement>('[data-thv-archive]');
   if (arch) { void thvArchive(view, arch); return; }
   const call = t.closest<HTMLElement>('[data-call]');
-  if (call) { void callAction(view, call.dataset.call); return; }
+  if (call) { void callAction(view, call.dataset.call, call); return; }
   if (t.closest('[data-thv-menu]')) { threadSettingsOpen(view); return; }
   const earlier = t.closest<HTMLButtonElement>('[data-th-earlier]');
   if (earlier) {

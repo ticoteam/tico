@@ -46,19 +46,22 @@ Work = Callable[["Budget"], Any]
 OnError = Callable[[str, BaseException], Any]
 
 
+def _monotonic() -> float:
+    """The clock a budget reads. A test sets its own."""
+    return time.monotonic()
+
+
 class Budget:
     """A pass's elapsed-time budget: `left()` is False once `seconds` have gone by or the server is stopping. None
     seconds is no limit (an inline drain, as before). `spent` says whether the budget, not the queue, ended the pass."""
 
     def __init__(self, seconds: float | None = None, stop: Stop | None = None) -> None:
         self.seconds, self.stop = seconds, stop
-        self.until = None if seconds is None else time.monotonic() + seconds
+        self.until = None if seconds is None else _monotonic() + seconds
         self.spent = False
 
     def left(self) -> bool:
-        if (self.stop is not None and self.stop.is_set()) or (
-            self.until is not None and time.monotonic() >= self.until
-        ):
+        if (self.stop is not None and self.stop.is_set()) or (self.until is not None and _monotonic() >= self.until):
             self.spent = True
             return False
         return True
@@ -297,7 +300,7 @@ class Drains:
             self.hub.worker = None
         for worker in self.all:
             worker.halt()
-        end = None if timeout is None else time.monotonic() + timeout
+        end = None if timeout is None else _monotonic() + timeout
         for thread in getattr(self, "threads", ()):
             # One deadline for all of them: a shutdown waits at most `timeout`, not `timeout` per worker.
-            thread.join(None if end is None else max(0.0, end - time.monotonic()))
+            thread.join(None if end is None else max(0.0, end - _monotonic()))

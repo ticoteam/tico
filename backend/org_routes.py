@@ -47,10 +47,25 @@ def register(app, auth, settings, settings_admin, store):
         "can_complete_onboarding",
     )
 
-    def bot_view(c, bot, level, access, registry_roster, registry_entries, who, rows):
+    # What a bot's row says about its activity, read per request (BotRows); the rest of the row is its profile.
+    ACTIVITY = (
+        "task_flow",
+        "draining",
+        "claim_scoped",
+        "claim_task",
+        "status",
+        "assignment",
+        "online",
+        "queued",
+        "notes",
+        "agent",
+        "goal_active",
+    )
+
+    def bot_view(c, bot, level, access, registry_roster, registry_entries, who, rows, activity=True):
         """One bot as the bot list and the bot detail show it: everything for a caller who may read
         it, only its profile for one who may only see it. `rows` (backend/bot_rows.py) holds what
-        was read for every bot in the answer."""
+        was read for every bot in the answer. Without `activity`, the row stops before its ACTIVITY."""
         row = dict(bot)
         # runtime, model and host are the bot's declaration (bot_settings); a bot with no declaration has none of them.
         # Tico is the only host there is, so a bot that declares none is a Tico bot.
@@ -118,7 +133,7 @@ def register(app, auth, settings, settings_admin, store):
                     "turns_at_once": start_places.bot_limit(json.loads(config["config"]) or {}),
                     # Plain words for a cheaper task model on a high-stakes bot, against its model now ("" else).
                     "task_model_warning": task_models.warning(
-                        c, settings, bot["id"], declared, task_models.of(declared)
+                        c, settings, bot["id"], declared, task_models.of(declared), rows.providers(c, settings)
                     ),
                     # Whether it changes its direct reports (backend/report_managers.py): on unless turned off.
                     "manages_reports": report_managers.switch_on(declared),
@@ -143,6 +158,8 @@ def register(app, auth, settings, settings_admin, store):
             row["reports_to"] = ""  # a bot this caller may not see is not named to them
         if not level["read"]:
             return {k: v for k, v in row.items() if k in SEE_ONLY}
+        if not activity:
+            return row
         slug = bot["id"]
         row["task_flow"] = rows.task_flow.get(slug, {"going": 0, "waiting": 0})
         row["draining"] = slug in rows.draining
@@ -172,17 +189,24 @@ def register(app, auth, settings, settings_admin, store):
         **api_v2(
             "Bots",
             "listBots",
-            "Bots the caller can see, each with the caller's own access; ?can=read|write keeps the ones they can read or write to",
+            "Bots the caller can see, each with the caller's own access; ?can=read|write keeps the ones they can read or write to; ?fields= keeps only the named fields",
             "BotList",
+            parameters={
+                "fields": "Comma-separated field names (slug,revision): each row has only these, the ones it has. "
+                "Naming none of a bot's activity (status, assignment, online, queued, notes, task_flow, draining, "
+                "claim_scoped, claim_task, agent, goal_active) skips reading it, so the answer is much cheaper"
+            },
         ),
     )
-    def bots(request: Request, include_archived: str | None = None, can: str | None = None):
+    def bots(request: Request, include_archived: str | None = None, can: str | None = None, fields: str | None = None):
         """The bots the caller may see, each with `access` (their own see, read and write on it).
-        `?can=read` or `?can=write` keeps only the bots they hold that level on."""
+        `?can=read` or `?can=write` keeps only the bots they hold that level on; `?fields=` only the named fields."""
         who = request.state.identity
         auth.domain(who)
         if can not in (None, "", "read", "write"):
             raise Problem("can", "can is read or write", 422)
+        wanted = [name for name in dict.fromkeys(f.strip() for f in (fields or "").split(",")) if name]
+        activity = not wanted or any(name in ACTIVITY for name in wanted)
         # Archived bots are gone from every picker; an admin view that needs them asks with ?include_archived=1.
         with_archived = (include_archived or "").lower() in ("1", "true", "yes")
         from .chat_goals import readable_active
@@ -200,18 +224,21 @@ def register(app, auth, settings, settings_admin, store):
                     continue
                 shown.append((bot, level))
             rows = BotRows(
-                c, who, [bot["id"] for bot, _ in shown], {bot["id"] for bot, level in shown if level["read"]}
+                c,
+                who,
+                [bot["id"] for bot, _ in shown],
+                {bot["id"] for bot, level in shown if level["read"]},
+                activity=activity,
             )
             redact = teammate_access.bot_redactor(c, who, auth)  # people and groups the caller may not see
-            return [
-                redact(
-                    {
-                        **bot_view(c, bot, level, access, registry_roster, registry_entries, who, rows),
-                        "goal_active": readable_active(c, auth, who, bot["id"], rows.goals.get(bot["id"], [])),
-                    }
-                )
-                for bot, level in shown
-            ]
+            out = []
+            for bot, level in shown:
+                row = bot_view(c, bot, level, access, registry_roster, registry_entries, who, rows, activity)
+                if activity:
+                    row["goal_active"] = readable_active(c, auth, who, bot["id"], rows.goals.get(bot["id"], []))
+                row = redact(row)
+                out.append({k: v for k, v in row.items() if k in wanted} if wanted else row)
+            return out
 
     def cant_run(c, bot, who):
         """The bot page's top line (docs/dev/pipelines-v3.md S14): why the bot can't run, as the never-stuck check reads it

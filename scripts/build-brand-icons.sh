@@ -65,21 +65,6 @@ else
   echo "iconutil not found: $APP/icon.icns left as is"
 fi
 
-# Recorder app bundle (recorder/tauri.conf.json lists these): the Liquid Dot with a mic cut into it.
-# The PNGs are flat like the desktop's; icon.icns sits on Apple's grid.
-REC=$BRAND/tico-recorder-mark.svg
-RICONS=recorder/icons
-tile "-8 -8 80 80" no "$REC" > "$TMP/recorder-mac.svg"
-png "$REC" 32 $RICONS/32x32.png
-png "$REC" 128 $RICONS/128x128.png
-png "$REC" 256 $RICONS/128x128@2x.png
-png "$REC" 512 $RICONS/icon.png
-if command -v iconutil >/dev/null; then
-  icns "$TMP/recorder-mac.svg" $RICONS/icon.icns recorder
-else
-  echo "iconutil not found: $RICONS/icon.icns left as is"
-fi
-
 # Windows icon: PNG-compressed entries at the usual sizes.
 python3 - "$MARK" "$APP/icon.ico" "$TMP" <<'PY'
 import struct, subprocess, sys

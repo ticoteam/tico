@@ -34,6 +34,7 @@ A beat runs these steps in this order. A step runs only when it is due. If one s
 | Repository and setup waits | Outside polls | Every 10 seconds, GitHub worker |
 | Contacts links | Recovery | Every beat |
 | Calls and live meetings | Recovery | Every 10 seconds |
+| Scheduled calls | Due times | Every minute |
 | PR and release metadata | Outside polls | Every minute, GitHub worker |
 | Merge queue | Due times | Every beat, GitHub worker |
 | Jev's page verdicts | Due times | Every beat |

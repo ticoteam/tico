@@ -350,7 +350,7 @@ pub fn plan(scope: &Scope) -> Vec<Candidate> {
                 }
             }
         }
-        finished.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+        finished.sort_by_key(|a| std::cmp::Reverse(a.bytes));
         out.extend(finished);
     }
     if let Some(held) = &scope.held {

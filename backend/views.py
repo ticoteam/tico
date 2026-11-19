@@ -23,7 +23,7 @@ from . import models as M
 from . import changelog as CL
 from . import releases
 from . import visuals
-from . import login_holds, needs_lane, providers, runner_versions, runs
+from . import login_holds, needs_cache, needs_lane, providers, runner_versions, runs
 from .runs import LIVE as LIVE_RUN_STATES
 from . import personal_tokens, profiles, rooms, team_rules, turns, wake_presets
 from . import bot_rows, holds, run_triggers
@@ -575,7 +575,7 @@ def machine(c, bot):
     online = bool(not row["revoked_at"] and runner_online.is_online(row["last_seen_at"]))
     # Online is contact; awake is contact that has lasted. A machine waking for a few seconds
     # is online and takes no work, so say which of the two a queued request is waiting for.
-    awake = online and Execution.awake(row["awake_since"], now)
+    awake = online and Execution.awake(row["awake_since"], now, row["platform"])
     # The declared access has its own route, behind the bot's visibility (backend/bot_tools.py). A missing
     # subscription sign-in the Gateway covers meanwhile is no problem (backend/models_preset.py as_served).
     from .models_preset import as_served
@@ -1419,8 +1419,12 @@ def live_parts(parts):
     return cut, len(parts) - len(kept)
 
 
-def conversation_snapshot(c, cid, who=None, settings=None, page_args=None, auth=None):
-    page = privacy.page(c, who, cid, **(page_args or {})) if who else message_page(c, cid)
+def conversation_snapshot(c, cid, who=None, settings=None, page_args=None, auth=None, room=None):
+    page = (
+        privacy.page(c, who, cid, chat=(auth, room) if room else None, **(page_args or {}))
+        if who
+        else message_page(c, cid)
+    )
     from .chat_goals import current
 
     return {**page, "execution": conversation_execution(c, cid, who, settings, auth=auth), "goal": current(c, cid)}
@@ -2050,10 +2054,11 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                 item["line"] = item["ask"]["line"]
                 if item["ask"]["kind"] == "ok":
                     item["missing"] = [item["ask"]["line"]]
-                    # A task filed for the OK is titled by its kind alone (task_asks.FILED_TITLES); the row says what
+                    # A task filed for the OK is titled by its kind alone (task_asks.KIND_TITLES); the row says what
                     # this one is about, to its party, in place of that title (task #389).
                     title = str((item.get("task") or {}).get("title") or "")
-                    if title in task_asks.FILED_TITLES.values():
+                    # Only to a party of the OK: one handed the ask reads its line as PRIVATE_LINE, and no more here.
+                    if title in task_asks.KIND_TITLES and item["line"] != task_asks.PRIVATE_LINE:
                         said = task_asks.about(c, item["requirement_id"], item["line"])
                         if said:
                             item["about"] = said
@@ -2101,6 +2106,12 @@ def needs_page(items, version, limit, cursor):
     limit = max(1, min(int(limit or NEEDS_PAGE), NEEDS_PAGE_MAX))
     end = offset + limit
     return items[offset:end], (needs_cursor(version, end) if end < len(items) else None), restarted
+
+
+def needs_still_readable(c, auth, who, task_ids):
+    """Whether the caller still reads every one of these tasks (`auth.task_sql`, as needs_items read them): one
+    statement for up to 500, before a page is cut from a held build (backend/needs_cache.py)."""
+    return not task_ids or _readable_task_ids(c, auth.task_sql(c, who), task_ids) == task_ids
 
 
 def needs_bots(items, me):
@@ -2652,11 +2663,12 @@ def install_views(app, store, auth, mutate, task_view):
                 and access.get(row["id"], auth.FULL)["see"]
                 and access.get(row["id"], auth.FULL)["write"]
             ]
-            from .credentials import administrator, can_open
-            from .onboarding import config_view
+            from .credentials import administrator, can_open, has_removable_loose_key
+            from .onboarding import client_features, config_view
             from .mail import can_access
 
             admins = store.settings.credential_admins
+            credential_access = can_open(c, who, admins)
             role = auth.company_role(who)
             domains_ = Access.company_domains(c, store.settings, auth.owner_email)
             return {
@@ -2674,7 +2686,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "developer": P.is_developer(H.actor_id(who.actor), r),
                 "bot_admin": auth.bot_admin(who),
                 "owner_id": auth.owner_id(c),
-                "config": config_view(c, store.settings, who),
+                "config": {**config_view(c, store.settings, who), "features": client_features(request.app)},
                 "credential_admin": administrator(c, who, admins),
                 # The SQL page: the owner's, and the Admins' unless the owner's rule says otherwise.
                 "can_see_sql": who.role == "owner" or (auth.bot_admin(who) and team_rules.load(c)["admin_sql"]),
@@ -2682,7 +2694,8 @@ def install_views(app, store, auth, mutate, task_view):
                 "has_tokens": personal_tokens.has_live(c, who),
                 "proxy_session": who.via_proxy,
                 "sign_in_name": auth.sign_in_name(request.headers) if who.via_proxy else "",
-                "credential_access": bool(can_open(c, who, admins)),
+                "credential_access": credential_access,
+                "credential_remove_access": not credential_access and has_removable_loose_key(c, who),
                 "mail_access": can_access(c, who),
                 # may move any task on the board
                 "mover": who.role == "owner" or H.can_move(c, who.actor),
@@ -3095,7 +3108,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "server_time": H.now(),
                 "health_issues": operation_issues(c, who, auth),
                 # A Tico Cloud company's access, for the banner and Pay to continue (backend/cloud_access.py).
-                "cloud_access": cloud_access.view(cloud_access.current(store)),
+                "cloud_access": cloud_access.shown(c, cloud_access.current(store)),
             }
 
     @app.get("/api/runs")
@@ -3421,7 +3434,7 @@ def install_views(app, store, auth, mutate, task_view):
         **api_v2(
             "Needs you",
             "getNeedsYou",
-            "What waits on the caller (kind task, ask, paused or mention, oldest first), with its `version` and `count`; count=true for the number alone, version=<held> answers `unchanged` without items while it holds, ids=<comma list> only those items and their `positions`, limit=<n> (at most 200) a page with `next` to pass as cursor=<next> for the one after it (a cursor from an older version starts again from the top, with `restart`); without limit or cursor, the whole list",
+            "What waits on the caller (kind task, ask, paused or mention, oldest first), with its `version` and `count`; count=true for the number alone, version=<held> answers `unchanged` without items while it holds, ids=<comma list> only those items and their `positions`, limit=<n> (at most 200) a page with `next` to pass as cursor=<next> for the one after it (cut from the build that gave the first page while it is held, about 30 s; a cursor from an older version starts again from the top, with `restart`); without limit or cursor, the whole list",
             "NeedsYou",
         ),
     )
@@ -3440,12 +3453,29 @@ def install_views(app, store, auth, mutate, task_view):
         `version=<the one held>` answers `unchanged` with no items when it still holds, and `ids=a,b` sends only those
         items, with each one's place in the whole list (`positions`), to mend a held copy after a live `needs` event.
         `limit` (at most NEEDS_PAGE_MAX) sends a page, with `next` to pass as `cursor` for the one after it and `bots`,
-        each bot's count over the whole list. A cursor from an older version starts again from the top (`restart`)."""
+        each bot's count over the whole list. A next page is cut from the build that gave the first while that build is
+        held (backend/needs_cache.py, needs_cache.TTL); a cursor from an older version starts again from the top
+        (`restart`)."""
         who = request.state.identity
         person_or_view(who)
         return await needs_lane.run(request.app, needs_answer, who, count, ids, version, limit, cursor)
 
     def needs_answer(who, count, ids, version, limit, cursor):
+        held = needs_cache.of(app)
+        viewer = needs_cache.viewer(who)
+        if cursor and not count and ids is None:
+            # A next page of a list built in the last few seconds is cut from that build (backend/needs_cache.py), once
+            # the caller is seen still to read every task the list names; when one is gone, the list is built again.
+            built = held.get(viewer, cursor.partition(".")[0])
+            if built is not None:
+                with store.read_transaction() as c:
+                    readable = needs_still_readable(c, auth, who, built.task_ids)
+                if readable:
+                    return needs_paged(
+                        who, built.items, built.version, limit, cursor, built.snoozed_until, built.counts
+                    )
+                held.drop(viewer, built)
+        began = needs_cache.begin()
         with store.read_transaction() as c:
             if count:
                 items = needs_items(c, auth, who, count_only=True)
@@ -3456,36 +3486,52 @@ def install_views(app, store, auth, mutate, task_view):
             from . import ask_snoozes
 
             woken = {"snoozed_until": ask_snoozes.next_end(c, who)}
-            if version and version == current and not cursor:
-                return {"actor": who.actor, "count": len(items), "version": current, "unchanged": True, **woken}
-            if ids is not None:
-                wanted = {part.strip() for part in ids.split(",") if part.strip()}
-                if len(wanted) > NEEDS_IDS_MAX:
-                    raise Problem("validation", f"At most {NEEDS_IDS_MAX} ids", 422)
-                positions = {str(x["id"]): n for n, x in enumerate(items) if str(x["id"]) in wanted}
-                return {
-                    "actor": who.actor,
-                    "count": len(items),
-                    "version": current,
-                    "positions": positions,
-                    "items": [x for x in items if str(x["id"]) in positions],
-                }
-            out = {
+        counts = {}  # the page counts, worked out by the first page, kept for the next ones
+        held.keep(viewer, current, items, woken["snoozed_until"], began, counts)
+        if version and version == current and not cursor:
+            return {"actor": who.actor, "count": len(items), "version": current, "unchanged": True, **woken}
+        if ids is not None:
+            wanted = {part.strip() for part in ids.split(",") if part.strip()}
+            if len(wanted) > NEEDS_IDS_MAX:
+                raise Problem("validation", f"At most {NEEDS_IDS_MAX} ids", 422)
+            positions = {str(x["id"]): n for n, x in enumerate(items) if str(x["id"]) in wanted}
+            return {
                 "actor": who.actor,
                 "count": len(items),
-                "by_kind": needs_kinds(items),
-                "items": items,
                 "version": current,
-                "next": None,
-                **woken,
+                "positions": positions,
+                "items": [x for x in items if str(x["id"]) in positions],
             }
-            if limit is not None or cursor:
-                out["items"], out["next"], restarted = needs_page(items, current, limit, cursor)
-                out["bots"] = needs_bots(items, who.actor)
-                out["stages"] = needs_stages(items)
-                if restarted:
-                    out["restart"] = True
-            return out
+        if limit is not None or cursor:
+            return needs_paged(who, items, current, limit, cursor, woken["snoozed_until"], counts)
+        return {
+            "actor": who.actor,
+            "count": len(items),
+            "by_kind": needs_kinds(items),
+            "items": items,
+            "version": current,
+            "next": None,
+            **woken,
+        }
+
+    def needs_paged(who, items, current, limit, cursor, snoozed_until, counts):
+        page, after, restarted = needs_page(items, current, limit, cursor)
+        if not counts:  # over the whole list: once a build, however many of its pages are read
+            counts.update(by_kind=needs_kinds(items), bots=needs_bots(items, who.actor), stages=needs_stages(items))
+        out = {
+            "actor": who.actor,
+            "count": len(items),
+            "by_kind": counts["by_kind"],
+            "items": page,
+            "version": current,
+            "next": after,
+            "snoozed_until": snoozed_until,
+            "bots": counts["bots"],
+            "stages": counts["stages"],
+        }
+        if restarted:
+            out["restart"] = True
+        return out
 
     @app.get(
         "/api/v2/needs-you/summary",
@@ -3535,10 +3581,12 @@ def install_views(app, store, auth, mutate, task_view):
         ),
     )
     def snapshot(request: Request, cid: str, limit: int | None = None, max_bytes: int | None = None):
-        with store.read() as c:
-            auth.conversation(c, request.state.identity, cid)
+        # One snapshot from the start: the room check, the page, its run and the per-message checks share read_cache's
+        # rows (a plain read only began caching once the first read check opened a transaction).
+        with store.read_transaction() as c:
+            room = auth.conversation(c, request.state.identity, cid)
             snap = conversation_snapshot(
-                c, cid, request.state.identity, auth.settings, page_options(limit, max_bytes), auth=auth
+                c, cid, request.state.identity, auth.settings, page_options(limit, max_bytes), auth=auth, room=room
             )
             turns.annotate(c, auth, request.state.identity, snap["messages"])
             visuals.for_reader(app, auth.settings, c, request.state.identity, snap["messages"])

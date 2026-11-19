@@ -1,10 +1,13 @@
 """The skills helper's devices: the device code flow, the token's reach, and the receipt and usage it reports."""
 
 import json
+from datetime import datetime, timezone
 
 from backend.store import H, digest
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
 from backend.tests.helpers.skill_devices import add_skill, ask, bearer, connect, install_for, poll, rows
+
+START = datetime(2030, 1, 7, 9, 0, tzinfo=timezone.utc)
 
 
 def test_device_code_flow_pending_approve_once_expired_denied(api):
@@ -100,7 +103,8 @@ def test_a_member_cannot_revoke_someone_elses_device(api):
     assert api.get("/api/v2/skills/marketplace.json", headers=bearer(mine["token"])).status_code == 200
 
 
-def test_receipt_and_usage_need_the_device_and_reporting(api):
+def test_receipt_and_usage_need_the_device_and_reporting(api, time_machine):
+    time_machine.move_to(START, tick=False)
     alpha, _ = add_skill(api, "alpha", "# Alpha v1")
     install_for(api, alpha, "cara")
     sha = rows(api, "SELECT sha256 FROM skill_versions WHERE skill_id=?", alpha)[0]["sha256"]
@@ -164,7 +168,7 @@ def test_receipt_and_usage_need_the_device_and_reporting(api):
         == (alpha, sha, "Human", "cara", "helper")
         for u in stored
     )
-    assert stored[0]["used_at"] <= H.now()  # a time ahead of the server's is now
+    assert stored[0]["used_at"] == "2030-01-07T09:00:00.000000Z"  # the event dated 2999 is kept as the server's now
     # A person's own session is not the helper.
     assert api.post("/api/v2/skills/usage", headers=headers("cara-test"), json={"events": [event]}).status_code == 403
     # A later receipt replaces the earlier one.

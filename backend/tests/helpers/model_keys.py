@@ -13,7 +13,7 @@ CAPABLE = ["model_sign_out_v1", "model_keys_v1"]
 SHARED = "sk-team-key-0123456789"
 MOVE = importlib.import_module("backend.migrations.20261117061243_computer_keys_to_subscriptions")
 DROP = importlib.import_module("backend.migrations.20261117085930_drop_computer_keys")
-# The two tables the drop migration removes, as v0.6.0-rc.1 made them (backend/migrations/baseline.sql).
+# The two tables the drop migration removes, as v0.6.0 made them (backend/tests/fixtures/schema_floor.sql).
 LEGACY = (
     "CREATE TABLE IF NOT EXISTS computer_keys(credential_id TEXT PRIMARY KEY REFERENCES credentials(id), "
     "runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL, state TEXT NOT NULL, login_id TEXT, "

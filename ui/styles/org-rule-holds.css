@@ -23,7 +23,30 @@
 .rh-btn:hover{background:var(--surface2);text-decoration:none}
 .rh-done{margin:0;font-size:var(--t-sm)}
 .rh-err{margin:0;font-size:var(--t-sm);color:var(--fail)}
+/* The held part: the fail tint and a 2px bar on its left, so it never rests on colour alone. */
+.rh-part{background:var(--fail-bg);color:inherit;border-left:2px solid var(--fail);padding:0 2px;border-radius:2px}
+.rh-whole{margin:6px 0 0;font-size:var(--t-sm)}
+/* A rule's holds as one review: its rule on one line, a few held items in brief, one decision for all of them. */
+.rh-group{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:flex;
+  flex-direction:column;gap:10px;min-width:0}
+.rh-dc{margin-top:12px}
+.rh-ghead{display:flex;align-items:baseline;gap:6px;min-width:0}
+.rh-gtitle{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.rh-gcount{flex:none;font-size:var(--t-sm)}
+.rh-brief{display:flex;flex-direction:column;gap:4px;min-width:0}
+.rh-who{margin:0;font-size:var(--t-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rh-lines{display:flex;flex-direction:column;gap:2px;font-size:var(--t-base);line-height:var(--lh)}
+.rh-line{overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;
+  padding-left:10px}
+.rh-line.rh-hit{background:var(--fail-bg);border-left:2px solid var(--fail);padding-left:8px;border-radius:2px}
+.rh-line.rh-hit .rh-part{background:none;border:0;padding:0}
+.rh-rest{display:flex;align-items:center;gap:10px;font-size:var(--t-sm)}
+.rh-each{display:flex;flex-direction:column;gap:10px}
 @media (max-width:760px){
+  .rh-group{padding:12px}
+  .rh-gacts{flex-direction:column;align-items:stretch}
+  .rh-gacts .spacer{display:none}
+  .rh-gacts>*{width:100%;justify-content:center}
   .rh-card{padding:14px}
   .rh-acts{gap:6px}
   .rh-acts .primary{flex:1 1 100%;order:3}

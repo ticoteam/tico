@@ -10,7 +10,6 @@ from . import company_billing
 from . import demo_billing
 from . import gateway_connection
 from . import invites
-from . import recorder_installs
 from . import team_rules
 from .usage import own_bots as usage_bots
 from . import views
@@ -71,7 +70,8 @@ def register(app, admin_only, auth, mutate, settings, store):
         """A Tico Cloud company's access for every page: open, frozen or locked, why, and where to pay. Null off
         cloud. Open to every signed-in person, also while locked."""
         views.human_only(request.state.identity)
-        return {"cloud": cloud_access.view(cloud_access.current(store))}
+        with store.read() as c:
+            return {"cloud": cloud_access.shown(c, cloud_access.current(store))}
 
     @app.get("/api/v2/billing/usage")
     def billing_day(request: Request, day: str = ""):
@@ -135,6 +135,4 @@ def register(app, admin_only, auth, mutate, settings, store):
                 "invite_email": invites.can_email(settings),
                 # Whether the issuer also makes accounts with a generated password (Create password).
                 "account_password": bool(invites.can_make(auth, settings)),
-                # Each person's most recently used Tico Recorder (backend/recorder_installs.py).
-                "recorders": recorder_installs.everyone(c),
             }

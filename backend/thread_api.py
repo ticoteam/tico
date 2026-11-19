@@ -86,6 +86,8 @@ class ThreadPost(BaseModel):
     defer_for: str | None = None  # with delivery defer: <n>m, <n>h, <n>d or never (the default)
     # Digests of suspect keys the person un-marked in the Tools chat (backend/secret_drop.py); never stored.
     unmarked: list[str] = Field(default_factory=list, max_length=50)
+    # Files already in Tico shared with the message, as `<file id>@<version>` or {ref, title} (shared_files).
+    attachments: list[M.Attachment] = Field(default_factory=list, max_length=10)
 
 
 class MessagePatch(BaseModel):
@@ -133,6 +135,36 @@ class ThreadUpload(BaseModel):
     titles: list[str] = Field(default_factory=list, max_length=10)
     delivery: Way | None = None
     defer_for: str | None = None
+    attachments: list[M.Attachment] = Field(default_factory=list, max_length=10)  # as ThreadPost's
+
+
+SHARE_REFUSED = (
+    "File {ref} is not one you can open. Share a file of yours as <file id>@<version> (tico file list prints both), "
+    "or post a file from your checkout with tico thread upload."
+)
+
+
+def shared_files(c, files, who, attachments):
+    """The items an upload's files would be for files already in Tico that a post shares, in order: each version's bytes
+    as a new blob of the poster's, which threads._post links to the message as it links an upload, so whoever reads the
+    message opens it and the file keeps its own access. Only a version of a file the poster may open is shared."""
+    from .blobs import register
+
+    items = []
+    for attachment in attachments:
+        fid, number, title = visuals.parse(attachment)
+        row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+        version = (
+            c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)).fetchone()
+            if row and not row["archived"] and files.visible(c, who, row, {})
+            else None
+        )
+        if version is None:
+            raise Problem("not_found", SHARE_REFUSED.format(ref=f"{fid}@{number}"), 404)
+        item = register(c, who, version["digest"], version["size"], version["name"], version["mime"])
+        item["title"] = title or row["title"] or version["name"]
+        items.append(item)
+    return items
 
 
 def _unmarked(who, body):
@@ -396,9 +428,8 @@ def _match(c, v, actors):
     sql = (
         f"SELECT r.*, {thread_rail.ACTIVITY} AS activity FROM conversations r "
         "WHERE r.id IN (SELECT m.thread_id FROM thread_members m WHERE m.actor=:a0) "
-        f"AND {thread_rail.root_open(c, v)} AND r.deleted_at IS NULL "
-        f"AND COALESCE(r.audience,{threads._derived_audience('r')}) IN "
-        "('company','team','members','personal','participants') "
+        f"AND {thread_rail.root_open(c, v, thread_rail.DM_MATCH_AUDIENCES)} AND r.deleted_at IS NULL "
+        f"AND {thread_rail.DM_MATCH_AUDIENCES} "
         f"AND (SELECT COUNT(*) FROM thread_members m WHERE {others})=:n "
         f"AND NOT EXISTS (SELECT 1 FROM thread_members m WHERE {others} AND m.actor NOT IN "
         f"({','.join(':' + k for k in names)})) "
@@ -699,7 +730,9 @@ def install(app, store, auth, mutate, rule_check):
     def get_thread(request: Request, thread_id: str):
         """The thread view, with its first page of members under `members` (the members route's shape, capped)."""
         v = threads.viewer(auth, request.state.identity)
-        with store.read() as c:
+        # One snapshot from the start, so the view and its members share read_cache's rows (a plain read only began
+        # caching once the first read check opened a transaction).
+        with store.read_transaction() as c:
             return {**threads.get(c, v, thread_id), "members": threads.members(c, v, thread_id, limit=50)}
 
     @app.get(
@@ -722,7 +755,7 @@ def install(app, store, auth, mutate, rule_check):
         """The thread in tree order: a page of its own messages, each followed by its sub-thread's messages, and the
         breadcrumb; with `flat=1`, the thread and its open sub-threads in time order, every message at depth 0.
         `next_cursor` is the seq to pass as `cursor` for the page above. Each message has `reply_to` and `routed`; the
-        first page has `bot_status`."""
+        first page has `bot_status`. A person's direct chat with a bot can also have `task_activity` in that seq window."""
         with store.read() as c:
             return threads.timeline(
                 c,
@@ -941,6 +974,7 @@ def install(app, store, auth, mutate, rule_check):
             v = threads.viewer(auth, who)
             replying = _reply_check(c, auth, who, thread_id, body)
             way, marks = _delivery_refs(c, auth, who, body, thread_id) if body.delivery else (None, {})
+            shared = shared_files(c, app.state.files, who, body.attachments)
             message = threads.post(
                 c,
                 v,
@@ -954,6 +988,7 @@ def install(app, store, auth, mutate, rule_check):
                 reach=True,
                 in_reply_to=replying,
                 unmarked=_unmarked(who, body),
+                attachments=shared or None,
             )
             if "id" not in message:  # held: post wrote nothing and answers with the hold
                 return message
@@ -1262,19 +1297,20 @@ def install(app, store, auth, mutate, rule_check):
         **api_v2(
             "Threads",
             "uploadThreadMessage",
-            "A person's message with files in a thread (multipart: text, titles and the files, and `in_reply_to` as a post takes it); each file is linked to the message, under the chat upload limit",
+            "A person's or a bot's message with files in a thread (multipart: text, titles and the files, `attachments` and `in_reply_to` as a post takes them); each file is linked to the message, under the chat upload limit",
             "ThreadUploaded",
             openapi_extra=upload_contract(ThreadUpload),
         ),
     )
     async def thread_upload(request: Request, thread_id: str):
-        """A person's message with files in a thread, stored as a chat's files are: each one linked to the message, under
-        the same upload limit. Who may post is checked and the rule check runs before any byte is stored."""
+        """A person's or a bot's message with files in a thread, stored as a chat's files are: each one linked to the
+        message, under the same upload limit. Who may post is checked and the rule check runs before any byte is stored."""
         from .blobs import register
-        from .views import human_only
+        from .media import write_upload
 
         who = request.state.identity
-        human_only(who)
+        if who.role not in ("owner", "human", "bot"):
+            raise Problem("identity", "A person or a bot posts files to a thread", 403)
         thread_id = bot_home_merge.named_home(store, thread_id)  # as post_message names it: the Home, before the check
         checked = {}
 
@@ -1285,7 +1321,7 @@ def install(app, store, auth, mutate, rule_check):
             checked["rc"] = check(who, thread_id, body)
 
         body, uploads = await app.state.uploads.form(request, ThreadUpload, admit)
-        if not body.text.strip() and not uploads:
+        if not body.text.strip() and not uploads and not body.attachments:
             raise Problem("empty", "A message needs text or a file", 422)
 
         def work(c):
@@ -1296,6 +1332,7 @@ def install(app, store, auth, mutate, rule_check):
             for index, item in enumerate(items):
                 caption = body.titles[index] if index < len(body.titles) else ""
                 item["title"] = caption or item["name"]
+            items += shared_files(c, app.state.files, who, body.attachments)
             posted = threads.post(
                 c,
                 v,
@@ -1318,7 +1355,7 @@ def install(app, store, auth, mutate, rule_check):
                 message = {**message, "sent_as": _sent_as(c, way, posted)}
             return {"thread": threads.get(c, v, thread_id), "message": message}
 
-        return await asyncio.to_thread(app.state.uploads.write, request, body, uploads, work)
+        return await asyncio.to_thread(write_upload, store, request, body, uploads, work)
 
     # The search index (migration 0047) follows every write through its triggers. Install can run before the schema,
     # so the first call that finds the index marks search ready (at boot if it is there, else on the first search).
@@ -1503,6 +1540,14 @@ def register_messages(
         body = routed_message(c, who, body)
         body.conversation_id = named_destination(c, who, body)
         audience = rule_message_audience(c, who, body) if rc is not None else None
+        if (
+            who.role == "bot"
+            and ("turn_id" in body.refs or body.in_reply_to)
+            and rc
+            and "outcome" in rc
+            and org_rule_check.holds(rc)
+        ):
+            recipient_gate.require_recipient(c, who, body.to, body=body, auth=auth)
         replay = {"body": body.model_dump(mode="json", by_alias=True), **({"files": files} if files else {})}
         rule = org_rule_check.apply(c, rc, body.text, replay, audience_now=audience)
         if rule and rule.get("moved"):

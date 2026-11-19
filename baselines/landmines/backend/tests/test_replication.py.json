@@ -1,0 +1,5 @@
+{
+  "backend/tests/test_replication.py": {
+    "no-unittest-mock": 2
+  }
+}

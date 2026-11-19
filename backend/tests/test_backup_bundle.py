@@ -3,7 +3,6 @@
 import hashlib
 import json
 import stat
-from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,6 +15,7 @@ from backend.operations import backup
 from backend.store import Problem
 from backend.tests.helpers.api import headers, post, setup_attempt  # noqa: F401
 from backend.tests.helpers.backup_bundle import ObjectStore, bundle, target
+from backend.tests.helpers.cloudwatch import CloudWatch
 
 
 def sources(api):
@@ -68,14 +68,14 @@ def test_incomplete_source_never_publishes_manifest_or_advances_backup_health(ap
     with api.app.state.store.read() as c:
         digest = c.execute("SELECT digest FROM blobs ORDER BY size LIMIT 1").fetchone()[0]
     (api.app.state.blobs.directory / Blobs.key(digest)).write_bytes(b"Corrupt test content")
-    s3, metrics = ObjectStore(), Mock()
+    s3, metrics = ObjectStore(), CloudWatch()
     with pytest.raises((Problem, RuntimeError)):
         backup(api.app.state.store, s3, metrics, "backup-bucket")
     assert not any(key.endswith(".manifest.json") for _, key in s3.objects)
     with api.app.state.store.read() as c:
         row = c.execute("SELECT * FROM service_health WHERE service='backup'").fetchone()
         assert row["last_succeeded_at"] is None and row["last_error"]
-    assert metrics.put_metric_data.call_args.kwargs["MetricData"][0]["Value"] == 0
+    assert metrics.points("BackupSucceeded") == [0]
 
 
 def test_corrupt_backups_fail_before_creating_restored_database(api, tmp_path):
@@ -235,3 +235,29 @@ def test_a_hand_run_backup_carries_only_the_key_files_present_and_refuses_a_brok
     with pytest.raises(RuntimeError, match="github-app.key"):
         restore_bundle("backup-bucket", "backups/hand.sqlite", other, s3)
     assert not other.db_path.exists() and not (other.db_path.parent / "github-app.key").exists()
+
+
+def test_a_bundle_carries_no_key_file_once_kms_holds_the_key_and_the_key_files_are_retired(api, tmp_path, monkeypatch):
+    sources(api)
+    data = api.app.state.store.settings.db_path.parent
+    (data / "github-app.key").write_bytes(b"\x05" * 32)  # a leftover file: never carried now
+    with api.app.state.store.transaction() as c:
+        c.executemany(
+            "INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
+            [("vault:rotated-at", "2026-11-18T10:00:00Z"), ("vault:key-files-retired", "2026-11-18T10:00:01Z")],
+        )
+    # Retired but no KMS key set: the files are what opens the secrets, so they are still carried.
+    monkeypatch.delenv("TICO_CREDENTIAL_KMS_KEY", raising=False)
+    assert set(backup_module.read_key_files(data, api.app.state.store.settings.db_path)) == {"github-app.key"}
+    monkeypatch.setenv("TICO_CREDENTIAL_KMS_KEY", "arn:aws:kms:eu-west-1:000000000000:key/synthetic")
+    s3 = ObjectStore()
+    hand_run_backup(api, s3, monkeypatch)
+    manifest = json.loads(s3.objects[("backup-bucket", "backups/hand.sqlite.manifest.json")])
+    assert "key_files" not in manifest
+    assert not any(".keys/" in key for _, key in s3.objects)
+    # A broken leftover is not an error either: it is not read.
+    (data / "credential.key").write_bytes(b"short")
+    hand_run_backup(api, s3, monkeypatch, key="backups/after.sqlite")
+    settings = target(tmp_path)
+    assert restore_bundle("backup-bucket", "backups/after.sqlite", settings, s3)["key_files"] == {}
+    assert not any((settings.db_path.parent / name).exists() for name in KEY_NAMES)

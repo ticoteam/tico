@@ -19,7 +19,7 @@ import pytest
 import yaml
 
 from backend import test_receipts
-from scripts import flake_quarantine as quarantine
+from scripts import flake_detect
 from scripts import pr_checks as checks
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -308,7 +308,8 @@ def test_contract_job_survives_default_deselection_and_runs_slow_tests_in_parall
     assert plan["python"] == [checks.CONTRACT_TESTS[0]]
     assert jobs == [
         {"suite": "python-1", "files": [checks.CONTRACT_TESTS[0]]},
-        {"suite": "contracts", "files": list(checks.CONTRACT_TESTS)},
+        # The contracts include test_e2e_cli, which reads history: that VM checks out all of it (HISTORY_TESTS).
+        {"suite": "contracts", "files": list(checks.CONTRACT_TESTS), "history": True},
     ]
     # Even a plan with no default tests must retain the contracts job.
     monkeypatch.setattr(checks, "collect", Counter)
@@ -370,7 +371,12 @@ def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fai
     )
     target = tmp_path / "plan.json"
     jobs = checks.prepare("pull_request", "base", target)["matrix"]["include"]
-    assert {"suite": "conformance", "files": [checks.CONFORMANCE], "crates": ["relay-rs", "runner-rs"]} in jobs
+    assert {
+        "suite": "conformance",
+        "files": [checks.CONFORMANCE],
+        "crates": ["relay-rs", "runner-rs"],
+        "history": True,
+    } in jobs
 
     monkeypatch.setattr(checks, "ROOT", tmp_path)
     (tmp_path / "runner_support/tests").mkdir(parents=True)
@@ -453,8 +459,9 @@ def test_install_retry_is_bounded_and_warm_browser_or_python_never_downloads_apt
         else:
             lines = calls.splitlines()
             unpack = lines.index(f"sudo tar -xpf {cache}/installed.tar -C /")
-            # The snapshot unpacks beside pip and npm, and is in place before the browsers install.
-            assert lines[unpack + 1] == "sudo ldconfig"
+            # The snapshot unpacks beside pip and npm (so their lines interleave in any order), and is in place
+            # before the browsers install.
+            assert lines.index("sudo ldconfig") > unpack
             assert unpack < next(i for i, line in enumerate(lines) if "playwright install chromium webkit" in line)
     # A cold cache: apt installs the packages (dpkg without fsync), and the snapshot is made from what changed and
     # moved into the cache folder the job saves.
@@ -580,14 +587,18 @@ def test_the_contracts_job_carries_a_sweeps_environment_and_an_unswept_change_ke
     monkeypatch.setattr(checks, "collect", Counter)
     target = tmp_path / "plan.json"
     for sweeps, job in (
-        ([], {"suite": "contracts", "files": list(checks.CONTRACT_TESTS)}),
-        ([TEMPLATES_SWEEP], {"suite": "contracts", "files": [*checks.CONTRACT_TESTS, TEMPLATES_SWEEP]}),
+        ([], {"suite": "contracts", "files": list(checks.CONTRACT_TESTS), "history": True}),
+        (
+            [TEMPLATES_SWEEP],
+            {"suite": "contracts", "files": [*checks.CONTRACT_TESTS, TEMPLATES_SWEEP], "history": True},
+        ),
         (
             [CLI_SWEEP, TEMPLATES_SWEEP],
             {
                 "suite": "contracts",
                 "files": [*checks.CONTRACT_TESTS, TEMPLATES_SWEEP],
                 "env": {"TICO_E2E_CLI_ALL": "1"},
+                "history": True,
             },
         ),
     ):
@@ -1410,7 +1421,6 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
             "pr-rust-lint",
             "pr-desktop",
             "pr-conformance",
-            "pr-recorder",
             "pinned-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pinned_tool.sh') }}",
             "playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}",
             "playwright-system-ubuntu24-x64-${{ steps.image.outputs.version }}-${{ hashFiles('package-lock.json', "
@@ -1575,7 +1585,6 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
     # PR checks and the merge queue take no RunsOn label and no repository variable: every job is GitHub-hosted.
     expected = {name: "ubuntu-24.04" for name in jobs}
     expected |= {
-        "recorder": "macos-latest",
         "caddy-linux": "${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}",
     }
     assert {name: job["runs-on"] for name, job in jobs.items()} == expected
@@ -1585,22 +1594,22 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         "github.event_name == 'merge_group' || (github.event_name == 'pull_request' && "
         "!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)"
     )
-    for name in ("tests", "rust-lint", "desktop-app", "recorder", "caddy-linux"):
+    for name in ("tests", "rust-lint", "desktop-app", "caddy-linux", "advisories"):
         assert ready in jobs[name]["if"], name
     for name, output in (
         ("rust-lint", "rust_lint"),
+        ("advisories", "advisories"),
         ("desktop-app", "desktop"),
-        ("recorder", "recorder"),
         ("caddy-linux", "caddy"),
     ):
         assert f"needs.plan.outputs.{output} == 'true'" in jobs[name]["if"], name
     # Only the cosmetic timing receipt (nothing waits on it) and the merge commit checks (a pull request's own static
     # checks and types jobs run the same list on its head) run in the merge queue alone.
-    for name in ("timings", "merge-checks"):
+    for name in ("timings", "merge-checks", "release-owner"):
         assert "github.event_name == 'merge_group'" in jobs[name]["if"], name
         assert "github.event_name == 'pull_request'" not in jobs[name]["if"], name
     queue_only = {name for name, job in jobs.items() if "pull_request" not in str(job.get("if", "pull_request"))}
-    assert queue_only == {"timings", "merge-checks"}
+    assert queue_only == {"timings", "merge-checks", "release-owner"}
     assert set(jobs) == {
         "plan",
         "static",
@@ -1610,9 +1619,10 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         "checks",
         "rust-lint",
         "desktop-app",
-        "recorder",
         "caddy-linux",
+        "advisories",
         "timings",
+        "release-owner",
     }
 
 
@@ -1668,7 +1678,7 @@ def test_a_failed_suite_leg_cancels_its_run_and_checks_still_reports():
 
 def test_every_runs_on_label_sits_behind_the_hosted_switch_and_stays_the_default():
     """vars.TICO_CI_HOSTED == 'true' moves a RunsOn job to a GitHub-hosted runner. Unset, each RunsOn label is the
-    default, and only a hosted job frees the preinstalled SDKs. The macOS recorder job stays on macos-latest."""
+    default, and only a hosted job frees the preinstalled SDKs."""
     import yaml
 
     for name in RUNSON_WORKFLOWS:
@@ -1687,15 +1697,13 @@ def test_every_runs_on_label_sits_behind_the_hosted_switch_and_stays_the_default
             for step in job.get("steps", []):
                 if "/opt/ghc" in str(step.get("run", "")):
                     assert step.get("if", "").startswith("vars.TICO_CI_HOSTED == 'true'"), (name, job_name)
-    recorder = yaml.safe_load((ROOT / ".github" / "workflows" / "pr-checks.yml").read_text())["jobs"]["recorder"]
-    assert recorder["runs-on"] == "macos-latest"
 
 
 def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_skipped_passes(tmp_path):
     gate = workflow_jobs()["jobs"]["checks"]
     assert gate["name"] == "checks" and "always()" in gate["if"]
     needs = set(gate["needs"])
-    assert needs == set(workflow_jobs()["jobs"]) - {"checks", "timings"}
+    assert needs == set(workflow_jobs()["jobs"]) - {"checks", "timings", "release-owner"}  # the last two follow it
     env = gate["steps"][0]["env"]
     names = {
         key: found.group(1) for key, value in env.items() if (found := re.search(r"needs\.([\w-]+)\.result", value))
@@ -1720,7 +1728,7 @@ def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_sk
 
     passing = dict.fromkeys(needs, "success")
     assert exit_code(passing) == 0
-    assert exit_code({**passing, "tests": "skipped", "recorder": "skipped", "caddy-linux": "skipped"}) == 0
+    assert exit_code({**passing, "tests": "skipped", "caddy-linux": "skipped"}) == 0
     assert exit_code({**passing, "tests": "failure"}) == 1
     assert exit_code({**passing, "caddy-linux": "cancelled"}) == 1
     assert exit_code({**passing, "plan": "skipped"}) == 0
@@ -2133,21 +2141,31 @@ def test_queue_jobs_start_only_for_a_change_to_their_folders_and_all_start_for_a
         checks.QUEUE_JOB_PATHS, False
     )
     # The screen relay is a Rust crate the lint checks, and the Caddy image compiles it.
-    assert checks.queue_jobs(["relay-rs/src/main.rs"]) == {"rust_lint": True, "desktop": False, "recorder": False}
+    assert checks.queue_jobs(["relay-rs/src/main.rs"]) == {"rust_lint": True, "desktop": False, "advisories": False}
     assert checks.selection(["relay-rs/src/main.rs"])["caddy"]
     for name in ("runner-rs/src/sessions.rs", "tools/release-command/src/main.rs", "contracts/runner/schema.json"):
         assert checks.queue_jobs([name])["rust_lint"], name
     assert checks.queue_jobs(["scripts/rust_checks.sh"])["rust_lint"]
-    assert checks.queue_jobs(["app/src/main.rs"]) == {"rust_lint": False, "desktop": True, "recorder": False}
-    assert checks.queue_jobs(["recorder/src/lib.rs"]) == {"rust_lint": False, "desktop": False, "recorder": True}
-    # esbuild builds the recorder's window: the root npm files run its job, a package.json deeper in the tree does not.
-    for name in ("package.json", "package-lock.json"):
-        assert checks.queue_jobs([name]) == {"rust_lint": False, "desktop": False, "recorder": True}, name
-    assert not checks.queue_jobs(["ui/vendor/x/package.json"])["recorder"]
-    # Anchored at the root: a folder named app/ or recorder/ deeper in the tree is not the desktop app or the recorder.
-    assert checks.queue_jobs(
-        ["backend/app/x.py", "docs/recorder/x.md", "scripts/tests/rust_checks.sh"]
-    ) == dict.fromkeys(checks.QUEUE_JOB_PATHS, False)
+    assert checks.queue_jobs(["app/src/main.rs"]) == {"rust_lint": False, "desktop": True, "advisories": False}
+    # The advisory scan starts for a dependency input: a lock, a vendored library, an inventory or the gate itself.
+    for name in (
+        "backend/requirements-dev.txt",
+        "package-lock.json",
+        "ui/package-lock.json",
+        "runner-rs/Cargo.lock",
+        "app/tests/glib-backport/Cargo.lock",
+        "ui/vendor/marked.min.js",
+        "templates/employee-repo/ui/vendor/js-yaml.min.js",
+        "scripts/advisories/allowlist.json",
+        "scripts/osv_gate.py",
+        "scripts/pinned_tool.sh",
+    ):
+        assert checks.queue_jobs([name])["advisories"], name
+    assert not checks.queue_jobs(["backend/requirements.in", "ui/app/vendor.ts", "Cargo.toml"])["advisories"]
+    # Anchored at the root: a folder named app/ deeper in the tree is not the desktop app.
+    assert checks.queue_jobs(["backend/app/x.py", "docs/app/x.md", "scripts/tests/rust_checks.sh"]) == dict.fromkeys(
+        checks.QUEUE_JOB_PATHS, False
+    )
     # A diff that could not be read (or is empty) never skips a job.
     assert checks.queue_jobs([]) == dict.fromkeys(checks.QUEUE_JOB_PATHS, True)
 
@@ -2165,20 +2183,20 @@ def test_the_plan_decides_the_queue_jobs_on_both_tiers_and_a_group_checks_its_me
     output = tmp_path / "github-output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
     plan = checks.prepare("merge_group", "queue-base", tmp_path / "plan.json", head="queue-head")
-    assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True, "recorder": False}
+    assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True, "advisories": False}
     lines = output.read_text().splitlines()
-    assert {"rust_lint=false", "desktop=true", "recorder=false"} <= set(lines)
+    assert {"rust_lint=false", "desktop=true"} <= set(lines)
     # A ready pull request runs the same jobs under the same conditions (PR checks == queue checks), so its plan writes
     # the same outputs from its own diff.
     monkeypatch.setattr(checks, "merge_parent", lambda base: base)
     output.write_text("")
     plan = checks.prepare("pull_request", "pr-base", tmp_path / "plan.json")
-    assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True, "recorder": False}
-    assert {"rust_lint=false", "desktop=true", "recorder=false"} <= set(output.read_text().splitlines())
+    assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True, "advisories": False}
+    assert {"rust_lint=false", "desktop=true"} <= set(output.read_text().splitlines())
 
     jobs = workflow_jobs()["jobs"]
     outputs = jobs["plan"]["outputs"]
-    for job, output_name in (("rust-lint", "rust_lint"), ("desktop-app", "desktop"), ("recorder", "recorder")):
+    for job, output_name in (("rust-lint", "rust_lint"), ("desktop-app", "desktop"), ("advisories", "advisories")):
         assert outputs[output_name] == f"${{{{ steps.plan.outputs.{output_name} }}}}", job
         assert jobs[job]["needs"] == "plan", job
         assert f"needs.plan.outputs.{output_name} == 'true'" in jobs[job]["if"], job
@@ -2346,6 +2364,16 @@ def branch(tmp_path, monkeypatch):
         return dict(seen.get("plan", LOCAL_PLAN))
 
     monkeypatch.setattr(checks, "selection", select)
+
+    def narrow(picked, changed, event, **kwargs):
+        seen.update(narrowed=event)
+        return seen["narrow"](picked) if "narrow" in seen else picked
+
+    monkeypatch.setattr(checks, "narrow", narrow)
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
+    monkeypatch.setattr(
+        checks, "collected", lambda files, root=None: seen.get("counts", Counter(dict.fromkeys(files, 1)))
+    )
     monkeypatch.setattr(checks, "browser_scripts", lambda args, root=None: list(args))
     monkeypatch.delenv("TICO_HEAVY_REMOTE", raising=False)
     commands = []
@@ -2375,6 +2403,60 @@ def branch(tmp_path, monkeypatch):
         envs=envs,
         run=lambda **kw: checks.local(base="main", root=tmp_path, execute=execute, **kw),
     )
+
+
+def test_a_local_run_picks_what_the_light_pull_request_run_picks(branch, capsys, monkeypatch):
+    # Nov 17: the whole pull_request selection picked 988 test files for a CLAUDE.md-only change and ran past 15 minutes
+    # on a builder's computer, while the pull request run (plan --light) is capped at ten VMs. Local runs the light plan.
+    (branch.root / "tests" / "test_far.py").write_text("def test_y(): pass\n")
+    (branch.root / "tests" / "test_slow_only.py").write_text("def test_z(): pass\n")
+    local_git(branch.root, "add", "-A")
+    local_git(branch.root, "commit", "-qm", "More tests")
+    branch.seen["plan"] = {
+        **LOCAL_PLAN,
+        "python": ["tests/test_app.py", "tests/test_far.py", "tests/test_slow_only.py"],
+    }
+    monkeypatch.setattr(
+        checks, "committed_timings", lambda root=None: {"tests/test_app.py": 5, "tests/test_far.py": 50}
+    )
+
+    def narrow(picked):
+        record = {"budget_seconds": 10, "smoke": False, "smoke_unless_capped": [], "left_transitive": []}
+        record["tier"] = {"tests/test_app.py": 0, "tests/test_far.py": 2, "tests/test_slow_only.py": 2}
+        return {**picked, "narrow": record}
+
+    branch.seen["narrow"] = narrow
+    # test_slow_only holds no default test, so the plan drops it, as prepare does from collect()'s counts.
+    branch.seen["counts"] = Counter({"tests/test_app.py": 1, "tests/test_far.py": 3})
+    assert branch.run() == 0
+    assert branch.seen["narrowed"] == "pull_request"
+    test, _ = pytest_leg(branch.commands[0])
+    assert test[-1] == "tests/test_app.py" and "tests/test_far.py" not in test  # over the light run's time budget
+    assert "light pull request plan" in capsys.readouterr().out
+    # When collection cannot say what a file holds, nothing is capped: when unsure, run more.
+    branch.commands.clear()
+    branch.seen["counts"] = None
+    assert branch.run() == 0
+    assert pytest_leg(branch.commands[0])[0][-3:] == [
+        "tests/test_app.py",
+        "tests/test_far.py",
+        "tests/test_slow_only.py",
+    ]
+    # --full keeps the old, whole selection, without narrowing.
+    branch.commands.clear()
+    del branch.seen["narrowed"]
+    assert branch.run(full=True) == 0
+    assert "narrowed" not in branch.seen
+    assert "tests/test_far.py" in pytest_leg(branch.commands[0])[0]
+
+
+def test_local_collection_counts_every_selected_file_whatever_pytest_addopts_says(tmp_path, monkeypatch):
+    # Review of #4086: an inherited PYTEST_ADDOPTS filter made collection leave a selected file uncounted, so the cap
+    # dropped it and its failing test never ran. The real collector, as the run, ignores it.
+    (tmp_path / "test_a.py").write_text("def test_keep(): pass\n")
+    (tmp_path / "test_b.py").write_text("def test_other(): assert False\n")
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-k keep")
+    assert checks.collected(["test_a.py", "test_b.py"], root=tmp_path) == Counter({"test_a.py": 1, "test_b.py": 1})
 
 
 def pytest_leg(command):
@@ -2621,7 +2703,7 @@ def test_the_command_line_runs_local_without_the_ci_only_plan_guard(monkeypatch)
     monkeypatch.setattr(checks, "local", lambda **kwargs: calls.append(kwargs) or 0)
     monkeypatch.setattr("sys.argv", ["pr_checks.py", "local", "--base", "origin/main", "--jobs", "3", "--ready"])
     assert checks.main() == 0
-    assert calls == [{"base": "origin/main", "jobs": 3, "ready": True}]
+    assert calls == [{"base": "origin/main", "jobs": 3, "ready": True, "full": False}]
 
 
 def junit(*skips):
@@ -2634,11 +2716,9 @@ def junit(*skips):
     return f'<?xml version="1.0"?><testsuites><testsuite name="pytest">{cases}</testsuite></testsuites>'
 
 
-def test_a_suite_whose_only_tests_are_quarantined_failures_passes_but_an_all_skipped_one_does_not(
-    tmp_path, monkeypatch
-):
-    """pr_checks.run fails a Python suite that skipped every test. A quarantined test that failed ran: it is an xfail,
-    which JUnit writes as a skipped element too, and must not make the suite fail."""
+def test_a_suite_whose_only_tests_are_xfail_failures_passes_but_an_all_skipped_one_does_not(tmp_path, monkeypatch):
+    """pr_checks.run fails a Python suite that skipped every test. An xfail test that failed ran: JUnit writes it as a
+    skipped element too, and it must not make the suite fail."""
     plan = {"matrix": {"include": [{"suite": "python-1", "files": ["fixture_tests/test_x.py"]}]}}
     (tmp_path / "fixture_tests").mkdir(parents=True)
     (tmp_path / "fixture_tests/test_x.py").touch()
@@ -2651,12 +2731,12 @@ def test_a_suite_whose_only_tests_are_quarantined_failures_passes_but_an_all_ski
 
     monkeypatch.setattr(checks.subprocess, "run", fake)
     report["xml"] = junit("pytest.xfail")
-    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 0
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, retry=True) == 0
     report["xml"] = junit("pytest.skip", None)
-    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 0
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, retry=True) == 0
     report["xml"] = junit("pytest.skip", "pytest.skip")
     with pytest.raises(RuntimeError, match="skip every test"):
-        checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True)
+        checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, retry=True)
 
 
 def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does(tmp_path, monkeypatch, capsys):
@@ -2669,17 +2749,17 @@ def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does
         checks.subprocess, "run", lambda command, **kw: calls.append(command) or SimpleNamespace(returncode=1)
     )
     assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path) == 1
-    assert "--quarantine" not in calls[-1]  # the release gate's incremental VMs call run() without it
-    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 1
-    assert "--quarantine" in calls[-1] and calls[-1][-1] == "fixture_tests/test_x.py"
+    assert len(calls) == 1  # the release gate's incremental VMs call run() without a retry
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, retry=True) == 1
+    assert calls[-1][-1] == "fixture_tests/test_x.py"
     # The job log names the files a leg ran: the pass evidence detection needs for a test in it.
-    assert quarantine.test_files(capsys.readouterr().out) == ["fixture_tests/test_x.py"]
+    assert flake_detect.test_files(capsys.readouterr().out) == ["fixture_tests/test_x.py"]
     workflows = ROOT / ".github/workflows"
     tests = yaml.safe_load((workflows / "pr-checks.yml").read_text())["jobs"]["tests"]
     step = next(s for s in tests["steps"] if s.get("name") == "Run selected tests")
-    assert "scripts/pr_checks.py run --quarantine" in step["run"]
+    assert "scripts/pr_checks.py run --retry" in step["run"]
     for name in ("ci.yml", "release.yml", "hotfix.yml", "train.yml"):
-        assert "--quarantine" not in (workflows / name).read_text(), name
+        assert not re.search(r"pr_checks\.py run\b[^\n]*--retry", (workflows / name).read_text()), name
 
 
 @pytest.fixture
@@ -2694,7 +2774,7 @@ def python_retry_leg(tmp_path, monkeypatch):
         first,
         retry=None,
         *,
-        quarantine=True,
+        retrying=True,
         suite="python-1",
         first_status=1,
         retry_status=0,
@@ -2730,7 +2810,7 @@ def python_retry_leg(tmp_path, monkeypatch):
             return SimpleNamespace(returncode=status)
 
         monkeypatch.setattr(checks.subprocess, "run", fake)
-        return checks.run(target, suite, root=tmp_path, quarantine=quarantine), calls
+        return checks.run(target, suite, root=tmp_path, retry=retrying), calls
 
     return run
 
@@ -2768,7 +2848,7 @@ def test_a_python_retry_passes_only_the_failed_ids_and_preserves_the_first_repor
     assert "--cov=backend" in initial and env["COVERAGE_FILE"] == str(results / "coverage-python-1.data")
     assert extracted == [(results / "coverage-python-1.data", results / "coverage-python-1.json")]
     assert "-n" in again and again[again.index("-n") + 1] == "0"
-    assert "--quarantine" in again and set(checks.PYTEST_FLAGS) <= set(again)
+    assert set(checks.PYTEST_FLAGS) <= set(again)
     assert not any(arg.startswith("--cov") for arg in again) and retry_env is None
     assert again[-2:] == ["backend/tests/test_x.py::test_a[case one]", "backend/tests/test_x.py::test_b"]
     assert (results / "python-1.xml").read_text() == first
@@ -2828,7 +2908,6 @@ def test_a_python_leg_passes_when_the_base_matches_and_records_a_flaky_retry_pas
         "-o",
         "junit_family=xunit1",
         f"--junitxml={(results / 'python-1-base.xml').resolve()}",
-        "--quarantine",
         test_id,
     ]
     assert (results / "python-1-base.xml").read_text() == base
@@ -2867,6 +2946,24 @@ def test_a_missing_test_file_on_the_base_stops_before_worktree_add(python_retry_
     assert calls[-1][0][:3] == ["git", "cat-file", "-e"]
 
 
+def test_a_base_missing_from_a_one_commit_checkout_is_fetched_before_it_is_read(python_retry_leg, monkeypatch):
+    base_sha = "b" * 40
+    monkeypatch.setenv("BASE_SHA", base_sha)
+
+    def output(command, *args, **kwargs):
+        if command[:2] == ["git", "rev-parse"] and "--verify" in command:
+            raise subprocess.CalledProcessError(1, command)
+        return "a" * 40 + "\n"
+
+    monkeypatch.setattr(checks.subprocess, "check_output", output)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(head, head, retry_status=1, base=head)
+    assert status == 0
+    fetch, cat = calls[2][0], calls[3][0]
+    assert fetch == ["git", "fetch", "--no-tags", "--depth=1", "origin", base_sha]
+    assert cat[:3] == ["git", "cat-file", "-e"]
+
+
 @pytest.mark.parametrize("base_sha", ["a" * 40, "z" * 40])
 def test_an_equal_or_invalid_base_does_not_run_base_tests(python_retry_leg, monkeypatch, base_sha):
     monkeypatch.setenv("BASE_SHA", base_sha)
@@ -2893,7 +2990,7 @@ def test_a_python_retry_that_skips_a_failed_test_leaves_the_leg_red(python_retry
 
 
 def test_a_python_leg_with_more_than_five_failures_does_not_retry(python_retry_leg):
-    first = retry_junit(*[(f"test_{n}", "<failure/>") for n in range(quarantine.MAX_FAILURES_PER_JOB + 1)])
+    first = retry_junit(*[(f"test_{n}", "<failure/>") for n in range(flake_detect.MAX_FAILURES_PER_JOB + 1)])
     status, calls = python_retry_leg(first)
     assert status == 1 and len(calls) == 1
 
@@ -2902,9 +2999,8 @@ def test_release_contracts_and_conformance_keep_the_first_failure_without_a_retr
     monkeypatch.setenv("BASE_SHA", "b" * 40)
     first = retry_junit(("test_a", '<failure message="assert False"/>'))
     for suite, enabled in (("python-1", False), ("contracts-1", True), ("conformance", True)):
-        status, calls = python_retry_leg(first, suite=suite, quarantine=enabled)
+        status, calls = python_retry_leg(first, suite=suite, retrying=enabled)
         assert status == 1 and len(calls) == 1
-        assert ("--quarantine" in calls[0][0]) == enabled
 
 
 @pytest.mark.parametrize(
@@ -2931,7 +3027,7 @@ def test_browser_retry_streams_the_log_and_runs_only_the_failed_scripts(tmp_path
 
     monkeypatch.setattr(checks.subprocess, "Popen", popen)
     monkeypatch.setattr(checks.subprocess, "check_output", lambda *args, **kwargs: "b" * 40 + "\n")
-    assert checks.run(target, "browser-1", root=tmp_path, quarantine=True) == retry_status
+    assert checks.run(target, "browser-1", root=tmp_path, retry=True) == retry_status
     (initial, env), (again, retry_env) = calls
     assert again == [*initial[:4], "broken.cts", "also-broken.cjs"]
     results = tmp_path / "ci-results"
@@ -3221,9 +3317,12 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
     monkeypatch.setattr(checks, "merge_parent", lambda base: base)
     monkeypatch.setattr(checks, "image_checks", lambda changed: None)
     monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/x.py"])
-    monkeypatch.setattr(checks, "committed_timings", lambda: dict.fromkeys(files, 600.0))  # ten minutes each
-    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
     far = "backend/tests/test_far.py"
+    # Ten minutes each; the depth drop has a time of its own.
+    monkeypatch.setattr(checks, "committed_timings", lambda: dict.fromkeys(files, 600.0) | {far: 12.0})
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
+    # The tier ranks by link kind as well as distance (#4093), so it is not the level: odd files are two levels away.
+    levels = {name: 0 if name.endswith("_00.py") else 1 + int(name[-5:-3]) % 2 for name in files}
 
     def fake_selection(changed, event, base=None, added=None, graph=None, head="HEAD"):
         empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
@@ -3236,7 +3335,8 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
         tier = {name: 0 if name.endswith("_00.py") else 2 for name in files}
         record = {"event": event, "depth": 1, "shards": 4, "budget_seconds": checks.narrow_budget(4), "smoke": True}
         record["smoke_unless_capped"] = []
-        return {**picked, "python": sorted(files), "narrow": {**record, "left_transitive": [far], "tier": tier}}
+        record |= {"left_transitive": [far], "tier": tier, "level": levels}
+        return {**picked, "python": sorted(files), "narrow": record}
 
     monkeypatch.setattr(checks, "selection", fake_selection)
     monkeypatch.setattr(checks, "narrow", fake_narrow)
@@ -3250,9 +3350,21 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
     assert 1 <= len(python) <= 4
     assert len(kept) == int(checks.narrow_budget(4) // 600) and "backend/tests/test_00.py" in kept
     left = plan["narrow"]["left_over_budget"]
-    assert sorted(left + kept) == sorted(files) and "tier" not in plan["narrow"]
+    assert sorted(left + kept) == sorted(files) and "tier" not in plan["narrow"] and "level" not in plan["narrow"]
     text = summary.read_text()
     assert all(f"`{name}`" in text for name in left) and f"`{far}`" in text and "merge queue group" in text
+    # Each left file says why it did not run: past the depth, or within reach but over the time budget.
+    dropped = {entry["file"]: entry for entry in plan["narrow"]["dropped"]}
+    assert set(dropped) == {*left, far}
+    assert dropped[far] == {"file": far, "reason": "depth", "level": None, "seconds": 12.0}
+    assert all(dropped[name]["reason"] == "budget" and dropped[name]["level"] == levels[name] for name in left)
+    assert {dropped[name]["level"] for name in left} == {1, 2} and all(dropped[name]["seconds"] == 600 for name in left)
+    assert f"- `{far}`: reached only past level 1 (12 s)" in text
+    two = next(name for name in left if levels[name] == 2)
+    assert f"`{two}`: level 2 (600 s)" in text
+    # Nearest cut tests first.
+    budget = [entry["level"] for entry in plan["narrow"]["dropped"] if entry["reason"] == "budget"]
+    assert budget == sorted(budget)
     # Without --light, or for main, nothing is narrowed: the full selection runs.
     narrowed.clear()
     for event, light in (("pull_request", False), ("push", True)):
@@ -3284,7 +3396,7 @@ def test_a_queue_group_runs_the_tests_two_levels_from_a_change_and_keeps_its_oth
     hub = checks.narrow(full, ["backend/leaf.py"], "merge_group", root=tmp_path)
     assert "backend/tests/test_helper.py" not in hub["python"]
     # A light queue group's summary says where the rest runs.
-    assert "release validation" in checks.narrow_summary({**record, "left_over_budget": []})
+    assert "release validation" in checks.narrow_summary({**record, "left_over_budget": [], "dropped": []})
 
 
 def test_release_validation_selects_the_full_closure_so_it_runs_what_a_queue_group_leaves_out():
@@ -3494,3 +3606,58 @@ def test_every_checkout_gives_up_in_three_minutes_and_is_tried_once_more():
         assert retry["if"] == "${{ steps.checkout_first.outcome == 'failure' }}", name
         assert first["timeout-minutes"] == retry["timeout-minutes"] == 3, name
         assert first["uses"] == retry["uses"] and first["with"] == retry["with"], name
+
+
+def test_cli_does_not_accept_abbreviated_options(monkeypatch, capsys):
+    # `run --ret` could silently turn the retry on in a release workflow.
+    monkeypatch.setattr(sys, "argv", ["pr_checks.py", "run", "unit", "--ret"])
+    with pytest.raises(SystemExit) as stop:
+        checks.main()
+    assert stop.value.code == 2
+    assert "unrecognized arguments: --ret" in capsys.readouterr().err
+
+
+# A git command that reads history (beyond the one commit a shallow checkout has), run in this checkout: "git" in a call
+# whose cwd is the repository root, or a test's git() helper bound to it. A temporary repository's git is not counted.
+GIT_CALL = re.compile(r'\[\s*"git",(?:[^\]]|\n)*?\][^\n]*(?:\n[^\n]*){0,2}')
+AT_ROOT = re.compile(r"cwd=(ROOT|REPO|REPO_ROOT|ROOT_DIR)\b")
+READS_HISTORY = re.compile(r'"(rev-list|merge-base|log|describe|blame|show|diff)"|HEAD~|HEAD\^|origin/main')
+ROOT_HELPER = re.compile(r"def git\(\*args\)[^\n]*\n(?:[^\n]*\n){0,3}[^\n]*cwd=ROOT\b")
+
+
+def test_every_test_that_reads_this_checkouts_history_gets_a_full_checkout(tmp_path, monkeypatch):
+    """A test VM checks out only the commit it tests unless its plan entry says "history" (pr_checks.HISTORY_TESTS): a
+    test that counts commits or diffs against origin/main would otherwise see one commit and quietly run less."""
+    names = subprocess.check_output(["git", "ls-files", "*.py"], cwd=ROOT, text=True).split()
+    tests = [n for n in names if Path(n).name.startswith("test_") or n.endswith("_test.py")]
+    found = set()
+    for name in tests:
+        text = (ROOT / name).read_text(encoding="utf-8")
+        if '"git"' not in text:
+            continue
+        calls = (m.group(0) for m in GIT_CALL.finditer(text))
+        if ROOT_HELPER.search(text) or any(AT_ROOT.search(c) and READS_HISTORY.search(c) for c in calls):
+            found.add(name)
+    assert found == checks.HISTORY_TESTS, "list a test that reads history in pr_checks.HISTORY_TESTS, or drop it there"
+
+    history = sorted(checks.HISTORY_TESTS)[0]
+    picked = {"python": [history, "backend/tests/test_other.py"], "browser": [], "caddy": False}
+    picked |= {"conformance": False, "rust": [], "contracts": False}
+    monkeypatch.setattr(checks, "selection", lambda *a, **kw: dict(picked))
+    monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
+    monkeypatch.setattr(checks, "collect", lambda: Counter({history: 1, "backend/tests/test_other.py": 1}))
+    monkeypatch.setattr(checks, "CEILING", {"pull_request": 2, "merge_group": 2})
+    monkeypatch.setattr(checks, "size_groups", lambda counts, *a, **kw: _two_groups(counts))
+    jobs = checks.prepare("pull_request", "base", tmp_path / "plan.json")["matrix"]["include"]
+    marked = {job["suite"]: job.get("history", False) for job in jobs}
+    assert marked == {"python-1": True, "python-2": False}
+
+    # The conformance VM always keeps full history: the Rust updater test reads main's parser from origin/main.
+    picked |= {"conformance": True, "rust": ["runner-rs"]}
+    jobs = checks.prepare("pull_request", "base", tmp_path / "plan.json")["matrix"]["include"]
+    assert {job["suite"]: job.get("history", False) for job in jobs}["conformance"] is True
+
+
+def _two_groups(counts):
+    split = [[name] for name in sorted(counts)]
+    return {"split": split, "loads": [1.0] * len(split), "target": 330}

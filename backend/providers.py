@@ -1109,14 +1109,19 @@ def normalize_check_models(value, record, saved=()):
 def check_order(record):
     """The models a review or check subtask may run on, best first: the owner's check-model order, then one model
     per other enabled provider in the owner's order (the company default for its own provider). An entry whose
-    provider is off or whose model is retired is skipped."""
+    provider is off or whose model is retired is skipped. Under a models choice that never spends the Gateway
+    (`subscriptions`, `own-keys`), the Tico AI Gateway is not added for being on: it stays on for the Gateway services
+    (decide, search, meetings), not for reviews. Only a Tico model the owner lists in the order runs a check there."""
     rows = []
     for entry in record["check_models"]:
         try:
             rows.append(_check_row(entry, record))
         except ProviderError:
             continue
+    no_gateway = never_gateway(record)
     for name in record["enabled"]:
+        if no_gateway and (PROVIDER_BY_ID.get(name) or {}).get("gateway"):
+            continue
         default = MODEL_BY_ID.get(record["model"])
         row = (
             default if default and default["provider"] == name and not default.get("deprecated") else recommended(name)
@@ -1129,6 +1134,26 @@ def check_order(record):
             seen.add(row["model"])
             order.append(row)
     return order
+
+
+def never_gateway(record):
+    """Whether the company's models choice never spends the Gateway on bots' work: `subscriptions` or `own-keys`.
+    No choice (as before presets) and the two Gateway choices keep the Gateway in reach."""
+    return bool(models_preset.of(record)) and not models_preset.spends_gateway(record)
+
+
+def gateway_check_refused(record, model):
+    """Whether a review or check may not run on `model`: a Gateway model under a choice that never spends the
+    Gateway, unless the owner lists it in the check-model order."""
+    if not gateway_model(model) or not never_gateway(record):
+        return False
+    for entry in record["check_models"]:
+        try:
+            if _check_row(entry, record)["model"] == model:
+                return False
+        except ProviderError:
+            continue
+    return True
 
 
 def author_provider(author):

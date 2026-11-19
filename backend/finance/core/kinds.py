@@ -330,6 +330,11 @@ _RULE: tuple[Field, ...] = (
     ),
     ("priority?", "int", "posting rules: lower runs first (default 100)"),
     ("external_rule_id?", "str", "the company rule this one carries out"),
+    (
+        "apply_from?",
+        "day",
+        "posting: also posts rows from that day that are still new or on the automatic Other expenses default",
+    ),
 )
 SHAPES: dict[str, tuple[Field, ...]] = {
     "journal": (
@@ -341,7 +346,7 @@ SHAPES: dict[str, tuple[Field, ...]] = {
             "debits positive, credits negative; they sum to zero",
         ),
         ("basis?", "both|accrual", "accrual: left out of the cash P&L (depreciation, accruals)"),
-        ("source?", "str", ""),
+        ("source?", "manual|import", "default manual"),
         ("source_id?", "str", ""),
         ("reverses?", "str", "instead of lines: the entry id to reverse (with date? and memo?)"),
     ),
@@ -460,11 +465,13 @@ SHAPES: dict[str, tuple[Field, ...]] = {
         ("provider", "mercury|stripe|brex", ""),
         ("credential_id", "str", ""),
         ("name?", "str", ""),
-        ("probe?", "bool", ""),
+        ("probe", "obj", "the provider read; POST /api/v2/finance/connections makes it: use that route"),
         ("approver_email?", "str", ""),
         ("token_creator_email?", "str", ""),
         ("server_ip?", "str", ""),
-        ("history_from?", "str", "Brex only: the first day of its history, YYYY-MM-DD"),
+        ("history_from?", "str", "the first day of its history, YYYY-MM-DD; default Jan 1"),
+        ("transfer_account_id?", "str", "Stripe"),
+        ("capital_account_id?", "str", "Stripe"),
     ),
     "connection_sync": (("connection_id", "str", ""),),
     "connection_disconnect": (("connection_id", "str", ""),),
@@ -475,6 +482,8 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "connection_settings": (
         ("connection_id", "str", ""),
         ("card_user_id?", "str", "the Mercury user cards are issued to when a card names none (empty clears it)"),
+        ("transfer_account_id?", "str", "Stripe: Connect transfers' expense line"),
+        ("capital_account_id?", "str", "Stripe: Capital loan line"),
     ),
     "payment_settings": (
         ("direct_send?", "bool", ""),
@@ -905,7 +914,7 @@ WORDS: dict[str, str] = {
     "books_disconnect": "Disconnect a books connection (its HQ grant is revoked first).",
     "bills_address_set": "Set or clear the address vendors send bills to (empty clears it).",
     "finance_approver_set": "Name the one person who approves finance-admin actions (empty returns them to the owner).",
-    "connection_settings": "Set the Mercury user cards are issued to when a card names none.",
+    "connection_settings": "Set a connection's card user (Mercury) or lines (Stripe).",
     "payment_settings": "Turn direct send on or off and set the cash alert.",
     "card_create": "Issue a card on a budget.",
     "card_update_limit": "Change a card's limit.",

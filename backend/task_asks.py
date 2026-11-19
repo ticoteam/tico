@@ -6,7 +6,8 @@ this cap, send this report) waits on an OK from a named person. The OK is a requ
 (`H.task_ask(kind="ok")`), and this module keeps a grant beside it (`ok_grants`): who asked, what will be done
 (`subject`, "<kind>:<id>", e.g. "email_send:<id>"), and the content asked about with its hash.
 
-    ask_ok(conn, by, person, line, *, shows, subject, content, task_id=None, title=None) -> {"task_id", "requirement_id"}
+    ask_ok(conn, by, person, line, *, shows, subject, content, task_id=None, title=None, parent_id=None)
+        -> {"task_id", "requirement_id"}
     show(conn, person, requirement_id, content, *, own_click) -> shown hash      a preview was put in front of a person
     preview(conn, viewer, requirement_id, *, own_click) -> {...}                 the stored content, shown
     give_ok(conn, person, requirement_id, shown_hash, *, own_click, ctx=None)    the only way a bound OK is given
@@ -105,6 +106,18 @@ def _proposal_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") 
     return module.ok_given(conn, grant, ctx)
 
 
+def _growth_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
+    from . import growth_proposals
+
+    return growth_proposals.ok_given(conn, grant, ctx)
+
+
+def _growth_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str | None:
+    from . import growth_proposals
+
+    return growth_proposals.may_ok(conn, person, grant)
+
+
 def _edition_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str | None:
     from .company_page import editions
 
@@ -187,6 +200,7 @@ ON_OK: dict[str, Callable[..., object]] = {
     "board": _board_ok,
     "email_send": _email_ok,
     "finance": _finance_ok,
+    "growth": _growth_ok,
     "letter": _letter_ok,
     "proposal": _proposal_ok,
     "support": _support_ok,
@@ -194,7 +208,18 @@ ON_OK: dict[str, Callable[..., object]] = {
 
 # Subject kinds whose module asks and uses its OKs itself: a bot's generic ask (POST /api/v2/tasks/{id}/oks) and use
 # (POST /api/v2/oks/{id}/use) never name one.
-OWNED = ("email_send", "letter", "edition", "board", "proposal", "support", "webhook", "publish", "finance")
+OWNED = (
+    "email_send",
+    "letter",
+    "edition",
+    "board",
+    "proposal",
+    "support",
+    "webhook",
+    "publish",
+    "finance",
+    "growth",
+)
 
 # Who may OK a subject of this kind under the subject's own rule, called as fn(conn, person, grant) -> the refusal's
 # words, or None when `person` may. Checked when the OK is given and again when it is used. An OWNED kind that is not
@@ -205,9 +230,13 @@ MAY_OK: dict[str, Callable[..., str | None]] = {
     "board": _edition_may_ok,
     "edition": _edition_may_ok,
     "proposal": _proposal_may_ok,
+    "growth": _growth_may_ok,
     "file": _file_may_ok,
 }
 CHECKS_ITSELF = ("email_send", "letter")
+# Kinds whose OK anyone its MAY_OK rule lets OK it may give, not only the person it waits on: a bot's Growth proposal is
+# asked of the owner, and any admin may OK it (backend/growth_proposals.py). Shown, own click and used once still hold.
+ANY_ALLOWED = ("growth",)
 
 # The kinds a bot may ask for and use through the generic routes (POST /api/v2/tasks/{id}/oks, POST
 # /api/v2/oks/{id}/use), each with who may OK it. Nothing else: a kind not here is refused when asked, and an OK of a
@@ -236,10 +265,11 @@ SEES: dict[str, Callable[..., bool]] = {
     "file": _file_may_see,
 }
 
-# The title of a task filed for an OK of an OWNED kind: it names the kind of act and nothing of the subject (no email
-# subject line, recipient, edition or endpoint name), since a title travels further than the task (lists, notices).
+# The title of a task filed for an OK of an OWNED kind: it names the kind of act and nothing of the subject (no
+# recipient, edition or endpoint name), since a title travels further than the task (lists, notices). An email's OK is
+# the exception: its filed task takes the asker's title (subject and first recipient, email_sending.send_title), since
+# several sends wait side by side and a person must tell them apart; the task stays private to the OK's parties.
 FILED_TITLES: dict[str, str] = {
-    "email_send": "Send an email",
     "letter": "Mail a letter",
     "edition": "Publish an edition",
     "board": "Approve a stats board",
@@ -248,7 +278,13 @@ FILED_TITLES: dict[str, str] = {
     "webhook": "Make a webhook endpoint",
     "publish": "Publish to the roadmap",
     "finance": "OK a Finance action",
+    "growth": "Add to Growth",
 }
+
+
+# Titles a filed task had for its kind alone: FILED_TITLES' and what an email's filed task was titled before it took
+# the email's own (views.needs_items says what such a task's OK is about beside it).
+KIND_TITLES: frozenset[str] = frozenset({*FILED_TITLES.values(), "Send an email"})
 
 
 def _clip_words(text: object, most: int = 120) -> str:
@@ -538,6 +574,15 @@ def refuses_plain_ok(conn: "sqlite3.Connection", requirement_id: str, value: obj
     return FROM_PREVIEW if bound(conn, requirement_id) else None
 
 
+def given_by_another_allowed(conn: "sqlite3.Connection", requirement_id: str, value: object) -> bool:
+    """For the engine's answer check: whether give_ok is answering `ok` to an OK of an ANY_ALLOWED kind, whose giver
+    it already checked against the kind's rule (MAY_OK), so someone other than the person it waits on may answer."""
+    if value != "ok" or _GIVING.get() != requirement_id:
+        return False
+    found = grant(conn, requirement_id)
+    return bool(found) and kind_of(found["subject"]) in ANY_ALLOWED
+
+
 # The bots that act for a person (backend/assistant.py, backend/botops_act.py): they never give an OK of any kind.
 ACTS_FOR_PEOPLE = ("bot:assistant", "bot:botops")
 NOT_YOURS = "An OK is the person's own: the Assistant and BotOps never give one. Send back is fine."
@@ -579,12 +624,13 @@ def ask_ok(
     content: object,
     task_id: str | None = None,
     title: str | None = None,
+    parent_id: str | None = None,
 ) -> Row:
     """Ask `person` (always a person by name) to OK `content` before `subject` is done. The OK goes on `task_id`, the
-    task the work belongs to; with none, a task is filed in General first, asked for by `by`: owned by `by` when that
-    is a bot or a person, by `person` when it is the engine. The same subject asked again with the same content is the
-    same ask; with other content, the old ask is withdrawn and a new one made (for a GENERIC subject, only the same
-    asker's on the same task). Returns {task_id, requirement_id}."""
+    task the work belongs to; with none, a task is filed in General first (under `parent_id`, when given, as its
+    sub-task), asked for by `by`: owned by `by` when that is a bot or a person, by `person` when it is the engine. The
+    same subject asked again with the same content is the same ask; with other content, the old ask is withdrawn and a
+    new one made (for a GENERIC subject, only the same asker's on the same task). Returns {task_id, requirement_id}."""
     H = _h()
     subject = str(subject or "").strip()
     if not kind_of(subject) or ":" not in subject:
@@ -638,6 +684,7 @@ def ask_ok(
             FILED_TITLES.get(kind) or (title or line).strip(),
             line.strip(),
             owner,
+            parent_id=parent_id,
             lint=False,
             # A task filed for an OK is private to its parties: the subject it previews is never wider than they are.
             private=True,
@@ -828,7 +875,7 @@ def give_ok(
     if state == WITHDRAWN or not requirement or not visit or visit.get("left_at"):
         _refuse(conn, person, "task_requirement", "This is not asked any more", task_id)
     asked_of = R.person_of(conn, requirement, visit["id"])
-    if asked_of != person:
+    if asked_of != person and kind_of(row["subject"]) not in ANY_ALLOWED:
         name = H.actor_name(conn, asked_of) if asked_of else "someone who is here: give it to them"
         _refuse(conn, person, "task_requirement", f"This is asked of {name}", task_id)
     if str(shown_hash or "") != row["content_hash"]:

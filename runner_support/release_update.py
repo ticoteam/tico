@@ -26,6 +26,17 @@ from pathlib import Path
 from . import checkout_links, release_branch
 from .regular_file import SMALL, read as read_regular, lock as open_regular_lock
 
+
+def _sleep(seconds):
+    """Every pause goes through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
+
+
+def _now():
+    """The wall clock (epoch seconds): a test replaces this and not time.time for the whole process."""
+    return time.time()
+
+
 ROOT = Path(__file__).resolve().parents[1]
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$")
 STATUS_FILE = "update-status.json"
@@ -139,7 +150,7 @@ def repair_instruction_links(root, g):
                 git_dir
                 / "tico-instruction-backups"
                 / Path(name).parent
-                / (Path(name).name + f".tico-backup-{int(time.time())}-{uuid.uuid4().hex}-sha256-{digest}")
+                / (Path(name).name + f".tico-backup-{int(_now())}-{uuid.uuid4().hex}-sha256-{digest}")
             )
             backup.parent.mkdir(parents=True, exist_ok=True)
             if backup.parent.resolve() != backup.parent:
@@ -464,13 +475,13 @@ def restart_runner(pid, wait=60, env=os.environ, run=subprocess.run):
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         return
-    deadline = time.time() + wait
-    while time.time() < deadline:
+    deadline = _now() + wait
+    while _now() < deadline:
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             return
-        time.sleep(0.5)
+        _sleep(0.5)
     try:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -559,8 +570,8 @@ def restart_helpers_systemd(env=os.environ, run=subprocess.run, unit_dir=None, s
 
 def wait_healthy(directory, commit, since, seconds=HEALTH_S, sleep=time.sleep):
     """True once a runner started on `commit` has heartbeated to the server after `since`."""
-    deadline = time.time() + seconds
-    while time.time() < deadline:
+    deadline = _now() + seconds
+    while _now() < deadline:
         started = read_json(Path(directory) / "runner-revision")
         beat = Path(directory) / "heartbeat"
         if started.get("revision") == commit and beat.exists() and beat.stat().st_mtime >= since:
@@ -600,20 +611,20 @@ def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S
             directory, target, "the checkout is busy or its update lock cannot be checked", clock=clock, transient=True
         )
     with open_regular_lock(path) as handle:
-        deadline, said = time.time() + lock_wait, False
+        deadline, said = _now() + lock_wait, False
         while True:
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
-                if time.time() >= deadline:
+                if _now() >= deadline:
                     return defer_update(
                         directory, target, "another update still holds the checkout lock", clock=clock, transient=True
                     )
                 if not said:
                     write_status(directory, state="updating", target=target, error="", at=clock())
                     said = True
-                time.sleep(1)
+                _sleep(1)
         try:
             result = update(root, version, directory, run=run, clock=clock, repair_links=True, **kw)
         finally:
@@ -862,11 +873,9 @@ def main(argv=None):
 
 
 def run_update(args):
-    deadline = time.time() + 600
-    while (
-        in_flight(args.state_dir) and time.time() < deadline
-    ):  # the runner waits for quiet first; this is the second look
-        time.sleep(10)
+    deadline = _now() + 600
+    while in_flight(args.state_dir) and _now() < deadline:  # the runner waits for quiet first; this is the second look
+        _sleep(10)
     if in_flight(args.state_dir):
         result = defer_update(args.state_dir, args.version, "this computer still has work running", transient=True)
         print(json.dumps(result))

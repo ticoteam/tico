@@ -189,6 +189,10 @@ section.card.tt-soon>header .pill{margin-left:auto}
 .tw-ses[data-state=signed_in]{background:var(--ok)}
 .tw-ses[data-state=needs_you]{background:var(--wait)}
 .tw-ses[data-state=signed_out]{background:var(--fail)}
+/* While it needs the viewer the dot is a button: a 24 px target around the same 8 px dot. */
+button.tw-ses{box-sizing:content-box;min-height:0;margin:-8px;padding:8px;border:0;background-clip:content-box;cursor:pointer}
+button.tw-ses:focus-visible,button.tw-ask:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+button.tw-ask{display:inline-flex;min-height:0;padding:0;border:0;border-radius:999px;background:none;font:inherit;cursor:pointer}
 .tw-recent{list-style:none;margin:0;padding:0}
 .tw-rec{display:grid;grid-template-columns:60px 22px minmax(0,1fr);align-items:center;gap:8px;padding:6px 0;font-size:var(--t-sm)}
 .tw-rec>.tnum{white-space:nowrap}

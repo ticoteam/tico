@@ -17,10 +17,15 @@ import type {Page} from 'playwright';
 //   opens its form);
 // - one document host, many documents: its controls answer once per tap; a read on its way still lands when the same
 //   document is shown again before it does;
-// - a phone at 390 px: the head holds the title (40% or more, up to two lines), the tabs, ⋯ and ✕; Details and Archive
-//   are in ⋯; the tabs scroll so the one selected shows, Chat from the start; nothing scrolls sideways.
+// - a phone at 390 px: the title and the actions on the first row (Details and Archive among them), the tabs on their
+//   own row under it; the tab selected shows; nothing scrolls sideways;
+// - many documents (8 "Queue 2026 11 18 pr…"): the row never scrolls; Chat, Files, one document and +8; the shared
+//   start of their names is left out ("pr4233 cce40e0"); +8 lists every document, in the order they first appeared,
+//   and opens the one picked in the one document place, Chat still a tap away; tapped through, no tab moves under the
+//   finger; a bot writing one moves nothing, the row nor +8's list; on a computer and a phone.
 // TICO_SHOTS=<dir> saves each state, desktop and phone, dark and light.
 declare function liveEmit(topic: string, data: unknown): void;
+declare function taskDocsSync(d: HTMLElement, t: unknown): void;
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const path: typeof import('node:path') = require('node:path');
@@ -30,8 +35,8 @@ const shots = process.env.TICO_SHOTS || '';
 const ago = (min: number) => new Date(Date.now() - min * 60000).toISOString();
 const PLAN = 'file-doc-plan', QA = 'file-doc-qa';
 const docs = () => [
-  {name: 'QA report', file_id: QA, version: 1, by: 'bot:writer', at: ago(20), versions: [{n: 1, by: 'bot:writer', at: ago(20), note: 'All six checks pass'}]},
-  {name: 'Plan', file_id: PLAN, version: 2, by: 'bot:writer', at: ago(125), versions: [
+  {name: 'QA report', file_id: QA, version: 1, by: 'bot:writer', at: ago(20), created: ago(20), versions: [{n: 1, by: 'bot:writer', at: ago(20), note: 'All six checks pass'}]},
+  {name: 'Plan', file_id: PLAN, version: 2, by: 'bot:writer', at: ago(125), created: ago(60 * 26), versions: [
     {n: 2, by: 'bot:writer', at: ago(125), note: 'Adds the empty state'}, {n: 1, by: 'human:ana', at: ago(60 * 26), note: 'First draft'}]},
 ];
 const PAGES: Record<string, string> = {
@@ -39,12 +44,18 @@ const PAGES: Record<string, string> = {
   [`${PLAN}@2`]: '<h1>Saved carts</h1><p>A cart survives closing the tab.</p><p>It expires after 30 days.</p><p>Empty state: "Nothing saved yet."</p>',
   [`${QA}@1`]: '<h1>QA report</h1><ul><li>Cart survives closing the tab ✓</li><li>Expires after 30 days ✓</li></ul>',
 };
+// A routine task with a document per pull request, as the review queue writes them (Nov 18): the summary first, then
+// one per pull request. The server lists them newest change first.
+const QUEUE_PRS = ['pr4233 cce40e0', 'pr4222 8f530e1', 'pr4196 4ddc9e9', 'pr4193 6b8267d', 'pr4082 17428ac', 'pr3913 4f3d9a2', 'pr3780 f654a67', 'pr3765 b1b128e'];
+const QUEUE = [{name: 'Review queue', kind: 'markdown', file_id: 'file-q', version: 1, by: 'bot:writer', at: ago(5), created: ago(30), versions: [{n: 1, by: 'bot:writer', at: ago(5)}]},
+  ...QUEUE_PRS.map((pr, i) => ({name: `Queue 2026 11 18 ${pr}`, kind: 'markdown', file_id: `file-q${i}`, version: 1, by: 'bot:writer', at: ago(6 + i), created: ago(29 - i), versions: [{n: 1, by: 'bot:writer', at: ago(6 + i)}]}))];
 const LONG = Array.from({length: 40}, (_, i) => `Step ${i + 1}: open a cart, close the tab, come back.`).join('\n\n');
 const req = (id: string, line: string, met: boolean) => ({requirement_id: id, line, met, who: 'bot:writer', may: [], answer: null, standing: '', asked_by: null});
 const tasks = () => [
   task('t-1', 'Fix the login redirect', 'spec', {owner_id: 'bot:writer', note: LONG}),
   task('t-2', 'Saved carts that survive closing the tab', 'spec', {owner_id: 'bot:writer', documents: docs(), note: LONG,
     to_leave: [req('r-1', 'Spec written', true), req('r-2', 'OK from anyone', false)]} as Parameters<typeof task>[3]),
+  task('t-3', 'Weekday review queue', 'spec', {owner_id: 'bot:writer', documents: QUEUE} as Parameters<typeof task>[3]),
 ];
 // Each task's pages (GET /api/v2/places/task:<id>): one, and the reader may link more.
 const PIN = {id: 'pin-1', size: 'medium', can_unpin: true, page: {file_id: 'file-brief', title: 'Saved carts brief', version: 1, replaced_by_id: null, archived: false}};
@@ -134,11 +145,11 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       assert.equal(await leave.isVisible(), false, 'and goes again with its form');
       await win.locator('[data-task-tab="details"]').click();
 
-      // ---- a Plan and a QA report: the tabs on the title row, Chat and Files first, then newest change first
+      // ---- a Plan and a QA report: the tabs on the title row, Chat and Files first, then in the order they appeared
       await page.evaluate(() => { location.hash = '#/task/t-2'; });
       const docWin = page.locator('#task-modal[open][data-task="t-2"]');
       await docWin.locator('.tw-tabs').waitFor();
-      assert.deepEqual(await texts(page), ['Chat', 'Files', 'QA report', 'Plan']);
+      assert.deepEqual(await texts(page), ['Chat', 'Files', 'Plan', 'QA report'], 'the Plan came first: the QA report changed since does not move it');
       assert.equal(await docWin.getByRole('tab', {name: 'Chat'}).getAttribute('aria-selected'), 'true', 'it opens on the chat');
       const [title, row, close] = [await docWin.locator('.tmodal-title').boundingBox(), await docWin.locator('.tw-tabs').boundingBox(), await docWin.locator('[data-modal-close]').boundingBox()];
       assert.ok(title && row && close && row.x > title.x + title.width - 1 && row.x + row.width <= close.x, `the tabs sit right of the title, before the actions (${JSON.stringify([title, row, close])})`);
@@ -218,6 +229,8 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       await page.keyboard.press('ArrowRight');
       assert.equal(await docWin.getByRole('tab', {name: 'Files'}).getAttribute('aria-selected'), 'true', 'Files comes after Chat');
       await page.keyboard.press('ArrowRight');
+      assert.equal(await docWin.getByRole('tab', {name: 'Plan'}).getAttribute('aria-selected'), 'true', 'then the Plan, the first document');
+      await page.keyboard.press('ArrowRight');
       assert.equal(await docWin.getByRole('tab', {name: 'QA report'}).getAttribute('aria-selected'), 'true');
       await view.locator('iframe[title="QA report v1"]').waitFor();
       assert.match((await line.innerText()).trim(), /^v1 · Writer · 20m/);
@@ -244,10 +257,9 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       const docWin = page.locator('#task-modal[open][data-task="t-2"]');
       await docWin.locator('.tw-tabs').waitFor();
       const [title, row] = [await docWin.locator('.tmodal-title').boundingBox(), await docWin.locator('.tw-tabs').boundingBox()];
-      assert.ok(title && row && Math.abs((row.y + row.height / 2) - (title.y + title.height / 2)) < 12, `one row (${JSON.stringify([title, row])})`);
-      const head = (await docWin.locator('.tw-head').boundingBox())!;
-      assert.ok(title!.width >= head.width * 0.4 - 8, `the title keeps 40% of the row (${title!.width} of ${head.width})`);
-      assert.deepEqual(await docWin.locator('.tw-acts > button:visible').evaluateAll(els => els.map(e => e.getAttribute('aria-label'))), ['More actions', 'Close window'], 'the head: tabs, ⋯ and ✕');
+      assert.ok(title && row && row.y >= title.y + title.height - 1, `the tabs on their own row under the title (${JSON.stringify([title, row])})`);
+      const acts = await docWin.locator('.tw-acts > button:visible').evaluateAll(els => els.map(e => e.getAttribute('aria-label') || ''));
+      assert.ok(['Details', 'More actions', 'Close window'].every(w => acts.some(a => a.startsWith(w))), `Details stays in the head beside ⋯ and ✕ (${acts})`);
       for (const b of await docWin.locator('.tw-tabs [role="tab"]').all()) assert.ok(((await b.boundingBox())?.height ?? 0) >= 44, 'each tab a 44 px target');
       const inStrip = (name: string) => docWin.locator('.tw-tabs').evaluate((strip, n) => {
         const t = [...strip.querySelectorAll('[role="tab"]')].find(e => e.textContent?.trim() === n)!, a = t.getBoundingClientRect(), s = strip.getBoundingClientRect();
@@ -259,7 +271,7 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       const menu = page.locator('.prop-pop:popover-open');
       await menu.waitFor();
       const said = await menu.locator('.tl-mi').allInnerTexts();
-      assert.ok(['Details', 'Archive'].every(w => said.some(s => s.includes(w))), `Details and Archive are in ⋯ (${said})`);
+      assert.ok(!said.some(s => s.includes('Details')), `Details is not in ⋯ too (${said})`);
       await shot(page, `more-menu-phone-${theme}`);
       await page.keyboard.press('Escape');
       await menu.waitFor({state: 'hidden'});
@@ -299,6 +311,66 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       assert.deepEqual(errors, []);
       await page.close();
     }
-    console.log('PASS: a task\'s documents: no documents, no tabs; Chat then documents newest first on the title row; one version line that opens the versions and Compare; Details over a document; a phone\'s same row.');
+    // ---- many documents, on a computer and a phone: Chat, Files, one document and +8; the row never slides
+    for (const viewport of [{width: 1280, height: 800}, {width: 390, height: 844}]) {
+      const {page, errors} = await open(browser, {viewport, theme: 'dark', hash: '#/task/t-3', tasks: tasks(), needs: [], beforeGoto: files});
+      const where = viewport.width < 600 ? 'phone' : 'computer';
+      const win = page.locator('#task-modal[open][data-task="t-3"]'), row = win.locator('.tw-tabs');
+      await row.waitFor();
+      // Files says its count once the task's pages are read ("Files 1"): one name for it here.
+      const shownTabs = () => row.locator('[role="tab"]:visible').evaluateAll(els => els.map(e => (e.textContent || '').trim().replace(/^Files\b.*/, 'Files')));
+      // Where each tab that shows sits in the row, and the row's width: a tab tapped never moves another.
+      const lay = () => row.evaluate(r => ({fits: r.scrollWidth <= r.clientWidth + 1, x: Object.fromEntries([...r.querySelectorAll<HTMLElement>('[role="tab"]')].filter(b => !b.hidden)
+        .map(b => [b.textContent!.trim().replace(/^Files\b.*/, 'Files'), Math.round(b.getBoundingClientRect().left - r.getBoundingClientRect().left)])
+        .concat([['row', Math.round(r.getBoundingClientRect().width)], ['head', Math.round(r.parentElement!.getBoundingClientRect().width)]]))}));
+      assert.deepEqual(await shownTabs(), ['Chat', 'Files', 'Review queue'], `Chat, Files and the first document (${where})`);
+      assert.equal(await row.locator('[data-doc-more]').getAttribute('aria-label'), '9 documents', `+8 for the rest (${where})`);
+      assert.equal((await row.locator('[data-doc-more]').innerText()).trim(), '+8', `how many more, not ⋯, the task's own menu (${where})`);
+      assert.equal((await lay()).fits, true, `the row fits: it does not scroll (${where})`);
+      const before = (await lay()).x;
+      // +8 lists all nine, the shared start left out; one picked opens in the document place
+      await row.locator('[data-doc-more]').click();
+      const menu = page.locator('.prop-pop:popover-open');
+      await menu.waitFor();
+      assert.deepEqual(await menu.locator('.tl-mi').allInnerTexts().then(t => t.map(x => x.replace('✓', '').trim())), ['Review queue', ...QUEUE_PRS], `+8 lists every document by its short name (${where})`);
+      await menu.locator('.tl-mi', {hasText: 'pr4082 17428ac'}).click();
+      await menu.waitFor({state: 'hidden'});
+      assert.deepEqual(await shownTabs(), ['Chat', 'Files', 'pr4082 17428ac'], `the one picked takes the document place (${where})`);
+      assert.equal(await row.getByRole('tab', {name: 'pr4082 17428ac'}).getAttribute('aria-selected'), 'true');
+      assert.equal(await win.locator('.task-doc .doc-view').isVisible(), true, `and shows (${where})`);
+      const after = (await lay()).x;
+      assert.deepEqual([after['Chat'], after['Files'], after['row']], [before['Chat'], before['Files'], before['row']], `Chat and Files stay where they were, the row its width (${where}: ${JSON.stringify([before, after])})`);
+      // tapped back and forth, nothing moves and Chat is one tap away
+      for (const name of ['Chat', 'pr4082 17428ac', 'Files', 'Chat']) {
+        const tab = name === 'Files' ? row.locator('[data-task-tab="files"]') : row.getByRole('tab', {name});
+        await tab.click();
+        assert.equal(await tab.getAttribute('aria-selected'), 'true', `${name} selected (${where})`);
+        assert.deepEqual((await lay()).x, after, `no tab moved after tapping ${name} (${where})`);
+      }
+      assert.deepEqual(await shownTabs(), ['Chat', 'Files', 'pr4082 17428ac'], `Chat and Files keep the last document in its place (${where})`);
+      // A bot writes the last pull request's document: the server lists it first now, and the row draws again. Nothing
+      // moves: the document place keeps its document, and +8 its order.
+      await row.evaluate(r => { r.dataset.drawn = 'before'; });
+      const now = new Date().toISOString(), last = QUEUE[8]!;
+      const written = {...last, version: 2, at: now, versions: [{n: 2, by: 'bot:writer', at: now}, ...last.versions]};
+      const t3 = {...tasks().find(t => t.id === 't-3')!, documents: [written, ...QUEUE.slice(0, 8)]};
+      await page.evaluate(t => { taskDocsSync(document.getElementById('task-modal')!, t); }, t3);
+      assert.equal(await win.locator('.tw-tabs[data-drawn]').count(), 0, `the row was drawn again (${where})`);
+      assert.deepEqual(await shownTabs(), ['Chat', 'Files', 'pr4082 17428ac'], `a bot's write leaves the document place as it was (${where})`);
+      assert.deepEqual((await lay()).x, after, `and moves no tab (${where})`);
+      await row.locator('[data-doc-more]').click();
+      await menu.waitFor();
+      assert.deepEqual(await menu.locator('.tl-mi').allInnerTexts().then(t => t.map(x => x.replace('✓', '').trim())), ['Review queue', ...QUEUE_PRS], `nor +8's list (${where})`);
+      await menu.locator('.tl-mi', {hasText: 'pr4082 17428ac'}).click();
+      await menu.waitFor({state: 'hidden'});
+      assert.equal(await row.getByRole('tab', {name: 'Queue 2026 11 18 pr4082 17428ac'}).count(), 0, 'its tab reads the short name');
+      assert.equal(await row.locator('[role="tab"]:visible').nth(2).getAttribute('title'), 'Queue 2026 11 18 pr4082 17428ac', 'and says the whole name when pointed at');
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= viewport.width, `nothing scrolls sideways (${where})`);
+      await shot(page, `many-documents-${where}`);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+
+    console.log('PASS: a task\'s documents: no documents, no tabs; Chat then documents in the order they appeared on the title row; one version line that opens the versions and Compare; Details over a document; a phone\'s same row.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

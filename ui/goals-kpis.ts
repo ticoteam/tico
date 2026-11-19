@@ -810,7 +810,7 @@ function goalTreeRows(actor: string, depth: number, goals: GkGoal[], loose: GkKp
   const info = goalOwnerInfo(actor);
   const av = actor === GOAL_COMPANY ? `<span class="av gt-co-av" aria-hidden="true">${esc(String(info.name || 'C').trim()[0] || 'C').toUpperCase()}</span>` : info.avatar;
   const bet = (g: GkGoal) => { const st = GOALS_ST?.strategy, c = g.bet_id && (st?.bets || []).find((x: GkStrategyBet) => x.id === g.bet_id); return c ? ` · ${st?.label_one || 'Bet'}: ${c.statement}` : ''; };
-  const goalCell = (g: GkGoal) => `<span class="gt-goal" title="${esc(g.title + (g.why || !bet(g) ? ' · Why: ' + (g.why || GOAL_NOT_TIED) : '') + bet(g))}">${gdot(g.status, goalStatusNote(g))}<span class="gt-title">${esc(g.title)}</span></span>`;
+  const goalCell = (g: GkGoal) => `<span class="gt-goal" title="${esc(g.title + (g.why || !bet(g) ? ' · Why: ' + (g.why || GOAL_NOT_TIED) : '') + bet(g))}">${goalDotHtml(g, goalStatusNote(g), `<span class="gt-title">${esc(g.title)}</span>`)}</span>`;
   // "+" adds a goal for this owner: always there, quiet until a pointer is over the line.
   const add = goalMayEdit({owner_id: actor}, GOALS_ST?.goals || []) ? `<button type="button" class="gt-add tap-mark" data-goal-add="${esc(actor)}" title="Add goal" aria-label="Add goal for ${esc(info.name)}">+</button>` : '';
   const row = (cls: string, goal: GkGoal | undefined, inner: string) => `<li class="gt-row${cls}" data-owner="${esc(actor)}"${goal ? ` data-goal="${esc(goal.id)}"` : ''} style="--d:${depth}" tabindex="0" role="button">`
@@ -1100,7 +1100,7 @@ function goalPanelHtml(state: GkState) {
     const mayG = goalMayEdit(g, state.goals);
     // The Why stays in view while the goal is being edited: beside its form, not in it, as it saves on its own.
     const head = (P.goal === g.id ? goalFormHtml(g, state.goals)
-      : `<button class="gp-gline" type="button" data-gp-edit="${esc(g.id)}" title="${esc(g.title)}">${gdot(g.status, goalStatusNote(g))}<span>${esc(g.title)}</span></button>${goalNoteHtml(g, mayG)}`)
+      : `<button class="gp-gline" type="button" data-gp-edit="${esc(g.id)}" title="${esc(g.title)}">${goalDotHtml(g, goalStatusNote(g), `<span>${esc(g.title)}</span>`)}</button>${goalNoteHtml(g, mayG)}`)
       + `<div class="goal-why-slot" data-why-slot="${esc(g.id)}">${goalWhyHtml(state, g, mayG)}</div>` + (P.goal === g.id ? '' : goalBetLineHtml(state, g));
     const props = state.proposals.filter(p => p.goal_id === g.id && p.kind !== 'goal_why');
     return `<li class="gp-goal" data-gp-goal="${esc(g.id)}">${head}${kpiLinesHtml(g.kpis, {goal: g.id})}

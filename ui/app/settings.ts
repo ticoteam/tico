@@ -468,8 +468,8 @@ async function renderSettingsBotReports() {
   try { rules = (await get('/v2/access')).rules || {}; }
   catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(errorMessage(e, 'Something went wrong.'))}</div>`; return; }
   if (!host.isConnected) return;
-  host.innerHTML = `<label class="people-line"><input type="checkbox" role="switch" class="people-switch" id="bot-reports-direct"${rules.bot_reports_direct !== false ? ' checked' : ''} aria-label="Bots send reports to the Tico team without asking">
-    <span>Bots send reports to the Tico team without asking</span></label>`;
+  host.innerHTML = `<label class="people-line"><input type="checkbox" role="switch" class="people-switch" id="bot-reports-direct"${rules.bot_reports_direct !== false ? ' checked' : ''} aria-label="Bots send reports to Tico support without asking">
+    <span>Bots send reports to Tico support without asking</span></label>`;
   host.querySelector('#bot-reports-direct').onchange = async (ev: Event) => {
     const box = ev.target;
     if (!(box instanceof HTMLInputElement)) return;

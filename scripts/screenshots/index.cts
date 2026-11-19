@@ -109,6 +109,7 @@ const DEMO_NOW = process.env.TICO_DEMO_NOW || '2026-11-06T18:00:00Z';
 const TASKS_UI = [
   'ui/app/stage-rules.ts', 'ui/app/stage-rules-mark.ts', 'ui/styles/stage-rules.css',  // each stage header's Rules button and panel
   'ui/app/stage-menu.ts',  // each stage header's ⋯: Move all to…, Close all, Assign all to…, Snooze all…
+  'ui/app/prop-menu.ts',  // a task's row menus and ⋯, and a folded document tab row's ⋯ (the task window and Flow)
   'ui/app/tasks.ts', 'ui/app/tasks-page.ts', 'ui/app/task-*.ts', 'ui/app/pull-refresh.ts', 'ui/app/hub-v2.ts',
   'ui/app/issues.ts', 'ui/styles/tasks.css', 'ui/styles/task-*.css', 'ui/styles/board.css', 'ui/styles/hub-v2.css',
   'ui/app/pipeline-*.ts', 'ui/styles/pipeline.css',
@@ -137,11 +138,9 @@ const PAGES: PageSpec[] = [
       await page.locator('.cf-hall-name').first().waitFor({timeout: 20000});
     }},
   {name: 'updates', route: '#/updates', ready: 'The rivals sit $20 to $40 above Home Pro, so we still win on price.', ui: ['ui/app/updates.ts', 'ui/styles/updates.css']},
-  {name: 'tasks', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?', ui: TASKS_UI, steps: async page => {
-    await page.click('#task-scope');
-    await page.click('#task-filter-pop [data-task-type="general"]');
-    await page.getByText('Draft replies for the open support tickets').first().waitFor();
-  }},
+  // The default view (You). The page lost its task-type filter in the Pipelines v3 cut-over (Nov 10); clicking it timed
+  // out every release's tasks pictures.
+  {name: 'tasks', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?', ui: TASKS_UI},
   {name: 'needs-you', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?',
     ui: [...TASKS_UI, 'ui/app/needs-you.ts', 'ui/app/decide.ts', 'ui/app/decide-content.ts', 'ui/app/decide-about.ts', 'ui/styles/needs-you.css', 'ui/styles/decide.css']},
   {name: 'org-chart', route: '#/goals', ready: 'Ship 6,000 units and 40 business installs this season',
@@ -217,7 +216,7 @@ const PAGES: PageSpec[] = [
       'ui/styles/strategy.css', 'ui/styles/strategy-budget.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
   {name: 'growth', route: '#/growth', ready: 'Growth', ui: ['ui/app/growth-*.ts', 'ui/app/brand-page.ts', 'ui/styles/growth.css']},
   {name: 'finance', route: '#/finance', ready: 'P&L', ui: ['ui/app/finance*.js', 'ui/app/finance*.ts', 'ui/styles/finance.css']},
-  {name: 'rules', route: '#/rules', ready: 'Rules', ui: ['ui/app/org-rules.ts', 'ui/app/drag-pan.ts', 'ui/app/org-rule-holds.ts', 'ui/styles/org-rules.css', 'ui/styles/org-rule-holds.css',
+  {name: 'rules', route: '#/rules', ready: 'Rules', ui: ['ui/app/org-rules.ts', 'ui/app/drag-pan.ts', 'ui/app/org-rule-holds.ts', 'ui/app/org-rule-review.ts', 'ui/styles/org-rules.css', 'ui/styles/org-rule-holds.css',
     // The stage rules panel opens from Rules › Pipelines and stages and from each stage header on the board.
     'ui/app/stage-rules.ts', 'ui/app/stage-rules-mark.ts', 'ui/styles/stage-rules.css']},
   {name: 'contacts', route: '#/library/contacts', ready: 'Bright Homes Retail', ui: ['ui/app/directory*.ts', 'ui/styles/directory.css']},

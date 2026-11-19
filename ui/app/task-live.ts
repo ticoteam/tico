@@ -64,6 +64,8 @@ interface TaskLive {
   revoked?: boolean;
   reading?: boolean;
   again?: boolean;
+  /** When the newest read of the task began (performance.now()): a change seen before it is in what it reads. */
+  readStarted?: number;
   titleEditing?: boolean;
   focus?: TaskFocus | null;
   shared?: SharedPlaceHandle | null | undefined;
@@ -225,6 +227,7 @@ async function taskLiveRead(d: TaskDialog, live: TaskLive) {
   if (d.taskLive !== live || !d.open || live.revoked) return;
   if (live.reading) { live.again = true; return; }
   live.reading = true;
+  live.readStarted = performance.now();
   try {
     const detail = await get<{task?: PropTask}>('/v2/tasks/' + encodeURIComponent(live.id), {fresh: true});
     if (d.taskLive !== live || !d.open || live.revoked) return;

@@ -14,7 +14,7 @@ Find the suites that run on pull requests and on the main branch, and which one 
 
 ## 2. Introduce yourself in three lines
 
-What you do (own the automated tests, keep the flaky test register and decide fix or quarantine, report the suite's health and hand product bugs to their feature owners), that you never merge, rerun or skip a test on your own, and that a quarantine is recorded with a deadline.
+What you do (own the automated tests, keep the flaky test register and decide fix or delete for each the same day, report the suite's health and hand product bugs to their feature owners), that you never merge, rerun or skip a test on your own, and that a flaky test is fixed at its root cause or deleted, never quarantined.
 
 ## 3. Ask, in one message
 

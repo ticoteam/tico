@@ -151,8 +151,8 @@ const newContext = async (browser: import('playwright').Browser, phone: boolean,
         const v = await visit(context, {phone, finance: 'no'});
         same(v, tag + ', no Finance');
         const keys = v.painted.rows.filter(r => r.on).map(r => r.key);
-        assert.deepEqual(keys.slice(0, 15), ['tasks', 'calendar', 'threads', 'updates', 'overview', 'Company pages', 'strategy', 'growth',
-          'automations', 'listening', 'rules', 'library', 'Library pages', 'docs', 'files'], tag + ': the order, from the first paint');
+        assert.deepEqual(keys.slice(0, 16), ['tasks', 'calendar', 'threads', 'updates', 'meetings', 'overview', 'Company pages', 'strategy',
+          'growth', 'automations', 'listening', 'rules', 'library', 'Library pages', 'docs', 'files'], tag + ': the order, from the first paint');
         assert.equal(await v.page.locator('#side a[data-nav="overview"]').evaluate(a => a.textContent!.trim()), 'Company', tag + ': Overview is Company');
         assert.ok(!keys.includes('connections'), tag + ': Connections is part of Tools');
         assert.ok(keys.includes('threads') && keys.includes('organisation'), tag + ': Threads and the Team section too');
@@ -177,7 +177,7 @@ const newContext = async (browser: import('playwright').Browser, phone: boolean,
         same(again, tag + ', Finance kept');
         assert.equal(shows(again.painted, 'finance'), true, tag + ': Finance from the first paint');
         const order = again.painted.rows.filter(r => r.on).map(r => r.key);
-        assert.deepEqual(order.slice(4, 9), ['overview', 'Company pages', 'strategy', 'finance', 'growth'], tag + ': Finance between Strategy and Growth');
+        assert.deepEqual(order.slice(5, 10), ['overview', 'Company pages', 'strategy', 'finance', 'growth'], tag + ': Finance between Strategy and Growth');
         assert.deepEqual(again.errors, []);
         await again.page.close();
       }
@@ -205,7 +205,7 @@ const newContext = async (browser: import('playwright').Browser, phone: boolean,
       await context.close();
     }
 
-    // No fold kept (most people): Company's six and Library's five rows are folded from the first paint, both chevrons
+    // No fold kept (most people): Company's six and Library's four rows are folded from the first paint, both chevrons
     // say so, and nothing moves once the scripts and reads are in. Opened and reloaded, a fold stays open.
     for (const phone of [false, true]) {
       const tag = phone ? 'phone' : 'desktop';
@@ -213,9 +213,9 @@ const newContext = async (browser: import('playwright').Browser, phone: boolean,
       const v = await visit(context, {phone, hash: '#/home'});
       same(v, tag + ', folds not kept');
       const keys = v.painted.rows.filter(r => r.on).map(r => r.key);
-      assert.deepEqual(keys.slice(0, 8), ['tasks', 'calendar', 'threads', 'updates', 'overview', 'Company pages', 'library', 'Library pages'],
-        tag + ': Company and Library folded from the first paint');
-      for (const nav of ['strategy', 'growth', 'automations', 'listening', 'rules', 'docs', 'files', 'skills', 'tools', 'meetings'])
+      assert.deepEqual(keys.slice(0, 9), ['tasks', 'calendar', 'threads', 'updates', 'meetings', 'overview', 'Company pages', 'library', 'Library pages'],
+        tag + ': Meetings on its own, Company and Library folded from the first paint');
+      for (const nav of ['strategy', 'growth', 'automations', 'listening', 'rules', 'docs', 'files', 'skills', 'tools'])
         assert.equal(shows(v.painted, nav), false, `${tag}: ${nav} folded`);
       assert.deepEqual(await v.page.locator('#side .rd-lib-toggle').evaluateAll(els => els.map(el => el.getAttribute('aria-expanded'))), ['false', 'false'],
         tag + ': both chevrons say folded');

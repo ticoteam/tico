@@ -253,15 +253,18 @@ def run_now(c: sqlite3.Connection, viewer: str, tool_id: str, at: str | None = N
 
 
 def assign(c: sqlite3.Connection, viewer: str, ad_account_id: str, bot_slug: str | None, at: str | None = None) -> Row:
-    """Which bot an ad account's spend counts for (None: not assigned)."""
+    """Which bot an ad account's spend counts for (None: not assigned), named by its slug or its id. The column keeps
+    the bot's id: every reader makes the teammate `bot:<id>` from it (spend attribution, campaigns, ad warnings, the
+    Tools picker), and an id outlives a rename."""
     ctx = _admin(c, viewer, at)
     acct = SA.account(c, ad_account_id)
     if acct is None:
         raise FinanceError(NOT_FOUND, "No such ad account")
-    slug = (bot_slug or "").strip()
-    if slug and "bot:" + slug not in ctx.org.bots:
+    ref = (bot_slug or "").strip().removeprefix("bot:")
+    bot = tico.bot_id(c, ref) if ref else ""
+    if ref and "bot:" + bot not in ctx.org.bots:
         raise FinanceError(INVALID, "No such bot")
-    SA.set_bot(c, ad_account_id, slug or None, ctx.at)
+    SA.set_bot(c, ad_account_id, bot or None, ctx.at)
     found = SA.account(c, ad_account_id)
     assert found is not None
     return {

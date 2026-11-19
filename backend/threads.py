@@ -58,6 +58,7 @@ from datetime import datetime, timedelta, timezone
 from . import people as P
 from . import read_cache
 from . import secret_drop
+from . import task_text_keys
 from .store import H, Problem
 
 AUDIENCES = ("company", "team", "members", "task", "home", "personal", "participants", "meeting")
@@ -230,7 +231,7 @@ def _row(c, value, table="conversations"):
     if value is None:
         return None
     if isinstance(value, str):
-        row = c.execute(f"SELECT * FROM {table} WHERE id=?", (value,)).fetchone()
+        row = read_cache.one(c, f"SELECT * FROM {table} WHERE id=?", (value,))
         return dict(row) if row else None
     return dict(value)
 
@@ -868,7 +869,7 @@ def can_manage(c, v, thread):
     row = thread_row(c, thread)
     if row is None or denial(c, v, row) is not None:
         return False
-    root = root_of(c, row)
+    root = root_of(c, row) or row  # a thread's root is never None
     if v.is_person and v.admin(c):
         return True
     if root.get("owner_id") == v.actor and audience_of(root) != "home":
@@ -878,12 +879,31 @@ def can_manage(c, v, thread):
 
         owner = home_owner(root)
         return bool(owner) and teammate_access.can(c, v.who, "manage", owner, auth=v.auth)
-    return (
-        c.execute(
-            "SELECT 1 FROM thread_members WHERE thread_id=? AND actor=? AND role='owner'", (root["id"], v.actor)
-        ).fetchone()
-        is not None
-    )
+    # prime_owners seeds these rows for a list's roots, so each row's check reads none of them again.
+    return read_cache.one(c, _OWNER_SQL, (root["id"], v.actor)) is not None
+
+
+_OWNER_SQL = "SELECT 1 FROM thread_members WHERE thread_id=? AND actor=? AND role='owner'"
+
+
+def prime_owners(c, v, roots):
+    """Seed `can_manage`'s owner check for these root rows, one query a chunk, for the rows that follow in this snapshot.
+    The seeded rows are the ones that check reads: (1,) where the viewer is an owner member, else none. A Home and a
+    root the viewer started are decided before that check, so they are not read."""
+    if read_cache.cache(c) is None:
+        return
+    ids = [r["id"] for r in roots if audience_of(r) != "home" and r.get("owner_id") != v.actor]
+    found = set()
+    for part in H.chunks(list(dict.fromkeys(ids))):
+        found.update(
+            r[0]
+            for r in c.execute(
+                "SELECT thread_id FROM thread_members WHERE actor=? AND role='owner' AND thread_id IN (%s)"
+                % ",".join("?" * len(part)),
+                (v.actor, *part),
+            )
+        )
+    read_cache.prime(c, _OWNER_SQL, {(i, v.actor): (1,) if i in found else None for i in ids})
 
 
 # ----------------------------------------------------------------------------- C1 as SQL and for SSE
@@ -897,7 +917,16 @@ def _grant_sql(v, id_sql, root_sql, t):
 
 
 def readable_sql(
-    c, v, alias="conversations", *, inner=None, tasks="SELECT id FROM tasks", meeting=None, conversation=None, only=None
+    c,
+    v,
+    alias="conversations",
+    *,
+    inner=None,
+    tasks="SELECT id FROM tasks",
+    meeting=None,
+    conversation=None,
+    only=None,
+    per_row=False,
 ):
     """A SQL boolean over a conversations row named `alias` (bare columns when alias is ''): the thread is readable.
 
@@ -907,8 +936,14 @@ def readable_sql(
     meeting-provenance check every thread also passes. `only` (readable_ids) is every stored audience the roots of
     the rows asked about have (None for a root that predates threads), plus "home" when a row is a Home itself: the
     Home and legacy terms no such row can take are rendered false without reading what they need (every teammate's
-    access, every bot's shared room), which only ever narrows."""
+    access, every bot's shared room), which only ever narrows.
+
+    `per_row` (a person's check, with none of the options above, over alias r or s): the same answer, tested row by row (the row's root
+    and task looked up by id) rather than against every readable root and task, built whole for each statement. For a
+    statement that tests few rows: building those lists reads every conversation and task."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
+    plain = inner is None and meeting is None and conversation is None and tasks == "SELECT id FROM tasks"
+    per_row = per_row and plain and alias in ("r", "s")  # never rd or rt, which its own subqueries name
     t = inner or (lambda name: name)
     x = (alias + ".") if alias else ""
     me = _q(v.actor)
@@ -949,29 +984,32 @@ def readable_sql(
     legacies = only is None or None in only or "home" in only
     chain = _qlist(v.chain(c)) if person else "()"
     hidden = v.hidden_read(c) if (person or v.is_bot) and homes else None
-    owner_sql = f"COALESCE(r.owner_id,{_derived_owner('r')})"
+    r = "rd" if per_row else "r"  # the root's alias: one a caller's own row (often `r`) never has, when correlated
+    owner_sql = f"COALESCE({r}.owner_id,{_derived_owner(r)})"
     home = f"{owner_sql} IS NOT NULL AND {owner_sql} NOT IN {_qlist(sorted(hidden))}" if hidden is not None else "0"
-    member = f"EXISTS (SELECT 1 FROM {t('thread_members')} tm WHERE tm.thread_id=r.id AND tm.actor IN {names})"
-    meeting_term = meeting("r.id") if meeting else "0"
-    participant = "1" if owner else f"EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r='r')} WHERE value={me})"
-    # A legacy root (no stored audience) reads as _legacy_denial: by scope, with shared rooms' members read live.
+    member = f"EXISTS (SELECT 1 FROM {t('thread_members')} tm WHERE tm.thread_id={r}.id AND tm.actor IN {names})"
+    meeting_term = meeting(f"{r}.id") if meeting else "0"
+    participant = "1" if owner else f"EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r=r)} WHERE value={me})"
+    # A legacy root (no stored audience) reads as _legacy_denial: by scope, with shared rooms' members read live. A task
+    # room is read before its scope: in a CASE, so its participants (a JSON array per room) are never parsed for it.
     shared = sorted(v.shared_slugs(c, [b["id"] for b in H.bots(c)])) if person and legacies else []
+    first_human = _FIRST_HUMAN.format(r=r)
     legacy = (
-        f"(CASE COALESCE(r.scope,'direct') WHEN 'personal' THEN COALESCE(r.owner_id,{_FIRST_HUMAN.format(r='r')})={me} "
-        f"AND (COALESCE(r.room_key,'')<>'{STRATEGY_ROOM}' OR {1 if owner else 0}) "
-        f"WHEN 'shared' THEN {_LEGACY_ROOM_BOT.format(r='r')} IN {_qlist(shared)} ELSE {participant} END "
-        f"OR (r.kind='task' AND r.task_id IS NOT NULL))"
+        f"(CASE WHEN {r}.kind='task' AND {r}.task_id IS NOT NULL THEN 1 ELSE "
+        f"CASE COALESCE({r}.scope,'direct') WHEN 'personal' THEN COALESCE({r}.owner_id,{first_human})={me} "
+        f"AND (COALESCE({r}.room_key,'')<>'{STRATEGY_ROOM}' OR {1 if owner else 0}) "
+        f"WHEN 'shared' THEN {_LEGACY_ROOM_BOT.format(r=r)} IN {_qlist(shared)} ELSE {participant} END END)"
     )
     root = (
-        f"CASE WHEN r.audience IS NULL THEN {legacy} ELSE CASE r.audience "
+        f"CASE WHEN {r}.audience IS NULL THEN {legacy} ELSE CASE {r}.audience "
         f"WHEN 'company' THEN {1 if person else 0} "
-        f"WHEN 'team' THEN {'1' if owner else ('r.audience_group_id IN ' + chain)} "
+        f"WHEN 'team' THEN {'1' if owner else (f'{r}.audience_group_id IN ' + chain)} "
         f"WHEN 'members' THEN {member} "
-        f"WHEN 'task' THEN r.task_id IS NOT NULL "
+        f"WHEN 'task' THEN {r}.task_id IS NOT NULL "
         f"WHEN 'home' THEN {home} "
-        f"WHEN 'personal' THEN ((COALESCE(r.room_key,'')<>'' AND COALESCE(r.owner_id,{_FIRST_HUMAN.format(r='r')})={me}) "
+        f"WHEN 'personal' THEN ((COALESCE({r}.room_key,'')<>'' AND COALESCE({r}.owner_id,{first_human})={me}) "
         f"OR {member}) "
-        f"AND (COALESCE(r.room_key,'')<>'{STRATEGY_ROOM}' OR {1 if owner else 0}) "
+        f"AND (COALESCE({r}.room_key,'')<>'{STRATEGY_ROOM}' OR {1 if owner else 0}) "
         f"WHEN 'participants' THEN {participant} "
         f"WHEN 'meeting' THEN {meeting_term} ELSE 0 END END"
     )
@@ -984,6 +1022,11 @@ def readable_sql(
             f" OR {x}id IN (SELECT lm.conversation_id FROM {t('messages')} lm JOIN {t('conversations')} lr ON "
             f"lr.id=lm.conversation_id WHERE lr.audience='home' AND lm.legacy_audience IN "
             f"{_qlist(['shared:' + s for s in shared])})"
+        )
+    if per_row:
+        return (
+            f"(EXISTS (SELECT 1 FROM conversations rd WHERE rd.id=COALESCE({x}root_id,{x}id) AND ({root})){bound}) "
+            f"AND ({x}task_id IS NULL OR EXISTS (SELECT 1 FROM tasks rt WHERE rt.id={x}task_id))"
         )
     out = f"(COALESCE({x}root_id,{x}id) IN (SELECT r.id FROM {t('conversations')} r WHERE {root}){bound}) AND {fence}"
     return f"({out}) AND {conversation(x + 'id')}" if conversation else out
@@ -1141,6 +1184,20 @@ def stamp(c, row, conv, refs):
     row["origin_id"] = str(origin.get("origin_id") or "") or mint_origin(c)
     row["revision"] = int(origin.get("revision") or 0)
     row["restricted"] = restricted_for(conv, refs, row.get("in_reply_to"), (POSTING.get() or {}).get("attachments"), c)
+    if row["restricted"] and row.get("in_reply_to"):
+        from .live_privacy import sources
+
+        # A reply can outlive the source's refs after the thread's retention sweep.
+        meetings = sources(c)
+        try:
+            inherited = meetings.message(H.message(c, row["in_reply_to"], include_deleted=True))
+        except Problem:
+            # The read gate refuses ancestry that exceeds its depth limit or cannot be resolved.
+            inherited = set()
+        if inherited:
+            stored = _refs_of(row)
+            stored["live_meetings"] = sorted(inherited | meetings.references(stored))
+            row["refs"] = H._dump(stored)
     row["legacy_audience"] = None
     return row
 
@@ -2656,6 +2713,9 @@ def _post(
         raise Problem("empty", "Write the message", 422)
     # A key in a person's message to the Tools owner is refused before it is stored, delivered or mirrored.
     secret_drop.refuse(c, thread, actor, text, via, unmarked)
+    # A key in text from Slack or mail on a task is stored as a mark (backend/task_text_keys.py): typed in Tico, the
+    # request guard refused it already.
+    text = task_text_keys.mask_outside(c, thread, actor, text, via)
     given_refs, refs = refs, dict(refs or {})
     if via:
         refs["via"] = via
@@ -3968,6 +4028,45 @@ def revived_roots(c, v, roots=None):
     return _revived_roots(c, v, roots)
 
 
+REVIVED_CHUNK = 400  # roots per revival query when a caller names them (revived_within)
+
+
+def revived_within(c, v, within, args=None, *, source="conversations r"):
+    """revived_roots for only the finished-task roots that match `within` (SQL over a conversations row `r`, with
+    `args`): the roots a caller's own query could return, so a page that lists no task threads (the rail's lists,
+    Browse) checks none, and Catch up checks only the ones its reader is in, not every finished task in the company.
+    Each root's answer is kept for the snapshot, so the rail's lists and its Catch up walk check a root once. `source`
+    is the FROM naming `r` (an INDEXED BY whose WHERE terms `within` holds)."""
+    return revival_scope(c, v, within, args, source=source)[1]
+
+
+def revival_scope(c, v, within, args=None, *, source="conversations r"):
+    """(the finished-task roots that match `within`, those of them a post brings back): revived_within, with the roots
+    it checked, so a caller can test every other finished-task root out without reading its posts."""
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    roots = [
+        row[0]
+        for row in c.execute(
+            f"SELECT r.id FROM {source} WHERE r.parent_id IS NULL AND r.task_id IN "
+            f"(SELECT id FROM tasks WHERE status IN ({FINISHED_TASKS})) AND ({within})",
+            args or {},
+        )
+    ]
+    if not roots:
+        return frozenset(), frozenset()
+    from . import task_privacy
+
+    values = read_cache.cache(c)
+    key = ("revived_root", repr(task_privacy.actor(v.who)), v.role, v.runner_turn)
+    known = values.setdefault(key, {}) if values is not None else {}
+    missing = sorted(set(roots) - known.keys())
+    for start in range(0, len(missing), REVIVED_CHUNK):
+        part = missing[start : start + REVIVED_CHUNK]
+        found = _revived_roots(c, v, part)
+        known.update({root: root in found for root in part})
+    return frozenset(roots), frozenset(root for root in roots if known[root])
+
+
 def _revived_roots(c, v, roots):
     from . import task_privacy
 
@@ -4004,13 +4103,14 @@ def _revived_roots(c, v, roots):
 
 def prime_checks(c, rows):
     """Before the per-message check of these stored rows: seed the message lookups with them and the messages they reply
-    to, the tasks and pages their refs name, and each run they name (a bot's reply names its run) together, so a reader
+    to, the tasks and pages their refs name, and runs named by either together, so a reader
     with hundreds of bot replies to check costs a fixed number of statements, not several per reply."""
     if not rows:
         return
     from . import provenance_clock, task_privacy
 
-    runs, every = set(), [H._json(r.get("refs"), {}) or {} for r in rows]
+    ancestry = H.prime_message_rows(c, rows) or rows
+    runs, every = set(), [H._json(r["refs"], {}) or {} for r in ancestry]
     for refs in every:
         run = refs.get("run") if isinstance(refs, dict) else None
         aid = (refs.get("turn_id") if isinstance(refs, dict) else None) or (
@@ -4018,7 +4118,6 @@ def prime_checks(c, rows):
         )
         if isinstance(aid, str) and aid:
             runs.add(aid)
-    H.prime_message_rows(c, rows)
     task_privacy.prime_references(c, every)  # the tasks and pages their refs could name
     # A run whose tasks were worked out since the last provenance change needs only its messages; the rest (after any
     # new message, so most loads) get their whole provenance read together.
@@ -4027,16 +4126,17 @@ def prime_checks(c, rows):
     task_privacy.prime_reply_chains(c, runs)
 
 
-def task_open_sql(c, v, r="r", revived=frozenset()):
+def task_open_sql(c, v, r="r", revived=frozenset(), *, per_row=False):
     """SQL: a thread on a task is open unless its task is done or closed and no post the viewer reads has come
     since: a plain post in its subtree (readable_sql on the sub-thread), or a root in `revived` (revived_roots). A notice
     (what the task's own changes write into its thread) is not a post. The finish is the task's latest move to Done or Closed, so
-    a later edit to the task neither hides a thread someone posted in nor brings a finished one back."""
+    a later edit to the task neither hides a thread someone posted in nor brings a finished one back. `per_row`: the
+    post's readable check is readable_sql's per_row form, for a query that reaches this check for few rows."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     plain = (
         f"EXISTS (SELECT 1 FROM conversations s JOIN messages m ON m.conversation_id=s.id WHERE s.root_id={r}.id "
         f"AND m.kind<>'notice' AND m.deleted_at IS NULL AND m.restricted=0 AND m.legacy_audience IS NULL "
-        f"AND m.created_at>{_finish_sql('t')} AND {readable_sql(c, v, 's')})"
+        f"AND m.created_at>{_finish_sql('t')} AND {readable_sql(c, v, 's', per_row=per_row)})"
     )
     kept = f" OR {r}.id IN {_qlist(sorted(revived))}" if revived else ""
     return (
@@ -4394,13 +4494,10 @@ def apply_revision(c, origin, *, body=None, deleted=False):
         return None
     row = dict(row)
     if not deleted:  # a replicated edit is checked as a new message is, before its text is kept anywhere
-        secret_drop.refuse(
-            c,
-            thread_row(c, row["conversation_id"]),
-            str(origin.get("actor") or row["sender_id"]),
-            str(body or ""),
-            "slack",
-        )
+        thread, author = thread_row(c, row["conversation_id"]), str(origin.get("actor") or row["sender_id"])
+        secret_drop.refuse(c, thread, author, str(body or ""), "slack")
+        # A key in it on a task is kept as a mark in the message and its revision alike (backend/task_text_keys.py).
+        body = task_text_keys.mask_outside(c, thread, author, str(body or ""), "slack")
     row["refs"] = _refs_of(row)  # the table's JSON text, as H.message_view decodes it
     if c.execute("SELECT 1 FROM message_revisions WHERE origin_id=? AND revision=?", (oid, revision)).fetchone():
         return None
@@ -4562,7 +4659,7 @@ def brief(c, principal, row):
 
 def live_calls(c, ids):
     """{thread id: {"id", "live_count"}} for the threads among `ids` with a live call (backend/calls.py), one query a
-    chunk. A Tico Meet call counts the people in it; a Google Meet call, what its status source last said."""
+    chunk. A call whose End was pressed (ending) is not live here: nobody can join it. A Tico Meet call counts the people in it; a Google Meet call, what its status source last said."""
     out = {}
     for part in H.chunks(list(dict.fromkeys(ids))):
         out.update(
@@ -4570,7 +4667,8 @@ def live_calls(c, ids):
             for r in c.execute(
                 "SELECT k.thread_id, k.id, CASE WHEN k.provider='tico' THEN (SELECT COUNT(*) FROM call_participants p "
                 "WHERE p.call_id=k.id AND p.left_at IS NULL AND p.removed_at IS NULL) ELSE k.live_count END "
-                "FROM calls k WHERE k.state='live' AND k.thread_id IN (%s)" % ",".join("?" * len(part)),
+                "FROM calls k WHERE k.state='live' AND k.ending_at IS NULL AND k.thread_id IN (%s)"
+                % ",".join("?" * len(part)),
                 part,
             )
         )
@@ -5110,11 +5208,14 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
     `flat`: the thread and its whole readable open subtree in time order, every message at depth 0, paged by the same
     cursor (a seq) and caps, with `read_marks` for the root and each thread a message on the page is in. Each shown
     message has `reply_to` (reply_quotes) in both modes; the first page also has `bot_status` (thread_bot_status)."""
+    from . import task_privacy
+
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = require(c, v, thread_id)
     limit = max(1, min(int(limit or 50), MAX_PAGE))
     max_bytes = min(int(max_bytes or MAX_PAGE_BYTES), MAX_PAGE_BYTES)
     below = int(cursor) if cursor not in (None, "") else (1 << 62)
+    bot = task_privacy.chat_peer(c, v, row)
     # An old reader of a migrated Home opens only its root, for the history they read: there is no branch for them.
     old_only = legacy_reader_only(c, v, row)
     only_old = " AND legacy_audience IS NOT NULL" if old_only else ""
@@ -5180,12 +5281,20 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
         size += bytes_of
         pages.append(rows_of)
     next_cursor = pages[-1][0]["seq"] if more and pages else None
+    activity = []
+    if bot:
+        activity, cutoff = task_privacy.chat_activity(c, v, bot, next_cursor or 0, below)
+        if cutoff is not None:
+            pages = [block_rows for block_rows in pages if block_rows[0]["seq"] >= cutoff]
+            next_cursor = cutoff
     out = {
         "thread": {**view(c, v, row), **_earlier(c, v, row)},
         "breadcrumb": breadcrumb(c, v, row),
         "messages": [r for rows_of in reversed(pages) for r in rows_of],
         "next_cursor": next_cursor,
     }
+    if activity:
+        out["task_activity"] = activity
     if flat:
         out["read_marks"] = read_marks(c, v, [row["id"], *(r.get("thread_id") for r in out["messages"])])
     if cursor in (None, ""):

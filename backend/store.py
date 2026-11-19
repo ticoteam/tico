@@ -115,6 +115,11 @@ def is_poll(operation, result):
         return False
     if operation.endswith("/inputs"):
         return isinstance(result, dict) and not result.get("messages")
+    if operation.endswith("/complete"):
+        from .call_sessions import CLOSED_COMPLETION
+
+        # A call's closed lease has a content-free, repeatable acknowledgement.
+        return result == CLOSED_COMPLETION
     return operation.endswith(("/renew", "/events"))
 
 
@@ -383,7 +388,13 @@ TRIM_PAUSE = 0.5  # seconds slept after each write transaction
 TRIM_PAGE = 2000  # rows read per read transaction
 TRIM_READ_PAUSE = 0.05  # seconds slept between read pages
 TRIM_MAX = 50_000  # deletes one hourly pass makes at most
-_sleep = time.sleep  # the pauses go through this so tests can run without waiting
+
+
+def _sleep(seconds):
+    """The pauses go through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
+
+
 TRIM_ACTIONS = ("credential.revealed", "credential.sent_to_computer")
 TRIM_MARK = "credential-use-trim"
 
@@ -1148,13 +1159,17 @@ class Store:
         c.close()
 
     @contextmanager
-    def transaction(self, durable=False):
+    def transaction(self, durable=False, *, notify=False):
         """One write transaction. `durable` makes its commit reach the disk before the call returns, for a write
         that authorises an outside effect (finance's claim of a money transfer before the provider is called): the
         connection runs synchronous=FULL for this transaction and goes back to the pool at its default. SQLite refuses
-        to change the setting inside a transaction, so it is set before BEGIN, from `checkout`."""
+        to change the setting inside a transaction, so it is set before BEGIN, from `checkout`.
+        `notify` wakes open streams after background writes that produce changes. Request writes handle this in
+        `write` or `mutate`, which also record the caller."""
+        from . import events
         from .flight import begin
 
+        logged = None
         # The gate is released only after commit/rollback, including message-link maintenance.
         with ExitStack() as stack:
             c = None
@@ -1174,9 +1189,12 @@ class Store:
                 from . import provenance_clock
 
                 c.provenance_start = provenance_clock.current(c)
+                since = events.mark(c) if notify else None
                 yield c
                 message_links.refresh_dirty(c)
                 H.owed_sync(c)
+                if notify:
+                    logged = events.claim(c, since, None)
                 c.commit()
                 # Work that must see the committed rows (a delivery worker's doorbell) runs once the write is durable.
                 # A barrier (hubdb.durable_commit's WAL sync) runs first and its error is the request's: the write is
@@ -1197,6 +1215,8 @@ class Store:
                 raise
             finally:
                 done()
+        if logged:
+            self.ring(logged)
 
     def seed_goals(self, c):
         """`registry/goals.yaml`, once per goal (backend/goals.py `seed`): the first draft of the
@@ -1368,7 +1388,9 @@ class Store:
                         task_ids.update(task["id"] for task in rows)
                 for task_id in task_ids:
                     replay_auth.task(c, replay_principal, task_id)
-                privacy.require_payload(c, replay_principal, result)
+                # A replayed claim is checked as the first answer was (task_privacy.require_payload): a person's own
+                # Assistant room turn as that person.
+                privacy.require_payload(c, replay_principal, result, privacy.attempt_reader(c, replay_principal, aid))
                 if '/meetings/' in operation or operation.endswith('/meetings'):
                     from .meeting_items import redact
 

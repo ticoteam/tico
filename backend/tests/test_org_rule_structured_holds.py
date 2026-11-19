@@ -152,7 +152,7 @@ def test_the_third_structured_block_in_a_day_escalates_with_one_review_task(bloc
     assert all(json.loads(h["rule_ids"]) == [rule_id] for h in holds)
     assert [e["actor"] for e in events(api, "rules.escalated")] == ["bot:ops"] * 2
     assert len(events(api, "rules.blocked")) == 2
-    assert len(sql(api, "SELECT id FROM tasks WHERE title = 'Rule review'")) == 1
+    assert len(sql(api, "SELECT id FROM tasks WHERE title LIKE 'Held by: %'")) == 1
 
 
 # ---- letters: a do-not-contact by letter holds a bot's letter (backend/letters.py) --------------------------------

@@ -16,6 +16,7 @@ from backend import browser_commands as bc
 from backend import website_tools as real_tools
 from backend.store import Problem
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner
+from backend.tests.helpers.wait import wait_for
 
 PASSWORD = "canary-pw-7Q2x"
 CODE = "424242"
@@ -377,7 +378,7 @@ def test_the_frame_takes_at_most_one_screenshot_a_second(setup, tools):
     watchers = [threading.Thread(target=watch) for _ in range(3)]
     for w in watchers:
         w.start()
-    time.sleep(0.3)
+    wait_for(lambda: bc.MAILBOX.watchers.get("acct1") == 3, "all three watchers waiting on the picture")
     cmds = collect(s, s.host)
     assert [c["verb"] for c in cmds] == ["screenshot"]
     import base64
@@ -407,7 +408,7 @@ def test_a_computer_that_is_neither_the_host_nor_running_the_turn_gets_nothing(s
         token=other["token"],
     )
     thread, box = call(s, s.ops, "read")
-    time.sleep(0.3)
+    wait_for(lambda: bc.MAILBOX.queued(s.host["runner_id"]), "the read queued for the host")
     assert collect(s, other, wait=0) == []
     assert collect(s, s.own, wait=0) == []
     # The host stops being the host before it collects: it gets nothing and the bot is told.
@@ -561,11 +562,13 @@ def test_a_caller_that_goes_away_leaves_nothing_queued(setup, tools, monkeypatch
     monkeypatch.setattr(bc, "GONE_CHECK", 0.05)
 
     class Caller:
-        def __init__(self, gone):
+        def __init__(self, gone, asked=None):
             self.state = types.SimpleNamespace()
-            self.gone = gone
+            self.gone, self.asked = gone, asked
 
         async def is_disconnected(self):
+            if self.asked is not None:
+                self.asked.set()
             return self.gone
 
     async def go():
@@ -573,8 +576,12 @@ def test_a_caller_that_goes_away_leaves_nothing_queued(setup, tools, monkeypatch
         spot = bc.Place(s.host["runner_id"], "Host Mac", True)
         cancelled = bc._new(loop, spot, tools._picked(), "read", {})
         bc.MAILBOX.enqueue(cancelled)
-        waiting = asyncio.create_task(bc.wait_reply(Caller(False), cancelled, 30))
-        await asyncio.sleep(0.1)
+        asked = asyncio.Event()
+        waiting = asyncio.create_task(bc.wait_reply(Caller(False, asked), cancelled, 30))
+        try:
+            await asyncio.wait_for(asked.wait(), 10)  # the request is waiting, and has checked on its caller
+        except TimeoutError:
+            raise AssertionError("the waiting request never checked on its caller") from None
         waiting.cancel()
         with pytest.raises(asyncio.CancelledError):
             await waiting
@@ -629,8 +636,9 @@ def test_a_poll_left_open_by_a_stopped_runner_never_takes_the_restarted_runners_
     s = setup
     old = {}
     first = threading.Thread(target=lambda: old.update(cmds=collect(s, s.host, wait=10)))
+    polls_before = bc.MAILBOX.polls.get(s.host["runner_id"], 0)
     first.start()
-    time.sleep(0.3)
+    wait_for(lambda: bc.MAILBOX.polls.get(s.host["runner_id"], 0) == polls_before + 1, "the first poll is open")
     new = {}
     second = threading.Thread(target=lambda: new.update(cmds=collect(s, s.host, wait=10)))
     second.start()
@@ -652,3 +660,42 @@ def test_scrub_report_also_covers_a_short_current_fill_value():
         "account", bc.BrowserReport(ok=True, text=value, title=value, url=value, error=value), value
     )
     assert all(value not in str(getattr(report, field)) for field in ("text", "title", "url", "error"))
+
+
+def test_a_typed_secret_reaches_activity_as_the_verb_and_page_path_only(setup, tools, monkeypatch):
+    # E-607: a bot that types a secret into a website leaves the verb and page path in Activity, never the text. The
+    # real Activity logger writes the row (Review on c4b9a23: a fake logger hid that it refused the verb, after the
+    # site was already typed into).
+    s = setup
+
+    def real_log(conn, picked, who, verb, page, where, result="use"):
+        tools.logs.append((who.actor, verb, page, where, result))
+        real_tools.log(conn, picked, who, verb, page, where, result)
+
+    monkeypatch.setattr(tools, "log", real_log)
+    with s.api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO tools(id,name,kind,sites,created_by,created_at,updated_at) "
+            "VALUES('tool1','Acme','website','[\"acme.example\"]','human:ana',?,?)",
+            (real_tools.H.now(), real_tools.H.now()),
+        )
+    typed = "acme-typed-" + PASSWORD
+    thread, box = call(s, s.ops, "type", {"ref": "e3", "text": typed})
+    [cmd] = collect(s, s.host)
+    report(s, s.host, cmd)
+    assert done(thread, box).status_code == 200, box["r"].text
+    assert tools.logs == [("bot:ops", "type", "acme.example/home", "central", "use")]
+    with s.api.app.state.store.read() as c:
+        [row] = c.execute("SELECT method, path, detail FROM tool_calls WHERE tool_id='tool1'").fetchall()
+        assert tuple(row) == ("type", "acme.example/home", "central")
+        for table in ("events", "tool_calls"):
+            rows = c.execute(f"SELECT * FROM {table}").fetchall()
+            assert typed not in repr([tuple(r) for r in rows]), table
+
+
+def test_every_logged_browser_verb_is_one_activity_knows():
+    # Each verb the browser commands log is one the Activity logger, its API schema and its page take.
+    from backend.api_schemas.tools import WEBSITE_ACTIVITY_ROW
+
+    enum = WEBSITE_ACTIVITY_ROW["properties"]["verb"]["enum"]
+    assert set(bc.LOGGED) <= set(real_tools.VERBS) and set(real_tools.VERBS) == set(enum)

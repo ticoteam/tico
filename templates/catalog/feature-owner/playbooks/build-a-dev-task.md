@@ -72,9 +72,14 @@ exception or baseline entry), delete that entry in this pull request: a stale en
 ## 5. Check on your computer
 
 Run only the tests your change can break, at the head you will hand in: the test files for the code you changed and
-their nearest neighbours, one file at a time, with the commands in `knowledge/standards.md`. Never the whole suite or a
-full local CI run on this computer: the pull request's checks run the rest once it is ready. Record each command, its
-result and the head commit. A check you could not run is "not checked", with the reason.
+their nearest neighbours, one file at a time, with the commands in `knowledge/standards.md`. Never the whole suite by hand.
+
+Then, before the push that goes to review, commit and run the repository's pre-push check at that head: the one that
+runs the tests its pull request checks would select for your diff, named in the repository's CLAUDE.md or in
+`knowledge/standards.md` ({{app_name}}'s is `python3 scripts/pr_checks.py local`). Push and mark the pull request ready
+only after it passes: a red pull request run costs every reviewer and the CI a run, so find the failure here first. Do
+the same before each later push to a ready pull request. Record each command, its result (the check's receipt line
+where it prints one) and the head commit. A check you could not run is "not checked", with the reason.
 
 ## 6. Mark the pull request ready, once
 

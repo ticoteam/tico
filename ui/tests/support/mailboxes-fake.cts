@@ -197,10 +197,12 @@ export interface OpenOptions {
   mail?: Record<string, unknown[]>;
   skip?: boolean;
   theme?: string;
+  clock?: string;  // an ISO time: the page's timers run on a fake clock from the start (page.clock.fastForward)
 }
 async function open(browser: Browser, fake: MailboxesFake, google: GoogleFake, {hash = '#/tools', ready, width = 1440, height = 900, automations = {},
-  extra = () => undefined, mail = {}, skip = false, theme = ''}: OpenOptions = {}): Promise<{page: Page; seen: {errors: string[]}}> {
+  extra = () => undefined, mail = {}, skip = false, theme = '', clock = ''}: OpenOptions = {}): Promise<{page: Page; seen: {errors: string[]}}> {
   const page = await browser.newPage({viewport: {width, height}, serviceWorkers: 'block'});
+  if (clock) await page.clock.install({time: new Date(clock)});
   const seen = {errors: [] as string[]};
   page.on('pageerror', error => seen.errors.push(error.message));
   await page.addInitScript(skip => {

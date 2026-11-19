@@ -92,8 +92,9 @@ Metric = Literal[
 class FinanceConnectionRequest(Contract):
     """Connect a bank, Stripe or Brex with a stored credential. Mercury's token: the approver is a Mercury user other than
     the token's creator, who approves payments in Mercury; without one, payments stay off. Stripe's restricted key and
-    Brex's token need no approver. history_from is Brex's first day of history (Jan 1 of this year when left out); it is
-    read for Brex only."""
+    Brex's token need no approver. history_from is the first day of history Finance reads (Jan 1 of this year when left
+    out); the opening balance is the balance less the rows from that day on. transfer_account_id and capital_account_id
+    (Stripe only) name the lines its Connect transfers and Capital paydowns post to."""
 
     provider: Literal["mercury", "stripe", "brex"] = "mercury"
     credential_id: str = Field(min_length=1, max_length=120)
@@ -102,6 +103,8 @@ class FinanceConnectionRequest(Contract):
     token_creator_email: str | None = Field(None, max_length=200)
     server_ip: str | None = Field(None, max_length=64)
     history_from: str | None = Field(None, pattern=DAY)
+    transfer_account_id: str | None = Field(None, max_length=120)
+    capital_account_id: str | None = Field(None, max_length=120)
 
 
 class FinanceActionRequest(Contract):
@@ -1216,6 +1219,10 @@ def install(app, store, auth, mutate):
         """Connect Mercury, Stripe or Brex: the credential is tested and its accounts listed (outside any transaction), then
         the connection_create action maps them into the books. A finance admin's action; the Idempotency-Key is its key."""
         who = viewer(request)
+        stripe_only = [k for k in ("transfer_account_id", "capital_account_id") if getattr(body, k) is not None]
+        if stripe_only and body.provider != "stripe":
+            # Refused before the key is read or sent anywhere: a Stripe request missing its provider is not Mercury's.
+            raise Problem("invalid", f"{', '.join(stripe_only)} is for a Stripe connection (provider: stripe)", 422)
         if not read(lambda c: finance_reads.may_connect(c, who.actor)):
             raise Problem("denied", "connecting a bank is for finance admins", 403)
         if not read(lambda c: finance.may_use_credential(c, who.actor, body.credential_id)):
@@ -1226,17 +1233,18 @@ def install(app, store, auth, mutate):
         if why:
             raise Problem("invalid", why, 422)
         key = (request.headers.get("idempotency-key") or "").strip()
+        extra = [("name", body.name), ("history_from", body.history_from)]
         if body.provider == "mercury":
-            extra = (
-                ("name", body.name),
+            extra += [
                 ("approver_email", body.approver_email),
                 ("token_creator_email", body.token_creator_email),
                 ("server_ip", body.server_ip),
-            )
-        elif body.provider == "brex":
-            extra = (("name", body.name), ("history_from", body.history_from))
-        else:
-            extra = (("name", body.name),)
+            ]
+        if body.provider == "stripe":
+            extra += [
+                ("transfer_account_id", body.transfer_account_id),
+                ("capital_account_id", body.capital_account_id),
+            ]
         payload = {
             "provider": body.provider,
             "credential_id": body.credential_id,

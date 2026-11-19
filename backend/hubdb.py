@@ -2892,6 +2892,39 @@ def _next_number(conn, actor, task_id, pipeline_id, note=""):
         refuse(conn, actor, "number", "The team's task numbers have reached 999999999")
 
 
+def number_task(conn, actor, task_id, pipeline_id, note=""):
+    """Give a task with no number one in a pipeline that numbers its tasks, its label's letters with it: a task made
+    while its pipeline had no prefix keeps none ('' or NULL), so it takes the pipeline's now (`ticket_refs`)."""
+    found = _one(conn, "SELECT prefix FROM pipelines WHERE id=?", (pipeline_id,))
+    prefix = (found or {}).get("prefix")
+    if not prefix:
+        return
+    conn.execute(
+        "UPDATE tasks SET prefix=? WHERE id=? AND number IS NULL AND COALESCE(prefix, '')=''", (prefix, task_id)
+    )
+    _next_number(conn, actor, task_id, pipeline_id, note)
+
+
+def number_pipeline(conn, actor, pipeline_id, note=""):
+    """Number every task of a pipeline that has a prefix and no number yet (open, done and closed), oldest first, after
+    the team's highest number: a pipeline that gets its prefix late numbers the tasks it already holds. A number
+    already given never changes. Each numbered task has one history row; nobody is woken. Returns how many it
+    numbered."""
+    if not _one(conn, "SELECT 1 FROM pipelines WHERE id=? AND prefix IS NOT NULL AND prefix<>''", (pipeline_id,)):
+        return 0
+    ids = [
+        row["id"]
+        for row in _rows(
+            conn.execute(
+                "SELECT id FROM tasks WHERE pipeline_id=? AND number IS NULL ORDER BY created_at, id", (pipeline_id,)
+            )
+        )
+    ]
+    for task_id in ids:
+        number_task(conn, actor, task_id, pipeline_id, note)
+    return len(ids)
+
+
 def _labels(labels):
     """Labels are lower-case free text, one word or a hyphenated few, unique, in the order given."""
     out = []

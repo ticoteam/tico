@@ -43,23 +43,23 @@ switch, off until an owner or admin turns it on ([Computers](computers.md#subscr
 
 The four choices:
 
-- **Your Claude and ChatGPT subscriptions, plus Tico Gateway** (recommended). Bots do their main work on your Claude
+- **Your Claude and ChatGPT subscriptions, plus Tico Gateway**. Bots do their main work on your Claude
   and ChatGPT subscriptions. Personal plans are fine. Sign in with your own Claude and ChatGPT accounts in
   **Settings → Computers**, and don't share one login across your team. Until you sign in, bots run on Tico Medium 1.0
   through the Gateway, and they move to your subscriptions on their next turn once you do, with no restart. When a
   plan runs out, the bot finishes on the Gateway, after any other provider signed in on its computer. Decide and
   update drafts run on the Gateway.
-- **Your Claude and ChatGPT subscriptions only**. Bots wait until a Claude or ChatGPT account is signed in on their
+- **Your Claude and ChatGPT subscriptions only** (recommended). Bots wait until a Claude or ChatGPT account is signed in on their
   computer, and never spend the gateway key unless you pick a Tico model for them.
 - **Tico Gateway only**. Bots run on the Tico models you pick for them. A bot whose plan runs out finishes on the
   Gateway too.
 - **Your company's plans or API keys**. Bring your own: tick the providers, then sign in or add API keys in
   **Credentials**. As with subscriptions only, the gateway key is spent only for a bot you put on a Tico model.
 
-Tico's installer sets the recommended choice (`TICO_MODELS_PRESET=subscriptions-gateway` in the server's environment)
+Tico's installer sets the recommended choice, subscriptions only (`TICO_MODELS_PRESET=subscriptions` in the server's environment)
 until the owner saves another one here.
 
-While the recommended choice waits for a sign-in, the owner sees one **Needs you** item, "Sign in to Claude and
+While a subscriptions choice waits for a sign-in, the owner sees one **Needs you** item, "Sign in to Claude and
 ChatGPT, or add API keys", with **Open Settings → Computers**. It goes away by itself once both are signed in on a
 computer. Gateway work runs only on a computer that runs bots as their own user (Tico's Docker runner, see
 [below](#pick-a-tico-model-for-a-bot)) or on a Tico cloud machine (docs/cloud-machines.md). When no computer here can, the item also says "This computer can't run Gateway

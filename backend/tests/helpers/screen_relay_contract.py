@@ -55,7 +55,6 @@ class Service:
         self.process, self.thread, self.server, self.initial = None, None, None, None
         self.listener = self.bind()
         self.origin = f"http://127.0.0.1:{self.listener.getsockname()[1]}"
-        self.relay_url = self.origin
         self.start_rust()
         self.settings = replace(
             api_helpers.api_settings(root),
@@ -74,40 +73,34 @@ class Service:
         self.start_http()
 
     @staticmethod
-    def bind(port=0):
+    def bind():
+        """A listener on a port the OS picks, so no port is chosen here for another test to take."""
         listener = socket.socket()
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        listener.bind(("127.0.0.1", port))
+        listener.bind(("127.0.0.1", 0))
         listener.listen(128)
         return listener
 
     def start_rust(self):
         binary = self.binary or relay_binary()
-        # Both listeners bind port 0 and the relay reports the ports it took, so no port is picked here and released for
-        # another test to take. A restart keeps the relay's own port, the one the API was given: if another test took it
-        # once the old relay exited, the start is tried again for up to 10 seconds.
-        port = 0 if self.relay_url == self.origin else int(self.relay_url.rsplit(":", 1)[1])
-        for attempt in range(100):
-            self.process = subprocess.Popen(
-                [str(binary)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                env={
-                    **os.environ,
-                    "TICO_SCREEN_RELAY_KEY": KEY,
-                    "TICO_SCREEN_PYTHON_URL": self.origin,
-                    "TICO_SCREEN_RELAY_BIND": f"127.0.0.1:{port}",
-                    "TICO_SCREEN_PUBLIC_BIND": "127.0.0.1:0",
-                },
-            )
-            line = self.process.stdout.readline()
-            if line.startswith("screen relay listening on "):
-                break
-            self.process.wait(5)
-            if "AddrInUse" not in line or attempt == 99:
-                raise RuntimeError("Relay did not start: " + line)
-            time.sleep(0.1)
+        # The relay binds port 0 and reports the port it took, so no port is picked here for another test to take.
+        self.process = subprocess.Popen(
+            [str(binary)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env={
+                **os.environ,
+                "TICO_SCREEN_RELAY_KEY": KEY,
+                "TICO_SCREEN_PYTHON_URL": self.origin,
+                "TICO_SCREEN_RELAY_BIND": "127.0.0.1:0",
+                "TICO_SCREEN_PUBLIC_BIND": "127.0.0.1:0",
+            },
+        )
+        line = self.process.stdout.readline()
+        if not line.startswith("screen relay listening on "):
+            self.process.kill()
+            raise RuntimeError("Relay did not start: " + line)
         self.relay_url = "http://" + line.strip().split()[-1]
         self.public_origin = gateway_origin(self.process)
 
@@ -115,7 +108,7 @@ class Service:
         self.server = uvicorn.Server(uvicorn.Config(self.api.app, lifespan="off", log_level="error", access_log=False))
         self.thread = threading.Thread(target=self.server.run, kwargs={"sockets": [self.listener]}, daemon=True)
         self.thread.start()
-        self.eventually(lambda: self.server.started)
+        self.eventually(lambda: self.server.started, what="the API server started")
 
     def stop_http(self):
         if self.server:
@@ -123,38 +116,6 @@ class Service:
             self.thread.join(10)
             assert not self.thread.is_alive(), "owned API server did not stop"
             self.listener.close()
-
-    def restart_python(self):
-        port = int(self.origin.rsplit(":", 1)[1])
-        self.stop_http()
-        if self.initial:
-            self.initial.close()
-            self.initial = None
-        else:
-            self.api.__exit__(None, None, None)
-        self.settings = replace(self.settings, test_identities=dict(self.settings.test_identities))
-        self.api = TestClient(create_app(self.settings)).__enter__()
-        # stop_http released the port: another test may take it before this bind, so the bind is tried again.
-        for attempt in range(50):
-            try:
-                self.listener = self.bind(port)
-                break
-            except OSError:
-                if attempt == 49:
-                    raise
-                time.sleep(0.1)
-        self.start_http()
-
-    def restart_rust(self):
-        self.process.terminate()
-        self.process.wait(5)
-        self.start_rust()
-        self.eventually(
-            lambda: (
-                self.api.app.state.store.screen_sessions.healthy
-                and self.api.app.state.store.screen_sessions.boot == self.control("hello", get=True)["boot"]
-            )
-        )
 
     def control(self, op, get=False, **body):
         with httpx.Client(base_url=self.relay_url, headers={"Authorization": "Bearer " + KEY}, timeout=4) as http:
@@ -187,13 +148,14 @@ class Service:
         return f"/api/v2/runners/me/screen/{opened['session_id']}/ws"
 
     @staticmethod
-    def eventually(predicate, seconds=10):
+    def eventually(predicate, what="the condition", seconds=10):
+        """Polls the predicate until it holds. Raises naming `what` when the deadline passes first."""
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             if predicate():
                 return
             time.sleep(0.02)
-        raise AssertionError("condition did not become true within its deadline")
+        raise AssertionError(f"never became true within {seconds} s: {what}")
 
     def close(self):
         try:

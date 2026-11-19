@@ -53,14 +53,13 @@ AREAS = (
     ("backend/", "backend"),
     ("runner-rs/", "runner"),
     ("runner_support/", "runner"),
-    ("recorder/", "recorder"),
     ("templates/", "templates"),
     ("docs/", "docs"),
     ("scripts/", "scripts"),
     (".github/", "ci"),
 )
 USER_AREAS = frozenset({"ui", "clients", "app"})
-BACKEND_AREAS = frozenset({"backend", "runner", "recorder", "templates"})
+BACKEND_AREAS = frozenset({"backend", "runner", "templates"})
 GROUPS = (("high", "High risk"), ("user", "User-facing"), ("backend", "Backend"), ("internal", "Internal"))
 HIGH_RISK_HEADING = "## " + dict(GROUPS)["high"]
 CUT_SHORT = "The range has more commits than these notes read; the list stops at the last one read."
@@ -361,6 +360,20 @@ def high_risk(text: str) -> bool:
     """Whether notes built here (alone, or inside an approval issue's body) list a High risk item: a pull request whose
     Risk section or label says high. scripts/release_train.py reads it to decide whether a release needs a person."""
     return any(line.strip() == HIGH_RISK_HEADING for line in text.splitlines())
+
+
+def high_risk_prs(text: str) -> set[int]:
+    """The pull requests listed in the generated High risk section of the notes."""
+    in_section = False
+    numbers = set()
+    for line in text.splitlines():
+        if line.startswith("## ") or line == "---":
+            if in_section:
+                break
+            in_section = line == HIGH_RISK_HEADING
+        if in_section and (match := re.match(r"^### #([0-9]+) ", line)):
+            numbers.add(int(match[1]))
+    return numbers
 
 
 def cut_short(text: str) -> bool:

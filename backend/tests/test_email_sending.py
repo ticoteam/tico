@@ -9,7 +9,7 @@ import pytest
 from backend import email_sending as S
 from backend import task_asks
 from backend.store import H, Problem
-from backend.tests.helpers.api import headers, post, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import assign, claim, headers, post, ready, runner, setup_attempt  # noqa: F401
 from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.email_sending import (
     BOX,
@@ -417,6 +417,55 @@ def test_a_bot_managers_message_approves_nothing(inbox):
         row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
         assert not S.approved(c, inbox.app.state.auth, row, S.effective(c, BOX, "ops"))
     assert dispatch(inbox) == [] and dispatch(inbox) == []
+
+
+def test_a_send_for_a_task_asks_its_ok_under_that_task_titled_with_the_email(inbox, monkeypatch):
+    """Each held send filed a task of its own titled "Send an email", apart from the case it was for: three sends could
+    not be told apart, and none was linked to the case. A bot's send from its turn on a task, or naming one, asks its
+    OK on a sub-task of it titled with the email, one per send (on the case itself the next send's ask would replace
+    the first's and stop that email). The send names both tasks; a task its sender cannot read is refused, and a
+    sent email leaves the case open."""
+    from backend import task_relations
+
+    policy(inbox, undo_seconds=0, pacing_seconds=0)
+    monkeypatch.setattr(S, "classify", lambda *a, **k: {"legal_or_money": False, "status": "classified"})
+    r = runner(inbox, "ana")
+    assign(inbox, r, "ops")
+    ready(inbox, r, ["ops"])
+    case = post(inbox, "tasks", {"owner": "ops", "title": "Winberg: reply letter", "body": "Answer the letter."})
+    case = case.get("task", case)["id"]
+    token = claim(inbox, r)["token"]
+    with inbox.app.state.store.transaction() as c:
+        hidden = H.task_create(c, "human:ben", "Ben's own", "x", "human:ben", private=True, lint=False)["id"]
+
+    def send(subject, expected=200, **more):
+        body = {"mailbox": BOX, "raw": mime(subject=subject), **more}
+        return post(inbox, "email/sends", body, token=token, expected=expected)
+
+    from_turn = send("Reply to your letter")["send"]
+    named = send("Records enclosed", task_id=case[:8])["send"]
+    with inbox.app.state.store.read() as c:
+        for queued, subject in ((from_turn, "Reply to your letter"), (named, "Records enclosed")):
+            assert queued["state"] == "waiting_approval" and queued["task_id"] == case
+            sub = H.task(c, queued["approval_task_id"])
+            assert sub["title"] == f"Send: {subject} → {CONTACT}" and sub["private"]
+            assert task_relations.parent_of(c, sub["id"]) == case
+            assert task_asks.task_of(c, queued["approval_id"]) == sub["id"]
+            assert task_asks.standing(c, queued["approval_id"]) == task_asks.WAITING
+    assert from_turn["approval_task_id"] != named["approval_task_id"]
+    send("Other", expected=404, task_id=hidden)
+
+    alone = queue(inbox, raw=mime(subject="Records request"), actor="bot:ops")
+    with inbox.app.state.store.read() as c:
+        assert alone["task_id"] is None and task_relations.parent_of(c, alone["approval_task_id"]) is None
+
+    approved(inbox, from_turn)
+    assert dispatch(inbox) == [] and len(dispatch(inbox)) == 1
+    with inbox.app.state.store.read() as c:
+        assert task_asks.standing(c, from_turn["approval_id"]) == task_asks.USED
+        assert H.task(c, from_turn["approval_task_id"])["status"] == "done"
+        assert H.task(c, case)["status"] == "open"
+        assert task_asks.standing(c, named["approval_id"]) == task_asks.WAITING
 
 
 def test_never_refuses_and_names_the_setting(inbox):

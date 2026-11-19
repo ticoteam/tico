@@ -437,7 +437,7 @@ def test_tico_calendars_wake_the_same_automations_as_google_ones(api, google):
 # ---------------------------------------------------------------- the appointment routes
 
 
-def test_the_recorders_call_reads_todays_meetings_live_with_no_snapshot(api, google):
+def test_the_appointments_read_gives_todays_meetings_live_with_no_snapshot(api, google):
     google.put(ANA, "m1", hangoutLink="https://meet.google.com/abc-defg-hij")
     google.put(ANA, "hold", attendees=[])  # a hold with nobody else and no link is no meeting
     read = get(api, "calendar/appointments?calendar=" + ANA)

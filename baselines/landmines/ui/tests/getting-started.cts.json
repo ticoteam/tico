@@ -1,0 +1,6 @@
+{
+  "ui/tests/getting-started.cts": {
+    "no-fixed-wait-ui": 3,
+    "no-raised-timeout": 1
+  }
+}

@@ -41,7 +41,7 @@ TAGS = {
     "Needs you": "What is waiting on the signed-in person: questions, tasks, approvals.",
     "Meetings": "Recorded meetings.",
     "Calls": "Calls in a thread (docs/meet.md): a Google Meet, or a Tico Meet call with audio and screen share, a live "
-    "transcript posted to the thread when it ends, and bots that listen. Joining a Tico Meet call hands back a token for "
+    "transcript posted to the thread when it ends, and bots that listen and, in Tico Meet, answer aloud. Joining a Tico Meet call hands back a token for "
     "audio and screen share only, never a camera; joining a Google Meet hands back its link.",
     "Files": "What a bot creates, revises or delivers, listed on its page (docs/files.md).",
     "Pages": "HTML pages bots publish and keep current (docs/pages.md): a file with a cadence, a data date and a status line.",

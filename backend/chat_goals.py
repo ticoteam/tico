@@ -9,6 +9,7 @@ from pydantic import Field
 from . import models as M, providers
 from .store import H, Problem, bot_readiness, readiness_document, encode
 from . import bot_settings as BS
+from . import read_cache
 from .api_contract import api_v2
 
 TICO_COMMANDS = [
@@ -54,7 +55,7 @@ def capabilities(c, auth, conv):
     if len(bots) != 1 or bots[0] == auth.settings.assistant_bot:
         return None, False, []
     bot = bots[0]
-    config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
+    config = read_cache.one(c, BS.ONE_SQL, (bot,))
     runtime, _ = providers.bot_choice(c, auth.settings, json.loads(config[0] or "{}") if config else {})
     row = c.execute(
         "SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "

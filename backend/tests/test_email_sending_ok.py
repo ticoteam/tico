@@ -10,7 +10,7 @@ from backend import email_sending as S
 from backend import mailbox_access as MA
 from backend import task_asks as K
 from backend.auth import Auth, Identity
-from backend.store import H
+from backend.store import H, Problem
 from backend.tests.helpers.email_sending import BOX, incoming, mime
 from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 
@@ -69,8 +69,9 @@ def test_a_held_email_asks_for_an_ok_on_a_task_of_its_own(store):
         grant = K.grant(c, rid)
         assert (grant["subject"], grant["asked_by_id"]) == ("email_send:" + queued["id"], "bot:ops")
         task = H.task(c, K.task_of(c, rid))
-        # Private to its parties, titled for the act only: the email's subject line stays in its preview.
-        assert (task["owner_id"], task["title"], bool(task["private"])) == ("bot:ops", "Send an email", True)
+        # Private to its parties, titled with the email so sends waiting side by side differ.
+        title = "Send: Update → contact@vendor.example"
+        assert (task["owner_id"], task["title"], bool(task["private"])) == ("bot:ops", title, True)
         ask = H.task_view(c, task["id"], ANA)["to_leave"][-1]
         assert (ask["kind"], ask["who"], ask["shows"]) == ("ok", ANA, ["email:" + queued["id"]])
     assert _pass(store) is None
@@ -134,6 +135,38 @@ def test_an_ok_whose_giver_may_no_longer_approve_does_not_send_and_is_asked_agai
         assert row["state"] == "waiting_approval" and row["approval_id"] != queued["approval_id"]
         assert K.standing(c, queued["approval_id"]) == K.WITHDRAWN
         assert H.task_view(c, K.task_of(c, row["approval_id"]), BEN)["to_leave"][-1]["who"] == BEN
+
+
+def test_an_ok_from_the_generic_preview_without_the_email_is_refused_up_front(store):
+    """Seen live: the OK was given from GET /api/v2/oks/{id}, which never shows the body, so `approved` never counted
+    it, and the next pass withdrew it as if the rule changed and asked again. It is refused when given instead."""
+    queued = _queue(store)
+    rid = queued["approval_id"]
+    with store.read() as c:
+        shown = K.preview(c, ANA, rid, own_click=True)["shown_hash"]
+    with pytest.raises(Problem) as refused, store.transaction() as c:
+        K.give_ok(c, ANA, rid, shown, own_click=True, ctx=K.Context(auth=store.auth))
+    assert (refused.value.code, refused.value.status) == ("email_not_shown", 409)
+    with store.read() as c:
+        assert K.standing(c, rid) == K.WAITING
+    _ok(store, queued)  # once they open the email itself, the same OK goes through
+    with store.read() as c:
+        assert K.standing(c, rid) == K.OK
+        assert S.approved(c, store.auth, _row(c, queued["id"]), S.effective(c, BOX, "ops"))
+
+
+def test_an_ok_whose_giver_was_never_shown_the_email_is_asked_again_saying_so(store, monkeypatch):
+    queued = _queue(store)
+    _ok(store, queued)
+    with store.transaction() as c:
+        c.execute("DELETE FROM email_send_previews WHERE send_id=?", (queued["id"],))  # an OK given before this check
+    said = []
+    withdraw = K.withdraw
+    monkeypatch.setattr(K, "withdraw", lambda c, rid, why: (said.append(why), withdraw(c, rid, why)))
+    assert _pass(store) is None
+    assert said == ["The email was OK'd without opening it in full: open it and OK it again"]
+    with store.read() as c:
+        assert _row(c, queued["id"])["approval_id"] != queued["approval_id"]
 
 
 def test_a_push_past_its_task_sends_nothing(store):

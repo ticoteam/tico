@@ -50,16 +50,25 @@ SCHEMAS.update(
         ),
         "Usage": obj(
             {
-                "from": "s",
-                "to": "s",
+                "from": {
+                    "type": "string",
+                    "description": "The window's start as asked: a UTC day (YYYY-MM-DD) or a UTC time (ISO-8601, Z)",
+                },
+                "to": {
+                    "type": "string",
+                    "description": "The window's end as asked: a UTC day (YYYY-MM-DD, included) or a UTC time (ISO-8601, Z, excluded)",
+                },
                 "prices_as_of": {"type": "string", "description": "The date the price table was read"},
-                "group": {"enum": ["bot", "day", "routine", "task", "harness", "model", "effort", "subscription"]},
+                "group": {
+                    "enum": ["bot", "day", "hour", "routine", "task", "harness", "model", "effort", "subscription"]
+                },
                 "department": "n",
                 "totals": ref("UsageFigures"),
                 "rows": items(
                     {
                         "type": "object",
-                        "description": "By bot: bot, name, department; by day: day; by routine: "
+                        "description": "By bot: bot, name, department; by day: day; by hour: hour, its UTC start "
+                        "(YYYY-MM-DDTHH:00:00Z), every hour of the window up to now in order, empty ones as zeros; by routine: "
                         "routine (null for runs that came from none), title, bot, name; by task: value and name (its title, "
                         "'A private task', or null and 'Chats and other runs' for runs with none). Every row has the "
                         "usage figures and `share`, its part of the total (estimate plus API-equivalent)",

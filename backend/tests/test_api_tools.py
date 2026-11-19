@@ -3,19 +3,44 @@ sees only what they hold, and no key value is ever in an answer except the vault
 
 Ana owns the company and Ben is an admin (both credential administrators); Cara is a member."""
 
+import base64
+import ipaddress
 import json
-from types import SimpleNamespace
 
+import httpx
 import pytest
 
-from backend import api_tools
+from backend import api_tools, egress
+from backend.credentials import FILE_MIGRATION
 from backend.store import Problem
-from backend.tests.helpers.api import get, headers, post
+from backend.tests.helpers.api import assign, get, headers, post, ready, runner
 from backend.tests.helpers.credentials import explicit_only, setup
 from backend.tests.helpers.api_tools import key, level, tool
 
 SECRET_RW = "acme-close-synthetic-rw-0011223344"
 SECRET_R = "acme-close-synthetic-ro-5566778899"
+PUBLIC = "93.184.215.14"
+
+
+class Close:
+    """Close's API at the network edge: answers every request with the status it is set to, and records each one."""
+
+    def __init__(self):
+        self.status, self.seen = 200, []
+
+    def __call__(self, request):
+        self.seen.append(request)
+        body = {"id": "synthetic"} if self.status == 200 else {"error": "synthetic"}
+        return httpx.Response(self.status, json=body)
+
+
+@pytest.fixture
+def close(monkeypatch):
+    """Close's name resolves to a public address, and checks go to a fake Close at that address."""
+    vendor = Close()
+    monkeypatch.setattr(egress, "resolve", lambda host: [ipaddress.ip_address(PUBLIC)])
+    monkeypatch.setattr(api_tools, "TRANSPORT", httpx.MockTransport(vendor))
+    return vendor
 
 
 def choose(api, tid, subject):
@@ -62,7 +87,7 @@ def test_a_member_sees_only_the_tools_they_hold_and_cannot_manage_them(api):
     tid = tool(api)["id"]
     key(api, tid, SECRET_RW)
     level(api, tid, "bot:ops", "read_write")
-    rows = lambda token: {r["id"]: r for r in get(api, "tool-index", token)["rows"]}  # noqa: E731
+    rows = lambda token: {r["id"]: r for r in get(api, "tool-index", token)["rows"]}  # noqa: E731 - a lookup used 3 times
     assert "api:" + tid in rows("ben-test")
     assert "api:" + tid not in rows("cara-test")
     get(api, f"api-tools/{tid}", "cara-test", expected=404)
@@ -77,28 +102,79 @@ def test_a_member_sees_only_the_tools_they_hold_and_cannot_manage_them(api):
     assert len(get(api, f"api-tools/{tid}")["access"]) == 2
 
 
-def test_a_check_marks_a_401_key_rejected_and_a_2xx_working(api, monkeypatch):
+def test_a_demoted_key_adder_can_remove_a_rotated_key_only_while_the_tool_is_visible(api):
+    setup(api)
+    tid = tool(api)["id"]
+    cid = key(api, tid, SECRET_RW, token="ben-test")["id"]
+    path = f"/api/v2/api-tools/{tid}/keys/{cid}"
+    assert api.patch(path, headers=headers(), json={"value": SECRET_RW + "rotated"}).status_code == 200
+    api.app.state.store.settings.credential_admins = ("ana@acme.example",)
+    assert api.delete(path, headers=headers("ben-test")).status_code == 404
+    assert api.delete(f"/api/v2/credentials/{cid}", headers=headers("ben-test")).status_code == 403
+
+    r = api.patch(f"/api/v2/api-tools/{tid}", headers=headers(), json={"audience": {"people": ["ben", "cara"]}})
+    assert r.status_code == 200, r.text
+    page = get(api, f"api-tools/{tid}", "ben-test")
+    assert not page["can_manage"] and page["keys"][0]["can_remove"] and not page["keys"][0]["preview"]
+    assert not get(api, f"api-tools/{tid}", "cara-test")["keys"][0]["can_remove"]
+    assert api.delete(path, headers=headers("cara-test")).status_code == 403
+    assert get(api, f"api-tools/{tid}")["keys"][0]["id"] == cid
+    assert api.delete(path, headers=headers("ben-test")).json()["deleted"]
+    with api.app.state.store.read() as c:
+        assert (
+            c.execute("SELECT actor FROM events WHERE action='tool.key_deleted' AND target=?", (tid,)).fetchone()[0]
+            == "human:ben"
+        )
+
+
+def test_a_person_whose_computer_brought_a_key_over_can_remove_it_like_one_they_added(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='ops'")  # Ben's bot, on Ben's computer
+    machine = runner(api, operator="ben")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (json.dumps(["ops"]), FILE_MIGRATION))
+    values = {"bot": "ops", "credentials": [{"env": "QA_MOVED_KEY", "value": "fixture-moved-value-123456"}]}
+    post(api, "runner-credential-migration", values, machine["token"])
+    with api.app.state.store.read() as c:
+        cid, tid = c.execute("SELECT id,tool_id FROM credentials WHERE env='QA_MOVED_KEY'").fetchone()
+    path = f"/api/v2/api-tools/{tid}/keys/{cid}"
+    # As in the rotated-key case above: Ben no longer manages credentials, and sees the tool through its audience.
+    api.app.state.store.settings.credential_admins = ("ana@acme.example",)
+    r = api.patch(f"/api/v2/api-tools/{tid}", headers=headers(), json={"audience": {"people": ["ben", "cara"]}})
+    assert r.status_code == 200, r.text
+    page = get(api, f"api-tools/{tid}", "ben-test")
+    assert not page["can_manage"] and page["keys"][0]["can_remove"]
+    assert not get(api, f"api-tools/{tid}", "cara-test")["keys"][0]["can_remove"]
+    assert api.delete(path, headers=headers("cara-test")).status_code == 403
+    assert api.delete(path, headers=headers("ben-test")).json()["deleted"]
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM credentials WHERE id=?", (cid,)).fetchone()
+        assert (
+            c.execute("SELECT actor FROM events WHERE action='tool.key_deleted' AND target=?", (tid,)).fetchone()[0]
+            == "human:ben"
+        )
+
+
+def test_a_check_marks_a_401_key_rejected_and_a_2xx_working(api, close):
     setup(api)
     tid = tool(api)["id"]
     key(api, tid, SECRET_RW)
     level(api, tid, "bot:ops", "read_write")
-    sent = []
-
-    def answer(url, hdrs, params):
-        sent.append((url, hdrs, params))
-        return api_tools.Reply(answer.code)
-
-    monkeypatch.setattr(api_tools, "send_check", answer)
-    answer.code = 401
+    close.status = 401
     got = post(api, f"api-tools/{tid}/check", {})
     assert (got["ok"], got["status_code"], got["detail"]) == (False, 401, "Key rejected")
-    assert sent[0][0] == "https://api.close.com/api/v1/me/" and sent[0][1]["Authorization"].startswith("Basic ")
+    sent = close.seen[0]
+    assert sent.url.host == PUBLIC and sent.url.path == "/api/v1/me/" and sent.headers["Host"] == "api.close.com"
+    assert base64.b64decode(sent.headers["Authorization"][len("Basic ") :]).decode().partition(":")[0] == SECRET_RW
     row = {r["id"]: r for r in get(api, "tool-index")["rows"]}["api:" + tid]
     assert row["status"] == {"tone": "fail", "text": "Key rejected"} and row["needs_you"]
-    answer.code = 200
+    close.status = 200
     assert post(api, f"api-tools/{tid}/check", {})["detail"] == "Working"
     assert get(api, f"api-tools/{tid}")["status"] == {"tone": "ok", "text": "Working"}
-    answer.code = 500
+    close.status = 500
     assert post(api, f"api-tools/{tid}/check", {})["detail"].startswith("Check failed")
     # The background loop checks a tool once its last check is old, its key on the proxy or on computers alike.
     with api.app.state.store.transaction() as c:
@@ -110,9 +186,8 @@ def test_a_check_marks_a_401_key_rejected_and_a_2xx_working(api, monkeypatch):
         assert api_tools.due(c) == [tid]
 
 
-def test_no_answer_carries_a_key_value_but_the_vaults_reveal(api, monkeypatch):
+def test_no_answer_carries_a_key_value_but_the_vaults_reveal(api, close):
     setup(api)
-    monkeypatch.setattr(api_tools, "send_check", lambda url, hdrs, params: api_tools.Reply(200))
     seen = []
     tid = tool(api)["id"]
     seen.append(json.dumps(key(api, tid, SECRET_RW)))
@@ -145,7 +220,7 @@ def test_no_answer_carries_a_key_value_but_the_vaults_reveal(api, monkeypatch):
         assert c.execute("SELECT count(*) FROM credentials WHERE tool_id=?", (tid,)).fetchone()[0] == 0
 
 
-def test_a_webhook_or_signing_secret_of_a_known_service_is_no_tools_key_and_reaches_the_bot_as_itself(api):
+def test_a_webhook_or_signing_secret_of_a_known_service_gets_no_tool(api):
     """A bot checks a delivery's signature with the secret itself: put on GitHub's or Stripe's proxied tool, the run
     would hold a proxy token in its place and every signature would fail."""
     setup(api)
@@ -162,8 +237,8 @@ def test_a_webhook_or_signing_secret_of_a_known_service_is_no_tools_key_and_reac
 
 
 def test_a_key_stored_outside_tools_gets_a_tool_on_the_proxy_only_for_a_known_service(api):
-    """Settings' vault (and a chat card, and a computer's migration) store through the vault: each tool key lands on a
-    tool in the same write. A known service's key fills that service's tool while it has no Read and write key."""
+    """Settings' vault and a chat card store through the vault: each tool key lands on a tool in the same write. A known
+    service's key fills that service's tool while it has no Read and write key."""
     setup(api)
     tid = tool(api)["id"]  # Close CRM, no key yet
     close = post(api, "credentials", {"name": "Close API key", "env": "CLOSE_API_KEY", "secret": SECRET_RW})["id"]
@@ -187,15 +262,21 @@ def test_a_key_stored_outside_tools_gets_a_tool_on_the_proxy_only_for_a_known_se
     rows = {r["id"]: r for r in get(api, "tool-index")["rows"]}
     assert {"api:" + tid, "api:" + keys[own], "api:" + keys[second]} <= set(rows)
     assert rows["api:" + keys[own]]["status"]["text"] == "Not checked" and not rows["api:" + keys[own]]["needs_you"]
-    # A key a bot already uses from its computer's files (the file migration) stays on computers, known service or not.
+
+
+def test_a_key_a_computer_migrates_from_its_files_stays_on_computers(api):
+    """A key a bot already uses from its computer's files moves into the vault through the migration, and its tool
+    stays on computers, a known service or not."""
+    setup(api)
+    machine = runner(api)
+    assign(api, machine, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,"
-            "updated_by) VALUES('c-file','STRIPE_API_KEY (ops)','api_key','STRIPE_API_KEY','',x'01',x'01',"
-            "'Computer migration','2026-11-05T00:00:00Z','2026-11-05T00:00:00Z','runner:r1')"
-        )
-        filed = api_tools.ensure_tool(c, SimpleNamespace(actor="runner:r1"), "c-file", from_computer=True)
-        assert tuple(c.execute("SELECT service, delivery FROM tools WHERE id=?", (filed,)).fetchone()) == (
-            "stripe",
-            "computer",
-        )
+        c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (json.dumps(["ops"]), FILE_MIGRATION))
+    values = {"bot": "ops", "credentials": [{"env": "STRIPE_API_KEY", "value": SECRET_R + "-stripe"}]}
+    post(api, "runner-credential-migration", values, machine["token"])
+    with api.app.state.store.read() as c:
+        service, delivery = c.execute(
+            "SELECT t.service, t.delivery FROM credentials k JOIN tools t ON t.id = k.tool_id "
+            "WHERE k.env = 'STRIPE_API_KEY'"
+        ).fetchone()
+    assert (service, delivery) == ("stripe", "computer")

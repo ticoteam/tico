@@ -356,6 +356,13 @@ class Settings:
     # one bot may check in a UTC day, and how many checks run at once (past that, an output goes through unchecked, `busy`).
     rules_check_daily_drafts: int = 200
     rule_check_concurrency: int = 8
+    # Each API client's fair share of the server (backend/fair_share.py): requests running at once and requests a
+    # minute, for one API token or service key, and for one bot or one person's Assistant. 0 turns that limit off.
+    # The app itself reads a task once when it opens and once per change after that, a few a minute.
+    fair_share_token_concurrent: int = 4
+    fair_share_token_per_minute: int = 240
+    fair_share_bot_concurrent: int = 8
+    fair_share_bot_per_minute: int = 600
     company_file_data: str = field(default="", repr=False)
     # Whether the installer named a company file at all, apart from whether its text could be read, and why not: an
     # empty or unreadable file is a failed import the owner sees.
@@ -367,9 +374,16 @@ class Settings:
     default_runtime: str = ""
     default_model: str = ""
     # The models choice the installer asks for (backend/models_preset.py; scripts/install.sh writes
-    # TICO_MODELS_PRESET=subscriptions-gateway for the recommended setup). First boot only, like the three above.
+    # TICO_MODELS_PRESET=subscriptions for the recommended setup). First boot only, like the three above.
     models_preset: str = ""
     credential_kms_key: str = ""
+    # A hosted company's own KMS settings (setup/cell.py writes them; backend/credentials.py `CredentialCipher`): its id as
+    # the KMS encryption context, so one company's access cannot unwrap another's key under the cell's one KMS key, and
+    # its own AWS access key (a container cannot use the host's role). Unset: today's context and boto's default chain.
+    credential_kms_context: str = ""
+    credential_kms_access_key_id: str = ""
+    credential_kms_secret_access_key: str = field(default="", repr=False)
+    credential_kms_region: str = ""
     # The Slack gateway (backend/slack_gateway.py): off unless the server configuration says so.
     # The thresholds are the routing rules in docs/slack-gateway.md; the tokens are read by
     # `slack_credentials()` in the gateway process only.
@@ -671,6 +685,10 @@ class Settings:
             ),
             rules_check_daily_drafts=max(0, int(os.environ.get("TICO_RULES_CHECK_DAILY", "") or 200)),
             rule_check_concurrency=max(1, int(os.environ.get("TICO_RULE_CHECK_CONCURRENCY", "") or 8)),
+            fair_share_token_concurrent=max(0, int(os.environ.get("TICO_FAIR_SHARE_TOKEN_CONCURRENT", "") or 4)),
+            fair_share_token_per_minute=max(0, int(os.environ.get("TICO_FAIR_SHARE_TOKEN_PER_MINUTE", "") or 240)),
+            fair_share_bot_concurrent=max(0, int(os.environ.get("TICO_FAIR_SHARE_BOT_CONCURRENT", "") or 8)),
+            fair_share_bot_per_minute=max(0, int(os.environ.get("TICO_FAIR_SHARE_BOT_PER_MINUTE", "") or 600)),
             **_company_file_fields(rehearsal),
             enabled_providers=tuple(
                 part.strip().lower() for part in os.environ.get("TICO_ENABLED_PROVIDERS", "").split(",") if part.strip()
@@ -679,6 +697,10 @@ class Settings:
             default_model=os.environ.get("TICO_DEFAULT_MODEL", "").strip(),
             models_preset=os.environ.get("TICO_MODELS_PRESET", "").strip().lower(),
             credential_kms_key=os.environ.get("TICO_CREDENTIAL_KMS_KEY", ""),
+            credential_kms_context=os.environ.get("TICO_CREDENTIAL_KMS_CONTEXT", "").strip(),
+            credential_kms_access_key_id=os.environ.get("TICO_CREDENTIAL_KMS_ACCESS_KEY_ID", "").strip(),
+            credential_kms_secret_access_key=os.environ.get("TICO_CREDENTIAL_KMS_SECRET_ACCESS_KEY", "").strip(),
+            credential_kms_region=os.environ.get("TICO_CREDENTIAL_KMS_REGION", "").strip(),
             slack_gateway_enabled=not rehearsal and os.environ.get("TICO_SLACK_GATEWAY_ENABLED", "0") == "1",
             slack_team_id=os.environ.get("SLACK_TEAM_ID", "").strip(),
             slack_app_id=os.environ.get("SLACK_APP_ID", "").strip(),

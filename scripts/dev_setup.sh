@@ -72,9 +72,12 @@ if ! { [ -f .venv/.dev-setup ] && [ "$(cat .venv/.dev-setup)" = "$py_stamp" ] &&
 fi
 
 # 3. node_modules, from package-lock.json (Biome, tsc, esbuild and Playwright's scripts).
-command -v node >/dev/null 2>&1 || fail "needs Node 22 or later on PATH"
+# Node 22.18 is the first 22 that strips types by default (the .cts scripts); package.json engines says the same.
+command -v node >/dev/null 2>&1 || fail "needs Node 22.18 or later on PATH"
 node_major=$(node -p 'process.versions.node.split(".")[0]')
-[ "$node_major" -ge 22 ] || fail "needs Node 22 or later; this is $(node --version)"
+node_minor=$(node -p 'process.versions.node.split(".")[1]')
+{ [ "$node_major" -gt 22 ] || { [ "$node_major" -eq 22 ] && [ "$node_minor" -ge 18 ]; }; } ||
+  fail "needs Node 22.18 or later; this is $(node --version)"
 node_stamp=$(stamp_of "node $node_major" "lock $(git hash-object package-lock.json)")
 if ! { [ -f node_modules/.dev-setup ] && [ "$(cat node_modules/.dev-setup)" = "$node_stamp" ]; }; then
   npm ci --no-audit --no-fund --update-notifier=false --prefer-offline --loglevel=error >/dev/null

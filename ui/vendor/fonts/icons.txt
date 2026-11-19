@@ -2,6 +2,7 @@ account_balance
 account_balance_wallet
 account_tree
 add
+add_circle
 alt_route
 analytics
 api
@@ -85,6 +86,7 @@ image
 inbox
 integration_instructions
 inventory_2
+key
 key_vertical
 label
 lightbulb
@@ -169,6 +171,7 @@ travel_explore
 troubleshoot
 unarchive
 unsubscribe
+upload
 verified_user
 vertical_align_top
 view_agenda

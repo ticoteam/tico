@@ -34,7 +34,13 @@ TRANSPORT = None  # tests' fake HQ, never a live company database
 RETENTION = 90 * 86400  # bodies and codes; metadata stays
 PURGE_EVERY = 600  # reads refuse expired content before the next purge
 CONNECTION_TIMEOUT = 15  # includes headers and a slow-drip response, not just each socket read
-now = time.time  # tests' controlled clock
+
+
+def now():
+    """Epoch seconds: the tests' controlled clock. A test replaces this, not time.time for the whole process."""
+    return time.time()
+
+
 AUDIENCES = ('company', 'team')
 
 

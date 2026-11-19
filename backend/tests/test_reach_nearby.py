@@ -541,8 +541,9 @@ def test_a_bot_two_levels_down_is_refused_a_person_whatever_it_shares_with_them(
     for title in ("Straight to Ben",):
         task(api, "ops-test", "human:ben", title=title, expected=409)
     refused = message(api, "ops-test", "human:ben", "A question.", expected=409, refs={"task": [child["id"]]})
-    assert refused["error"]["code"] == "reach_closed" and refused["error"]["via"] == "bot:product-design"
-    assert "Send it to product-design, who can pass it on." in refused["error"]["detail"]
+    # Ben wrote to ops this week, so the refusal sends it to file the work for him from that message, not upward.
+    assert refused["error"]["code"] == "reach_closed" and refused["error"]["via"] is None
+    assert f"--from-message {asked['id']}" in refused["error"]["detail"], refused
     # Handing Ben the task is checked the same way.
     r = api.post(
         f"/api/v2/tasks/{child['id']}/owner",
@@ -681,3 +682,110 @@ def test_a_bot_reaches_the_bot_that_worked_the_task_in_an_earlier_stage(api):
     with api.app.state.store.read() as c:  # on the task: passes (raises nothing)
         reach.check(c, Identity("bot:ops", "bot", agent="test"), "bot:finance", "task", task_id=copy["id"])
     task(api, "ops-test", "bot:finance", title="Something new for Finance", expected=409)
+
+
+def test_a_task_filed_for_the_person_from_their_message_lets_the_bot_ask_them_until_it_ends(api):
+    """Ben asks ops, two levels down, for work. Filed for him from his message, the task names him as requester, so
+    ops's ask on it reaches him; once the task is done the same ask is refused again."""
+    two_levels_down(api)
+    said = message(api, "ben-test", "ops", "Send me your questions for the launch note")
+    filed = task(
+        api,
+        "ops-test",
+        "bot:ops",
+        title="Questions for the launch note",
+        for_actor="human:ben",
+        from_message=said["id"],
+    )
+    assert filed["requester_id"] == "human:ben", filed
+
+    def ask():
+        with api.app.state.store.transaction() as c:
+            question_marks.ask(c, "bot:ops", filed["id"], "human:ben", "Which launch date do you want?")
+
+    ask()
+    with api.app.state.store.read() as c:
+        version = H.task(c, filed["id"])["version"]
+    r = api.post(
+        f"/api/v2/tasks/{filed['id']}/move",
+        json={"to": "closed", "why": "Answered elsewhere", "version": version},
+        headers=headers("ben-test"),
+    )
+    assert r.status_code == 200, r.text
+    with api.app.state.store.read() as c:  # the task no longer opens Ben: a write to him on it is out of reach again
+        with pytest.raises(reach.Refused) as refused:
+            reach.check(c, Identity("bot:ops", "bot", agent="test"), "human:ben", "task", task_id=filed["id"])
+    assert refused.value.code == "reach_closed"
+
+
+def test_the_refusal_for_a_person_who_wrote_lately_says_to_file_for_them_and_names_no_manager(api):
+    two_levels_down(api)
+    own = task(api, "ops-test", "bot:ops", title="A question for Ben")
+    with api.app.state.store.transaction() as c:  # the bot never heard from Ben: today's refusal
+        with pytest.raises(reach.Refused) as before:
+            question_marks.ask(c, "bot:ops", own["id"], "human:ben", "Which launch date do you want?")
+    assert before.value.extra["via"] == "bot:product-design" and "who can pass it on" in before.value.detail
+    said = message(api, "ben-test", "ops", "Can you draft the launch note?")
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(reach.Refused) as after:
+            question_marks.ask(c, "bot:ops", own["id"], "human:ben", "Which launch date do you want?")
+    detail = after.value.detail
+    assert after.value.code == "reach_closed" and after.value.extra["via"] is None, detail
+    assert f"--for human:ben --from-message {said['id']}" in detail, detail
+    assert "product-design" not in detail and "pass it on" not in detail, detail
+    with api.app.state.store.read() as c:
+        week_later = (datetime.now(timezone.utc) + timedelta(days=8)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        assert reach.wrote_lately(c, "bot:ops", "human:ben", before=week_later) is None
+
+
+def test_a_mention_in_a_thread_the_bot_cannot_read_is_not_named_in_its_refusal(api):
+    """Ben @mentions ops in a members-only thread ops is not in: ops cannot read or file from that message, so its
+    refusal is today's, through its manager, and names neither the message nor its date."""
+    two_levels_down(api)
+    tid = members_thread(api, ["human:ben"])
+    posted = api.post(f"/api/v2/threads/{tid}/messages", json={"text": "Numbers, @ops?"}, headers=headers("ben-test"))
+    assert posted.status_code == 200, posted.text
+    own = task(api, "ops-test", "bot:ops", title="A question for Ben")
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(reach.Refused) as refused:
+            question_marks.ask(c, "bot:ops", own["id"], "human:ben", "Which launch date do you want?")
+    detail = refused.value.detail
+    assert refused.value.extra["via"] == "bot:product-design" and "who can pass it on" in detail, detail
+    assert posted.json()["id"] not in detail and "--from-message" not in detail, detail
+
+
+def test_a_bot_brings_a_teammate_out_of_its_reach_into_a_task_it_owns(api):
+    """Live on v0.6.65: Legal could not hand a customer's case to Concierge, on another team. Its refusal names the
+    rule, and on a task it owns it adds anyone, as a follower or a reader, and then reaches them there."""
+    chart(api)
+    cold = message(api, "pd-test", "scout", "Can you take this customer's case?", expected=409)["error"]
+    assert cold["code"] == "reach_closed"
+    assert "reach rule, Nearby (the company default) on Rules › Internal" in cold["detail"]
+    assert "add them to its task as a reader or follower" in cold["detail"]
+    case = task(api, "pd-test", "bot:product-design", title="Reply to the customer")
+    ask = {"text": "@scout can you take this customer's case?"}
+    early = api.post(f"/api/v2/tasks/{case['id']}/comments", json=ask, headers=headers("pd-test"))
+    assert early.status_code == 409, early.text  # not on the task yet
+    added = api.put(
+        f"/api/v2/tasks/{case['id']}/followers", json={"following": True, "actor": "scout"}, headers=headers("pd-test")
+    )
+    assert added.status_code == 200, added.text
+    said = api.post(f"/api/v2/tasks/{case['id']}/comments", json=ask, headers=headers("pd-test"))
+    assert said.status_code == 200, said.text
+    sealed = task(api, "pd-test", "bot:product-design", title="Sealed case", private=True, readers=["bot:scout"])
+    with api.app.state.store.read() as c:
+        assert "bot:scout" in H.task_readers(H.task(c, sealed["id"]))
+    handed = api.post(
+        f"/api/v2/tasks/{case['id']}/owner",
+        json={"owner": "bot:scout", "version": version(api, case["id"])},
+        headers=headers("pd-test"),
+    )
+    assert handed.status_code == 200, handed.text
+    # Away from a task it shares with them, the rule holds.
+    message(api, "pd-test", "scout", "Another case?", expected=409)
+    task(api, "pd-test", "bot:scout", title="Straight to Scout", expected=409)
+
+
+def version(api, task_id):
+    with api.app.state.store.read() as c:
+        return H.task(c, task_id)["version"]

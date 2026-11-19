@@ -31,6 +31,21 @@ def test_the_owners_order_wins_and_the_authors_provider_is_skipped():
     assert P.check_choice(short, "xai")["provider"] == "anthropic"
 
 
+def test_a_subscriptions_company_never_reviews_on_the_gateway():
+    # Tico Team, Nov 18: second reviews fell through to pi:tico-medium-1.0 when the Codex login ran out.
+    tico = {**COMPANY, "enabled": ["anthropic", "openai", "tico"], "check_models": ["codex:gpt-6.2-sol"]}
+    assert "tico" in [row["provider"] for row in P.check_order(P._record(tico))]  # no choice: as before presets
+    assert "tico" in [row["provider"] for row in P.check_order(P._record({**tico, "preset": "gateway"}))]
+    for preset in ("subscriptions", "own-keys"):
+        order = P.check_order(P._record({**tico, "preset": preset}))
+        assert [row["model"] for row in order] == ["gpt-6.2-sol", "claude-opus-5-5", "gpt-6-luna"]
+        with pytest.raises(P.ProviderError):
+            P.check_choice(P._record({**tico, "preset": preset}), "claude", available={"pi"})
+    # A Tico model the owner lists runs checks there still.
+    listed = P._record({**tico, "preset": "subscriptions", "check_models": ["pi:tico-medium-1.0"]})
+    assert P.check_order(listed)[0]["provider"] == "tico"
+
+
 def test_every_enabled_provider_counts_even_two_on_one_runtime():
     record = P._record({"enabled": ["moonshot", "deepseek"]})
     assert [row["provider"] for row in P.check_order(record)] == ["moonshot", "deepseek"]

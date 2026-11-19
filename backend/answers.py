@@ -5,7 +5,8 @@ The one writer of `answers` rows, apart from the `pushed_past` rows `task_engine
 person OKs or sends back, an ask is given to someone else, or an answer is taken back. The answer is saved and the task
 moves on in the same step if that was the last thing it waited for. When a send back hands the turn back to a bot, the
 bot is woken once with the person's words. A question to a person is a message marked ❓ (backend/question_marks.py),
-answered by a reply in the chat, never here.
+answered by a reply in the chat, never here; a person's answer to a stage's page approval clears their open ❓ on the
+task (question_marks.approval_answered).
 
 Every function takes the caller's open write transaction and never commits. Each returns the task as
 `task_engine.task()` gives it after the write, with `answer_id` where an answers row was written, and refuses through
@@ -18,7 +19,7 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
-from . import hubdb_core, pr_conflicts
+from . import hubdb_core, pr_conflicts, question_marks
 from . import task_engine as E
 from . import task_requirements as R
 from . import task_wakes, validate_gate
@@ -159,8 +160,12 @@ def _may_answer(
     if refused:
         _refuse(conn, by, "task_requirement", refused, task_id)
     # A requirement that names nobody (a stage's OK), or a person who left, is any person's. A bot answers only when it
-    # is named.
-    if by != person and not (person is None and is_human(by)):
+    # is named. An OK of a kind any allowed person may give (task_asks.ANY_ALLOWED) passed its rule in give_ok.
+    if (
+        by != person
+        and not (person is None and is_human(by))
+        and not task_asks.given_by_another_allowed(conn, requirement["id"], value)
+    ):
         _refuse(conn, by, "task_requirement", f"This is asked of {_name(conn, person)}", task_id)
     if value == NO and not (notes or "").strip():
         _refuse(conn, by, "task_why", "Say what to change", task_id)
@@ -215,6 +220,18 @@ STALE_APPROVAL = "A newer version is submitted. Look again."
 APPROVE_SHOWN = "Approve the version you were shown"
 
 
+def _deciding_bot(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row) -> bool:
+    """Whether `by` is the pipeline's manager bot the page waits on to decide what Jev was unsure of
+    (task_requirements._unsure_to_bots). It answers a document page it may not open as it answers a plain page (which
+    has no read check): else a bot-held stage's document, such as a Validate's Checked in production, stays stuck. A
+    person approving a document is still refused a page they may not read."""
+    if not is_bot(by):
+        return False
+    newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement["id"])
+    standing = R.standing(conn, row, requirement, newest)
+    return standing.state == R.WAITING and standing.on == by and standing.line.startswith(R.DECIDE)
+
+
 def _page_version(
     conn: "sqlite3.Connection",
     by: str,
@@ -257,7 +274,7 @@ def _page_version(
             )
         else:
             readable = page_reader(refs)
-        if not readable:
+        if not readable and not _deciding_bot(conn, by, row, requirement):
             _refuse(conn, by, "task_requirement", "This approval is unavailable", row["id"])
     expected = P.version_key(pages)
     if keyed and is_human(by) and document and value == OK and page_version in (None, ""):
@@ -481,6 +498,9 @@ def answer(
         out["answer_id"] = newest["id"]
         return out
     answer_id = _write(conn, row, requirement_id, by, value, notes, pinned)
+    if requirement["kind"] == "page" and requirement.get("stage_id") and value in (OK, NO):
+        # The approval was the person's ask on this task: a bot's ❓ to them here clears with it (one card per person).
+        question_marks.approval_answered(conn, task_id, str(by), answer_id)
     if requirement["kind"] == "owner_done":
         reopen_sent_back(conn, row, by, notes)
     if requirement["kind"] == "ok" and value != OK:

@@ -99,7 +99,7 @@ tasks they own. The owned tasks are one kind of many.
 
 38. **"What may bots put on me?"**: `tico settings find "reach"` for the setting, then `tico team show --person <id>` for who reaches whom.
 39. **"What changed in Tico?"**: `tico changelog list --unread`, and `tico --version` for the release this install runs. Updating Tico is not yours: on a computer a person runs `tico-computer update`; a hosted server updates itself.
-40. **"I need Tico support" / "this is broken in Tico."**: link `[Message the Tico team](#/support)`. Do not file a support report yourself. Say what to include: the page, the device, the browser, the steps. Claim no test or check you did not run.
+40. **"I need Tico support" / "this is broken in Tico."**: link `[Message Tico support](#/support)`. Do not file a support report yourself. Say what to include: the page, the device, the browser, the steps. Claim no test or check you did not run.
 41. **"Teach you how I like things."**: `tico assistant learn "<line>"`, in their words. Say you saved it and where to change it.
 
 ## People, access, money, routines

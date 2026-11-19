@@ -25,9 +25,11 @@ exactly as `judge_once` reads one.
 """
 
 import hashlib
+import html
 import json
 import logging
 import math
+import re
 import sqlite3
 from typing import Any, TYPE_CHECKING, cast
 
@@ -237,6 +239,51 @@ BARS: dict[str, tuple[float, float]] = {
     "qa": (0.75, NOT_MET_AT),
     "validate": (0.5, NOT_MET_AT),
 }
+# Rubrics asked whole whose parts are asked beside the whole question in the same call, only to say which part is
+# missing (task #614). The verdict stays the whole question's, read on the default bar as before: these parts never move
+# a page from met to not met. When the verdict is not met or unsure, the reason names the part the model scored lowest
+# and what it looked for on the page, instead of 'Doesn't meet "Review page".' with nothing to change (seen on #602,
+# #495, #520, #559 and #3857 on Nov 18, each refused two to four times). Each line names the rubric item; the first is
+# followed by the page line the model says its answer rests on: the same call asks it to pick one numbered line of the
+# page, or none (READ, `_read_question`), so the line quoted is the model's own pick, never one Tico chose. Any other
+# rubric asked whole is explained by its own sentences (`explain_parts`); a rubric of one sentence is its own only item,
+# quoted (`_one_item`).
+EXPLAINED: dict[str, tuple[Part, ...]] = {
+    "two_reviews": (
+        Part(
+            "two",
+            "holds two reviews of the work, and each names the model that made it",
+            "No second review that names its model.",
+            "Can't tell if there are two reviews that each name their model.",
+        ),
+        Part(
+            "models",
+            "names a different model for each of its two reviews, so a reader can see the two models differ",
+            "No second review from a different model.",
+            "Can't tell if the two reviews are by different models.",
+        ),
+        Part(
+            "commit",
+            "names, in each review, the commit it reviewed for every linked PR, and that commit is the PR's newest "
+            "(`work.context.heads`, in full or its first 7 or more characters)",
+            "A review doesn't name the PR's newest commit.",
+            "Can't tell if each review names the PR's newest commit.",
+        ),
+        Part(
+            "checked",
+            "says what each review checked: files read, tests or commands run",
+            "Doesn't say what each review checked (files read, tests or commands run).",
+            "Can't tell what each review checked.",
+        ),
+        Part(
+            "findings",
+            "gives each real defect its own finding with file:line, a severity and why it matters, or says there are "
+            "no findings",
+            "A finding lacks file:line, a severity or why it matters, or there is no line saying there are none.",
+            "Can't tell if each finding has file:line, a severity and why it matters.",
+        ),
+    ),
+}
 
 
 def _words(text: object) -> str:
@@ -263,6 +310,138 @@ def check_of(rubric: object) -> str | None:
         if any(_words(text) == said for text in texts):
             return check
     return None
+
+
+# A rubric of a company's own is explained by its sentences in at most this many parts (a longer rubric's sentences are
+# grouped, none dropped), each quoted in at most SENTENCE_CHARS.
+SENTENCES_AT_MOST = 8
+SENTENCE_CHARS = 160
+# The page line the model's answer rests on (task #614): asked in the same call as the verdict, as a choice of the
+# page's first LINES_OFFERED lines (`page_lines`), each offered up to LINE_CHARS, or NO_LINE.
+READ = "read"
+NO_LINE = "none"
+LINES_OFFERED = 80
+LINE_CHARS = 140
+
+
+def _sentences(said: str) -> list[str]:
+    """A rubric's sentences: split after a full stop, question or exclamation mark that a capital, a quote, a bracket or
+    a backtick follows, so "file:line" and "e.g. x" stay whole."""
+    return [one for one in re.split(r"(?<=[.!?])\s+(?=[A-Z\"'(`])", said) if one.strip()]
+
+
+def explain_parts(rubric: object) -> tuple[Part, ...]:
+    """The parts asked beside a rubric asked whole, only to name what is missing (task #614): the shipped Review
+    rubric's own (EXPLAINED), or for a rubric of two or more sentences, one part per sentence (grouped into at most
+    SENTENCES_AT_MOST parts, so none is left out), the sentence quoted. Empty for one of CHECKS (asked as its parts) and
+    for a rubric of one sentence: that sentence is the only item, and the whole question's verdict is about it, so the
+    reason quotes it (`_one_item`) without asking it again."""
+    from . import pipeline_settings as PS
+
+    S: Any = PS
+    said = _words(rubric)
+    if not said or check_of(rubric) is not None:
+        return ()
+    if said == _words(S.REVIEW_RUBRIC):
+        return EXPLAINED["two_reviews"]
+    sentences = _sentences(said)
+    if len(sentences) < 2:
+        return ()
+    size = -(-len(sentences) // SENTENCES_AT_MOST)  # sentences per part, so at most SENTENCES_AT_MOST parts
+    groups = [" ".join(sentences[i : i + size]) for i in range(0, len(sentences), size)]
+    parts: list[Part] = []
+    for n, sentence in enumerate(groups, start=1):
+        quoted = sentence if len(sentence) <= SENTENCE_CHARS else sentence[: SENTENCE_CHARS - 1].rstrip() + "…"
+        parts.append(
+            Part(
+                f"s{n}",
+                f"meets this part of `requirement.rubric`: {json.dumps(sentence)}",
+                f"Not met: {json.dumps(quoted)}",
+                f"Can't tell if it meets: {json.dumps(quoted)}",
+            )
+        )
+    return tuple(parts)
+
+
+def page_lines(text: object) -> list[str]:
+    """The lines of a page's text the model may pick as what its answer rests on: an HTML page's text without its tags,
+    one line per block, each with eight characters or more, the first LINES_OFFERED, each cut to LINE_CHARS. The same
+    text gives the same lines, so the pick is read back against the lines it was offered."""
+    if not isinstance(text, str) or not text.strip():
+        return []
+    if "<" in text and ">" in text:
+        text = re.sub(r"(?is)<(script|style)\b.*?</\1>", "\n", text)
+        text = html.unescape(re.sub(r"<[^>]+>", "\n", text))
+    out: list[str] = []
+    for raw in text.splitlines():
+        line = _words(raw)
+        if len(line) < 8:
+            continue
+        out.append(line if len(line) <= LINE_CHARS else line[: LINE_CHARS - 1].rstrip() + "…")
+        if len(out) == LINES_OFFERED:
+            break
+    return out
+
+
+def _read_question(lines: list[str]) -> dict[str, Any]:
+    """The choice asked beside a rubric asked whole: which one line of the page the model's answer rests on (L1 the
+    first of `page_lines`), or NO_LINE."""
+    return {
+        "type": "choice",
+        "instructions": (
+            "Pick the one line of `attachment.text` your answer on whether the `attachment` meets "
+            "`requirement.rubric` rests on most. When it does not meet the rubric, or you can't tell, pick the line "
+            "where the part of the rubric least met falls short, or should be and isn't clear; when it meets it, the "
+            f"line that shows that best. Each option quotes one line of the attachment. Pick `{NO_LINE}` when no line "
+            "bears on it."
+        ),
+        "criteria": {
+            **{f"L{n}": line for n, line in enumerate(lines, start=1)},
+            NO_LINE: "No line of the attachment bears on it.",
+        },
+    }
+
+
+def _seen(pick: object, text: object) -> str:
+    """The line a reason gives for what the model read: the page line it picked, quoted, or that it found no line
+    bearing on it. Empty when it made no valid pick: then nothing is quoted rather than a line Tico guessed."""
+    if pick == NO_LINE:
+        return "Read: no line of the page bears on it."
+    lines = page_lines(text)
+    if isinstance(pick, str) and re.fullmatch(r"L[1-9][0-9]*", pick) and int(pick[1:]) <= len(lines):
+        return f"Read: {json.dumps(lines[int(pick[1:]) - 1], ensure_ascii=False)}"
+    return ""
+
+
+def _one_item(verdict: str, rubric: object) -> str:
+    """A rubric of one sentence is its own only item: the line naming it, quoted up to SENTENCE_CHARS, under a not
+    met or an unsure verdict on the whole question."""
+    said = _words(rubric)
+    if not said:
+        return ""
+    quoted = json.dumps(said if len(said) <= SENTENCE_CHARS else said[: SENTENCE_CHARS - 1].rstrip() + "…")
+    return f"Not met: {quoted}" if verdict == "not_met" else f"Can't tell if it meets: {quoted}"
+
+
+def _explain_lines(explain: tuple[Part, ...], parts: dict[str, float]) -> list[str]:
+    """The reason a not met or unsure verdict on a rubric asked whole gives from the parts asked beside it: the parts
+    that read no on the default bar with their `missing` line, else the ones that can't be told, lowest first, with
+    their `unclear` line: a part never reads as missing unless it was scored no. When every part read as there on its
+    own, the lowest is named as the least clear. Empty only when no part was answered (then the caller keeps today's
+    line)."""
+    bar = (MET_AT, NOT_MET_AT)
+    known = sorted((part for part in explain if part.key in parts), key=lambda p: parts[p.key])
+    if not known:
+        return []
+    no = [part for part in known if _band(parts[part.key], bar) == "no"]
+    unclear = [part for part in known if _band(parts[part.key], bar) == "unsure"]
+    if no:
+        lines = [part.missing for part in no]
+    elif unclear:
+        lines = [part.unclear for part in unclear]
+    else:
+        lines = [f"Each item reads as there on its own; least clear: {known[0].unclear}"]
+    return lines[:LINES_AT_MOST]
 
 
 def _band(p: float, bar: tuple[float, float]) -> str:
@@ -462,9 +641,13 @@ def _fit(state: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
-def _questions(check: str | None = None) -> dict[str, Any]:
+def _questions(
+    check: str | None = None, explain: tuple[Part, ...] = (), lines: list[str] | None = None
+) -> dict[str, Any]:
     """The question set's questions (questions/pipeline-requirement.json): its one `met` question, or for one of CHECKS a
-    yes/no question per part (`part_<key>`), each with the set's rules for reading the work and the attachment."""
+    yes/no question per part (`part_<key>`), each with the set's rules for reading the work and the attachment. A rubric
+    asked whole with parts that explain it (`explain_parts`) is asked `met` and those parts beside it, and a rubric asked
+    whole on a page with text also which line of it the answer rests on (READ, from `page_lines`)."""
     asked: dict[str, Any] = J.load_set(QUESTION_SET)["questions"]
     met: dict[str, Any] = asked["met"]
     rules = str(met["instructions"])
@@ -473,7 +656,25 @@ def _questions(check: str | None = None) -> dict[str, Any]:
     start = rules.find("`work.title`")
     rules = rules[start:] if start >= 0 else rules
     if check is None or check not in CHECKS:
-        return asked
+        read = {READ: _read_question(lines)} if lines else {}
+        if explain:
+            # The whole question decides; each part beside it only says which one is missing (explain_parts).
+            return {
+                "met": met,
+                **{
+                    "part_" + part.key: {
+                        **met,
+                        "instructions": (
+                            f"This question is about one part of `requirement.rubric` alone: the `attachment` "
+                            f"{part.ask}, for the work as it is now. Answer high when it does, low when it does not. "
+                            f"{rules}"
+                        ),
+                    }
+                    for part in explain
+                },
+                **read,
+            }
+        return {**asked, **read}
     return {
         **{
             "part_" + part.key: {
@@ -486,6 +687,12 @@ def _questions(check: str | None = None) -> dict[str, Any]:
             for part in CHECKS[check]
         },
     }
+
+
+def _asked(rubric: object, text: object = None) -> dict[str, Any]:
+    """The questions a requirement with this rubric is asked about a page with this text: its check's parts, or its
+    whole question with the parts that explain it and the line it rests on."""
+    return _questions(check_of(rubric), explain_parts(rubric), page_lines(text))
 
 
 def _default_engine() -> "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]] | None":
@@ -516,20 +723,31 @@ def _noul(answers: Any, qid: str) -> float | None:
     return _probability(cast("dict[str, Any]", answer).get("noul") if isinstance(answer, dict) else None)
 
 
+def _pick(answers: Any) -> str:
+    """The option the model chose on READ, or empty when it was not asked or chose none of the options."""
+    answer: Any = cast("dict[str, Any]", answers).get(READ) if isinstance(answers, dict) else None
+    choice: object = cast("dict[str, Any]", answer).get("choice") if isinstance(answer, dict) else None
+    return choice if isinstance(choice, str) else ""
+
+
 def _read(result: dict[str, Any], qid: str | list[str], model: str, cost: object = None) -> dict[str, Any]:
     """The engine's answer to `qid` as judge_once's engines give it: {p, reason, provider, model, cost_usd,
-    latency_ms}, and with a list of part question ids (`part_<key>`), `parts` (each part's probability) and p the lowest.
+    latency_ms}, and with a list of part question ids (`part_<key>`), `parts` (each part's probability) and p the lowest,
+    or `met`'s when it was asked beside them.
     Raises JudgeError("shape") when any asked question has no probability."""
     answers: Any = result.get("answers")
-    asked = [qid] if isinstance(qid, str) else qid
+    asked = [one for one in ([qid] if isinstance(qid, str) else qid) if one != READ]
     got = {one: _noul(answers, one) for one in asked}
     if any(p is None for p in got.values()) or not got:
         raise JudgeError("shape", "the decision model's answer has no probability")
     ps = cast("dict[str, float]", got)
     parts = {one.removeprefix("part_"): p for one, p in ps.items() if one.startswith("part_")}
     return {
-        "p": min(ps.values()),
+        # Asked whole with parts beside it (explain_parts), the whole question is the verdict; the parts only explain it.
+        "p": ps["met"] if "met" in ps else min(ps.values()),
         **({"parts": parts} if parts else {}),
+        # The page line the model picked as what its answer rests on (READ), when it was asked one.
+        **({"read": _pick(answers)} if _pick(answers) else {}),
         "reason": "",
         "provider": result.get("provider") or "",
         "model": result.get("model") or MODELS[model],
@@ -633,7 +851,7 @@ def _ask(
         return _failed(base, "No judge is configured on this server")
     state = _state(requirement, attachment)
     try:
-        result = ask(chosen, state, _questions(check_of(requirement.get("rubric"))), QUESTION_SET)
+        result = ask(chosen, state, _asked(requirement.get("rubric"), state["attachment"].get("text")), QUESTION_SET)
     except Exception as exc:  # noqa: BLE001 - any error in the call is a judge failure, retried, never a verdict
         return _call_failed(base, exc)
     return _finish(base, requirement, attachment, state, result)
@@ -674,6 +892,23 @@ def _finish(
     else:
         verdict = verdict_of(p)
         reason = _words(result.get("reason")) or reason_for(verdict, str(requirement.get("name") or ""))
+        explain = explain_parts(requirement.get("rubric"))
+        text = state["attachment"].get("text")
+        if verdict != "met" and check is None and not _words(result.get("reason")):
+            # Name the item that is missing and the page line the model says its answer rests on (task #614). A met
+            # keeps its line, and a model that gave its own words keeps them. A rubric of one sentence is its own only
+            # item, quoted.
+            named = _explain_lines(explain, parts) if explain and parts else []
+            if not named and not explain:
+                one = _one_item(verdict, requirement.get("rubric"))
+                named = [one] if one else []
+            seen = _seen(result.get("read"), text)
+            if named and seen:
+                named.insert(1, seen)
+            elif seen:
+                named = [seen]
+            if named:
+                reason = f"{reason_for(verdict, str(requirement.get('name') or ''))} {' '.join(named)}"
     reason = reason[:REASON_BYTES]
     if _cannot_see(attachment, state):
         # Enforced here, not only in the prompt: a model that says met on text it was not all shown is still unsure.
@@ -751,14 +986,17 @@ def judge_many(store: Any, pairs: "list[tuple[dict[str, Any], dict[str, Any]]]")
     holds: list[list[tuple[int, str | list[str]]]] = []  # each pair's question id, or its parts' ids
     for members in pages.values():
         # A check's parts are never merged.
-        whole = all(check_of(pairs[n][0].get("rubric")) is None for n in members)
+        whole = all(
+            check_of(pairs[n][0].get("rubric")) is None and not explain_parts(pairs[n][0].get("rubric"))
+            for n in members
+        )
         merged = _page_item([states[n] for n in members]) if SAME_PAGE and whole and len(members) > 1 else None
         if merged is not None:
             items.append((merged[0], merged[1]))
             holds.append([(n, qid) for n, qid in zip(members, merged[2], strict=True)])
             continue
         for n in members:
-            asked = _questions(check_of(pairs[n][0].get("rubric")))
+            asked = _asked(pairs[n][0].get("rubric"), states[n]["attachment"].get("text"))
             items.append((states[n], asked))
             holds.append([(n, "met" if list(asked) == ["met"] else list(asked))])
     for k, run in enumerate(DG.packs(items, GROUP)):

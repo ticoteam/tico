@@ -48,7 +48,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
 | See the Company page, or share it | Company → ⋯ → Share (`#/overview/company-page`); the share icon has transparency, the address and readers. Owners and admins only ([Company page](company-page.md)) |
 | Change the Company page: editions, disclosure, stats, audiences, accent, logo | Company → ⋯ → Share → Manage (`#/company-page`) |
-| Message the Tico team | **?** beside Search (phone: More drawer, beside Search), or any `#/support` link |
+| Message Tico support | **?** beside Search (phone: More drawer, beside Search), or any `#/support` link |
 
 All four system bots appear as **Built-in** in Settings > Bots. Neither Assistant nor BotOps has a rail entry: **Tico Assistant**
 (the sidebar's bottom row, ⌘J; **Assistant**, the phone's middle tab) opens your Assistant over any page except the Assistant page and setup, even while the signed-out banner shows, `#/assistant`

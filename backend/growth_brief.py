@@ -18,8 +18,10 @@ works. `channel` answers it in one read, in this order:
    failing or stale, or the newest month is more than 45 days old.
 
 `segment` gives a segment's last 6 months from customer facts (backend/growth_computed.py, cut by segment): new
-customers, kept at 30 and 90 days, LTV, the change against the month before, and "spend is not split by segment". A
-cohort under the team's minimum shows counts only.
+customers, kept at 30 and 90 days, LTV and the change against the month before. A cohort under the minimum shows counts
+only. With segments (backend/growth_segments.py) it reads one by slug or name (`none` is No segment) and adds its rules,
+its channels, its direct and loaded CAC each month, observed LTV where customers carry net revenue, and `health`;
+without, the label reads as customers give it and "spend is not split by segment".
 
 Alerts. The lines are ones the team already set: the channel's KPI turning red against its goal (`kpi`), its guardrail
 KPI going over its max (`guardrail`), and its source failing (`source`). A KPI reading (backend/kpis.py add_reading)
@@ -83,6 +85,8 @@ EVENT = "growth.channel.crossed"
 ALERT_LABEL = "growth:alert"
 WHO_MAY_LINK = "the bot that owns the channel, the owner or an admin"
 SEGMENT_FIGURES = ("new_customers", "kept_d30", "kept_d90", "ltv")
+# Shown whatever the cohort's size: the CACs (with segments) and observed LTV (with net revenue), each with its count.
+SEGMENT_MONEY = ("cac", "cac_loaded", "ltv_observed_d90", "ltv_observed_d180", "ltv_observed_d365")
 
 
 # ----------------------------------------------------------------------------- small helpers
@@ -438,19 +442,30 @@ def channel(c: Conn, auth: Any, who: Any, row: Row, hidden: Collection[str] = ()
 def segment(c: Conn, auth: Any, who: Any, label: str) -> Row:
     from . import growth_computed as GX
 
+    from . import growth_segments as SEG
+
     found = GX.computed(c, auth, who, cut="segment", grain="month", segment=label)
-    cohorts = sorted((r for r in found["cohorts"] if r.get("value") == label), key=lambda r: r["period"], reverse=True)
+    cohorts = sorted(found["cohorts"], key=lambda r: r["period"], reverse=True)  # the filter keeps this segment only
     if not cohorts:
         raise Problem("not_found", f"No customers in segment {label}", 404)
+    defined = "health" in found
 
     def months_row(r: Row) -> Row:
+        money = [f for f in SEGMENT_MONEY if f in r and (defined or not f.startswith("cac"))]
+        extra: Row = {f: r[f]["value"] for f in money}
+        if money:
+            extra["counts"] = {f: {"count": r[f].get("count"), "denominator": r[f].get("denominator")} for f in money}
         if r["too_few"]:
-            return {"month": r["period"], "too_few": True, "new_customers": r["new_customers"]["value"]}
+            shown: Row = {"month": r["period"], "too_few": True, "new_customers": r["new_customers"]["value"], **extra}
+            if money:
+                shown["status"] = {f: r[f]["status"] for f in money}
+            return shown
         return {
             "month": r["period"],
             "too_few": False,
             **{f: r[f]["value"] for f in SEGMENT_FIGURES},
-            "status": {f: r[f]["status"] for f in SEGMENT_FIGURES},
+            **extra,
+            "status": {f: r[f]["status"] for f in (*SEGMENT_FIGURES, *money)},
         }
 
     months = [months_row(r) for r in cohorts[:MONTHS]]
@@ -463,7 +478,7 @@ def segment(c: Conn, auth: Any, who: Any, label: str) -> Row:
             figures.append(
                 {"figure": f, "name": FIGURE_NAMES[f], **ch, **({} if ch["recorded"] else {"note": "not recorded"})}
             )
-    return {
+    out: Row = {
         "segment": label,
         "min_cohort": found["min_cohort"],
         "counts_only": all(m["too_few"] for m in months),
@@ -471,6 +486,26 @@ def segment(c: Conn, auth: Any, who: Any, label: str) -> Row:
         "changed": {"month": months[0]["month"] if months else None, "figures": figures},
         "spend": found["cac_note"] or "spend is not split by segment",
     }
+    if defined:
+        slug = str(cohorts[0]["value"])
+        none: Row = {}
+        row: Row = next((s for s in SEG.listed(c, include_retired=True) if s["slug"] == slug), none)
+        out.update(
+            segment=slug,
+            name=row.get("name") or "No segment",
+            customer_rule=row.get("customer_rule") or "",
+            churn_days=row.get("churn_days") or 0,
+            revenue_month=row.get("revenue_month"),
+            margin_pct=row.get("margin_pct"),
+            channels=row.get("channels") or [],
+            min_cohort=max(GX.MIN_COHORT_FLOOR, int(row["min_cohort"]))
+            if row.get("min_cohort")
+            else found["min_cohort"],
+            spend=found["cac_note"]
+            or "direct CAC is its channels' spend; loaded adds company-wide spend by its share of new customers",
+            health=found["health"],
+        )
+    return out
 
 
 # ----------------------------------------------------------------------------- reads counted

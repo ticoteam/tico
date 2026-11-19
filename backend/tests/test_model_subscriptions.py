@@ -86,6 +86,18 @@ def test_owners_and_admins_save_the_company_subscriptions_and_nobody_reads_a_val
     assert again["status"] == "new" and again["revision"] == 2 and again["preview"].endswith(OTHER[-4:])
 
 
+def test_a_demoted_adder_can_remove_a_model_key_but_other_members_cannot(api):
+    setup(api)
+    sid = add(api, "openai_key", "sk-acme-synthetic-key-123456789", token="ben-test")["id"]
+    post(api, "access/humans/ben", {"role": "member"})
+    assert listed(api, "ben-test")[0]["can_remove"]
+    assert not listed(api, "cara-test")[0]["can_remove"]
+    path = f"/api/v2/model-subscriptions/{sid}"
+    assert api.delete(path, headers=headers("cara-test")).status_code == 403
+    assert api.delete(path, headers=headers("ben-test")).json()["deleted"]
+    assert listed(api) == []
+
+
 def test_a_computer_holds_one_subscription_per_runtime_of_the_right_kind(api):
     setup(api)
     company(api)
@@ -616,7 +628,10 @@ def test_a_computer_with_only_a_codex_subscription_runs_codex_checks_and_their_l
     )
     old = machine(api, bot="cpo", label="Old Mac")
     with api.app.state.store.read() as c:
-        assert can_run(c, "ops", "codex")["can_run"] is False
+        before = can_run(c, "ops", "codex")
+    # Signed out of Codex while the company has a ChatGPT plan: said plainly, and the fix is giving it the plan.
+    assert before["can_run"] is False and before["problem"].endswith(" has no ChatGPT plan")
+    assert before["fix"] == "Give it one in Settings > Computers" and before["sign_in"] is True
     give(api, m, "codex", sid)
     give(api, old, "codex", sid)
     with api.app.state.store.read() as c:

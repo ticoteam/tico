@@ -29,15 +29,17 @@ def test_the_standard_webhooks_vector_and_our_signature_verify_with_an_independe
     assert not verify(secret, published, body + b" ", now=1614265330)
 
 
-def test_a_delivery_carries_a_fresh_timestamp_a_stable_id_and_a_signature_the_receiver_verifies(api, net):
+def test_a_delivery_carries_a_fresh_timestamp_a_stable_id_and_a_signature_the_receiver_verifies(api, net, monkeypatch):
     made = make(api, events=["custom.*"])
     assert made["secret"].startswith("whsec_") and made["replayed"] is False
     post(api, f"webhooks/{made['id']}/send", {"type": "custom.order", "data": {"order": 42}})
+    stamp = [int(time.time())]
+    monkeypatch.setattr(D, "_now", lambda: stamp[0])  # the clock each attempt's webhook-timestamp is read from
     net.reply = lambda request: httpx.Response(500)
     assert run(api, net) == 1
     first = net.seen[0]
     due(api)
-    time.sleep(1.1)  # a second tick of the clock the timestamp reads
+    stamp[0] += 2  # a later attempt, two seconds on
     assert run(api, net) == 1
     second = net.seen[1]
     assert first.headers["webhook-id"] == second.headers["webhook-id"] == sends(api)[0]["id"]

@@ -147,7 +147,7 @@ def check(c, who, auth, settings):
                 from .shared_bots import declared, source_of
 
                 branch = bool(source_of(declared(c, bid)))
-                _, clone = repository_fix(c, bid, label, settings.github_owner)
+                _, clone = repository_fix(c, bid, label, settings.github_owner, why)
                 add(
                     bot,
                     "repository_missing",

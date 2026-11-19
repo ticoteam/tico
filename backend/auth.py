@@ -47,18 +47,37 @@ TASK_PREFIX_MIN = 8
 
 
 def _edit_distance(a, b, limit):
-    """Levenshtein distance when it is at most `limit`, else None (gives up as soon as it must exceed it)."""
-    if abs(len(a) - len(b)) > limit:
+    """Levenshtein distance when it is at most `limit`, else None (gives up as soon as it must exceed it).
+
+    Only the band of cells with |i - j| <= limit is computed: a cell outside it is at least |i - j| away, so it stands
+    in as limit + 1, a lower bound that keeps every cell exact while it is within `limit` and above `limit` once not."""
+    m = len(b)
+    if abs(len(a) - m) > limit:
         return None
-    previous = list(range(len(b) + 1))
+    over = limit + 1
+    previous = [j if j <= limit else over for j in range(m + 1)]
     for i, ca in enumerate(a, 1):
-        row = [i]
-        for j, cb in enumerate(b, 1):
-            row.append(min(previous[j] + 1, row[j - 1] + 1, previous[j - 1] + (ca != cb)))
+        row = [over] * (m + 1)
+        if i <= limit:
+            row[0] = i
+        for j in range(max(1, i - limit), min(m, i + limit) + 1):
+            row[j] = min(previous[j] + 1, row[j - 1] + 1, previous[j - 1] + (ca != b[j - 1]))
         if min(row) > limit:
             return None
         previous = row
-    return previous[-1] if previous[-1] <= limit else None
+    return previous[m] if previous[m] <= limit else None
+
+
+def near_task_sql(typed):
+    """A filter that keeps every id within edit distance 2 of `typed` (already lowercased) and drops nearly all
+    others, with its parameters. Two edits touch at most two of the three pieces typed[:12], typed[12:24] and
+    typed[24:] (an insertion before the first or after the last character counts against the end piece), so a match
+    holds one of them whole. Each is looked for anywhere in the id with instr, which reads past a NUL where substr
+    and length stop; a piece of ten or more characters is rarely anywhere in an unrelated id."""
+    pieces = (typed[:12], typed[12:24], typed[24:])
+    if not all(pieces):
+        return "1", ()  # too short to split in three: every id is a candidate, as before
+    return "(instr(id,?)>0 OR instr(id,?)>0 OR instr(id,?)>0)", pieces
 
 
 OPERATOR_SQL = "SELECT owner_id FROM bot_config WHERE bot=?"
@@ -1101,8 +1120,16 @@ class Auth:
             return False
         from . import views
 
-        archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
-        return P.manages(H.actor_id(who.actor), kind, ident, views.roster(c), views.entries(c), archived, True)
+        # Pages ask this once per bot, so it reads the snapshot's roster, entries and archived bots as they are (people
+        # `manages` only reads them): copying them per call was most of a non-admin's time on the people pages.
+        archived = read_cache.value(
+            c,
+            ("archived_bots",),
+            lambda: frozenset(row["id"] for row in H.bots(c) if row.get("state") == "archived"),
+            shared=True,
+        )
+        roster, entries = views.roster(c, shared=True), views.entries(c, shared=True)
+        return P.manages(H.actor_id(who.actor), kind, ident, roster, entries, archived, True)
 
     def bot_admin(self, who):
         """Whether a person may administer bots assigned to their own operator identity. Tico support with app access
@@ -1155,14 +1182,14 @@ class Auth:
         all (`hubdb.answer` checks only that the ask was addressed to you), so refusing contact
         cannot strand a bot that is blocking on a reply.
         """
-        row = c.execute(
-            f"SELECT {BS.CONFIG} AS config,bc.reports_to FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)
-        ).fetchone()
         if who.role != "bot":
             return True
         sender = who.actor
         if sender == "bot:" + slug or sender == H.TICO_ACTOR:
             return True
+        row = read_cache.one(
+            c, f"SELECT {BS.CONFIG} AS config,bc.reports_to FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)
+        )
         if not row:
             return True
         declared = json.loads(row["config"]) if row["config"] else {}
@@ -1444,14 +1471,19 @@ class Auth:
                 )
         if len(ident) >= 34:
             near = []
+            typed = ident.lower()
+            # Only ids that could be within two edits are read and compared (near_task_sql): checking every visible
+            # task took seconds on a large company, inside the write transaction of a bot's write.
+            close, params = near_task_sql(typed)
             for row in H._rows(
                 c.execute(
+                    # In table order, as the scan of every task gave them: the first three of a tie are named.
                     "SELECT id,title,owner_id,requester_id FROM tasks WHERE length(id) BETWEEN ? AND ? "
-                    "AND (" + visible + ")",
-                    (len(ident) - 2, len(ident) + 2),
+                    "AND " + close + " AND (" + visible + ") ORDER BY rowid",
+                    (len(ident) - 2, len(ident) + 2, *params),
                 )
             ):
-                distance = _edit_distance(ident.lower(), row["id"], 2)
+                distance = _edit_distance(typed, row["id"], 2)
                 if distance is not None:
                     near.append((distance, row))
             if near:

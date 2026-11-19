@@ -136,18 +136,15 @@ function gcSyncedMark(c: GrowthCohort) {
 }
 // One of a month's numbers by its field name.
 const gcValue = (c: Partial<GrowthCohort>, field: string): number | null => { const v = (c as Record<string, unknown>)[field]; return typeof v === 'number' ? v : null; };
-// Under a number in a month: where it came from, and Keep / Use when a source disagrees with what was typed.
-function gcOriginHint(ch: ChannelRef, month: string, field: string, c: Partial<GrowthCohort>, o: GrowthOrigin | undefined) {
+// Under a number in a month: where it came from. When a source disagrees with what was typed, the Growth Manager asks
+// whoever typed it which is right (its numbers-from-chat skill), so the month's row only marks it (gcSyncedMark).
+function gcOriginHint(field: string, o: GrowthOrigin | undefined) {
   if (!o) return '';
   const from = (o.sources || []).map(s => s.source).join(', ');
   const line = o.origin === 'synced' ? `From ${o.source || 'a source'}${o.at ? ` · ${ago(o.at)}` : ''} · actual`
     : o.origin === 'computed' ? `Computed from ${o.computed_from ?? 0} customers${from ? ` · ${from}` : ''}`
     : `Typed${o.by ? ` by ${grWho(o.by)}` : ''}${o.at ? `, ${grDay(o.at)}` : ''} · ${o.quality === 'estimate' ? 'estimate' : 'actual'}${o.differs?.chosen === 'typed' ? ' · kept over the computed number' : ''}`;
-  const typed = gcValue(c, field), d = o.differs;
-  // The server checks who may choose; the dialog offers Keep and Use to whoever opened it, as it does for a source's value.
-  const conflict: GrConflict | null = o.conflict ? {channel: ch.slug, channel_name: ch.name, month, field, typed: typed ?? null, value: o.conflict.value, source: o.conflict.source, may: true}
-    : d && !d.chosen ? {channel: ch.slug, channel_name: ch.name, month, field, typed: d.typed, value: typed ?? null, source: `${o.computed_from ?? 0} customers`, may: true, against: 'computed'} : null;
-  return `<span class="gc-origin muted" data-gc-origin="${esc(field)}">${esc(line)}</span>${conflict ? `<span class="gr-conflict">${grConflictLine(conflict, false)}</span>` : ''}`;
+  return `<span class="gc-origin muted" data-gc-origin="${esc(field)}">${esc(line)}</span>`;
 }
 
 // One month's numbers for a channel; `fresh` picks the month in the form.
@@ -167,9 +164,9 @@ function gcCohortDialog(state: GrowthState, ch: ChannelRef, c: Partial<GrowthCoh
   const origins = c.origins || {}, month = c.month ?? '';
   const locked = (name: string) => { const o = origins[name]; return !!o && o.origin === 'synced' && !!o.source_id && !!live.get(o.source_id)?.includes(name); };
   const n = (name: string, label: string, v: number | null | undefined) => grField(label, `<input name="${name}" inputmode="decimal" value="${esc(v ?? '')}"${locked(name)
-    ? ` disabled title="${esc(`${origins[name]?.source || 'A source'} syncs this number: change it there, or retire that source to type it`)}"` : ''}>${fresh ? '' : gcOriginHint(ch, month, name, c, origins[name])}`);
+    ? ` disabled title="${esc(`${origins[name]?.source || 'A source'} syncs this number: change it there, or retire that source to type it`)}"` : ''}>${fresh ? '' : gcOriginHint(name, origins[name])}`);
   const srcs: GrowthCohortSources = c.sources || {};
-  const dlg = grDialog([ch.name, fresh ? 'New month' : grMonth(c.month)].join(' · '),
+  grDialog([ch.name, fresh ? 'New month' : grMonth(c.month)].join(' · '),
     `${fresh ? grField('Month', `<select name="month" required>${gcMonthOptions(c.month)}</select>`) : ''}
     <div class="gr-pair">${n('spend', 'Spend', c.spend)}${n('bot_cost', 'Bot cost', c.bot_cost)}</div>
     <div class="gr-pair">${n('new_customers', 'New', c.new_customers)}${grField('Data', `<select name="quality">${grOpts([['actual', 'Actual'], ['estimate', 'Estimate']], c.quality || 'estimate', null)}</select>`)}</div>
@@ -191,8 +188,6 @@ function gcCohortDialog(state: GrowthState, ch: ChannelRef, c: Partial<GrowthCoh
       toast('Saved');
       grReload(state);
     });
-  dlg.dataset.closeOnResolve = '1';   // its fields would show the number from before the choice
-  grResolveWire(dlg);
 }
 
 // Add or edit a channel; editing also retires it.

@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 SWEEP = 300.0  # seconds between sweeps without a ring
 POLL_MINUTES = 15  # how often a connection is read without a webhook
 BACKFILL_PAGES = 4  # /transactions pages per step: the first backfill is paced across steps
+POSTING_LAG_DAYS = 30  # Mercury's `start` reads the day a row was made; one made this long before posting is still read
 EVENTS_PAGES = 4
 INBOX_MOST, OUTBOX_MOST, PAY_MOST = 200, 50, 50
 STATEMENT_HOURS = 24
@@ -407,9 +408,23 @@ def _ingest_all(store: Any, cid: str, raws: list[dict[str, Any]], now: str, vers
                     )
 
 
+def _in_history(raw: Mapping[str, Any], since: str | None) -> bool:
+    """Whether a Mercury row belongs to a history cut at `since`: a pending row does (it posts from now on), a settled
+    one when the books date it (its posting day, F.mercury_txn) on or after that day."""
+    if not since or str(raw.get("status") or F.PENDING) == F.PENDING:
+        return True
+    when = raw.get("postedAt") if str(raw.get("status")) == F.POSTED and raw.get("postedAt") else raw.get("createdAt")
+    try:
+        return F.day_of(when) >= since
+    except FinanceError:
+        return True  # ingest refuses it, and queues it to try again, as for any row it cannot read
+
+
 def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
-    """The first backfill: /transactions oldest first from its cursor, a few pages per step. When it ends, the Events
-    cursor starts at Mercury's newest event, so catch-up reads only what came after."""
+    """The first backfill: /transactions oldest first from its cursor, a few pages per step, from the connection's
+    `history_from` day on when it has one (by posting day: _in_history). When it ends, the Events cursor starts at
+    Mercury's newest event, so catch-up reads only what came after, and each account's opening is its balance less the
+    rows taken in (opening_balance)."""
     with store.read() as c:
         row = SK.get(c, "fin_connections", cid)
     conf = _settings(row)
@@ -421,15 +436,19 @@ def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
         with store.transaction() as c:
             SK.update(c, "fin_connections", cid, {"events_cursor": str(first[0].get("id")) if first else "start"})
     cursor = str(row["cursor"] or "") or None
+    since = str(conf.get("history_from") or "") or None  # none on a connection made before it: the whole history
+    # Mercury's `start` filters the day a row was made, the books its posting day: read back far enough for a row made
+    # before history_from and posted on or after it, then keep only the rows the books date from that day on.
+    read_from = (datetime.fromisoformat(since) - timedelta(days=POSTING_LAG_DAYS)).date().isoformat() if since else None
     repeat = False  # the page before was all rows already taken in
     for _ in range(BACKFILL_PAGES):
-        page = provider.transactions(cursor)
+        page = provider.transactions(cursor, start=read_from)
         if not page.ok:
             return [error_text(page)]
         raws = listed(page, "transactions")
         with store.read() as c:
             known = SK.known_txns(c, cid, [str(r.get("id")) for r in raws if r.get("id")])
-        _ingest_all(store, cid, raws, now)
+        _ingest_all(store, cid, [r for r in raws if _in_history(r, since)], now)
         before, cursor = cursor, next_page(page) or (str(raws[-1].get("id")) if raws else cursor)
         # The end: an empty or short last page, or (whatever Mercury's page says) a page that moves the cursor nowhere
         # or a second page in a row of rows already taken in, so a list that keeps naming a next page still ends. One
@@ -1057,6 +1076,8 @@ def statements(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
 
 # ------------------------------------------------------------------------------------------------ the thread
 BELL = Bell()
+# Set once a pass of the current worker has ended, so a test waits for it and not for a sleep. `start` clears it.
+FIRST_PASS = threading.Event()
 _worker: dict[str, Any] = {"thread": None, "stop": threading.Event(), "lock": threading.Lock(), "args": None}
 
 
@@ -1075,6 +1096,7 @@ def start(store: Any, vault: Any, *, rehearsal: bool = False, make: Make | None 
             return
         if cast(threading.Event, _worker["stop"]).is_set():
             _worker["stop"] = threading.Event()
+        FIRST_PASS.clear()
         made = threading.Thread(
             target=_loop, args=(store, vault, rehearsal, make, _worker["stop"]), name="finance-banking", daemon=True
         )
@@ -1105,4 +1127,5 @@ def _loop(store: Any, vault: Any, rehearsal: bool, make: Make | None, halt: thre
             step(store, vault, rehearsal=rehearsal, make=make)
         except Exception:
             log.exception("Finance sync failed")
+        FIRST_PASS.set()
         BELL.wait(seen, SWEEP)

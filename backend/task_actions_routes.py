@@ -2,6 +2,7 @@
 
 import json
 from . import views
+from . import read_cache
 from . import person_asks
 from . import teammate_access
 from . import task_documents, task_followers
@@ -203,14 +204,14 @@ def register_core(
         ),
     )
     def task(request: Request, tid: str):
-        with store.read() as c:
-            tid = auth.resolve_task(c, request.state.identity, tid)
-            auth.task(c, request.state.identity, tid)
         from .github import refresh_task_prs
 
-        refresh_task_prs(app.state.github_app, tid)
+        # One snapshot finds the task, checks the reader and reads it. The PR refresh runs apart and this answer serves
+        # the stored PR state either way, so it is scheduled once the reader is known to read the task.
         with store.read_transaction() as c:
+            tid = auth.resolve_task(c, request.state.identity, tid)
             row = auth.task(c, request.state.identity, tid)
+            refresh_task_prs(app.state.github_app, tid)
             # A bot task now lives in the bot's chat room. Only this task's messages
             # come back here; the rest of that room stays on Chat.
             who = request.state.identity
@@ -260,20 +261,16 @@ def register_core(
             # An event that names a ticket the reader may not open (a hidden child, say) is no detail of this one: it goes.
             named = sorted({str(e[k]) for e in history for k in ("old", "new") if e.get(k)})
             if named:
-                known = {
+                # The named tasks that exist and that the reader may not read, in one statement.
+                hidden_refs = {
                     r[0]
                     for r in c.execute(
-                        "SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?))", (json.dumps(named),)
-                    )
-                }
-                readable = {
-                    r[0]
-                    for r in c.execute(
-                        "SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND (" + related_sql + ")",
+                        "SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND NOT coalesce(("
+                        + related_sql
+                        + "),0)",
                         (json.dumps(named),),
                     )
                 }
-                hidden_refs = known - readable
                 history = [e for e in history if not ({str(e.get(k)) for k in ("old", "new")} & hidden_refs)]
             # A subtask summary's text names its subtasks only where the reader may open them (task_reads.children_text).
             from . import task_reads
@@ -333,6 +330,15 @@ def register_core(
                 and task_run_models.may_set(c, auth, who, H.actor_id(row["owner_id"])),
                 **privacy.page(c, who, row["conversation_id"], task_id=tid),
             }
+
+    @app.get("/api/v2/tasks/{tid}/execution")
+    def task_execution_read(request: Request, tid: str):
+        """The run the task's page follows (`execution` of GET /api/v2/tasks/{tid}, the same value), alone: the page
+        reads it as the run's steps come in, without reading the whole task each time."""
+        who = request.state.identity
+        with store.read_transaction() as c:
+            row = auth.task(c, who, auth.resolve_task(c, who, tid))
+            return {"execution": task_execution(c, who, row)}
 
     def task_execution(c, who, row):
         """The run the task's page follows in its own room, as a conversation snapshot shows it, or None: the owning
@@ -409,7 +415,7 @@ def register_core(
                 "goal": False,
             }
         way, defer_for = comment_way_for(c, who, row)
-        config = c.execute(BS.ONE_SQL, (H.actor_id(bot),)).fetchone()
+        config = read_cache.one(c, BS.ONE_SQL, (H.actor_id(bot),))
         config = json.loads(config[0] or "{}") if config else {}
         from .harnesses import steers
         from .chat_goals import may_direct, may_set, own_room
@@ -795,7 +801,7 @@ def register_core(
         if check:
             # A check is its owner's (check_models.of): one asked for is filed by its owner (check_choice), and a
             # reviewer's default comes from its own setting.
-            check_models.record(c, owner, row["id"], check)
+            check_models.record(c, owner, row["id"], check, parent_id, f"{body.title}\n{body.body or ''}")
         elif body.check_model is None and body.check_role is None and unchecked:
             H._task_event(c, row["id"], who.actor, "check_model", None, None, unchecked)
         if handoff and owner == "bot:" + BOTOPS:

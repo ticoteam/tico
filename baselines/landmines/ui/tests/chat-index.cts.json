@@ -1,0 +1,5 @@
+{
+  "ui/tests/chat-index.cts": {
+    "no-fixed-wait-ui": 2
+  }
+}

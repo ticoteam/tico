@@ -22,7 +22,7 @@ last review: steps 3 and 4 read from it.
     tico kpi show <id>
 
 Use `skills/read-cost-per-customer-for-a-segment/SKILL.md` for the segment's new customers and cost per customer. Write
-each figure with its split methods and its month. For each KPI you own, log the reading:
+each figure with its counts and its month, and the cost per customer as direct and loaded. For each KPI you own, log the reading:
 
     tico kpi log <id> <value> --period-start <YYYY-MM-01> --period-end <YYYY-MM-DD>
 
@@ -60,5 +60,5 @@ Write `reports/YYYY-MM-DD-segment-growth-review.md` in the shape of `knowledge/e
 commit this repository, and finish with `tico task done <id> -m "..." --version N`: the number against goal and
 ceiling, the tests, the asks, the ideas filed and what you could not read.
 
-Done when: the number is written with its split methods and month; every running test has a line; every open ask has its
+Done when: the number is written with its counts, direct and loaded cost and month; every running test has a line; every open ask has its
 task id and age; the reconciliation is written, or its gap is named; and the review is published.

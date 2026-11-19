@@ -1,0 +1,6 @@
+{
+  "ui/tests/ask-screen-opinions.cts": {
+    "no-fixed-wait-ui": 6,
+    "no-raised-timeout": 6
+  }
+}

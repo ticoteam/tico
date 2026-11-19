@@ -104,8 +104,13 @@ Never refused (a person receiver follows the rule above):
   in that thread (or the thread above a sub-thread) when it names one. In a DM, anything the receiver wrote there, and
   any person's message there, counts. It still adds to the bot's chats a day;
 - anything on a task the bot and a bot teammate are both part of: requester, owner (now or at any earlier stage), anyone
-  an ask on it names or was given to, its readers, or a poster in or member of the task's thread. A message in a
-  task's thread is on that task. Handing a task back to its requester passes; handing it to someone new is checked;
+  an ask on it names or was given to, its readers, its followers, or a poster in or member of the task's thread. A
+  message in a task's thread is on that task. Handing a task back to its requester passes; handing it to someone new is
+  checked, and passes for a teammate already on the task;
+- adding any teammate in the company, bot or person, as a follower or reader of a task the bot owns: sharing its own
+  work is never out of reach. A bot teammate added this way is then on the task, so the bot reaches them there
+  (@mentions, comments, a hand-off). Away from that task the rule holds. A group is still added to Who can see only by
+  a person;
 - system hand-offs: the task engine and the never-stuck check, routines and automations, and rule wakes. They write in
   the hub, not through a bot's route;
 - the hub's own work in a bot's name: a runner's reply to the message that woke it, comments on a task;
@@ -117,9 +122,12 @@ Never refused (a person receiver follows the rule above):
 
 The refusal is a 409 the bot reads once and acts on, never a retry:
 
-- `reach_closed`: the receiver is outside its reach. The detail names who it reaches and ends "Send it to <manager>, who
-  can pass it on." (a bot with no manager: the owner, named as such; with no owner either, the teammates it does reach,
-  or that it needs a manager);
+- `reach_closed`: the receiver is outside its reach. The detail names who it reaches, the rule (its mode and where it
+  is set: the company default, Everyone, a team or the bot itself, on Rules › Internal), that a task it owns can take
+  the teammate as a reader or follower, and ends "Send it to <manager>, who can pass it on." (a bot with no manager: the owner, named as such; with no owner either, the teammates it does reach,
+  or that it needs a manager). When the receiver is a person who wrote to the bot (addressed or @mentioning it) in the
+  last 7 days, the detail names no manager instead: it says to file the work for them from that message
+  (`--for human:<id> --from-message <id>`, so they are its requester) and ask on that task, and `via` is `null`;
 - `reach_line`: a line blocks the pair (`per_day` 0) or its count for today is used;
 - `reach_cap`: its chats or tasks a day are used; the count starts again at midnight.
 

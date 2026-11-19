@@ -81,9 +81,6 @@ function grlDraw() {
   if (!st || !box) return;
   const ln = st.line;
   box.hidden = !ln;
-  // The headline says what the stale-sources banner said, so the banner gives way while the line shows.
-  const banner = st.dash.root?.querySelector<HTMLElement>('[data-gr-health]');
-  if (banner && ln) banner.hidden = true;
   if (!ln) { box.innerHTML = ''; return; }
   const src = new Map(ln.sources.map(s => [s.id, s]));
   const kpi = new Map(ln.kpis.map(k => [k.id, k]));

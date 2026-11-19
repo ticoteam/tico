@@ -56,7 +56,7 @@ def test_hosted_own_with_the_preset_writes_the_mark_the_choices_and_only_the_lin
         "TICO_AUTH_PROXY": "owner-link",
         "TICO_OWNER_LINK_HASH": hashlib.sha256(token.encode()).hexdigest(),
         "TICO_INSTALL_PRESET": "recommended",
-        "TICO_MODELS_PRESET": "subscriptions-gateway",
+        "TICO_MODELS_PRESET": "subscriptions",
         "TICO_SUPPORT": "on",
         "TICO_GATEWAY_INVITE": INVITE,
         "TICO_TEAM_NAME": "Acme",

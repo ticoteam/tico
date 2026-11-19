@@ -138,6 +138,8 @@ Do not retry the same text, and do not look for another route.
 tico email draft ana@acme.example --to ava@creator.example \
   --subject "Ava, 6 months of Acme on us" --body-file out/ava.txt
 tico email draft ana@acme.example --reply-to 18f2c9a3b4d5e6f7 --body-file out/reply.txt
+tico email draft ana@acme.example --to records@city.example --subject "Records request" \
+  --body-file out/request.txt --attach out/request.pdf --attach file-0123456789abcdef01234567
 tico email discard ana@acme.example r-882...
 ```
 
@@ -146,9 +148,15 @@ tico email discard ana@acme.example r-882...
 new one. `--cc` adds copies; Tico decides whether an outside Cc needs a person.
 
 The lint refuses a draft with an error: rewrite it once, and never route around it. The answer carries the draft id,
-the thread and the second reviewer's verdict. Running the same draft again **finds the same Gmail draft** instead of
+the thread and the second reviewer's verdict (`review`) with its reason (`review_reason`). Running the same draft again **finds the same Gmail draft** instead of
 leaving two. Change a word and it is a new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail. A draft is
 harmless: it sits in Gmail Drafts until someone sends it.
+
+`--attach` (repeatable, also on `reply`) adds a file: a path in your checkout is published first, as `tico file
+publish` does, and a Tico file id (`FILE` or `FILE@N`) is used as it is. Over MCP, `attachments` takes file ids only.
+You may attach only files you may open; any other is not found. The draft carries each file's bytes as they are now,
+so a changed file or another set of files is a new draft. An email is at most 24 MB with its files encoded (about
+18 MB of files); a bigger one is refused.
 
 Attachments use the shared sending policy, whose attachment prompt is on by default. The server freezes and hashes
 every attachment, including unnamed inline parts. An OK binds that exact snapshot; changed files need a new send and OK.
@@ -159,7 +167,7 @@ needs Read and write on the mailbox and is audited.
 ### Send
 
 ```bash
-tico email send ana@acme.example --draft r-882...
+tico email send ana@acme.example --draft r-882... --task 1a2b3c4d
 ```
 
 `send` freezes the draft and queues it with Tico. Your sending policy is set in Tico, never in `bot.yaml`: **Settings >
@@ -171,7 +179,9 @@ Bots > <bot> > Email sending**, or the company or inbox sending policy (see [Tur
 
 Some sends always ask a person whatever the mode, for example a new correspondent, attachments, an outside Cc or many
 outside recipients, legal or money matters; the effective **Who can OK** rule decides whose yes counts. A held send
-is an OK on a task, "Send this email?", in that person's Needs you. It is bound to the frozen send: the person sees the
+is an OK on a task of its own, titled with the email ("Send: <subject> → <first recipient>"), in that person's Needs
+you. With `--task` (or, left out, the task a bot's turn works on) that task is a sub-task of the one the email is for,
+and the send's `task_id` and `approval_task_id` name both. It is bound to the frozen send: the person sees the
 whole email (the complete MIME and exact To, Cc and Bcc) and OKs it with their own click; a changed email needs a new
 OK. Nothing a bot passes releases a send, and a numbered GitHub issue authorizes nothing either. Finance queues its
 exact invoice email the same way; OKing the finance action does not OK an email nobody saw.
@@ -312,7 +322,9 @@ What is left in the inbox is the part that needs judgement. Lists carry headers 
 about to act on with `tico email thread`, never a whole list.
 
 `tico email draft` runs a second reviewer on the text. Its verdict is advisory: a flagged draft is still written, and
-Tico still decides the send. Rewrite a flagged draft once before you try again.
+Tico still decides the send. A stop always says why in `review_reason` (a commitment, a confirmed time, a claim the
+thread does not support, files it says are attached but are not, or wording that is not the company's); a review that
+gave no verdict says that too. Rewrite a flagged draft once before you try again.
 
 If you keep sorting the same kind of message by hand, that is a rule. Propose it as a change to the inbox's Message
 automation: `tico automation update <id> --file <json> --summary "..."`. A bot's change to a person's automation is a

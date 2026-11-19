@@ -9,6 +9,7 @@ import type {Page, Route} from 'playwright';
 // - a Company page edition: title, who it goes to, period, link, text; its content_sha256 only under Details;
 // - a spend limit proposal: one line, from and to;
 // - a webhook: its name, address and what it sends in the catalog's words;
+// - a bot's Growth channel and source: the channel, the bot that will own it and the source, in words;
 // - a budget raise (a kind with no summary of its own): labelled lines;
 // - Details (at least 44 px tall) holds the exact content, unchanged; Approve sends the same shown_hash as before.
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -62,6 +63,9 @@ const oneBank = {source: 'tico', action_id: 'act_one001', kind: 'payment_create'
 const euro = {source: 'tico', action_id: 'act_eu0001', kind: 'payment_create',
   what: 'Pay 1920.00 EUR to Keelson Freight Forwarding by ach (Finance action act_eu0001)',
   payload: {recipient_id: 'ct_91aa', amount: 192000, money_account_id: 'ma_eu1', account_id: 'acc_9999'}, amount: 192000, account: 'ma_eu1'};
+const growth = {kind: 'growth', owner: 'bot:pm', for_channel: null,
+  channel: {slug: 'linkedin', name: 'LinkedIn posts', track: 'brand', stage: 'testing', why: 'Founder posts bring trials', budget_month: 0, owner_ref: 'bot:pm'},
+  source: {truth_for: 'signups', system: 'HubSpot', reach_kind: 'mcp', owner_ref: 'bot:pm'}};
 const OKS: Record<string, {subject: string; content: unknown; line: string}> = {
   r1: {subject: 'finance:act_8f3e2b1c9d', content: payment, line: 'OK this payment in Finance?'},
   r2: {subject: 'finance:act_77aa01', content: rule, line: 'OK this rule in Finance?'},
@@ -69,13 +73,14 @@ const OKS: Record<string, {subject: string; content: unknown; line: string}> = {
   r4: {subject: 'edition:ed1', content: edition, line: 'Publish this edition?'},
   r5: {subject: 'proposal:p1', content: proposal, line: 'Change a spend limit?'},
   r6: {subject: 'webhook:abc', content: webhook, line: 'Make this webhook endpoint?'},
+  r12: {subject: 'growth:g1', content: growth, line: 'Add a Growth channel and its source?'},
   r7: {subject: 'budget_raise:Launch video', content: raise, line: 'Raise the budget?'},
   r8: {subject: 'board:aud_1', content: board, line: 'Show these stats to Investors?'},
   r9: {subject: 'proposal:p2', content: cap, line: 'Change how many tasks a teammate may send a manager a day?'},
   r10: {subject: 'finance:act_eu0001', content: euro, line: 'OK this euro payment in Finance?'},
   r11: {subject: 'finance:act_one001', content: oneBank, line: 'OK this one-bank payment in Finance?'},
 };
-const SHOWN: Record<string, string> = {r1: HASH('1'), r2: HASH('2'), r3: HASH('3'), r4: HASH('4'), r5: HASH('5'), r6: HASH('6'), r7: HASH('7'), r8: HASH('8'), r9: HASH('9'), r10: HASH('e'), r11: HASH('f')};
+const SHOWN: Record<string, string> = {r1: HASH('1'), r2: HASH('2'), r3: HASH('3'), r4: HASH('4'), r5: HASH('5'), r6: HASH('6'), r7: HASH('7'), r8: HASH('8'), r9: HASH('9'), r10: HASH('e'), r11: HASH('f'), r12: HASH('c')};
 const email = {preview_complete: true, shown_hash: SHOWN.r3, body: 'Your replacement ships today.',
   bodies: [{type: 'text/plain', text: 'Your replacement ships today.'}],
   send: {id: 'S1', subject: 'Your replacement order', mailbox: 'support@acme.example', recipients: ['jo@customer.example'],
@@ -218,6 +223,13 @@ async function firstScreenClean(page: Page, label: string) {
     text = await firstScreenClean(page, 'webhook');
     for (const s of ['Ops alerts', 'https://hooks.acme.example/tico', 'A task is filed', 'Only when']) assert.ok(text.includes(s), `webhook shows ${s}`);
     await details('r6');
+
+    // r12: a bot's Growth channel and its source: the channel, its owner (the bot asking) and the source in words.
+    await open('r12');
+    text = await firstScreenClean(page, 'growth');
+    for (const s of ['Add a Growth channel and its source', 'LinkedIn posts (linkedin) · brand · testing', 'Founder posts bring trials',
+      '(the bot asking)', 'HubSpot · truth for signups · through its MCP tool']) assert.ok(text.includes(s), `growth shows ${s}`);
+    await details('r12');
 
     // r7: a budget raise: labelled lines.
     await open('r7');

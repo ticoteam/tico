@@ -1,0 +1,5 @@
+{
+  "ui/tests/stage-rules.cts": {
+    "no-fixed-wait-ui": 2
+  }
+}

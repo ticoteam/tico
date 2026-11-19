@@ -70,7 +70,7 @@ def failed_tokens(jobs):
     return tokens
 
 
-def anchor_of(records, now, contained, named):
+def anchor_of(records, now, contained, named, complete=lambda record: True):
     """The anchor: the newest validation, full or incremental, that finished within the last 24 hours (by finish time),
     whose commit main still contains, and that ran the suite to an answer: green, or red naming its failures. A green
     incremental validation covers its own diff from its anchor, so the chain of incrementals anchors the next one.
@@ -78,7 +78,9 @@ def anchor_of(records, now, contained, named):
     failures (a build, a VM, a startup failure), is no anchor; full_within_day still counts it, so no second full run is
     dispatched on its account. Returns the record with its "failed" tokens (empty when green), or None. `records` are
     every release's validations (validation_record in release_train): the anchor may have validated an earlier
-    release."""
+    release. `complete(record)` is False for a red run that fail fast cut short (ci.yml's gate cancels an incremental
+    validation's other parts at its first failure): it ran only part of its suite, so it is no anchor either; the next
+    validation selects from the anchor before it, which still covers its diff."""
     candidates = [
         record
         for record in records
@@ -92,7 +94,7 @@ def anchor_of(records, now, contained, named):
             continue
         if record["conclusion"] == "success":
             return {**record, "failed": set()}
-        if record["conclusion"] in FAILED:
+        if record["conclusion"] in FAILED and complete(record):
             failed = named(record)
             if failed is not None:
                 return {**record, "failed": failed}
@@ -254,6 +256,13 @@ def slow_marks(path):
     return has, all_slow
 
 
+def native_test_files(files, root):
+    """The files of `files` that run the release's native binaries, read in `root` (pr_checks holds the rule
+    release_checks uses for the full gate's shards, so both pick the same files; CI checks this module out with only
+    pr_checks.py beside it)."""
+    return pr_checks.native_test_files(files, root)
+
+
 def has_slow_tests(path):
     """Whether a python test file marks a test slow: its slow tests run in the contracts lane (-m slow)."""
     return slow_marks(path)[0]
@@ -280,13 +289,15 @@ def plan_for(
     tables,
     has_slow=lambda path: False,
     previous_changed=False,
+    native=None,
 ):
     """The incremental plan: what the selection runs, the browser smoke set, and the carried failures (`carried`, a set
     of tokens from the newest red validation since the anchor). `exists(path)` tells whether a path is in the candidate's
     tree (a deleted test is not run). Returns the plan; `jobs` lists the gate's VMs in the shape ci.yml's matrix takes.
     `has_slow(path)` tells whether a test file marks slow tests: a carried file that does runs them in the contracts lane.
     `previous_changed`: the candidate's previous release is not the anchor's, so the product part runs (its upgrade
-    journey starts from the previous release)."""
+    journey starts from the previous release). `native(files)` gives the files of `files` that run the release's native
+    binaries (release_checks.native_test_files); None: unknown, so every python VM waits for the binaries."""
     carried = set(carried or ())
     slow_only = tables["slow_only"]
     python = set(selected["python"])
@@ -320,7 +331,15 @@ def plan_for(
     product = bool(selected.get("caddy")) or PRODUCT in carried or bool(previous_changed)
     desktop = any(name.startswith(DESKTOP_INPUTS) for name in changed) or DESKTOP in carried
     jobs = build_jobs(
-        python, browser, contract_files, conformance, selected.get("rust") or [], product, desktop, tables
+        python,
+        browser,
+        contract_files,
+        conformance,
+        selected.get("rust") or [],
+        product,
+        desktop,
+        tables,
+        native=native,
     )
     return {
         "python": python,
@@ -347,16 +366,30 @@ def warn(lines):
         print(line, file=sys.stderr)
 
 
-def build_jobs(python, browser, contract_files, conformance, rust, product, desktop, tables):
-    """The gate's VMs for these files, grouped by measured seconds the way pr_checks.prepare groups them."""
+def build_jobs(python, browser, contract_files, conformance, rust, product, desktop, tables, native=None):
+    """The gate's VMs for these files, grouped by measured seconds the way pr_checks.prepare groups them.
+
+    Only a VM holding a file that runs the native binaries (`native(files)`, release_checks.native_test_files) waits
+    for the native-linux build and places them; the others say binaries "no" and start their tests at once, as the
+    full matrix's python shards 3+ do. The python lane packs its native files on their own VMs, so one native file
+    does not hold a whole VM of other tests; `native` None (unknown) keeps every python VM waiting."""
+    native_files = (set(python) | set(contract_files)) if native is None else set(native([*python, *contract_files]))
+
+    def binaries(files):
+        return {} if native_files.intersection(files) else {"binaries": "no"}
+
     jobs = []
     if python:
-        split, loads = pr_checks.groups(Counter(dict.fromkeys(python, 1)), tables["seconds"])
-        warn(pr_checks.overrun_warnings(loads, pr_checks.SETUP_SECONDS["python"], pr_checks.JOB_SECONDS, "Python"))
+        packed = []
+        for lane in ([f for f in python if f in native_files], [f for f in python if f not in native_files]):
+            if not lane:
+                continue
+            split, loads = pr_checks.groups(Counter(dict.fromkeys(lane, 1)), tables["seconds"])
+            warn(pr_checks.overrun_warnings(loads, pr_checks.SETUP_SECONDS["python"], pr_checks.JOB_SECONDS, "Python"))
+            packed += [(files, load) for files, load in zip(split, loads, strict=True) if files]
         jobs += [
-            job(f"python-{i}", "python", files, seconds=load)
-            for i, (files, load) in enumerate(zip(split, loads, strict=True), 1)
-            if files
+            job(f"python-{i}", "python", files, seconds=load, **binaries(files))
+            for i, (files, load) in enumerate(packed, 1)
         ]
     if browser:
         split, loads = pr_checks.groups(
@@ -379,7 +412,10 @@ def build_jobs(python, browser, contract_files, conformance, rust, product, desk
         warn(pr_checks.overrun_warnings(loads, pr_checks.SETUP_SECONDS["python"], pr_checks.JOB_SECONDS, "contracts"))
         packed = [(files, load) for files, load in zip(split, loads, strict=True) if files]
         names = ["contracts"] if len(packed) == 1 else [f"contracts-{i}" for i in range(1, len(packed) + 1)]
-        jobs += [job(name, "python", files, seconds=load) for name, (files, load) in zip(names, packed, strict=True)]
+        jobs += [
+            job(name, "python", files, seconds=load, **binaries(files))
+            for name, (files, load) in zip(names, packed, strict=True)
+        ]
     if product:
         # The product and desktop parts run hosted_release_check's native_binaries, so their VMs place the release binaries.
         jobs.append(job("product", "product", workers="2"))
@@ -503,6 +539,7 @@ class Checkout:
             tables,
             has_slow=lambda path: has_slow_tests(self.root / path),
             previous_changed=previous_changed,
+            native=lambda files: native_test_files(files, self.root),
         )
         return plan_json(plan)
 

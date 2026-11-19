@@ -125,3 +125,11 @@ def test_connection_commands_send_an_operation_id_only_when_one_is_set(monkeypat
     ]
     both = run_line(["repo", "grant", "acme/web", "ops", "--actions", "--no-actions"], monkeypatch)
     assert both["exit"] != 0 and both["http"] == [] and "not allowed with" in both["stderr"]
+
+
+def test_repo_claim_sends_the_bots_named_or_none_for_all(monkeypatch):
+    some = run_line(["repo", "claim", "--bot", "legal-owner", "--bot", "cmo"], monkeypatch)
+    assert some["tools"] == [["tico_repo_claim", {"bots": ["legal-owner", "cmo"]}]]
+    assert some["http"][-1] == ["POST", "repositories/claim", {"bots": ["legal-owner", "cmo"]}]
+    every = run_line(["repo", "claim"], monkeypatch)
+    assert every["http"][-1] == ["POST", "repositories/claim", {}]

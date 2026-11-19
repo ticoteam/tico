@@ -14,7 +14,7 @@ else), and a person who takes control in the live view holds it until they give 
 (409 `person_in_control` for bots). A person's view is a picture refreshed at most once a second however many people
 watch (one screenshot command per FRAME_EVERY seconds), and their clicks and keys are commands too.
 
-Nothing here is persisted: the server is one process (backend/meeting_screen.py assumes the same). A restart drops
+Nothing here is persisted: the server is one process. A restart drops
 in-flight commands and holds; a caller retries. A login's value reaches only the payload a computer collects for a
 `fill` or `copy`: never a reply, an event, an Activity row or an idempotency row. The 2FA key never leaves the server:
 `code` is answered here and a `fill`/`copy` of the code carries only the current code.
@@ -91,7 +91,8 @@ Verb = Literal[
     "upload",
     "close",
 ]
-LOGGED = ("open", "fill", "copy", "code", "download", "upload")
+# Typing is logged too (E-607): its row holds the verb and the page path, never the text typed.
+LOGGED = ("open", "type", "fill", "copy", "code", "download", "upload")
 FIELDS = ("username", "password", "code")
 REF = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 REQUEST_ERRORS = ("not_on_site", "not_a_password_field")
@@ -278,6 +279,7 @@ class Mailbox:
         self.holds: dict[str, Hold] = {}
         self.sessions: dict[str, SessionFacts] = {}
         self.frames: dict[str, Frame] = {}
+        self.watchers: dict[str, int] = {}  # per account, the people waiting on its next picture now
         self.recent: dict[tuple[str, str], tuple[float, "asyncio.Future[Outcome | dict[str, Any]]"]] = {}
         self.sent: dict[str, list[tuple[float, str]]] = {}
 
@@ -462,6 +464,15 @@ class Mailbox:
     def queued(self, runner_id: str) -> list[Command]:
         with self.lock:
             return list(self.queues.get(runner_id, ()))
+
+    def watch(self, account_id: str, delta: int) -> None:
+        """Counts the people waiting on the account's next picture: one more when one starts to wait, one less after."""
+        with self.lock:
+            left = self.watchers.get(account_id, 0) + delta
+            if left:
+                self.watchers[account_id] = left
+            else:
+                self.watchers.pop(account_id, None)
 
     def hand_out(self, runner_id: str, ids: set[str]) -> list[Command]:
         with self.lock:
@@ -741,7 +752,7 @@ def first_url(sites: list[str]) -> str:
 
 
 def _idle(request: Request, began: float) -> None:
-    # A deliberate wait is not server processing (backend/app.py timing; backend/meeting_screen.py does the same).
+    # A deliberate wait is not server processing (backend/app.py timing).
     request.state.idle_wait_ms = getattr(request.state, "idle_wait_ms", 0) + (time.perf_counter() - began) * 1000
 
 
@@ -1658,6 +1669,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
                 raise
         if pending is not None:
             began = time.perf_counter()
+            mailbox.watch(account_id, 1)
             try:
                 outcome = await asyncio.wait_for(asyncio.shield(pending.reply), FRAME_WAIT)
                 if isinstance(outcome, Problem):
@@ -1665,6 +1677,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             except TimeoutError:
                 pass
             finally:
+                mailbox.watch(account_id, -1)
                 _idle(request, began)
         with mailbox.lock:
             data, url, width, height = frame.data, frame.url, frame.width, frame.height

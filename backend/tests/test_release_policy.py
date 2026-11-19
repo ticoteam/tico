@@ -560,8 +560,8 @@ def test_a_continue_latest_run_never_forks_a_private_task_or_a_chat(api):
             ((open_task["id"], "shared-thread"), (secret["id"], "private-thread"), (None, "chat-thread"))
         ):
             c.execute(
-                "INSERT INTO attempts(id,bot_id,state,created_at,finished_at,lane,last_seq,thread_id,runner_id,task_id) "
-                "VALUES(?,?,?,?,?,?,0,?,?,?)",
+                "INSERT INTO attempts(id,bot_id,state,created_at,finished_at,lane,last_seq,thread_id,runner_id,task_id,"
+                "input_tokens) VALUES(?,?,?,?,?,?,0,?,?,?,100)",
                 (
                     H.new_id(),
                     "ops",
@@ -627,3 +627,76 @@ def test_a_turn_that_never_reached_the_model_does_not_restart_the_idle_count(api
     tick(api, t0)
     row = job(api, routine["id"])
     assert row["held"] == 0 and released(row)["warm"] is True
+
+
+def _turn_on(api, bot, task_id, ended, thread, runner=None, tokens=100):
+    """A finished turn of the bot on `task_id` (None: a chat); with tokens 0, one that never reached the model."""
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO attempts(id,bot_id,state,created_at,finished_at,lane,last_seq,thread_id,task_id,runner_id,"
+            "input_tokens) VALUES(?,?,?,?,?,?,0,?,?,?,?)",
+            (
+                H.new_id(),
+                bot,
+                "completed",
+                H.shift(ended, minutes=-5),
+                ended,
+                "default",
+                thread,
+                task_id,
+                runner,
+                tokens,
+            ),
+        )
+
+
+def test_a_forking_job_counts_idle_from_the_turn_it_continues_not_a_later_private_or_chat_turn(api):
+    """Product #545: the idle clock and the forked session come from one turn. A private task's or a chat's turn
+    since does not restart it, so the job goes in the window of the turn it reads."""
+    shared = new_task(api, "shared work")
+    settle_all(api)
+    t0 = H.shift(H.now(), hours=-6)
+    with api.app.state.store.transaction() as c:
+        secret = H.task_create(c, "bot:assistant", "Private matter", "x", "bot:ops", private=True)
+    settle_all(api)
+    _turn_on(api, "ops", shared["id"], H.shift(t0, minutes=-46), "shared-thread")
+    _turn_on(api, "ops", secret["id"], H.shift(t0, minutes=-10), "private-thread")
+    _turn_on(api, "ops", None, H.shift(t0, minutes=-5), "chat-thread")
+    routine = held(api, shared, wait=DAY, warm=True, session=W.FORK)
+    queued_at(api, routine["id"], t0)
+    tick(api, t0)
+    row = job(api, routine["id"])
+    assert row["held"] == 0 and released(row)["warm"] is True
+
+
+def test_a_forking_job_whose_last_turn_is_shared_goes_at_minute_45_as_before(api):
+    shared = new_task(api, "shared work")
+    settle_all(api)
+    t0 = H.shift(H.now(), hours=-6)
+    _turn_on(api, "ops", shared["id"], H.shift(t0, minutes=-30), "shared-thread")
+    routine = held(api, shared, wait=DAY, warm=True, session=W.FORK)
+    queued_at(api, routine["id"], t0)
+    tick(api, t0)  # idle 30 minutes: not yet
+    assert job(api, routine["id"])["held"] == 1
+    tick(api, H.shift(t0, minutes=15))  # idle 45 minutes
+    row = job(api, routine["id"])
+    assert row["held"] == 0 and released(row)["warm"] is True
+
+
+def test_a_newer_turn_that_never_reached_the_model_is_neither_the_clock_nor_the_fork(api):
+    """Review of #545: the provider thread is recorded at start, so a turn that failed before any request can carry
+    one. The idle clock and the fork both skip it and agree on the turn that warmed the cache."""
+    machine = task_bot(api, lanes=True)
+    ready(api, machine, ["ops"], capabilities=["task_lanes_v2", "fork_session_v1"])
+    shared = new_task(api, "shared work")
+    other = new_task(api, "other shared work")
+    settle_all(api)
+    now = H.now()
+    _turn_on(api, "ops", shared["id"], H.shift(now, minutes=-46), "warmed-thread", machine["runner_id"])
+    _turn_on(api, "ops", other["id"], H.shift(now, minutes=-10), "unwarmed-thread", machine["runner_id"], tokens=0)
+    routine = held(api, shared, wait=DAY, warm=True, session=W.FORK)
+    tick(api, H.now())  # idle 46 minutes from the warmed turn; 10 from the unwarmed one, which does not count
+    row = job(api, routine["id"])
+    assert row["held"] == 0 and released(row)["warm"] is True
+    attempt = claim(api, machine)
+    assert attempt["job_id"] == routine["id"] and attempt["fork_thread"] == "warmed-thread"

@@ -84,7 +84,7 @@ const PE_REQ_PICKS: [string, string][] = [
 const PE_REQ_CHOOSE = ['approval', 'ok_bot', 'page', 'in_release'];
 /** The documents a stage approves (task_requirements.APPROVED): a person approves the version the bot submits by
  * writing it in the stage. */
-const PE_APPROVALS = ['Spec', 'QA report', 'Release report', 'Invoice'];
+const PE_APPROVALS = ['Spec', 'QA report', 'Release report', 'Invoice', 'Proposal', 'Results', 'Checked in production'];
 /** The document a page requirement approves, or '' for a page attached by hand. */
 const peDocument = (req: PipelineReqRec): string =>
   req.kind === 'page' && typeof req.settings['document'] === 'string' ? req.settings['document'] : '';

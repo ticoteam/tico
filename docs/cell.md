@@ -26,8 +26,12 @@ its `compose.yaml` come from that checkout). Before you run `init`, on the insta
 
 ```sh
 install -m 600 /dev/stdin /root/tunnel-token <<<"$TOKEN"     # the tunnel's token, readable by root only
-python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.team --json
+python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.team \
+  [--kms-key arn:aws:kms:<region>:<account>:key/<id>] --json
 ```
+
+`--kms-key` saves the cell's one KMS key in `cell.json`, for every `add` that gives none
+([Stored secrets and KMS](#stored-secrets-and-kms)). Left out, the saved key is kept; `--kms-key ""` clears it.
 
 `init` is idempotent. Re-run it after you change anything. It does the following:
 
@@ -60,6 +64,8 @@ python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.
 `init` then adds one tunnel route, `*.<page-domain>`, beside the cell's own. `--page-domain ""` removes it. In Cloudflare,
 the page domain needs the same wildcard record as the cell's, a CNAME to the tunnel, in its own zone.
 
+`--meet-domain HOST` turns on Tico Meet calls for every company on the host ([Tico Meet](#tico-meet)).
+
 In Cloudflare, give the tunnel a wildcard DNS record `*.<domain>` (a CNAME to the tunnel). Set no Public Hostnames
 of its own on the tunnel: cloudflared prefers routes held in the dashboard over the file `init` writes. Names that
 already have their own DNS record, such as `hub` and `accounts`, are not affected.
@@ -69,6 +75,7 @@ already have their own DNS record, such as `hub` and `accounts`, are not affecte
 ```sh
 python3 -m setup cell add --company boatyard --domain boatyard.tico.team --owner-email owner@example.com \
   --auth oidc --issuer https://accounts.tico.team --client-id tc_... --client-secret-file /root/boatyard/client-secret \
+  --kms-key arn:aws:kms:us-west-2:<account>:key/<id> --kms-credentials-file /root/boatyard/kms-key \
   [--gateway-invite-file F] [--backup-url s3://bucket/prefix --backup-region us-west-2 --backup-credentials-file F] \
   [--company-file tico.company.yaml] [--company-name "Boatyard"] [--memory 2g] [--version vX.Y.Z] \
   [--hosted own|invited] [--signin-label "Tico account"] [--timeout 300] \
@@ -81,7 +88,9 @@ python3 -m setup cell set-sleep --company boatyard --minutes N|default --json
 python3 -m setup cell set-page-host --company boatyard --host boatyard.tico.page|"" --json
 python3 -m setup cell set-slack --company boatyard on|off --json
 python3 -m setup cell wake --company boatyard [--timeout 300] --json
-python3 -m setup cell update --company boatyard --version vX.Y.Z --json
+python3 -m setup cell update --company boatyard --version vX.Y.Z [--kms-key ARN] [--kms-credentials-file F] --json
+python3 -m setup cell kms-policy --company boatyard [--kms-key ARN] --json
+python3 -m setup cell rewrap --company boatyard [--timeout 300] [--step-timeout 1800] --json
 python3 -m setup cell remove --company boatyard [--keep-data] --json
 ```
 
@@ -113,12 +122,18 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 | `snapshot_failed` | `update` could not copy the database; nothing changed and the old release runs again |
 | `docker_failed` | A Docker or Compose call failed |
 | `router_failed` | The router refused its new config (the old config stays) |
-| `firewall_failed` | The metadata firewall rule could not be set |
+| `firewall_failed` | The metadata firewall rule, or Tico Meet's `INPUT` rules for 7880, could not be set |
+| `meet_failed` | Tico Meet did not come up within 60 s of `init` (the detail says what is missing), or it is on but its key file holds no key pair |
+| `port_taken` | `init --meet-domain` while a route uses one of Tico Meet's ports |
 | `unhealthy` | `/healthz` did not answer through the router in time (`wake`: on the server's own port), and the detail has the last log lines |
 | `update_failed` | The new release did not come up and the company is back on the old one and its database (`version` says which) |
 | `updater_failed` | `init` could not install or start the cell updater or the wake service |
 | `rollback_failed` | The new release did not come up, and putting the old one back failed too; the detail says how far it got (`version` is the release in `.env` now) |
-| `unsupported_host` | `init` was run somewhere other than the Linux host |
+| `kms_required` | `add` of a new company without `--kms-key` (and no key from `init`) or `--kms-credentials-file`; `update` with one of the two and neither saved; `rewrap` of a company without KMS settings. The detail names the missing flags. Nothing changed |
+| `public_access` | `rewrap`: the company's backup bucket does not block public access with all four settings. The detail names the bucket. Nothing changed |
+| `rewrap_failed` | `rewrap`: the backend step did not finish (`step`, `exit`, and `failed`: the kinds and counts of secrets that do not open under KMS). Nothing was deleted, and a running company was started again |
+| `s3_failed` | `rewrap`: an S3 call with the host's role failed (reading the public access block, or deleting the key copies) |
+| `unsupported_host` | `init` was run somewhere other than the Linux host, or `rewrap` on a host without boto3 |
 | `internal` | A bug. The detail has the cause, with secrets masked |
 
 `add`, `start`, `wake` and `update` answer like this:
@@ -127,6 +142,10 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 {"ok": true, "company": "boatyard", "url": "https://boatyard.tico.team", "port": 20000, "ready_ms": 8400,
  "version": "v0.5.1", "changed": true, "owner_link_file": "/srv/tico-cell/companies/boatyard/owner-link.txt"}
 ```
+
+`add` and `update` add `"kms": true` and `"kms_key"` when the company's stored secrets are on KMS. A company made
+before KMS gets `"kms": false` and a `"warning"` instead; it runs as before until `update --kms-key
+--kms-credentials-file` and `rewrap` ([Stored secrets and KMS](#stored-secrets-and-kms)).
 
 `add` adds `"ignored"` (the `--env-file` keys it did not keep, names only) and `"unused"` (kept keys the stock
 `compose.yaml` does not pass to the server, so they do nothing) when given `--env-file`, and `"imported": true` with
@@ -151,8 +170,8 @@ A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `sl
 
 ### Rules
 
-- **Secrets come only from files.** These are the client secret, the Gateway invite, the backup key and the tunnel
-  token. Each file must be readable by its owner only (mode 0600 or stricter). Secrets never appear in argv, and never
+- **Secrets come only from files.** These are the client secret, the Gateway invite, the backup key, the KMS access
+  key and the tunnel token. Each file must be readable by its owner only (mode 0600 or stricter). Secrets never appear in argv, and never
   on stdout: every detail and log line is scrubbed. They are written only to the company's `.env` (0600).
 - **Every command is idempotent.** Running `add` again with the same settings changes nothing and gives the same answer
   (`changed: false`). Running it with new settings, such as a rotated client secret, applies them. An optional input
@@ -185,6 +204,66 @@ A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `sl
   company stays marked `removed` with its slot, and running `remove` again finishes.
 - **Locks.** Commands on different companies run in parallel. Only allocating or freeing a slot and rewriting the
   router config share a lock. A command reads a company's record only once it holds that company's lock.
+
+## Stored secrets and KMS
+
+A company's stored secrets (API keys, model subscriptions, Slack tokens, GitHub App secrets) are sealed with a data
+key ([docs/credential-vault.md](credential-vault.md)). Without KMS that key is a file in `data/`, `credential.key`,
+and the backups carry a copy of it, so whoever reads a backup opens every secret. On a cell the data key is wrapped
+with the cell's one AWS KMS key instead, with the company's slug as its encryption context, and no key file is kept.
+
+**A person's step, once per cell and once per company** (bots cannot do it):
+
+1. Create the cell's KMS key: a symmetric encryption key in the cell's region, with a deletion waiting period (30
+   days). A deleted key, or a lost access key, loses every company's stored secrets: keep the waiting period on. Pass
+   its ARN to `init --kms-key` (or to each `add` and `update`).
+2. For each company, an IAM user of its own with one access key and exactly the policy that
+   `python3 -m setup cell kms-policy --company <slug> --kms-key <arn> --json` prints (`policy`): `kms:Encrypt`,
+   `kms:Decrypt` and `kms:GenerateDataKey` on the cell's key, only when the encryption context is
+   `company=<slug>` and `application=tico-credentials`. So one company's key can never unwrap another's data key.
+   Containers cannot use the host's role, so each company needs this key of its own.
+3. Save the access key in a 0600 file (`KEY=VALUE` lines with `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, or the
+   JSON `aws iam create-access-key` prints) and pass it as `--kms-credentials-file`.
+
+**The flags.** `add` and `update` take `--kms-key ARN` (a key ARN, `arn:aws:kms:<region>:<account>:key/<id>`, not an
+alias) and `--kms-credentials-file F`. They write five lines to the company's `.env`: `TICO_CREDENTIAL_KMS_KEY` (the
+ARN), `TICO_CREDENTIAL_KMS_CONTEXT` (the slug), `TICO_CREDENTIAL_KMS_ACCESS_KEY_ID`,
+`TICO_CREDENTIAL_KMS_SECRET_ACCESS_KEY` and `TICO_CREDENTIAL_KMS_REGION` (the ARN's region). Either flag left out
+keeps the saved value. The secret is never printed. **A new company needs both** (`--kms-key` may come from `init`):
+without them `add` is refused with `kms_required`, naming the missing flag, so its first secret is never sealed by a
+key file. A company made before this keeps running as it did, with a warning in the answer.
+
+**Moving an existing company onto KMS:** `update --company <slug> --version <its release> --kms-key ARN
+--kms-credentials-file F` (the server restarts with the settings and wraps its data key on next use), then
+`python3 -m setup cell rewrap --company <slug> --json`, which does, in this order, each step stopping the run before
+the next:
+
+1. Reads the company's backup bucket's public access block with the host's role (read-only `GetPublicAccessBlock`).
+   A bucket that does not block public access with all four settings stops it (`public_access`, naming the bucket)
+   before anything else.
+2. Refuses (`kms_required`) a company without its KMS settings.
+3. Stops the server (and its Slack gateway; Docker must say they are stopped; a sleeping or stopped company already
+   is) and runs the backend step `python -m backend.manage vault-rotate --json` in a one-off container of the same
+   image, `.env` and `/data`. The step wraps the data key with KMS, re-seals what `github-app.key` seals, moves every
+   secret to a fresh data key, checks that every one opens under KMS, and only then deletes `credential.key` and
+   `github-app.key` from `data/`. A secret that does not open stops it with nothing deleted: the answer is
+   `rewrap_failed` with `failed`, the kinds and counts. A company that was running is started again, also when the
+   step failed; a sleeping one sleeps on.
+4. With the host's role, deletes every version and delete marker of the key copies under
+   `<backup prefix>/credential-key/` in the bucket.
+5. With the host's role, deletes every version of a bundle backup's key copy in the same bucket
+   (`backups/**.sqlite.keys/credential.key` or `github-app.key`, from a hand-run `manage.py backup`) whose SHA-256,
+   as S3 stored it, is one of this company's key files', and the copy's delete markers. Another company's copy in a
+   shared bucket, or one S3 holds no SHA-256 for, is left alone and counted in `kept_bundle_key_copies`. The key
+   files' SHA-256s are written to `.key-digests.json` (0600) beside `.env` before step 3, so a run after an
+   interruption still finds the copies. A bundle written to another bucket is not looked for.
+
+It answers `{"ok": true, "company", "public_access_blocked": true, "step": "done", "resealed", "deleted",
+"deleted_key_copies", "deleted_bundle_key_copies", "kept_bundle_key_copies", "state", "ready_ms"}` (`public_access_blocked` is null for a company without a backup bucket).
+It is idempotent: run it again after a failure or an interruption, and the step answers `already_done` and nothing is
+left to delete. It needs boto3 on the host (`pip install boto3`) and a host role that may read the bucket's public
+access block, list object versions, read object checksums (`HeadObject`) and delete object versions under the
+companies' prefixes and `backups/`.
 
 ## Sleep, wake and the hold
 
@@ -323,8 +402,9 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   invite, owner link, backup, company file), its sign-in, network, preset and support keys, and the ones that belong
   to a single-company install: `CLOUDFLARE_TUNNEL_TOKEN`, `COMPOSE_PROFILES`, `COMPOSE_PROJECT_NAME`,
   `TICO_UPDATER_URL`, `TICO_UPDATES`, `TICO_CELL`, `TICO_TAG`, `TICO_PORT`, `TICO_EXPECTED_AWS_ACCOUNT`,
-  `TICO_EXPECTED_AWS_ROLE`, `TICO_CADDY*`, `TICO_TUNNEL*`, and the page's `TICO_READER_ORIGIN` and
-  `TICO_COMPANY_PAGE_DIR`. So pass the team name and sign-in button as `--company-name` and `--signin-label`,
+  `TICO_EXPECTED_AWS_ROLE`, `TICO_CADDY*`, `TICO_TUNNEL*`, the page's `TICO_READER_ORIGIN` and
+  `TICO_COMPANY_PAGE_DIR`, and the KMS settings (`TICO_CREDENTIAL_KMS_KEY`, `_CONTEXT`, `_ACCESS_KEY_ID`,
+  `_SECRET_ACCESS_KEY`, `_REGION`: only `--kms-key` and `--kms-credentials-file` set them). So pass the team name and sign-in button as `--company-name` and `--signin-label`,
   not in the file. The values are secrets: never printed, masked in every detail. Passing `--env-file` again replaces
   `extra.env`; leaving it out keeps it.
 - **`--import-data FILE`** (a `.tar` or `.tar.gz` of the contents of the install's `/data`: `hub.sqlite` and its
@@ -413,15 +493,125 @@ control volume. Run `init` from the new checkout once (it installs the service),
 `update` rewrites the company's files to the new form (token, `control/` mount, `.env`). With the same release it
 takes no snapshot, and it restarts the server only when a file changed, so a second run changes nothing.
 
+## Tico Meet
+
+Tico Meet calls ([meet.md](meet.md)) need a LiveKit media server. A cell runs **one LiveKit for every company on the
+host, with one key pair**. LiveKit OSS lets any key mint a token for any room, so a key pair per company would add no
+isolation, and adding a company would restart LiveKit and drop every call. Rooms are `tico-call-<uuid>`, and each
+server lists and ends only its own rooms by name.
+
+Turn it on with `init --meet-domain <host>`, where `<host>` is the TURN hostname, such as `meet-cell-1.preview.tico.team`. The
+setting is saved in `cell.json` and kept when the flag is left out. `--meet-domain ""` turns it off. `init` then:
+
+- Makes the key pair once, in `/srv/tico-cell/meet/keys/keys.yaml` (0600, `<key>: "<secret>"`, LiveKit's own
+  `key_file`). LiveKit reads it from a read-only mount, so the secret is in neither `docker inspect` nor
+  `docker compose config`. The secret is never printed, and it is scrubbed from every answer and error. Turning Tico
+  Meet off keeps the file, so turning it on again reuses the same pair.
+- Refuses to turn it on while a route (`cell route set`) uses 7880, 7881, 3478 or 8443 (`port_taken`). Routes can never
+  take those ports, whether Tico Meet is on or not.
+- Adds two services to the edge project, both pinned by digest, on the host's network, with all capabilities dropped
+  except `NET_BIND_SERVICE`, `no-new-privileges` and a read-only root filesystem:
+  - `certs` (`tico-cell-certs`): Caddy, the router's image, which only gets and renews the TURN certificate. It uses
+    HTTP-01 on port 80 and nothing else, so no DNS credential is ever on the host. Its admin API is off (the router
+    uses `localhost:2019`), and its own HTTPS port is 8443, which stays closed. Its storage is
+    `/srv/tico-cell/meet/certs` (0700).
+  - `livekit` (`tico-cell-livekit`): `compose.yaml`'s LiveKit image (v1.13.11: TURN credentials that expire, and
+    TURN refuses relays to private addresses and to this host's other ports). Its API and signal are on 7880, media on
+    7881/tcp and 50000-50100/udp, TURN on 3478/udp, and TURN over TLS on **443/tcp** with that certificate. Nothing
+    else on a cell binds 443, because the tunnel is outbound only. It uses `use_external_ip`.
+- Keeps 7880 to this host: the firewall script (the one that blocks the metadata service, run at boot and after every
+  Docker start) puts three rules tagged `tico-cell-meet` first in `INPUT`. They accept 7880/tcp from `127.0.0.0/8` (the
+  router) and from the companies' default networks (`10.208.0.0/12`, their servers), and drop it from anywhere else.
+  The security group also keeps 7880 closed. Turning Tico Meet off removes the rules.
+- Waits up to 60 s for LiveKit's API to answer on `127.0.0.1:7880` and for the TURN certificate to be there. Only then
+  does Tico Meet count as on. If either is missing, `init` fails with `meet_failed`, naming what is missing. A Tico Meet
+  that was off is taken down again (services, firewall rules), and nothing below happens. One that was already on stays
+  on, as it would if LiveKit stopped by itself.
+- Then sends `/rtc` and `/rtc/*` on every running company's hosts to `127.0.0.1:7880`, ahead of the company's server, with
+  the same hold and WebSocket grace as the server. Browsers connect to `wss://<company host>/rtc` through the tunnel,
+  so the signal needs no public port.
+
+Each company's `.env` gets five keys at `add`, or at its next `update`, including one to the release it already runs:
+
+| Key | Value |
+|---|---|
+| `TICO_MEET_URL` | `wss://<company domain>` |
+| `TICO_MEET_INTERNAL_URL` | `http://10.208.<i>.1:7880`: the company's default-network gateway, as for its updater |
+| `TICO_MEET_DOMAIN` | the TURN hostname |
+| `TICO_MEET_API_KEY`, `TICO_MEET_API_SECRET` | the cell's key pair |
+
+While Tico Meet is off, `add` and `update` remove these keys, and calls answer `meet_unavailable`. They are the cell's
+own: an `--env-file` that carries them gets them back in `ignored`. A company on a release older than v0.5.54 (the
+first with calls) ignores them. A company host can never be the TURN host, and the reverse is also refused
+(`domain_taken`).
+
+**Certificate renewal.** LiveKit reads its certificate only when it starts. Every 10 minutes the cell updater
+compares the certificate file with LiveKit's start time. When the file is newer, it asks LiveKit's `ListRooms` with a
+one-minute token that may only list rooms. If no room is open, it restarts LiveKit. When rooms are open or LiveKit does
+not answer, it waits and tries again 10 minutes later. Caddy renews about 30 days before the certificate expires, so
+there is time to find an empty moment. While the certificate LiveKit started with runs out in under 14 days (renewal
+failed, or no empty moment came), each check logs `tico meet: warning: cert_expiring: ... <days> days` to the updater's
+journal (`journalctl -u tico-cell-updater`).
+
+**Restarts.** Each server restarts once, when its `.env` gains or loses the keys. The router holds requests for 30 s
+while it does. A LiveKit restart drops live calls. That happens on a renewal (only when the cell is empty), on a new
+TURN host or LiveKit image (an `init` from a core that changes them), and when Tico Meet is turned off.
+
+**Trust.** All the companies on a host share one key, so a company's server that leaks it could list rooms and join
+another company's call. Each server also has the secret in its own environment (`TICO_MEET_API_SECRET`). Every company
+on cell-1 is ours, so the cell is one trust boundary and that is acceptable. Before untrusted
+sign-ups share a cell, revisit this with a LiveKit per company or a proxy that checks tokens.
+
+### Turning it on in production
+
+The AWS piece is `infra/cell-meet/cell-meet.yaml`: an Elastic IP associated with the host, and the inbound rules
+80/tcp, 443/tcp, 3478/udp, 7881/tcp and 50000-50100/udp on the host's security group. It keeps 22, 7880 and 8443
+closed. It is a stack of its own, so the host's own stack is never redeployed. For cell-1 (`i-027126437a47a24f4`,
+`sg-0ee5245bf7bc7a276`), in this order:
+
+1. **Install the core** for the release that has this, through HQ (`POST /v1/staff/cloud/hosts/cell-1/core`), at a
+   quiet hour, and check that every company is healthy. That install runs a plain `init`. If the host's edge still
+   runs older router or tunnel images than this core pins, the init recreates the router and the tunnel, so every
+   company drops for a few seconds. Keep that apart from the steps below.
+2. **Create the stack** `tico-cloud-cell-1-meet` from `infra/cell-meet/cell-meet.yaml` with a change set
+   (`InstanceId=i-027126437a47a24f4`, `SecurityGroupId=sg-0ee5245bf7bc7a276`). Do not redeploy `tico-cloud-cell-1`.
+   Associating the IP changes the host's public IP, which resets outbound connections once. cloudflared reconnects
+   within seconds. Note the `PublicIp` output.
+3. **Add the DNS record in Route53**, in the `preview.tico.team` hosted zone (the HQ AWS account, `--profile tidy`): an
+   A record `meet-cell-1.preview.tico.team` pointing to that IP. tico.team itself is on Cloudflare behind a proxied
+   wildcard, which can't carry LiveKit's UDP and TURN; the delegated Route53 zone answers the IP directly. Check that
+   `dig +short meet-cell-1.preview.tico.team` answers the IP.
+4. **Run init over SSM**: `cd /opt/tico-cell/core-<vX> && python3 -m setup cell init --meet-domain meet-cell-1.preview.tico.team --json`.
+   It answers only once LiveKit is up with its certificate (or fails with `meet_failed` and leaves Tico Meet off).
+   Check `iptables -S INPUT | head -4` shows the three `tico-cell-meet` rules first.
+5. **Canary on one company**: `python3 -m setup cell update --company co-tico-team --version <its current release>`.
+   This rewrites its `.env` and restarts only that server. On co-tico-team.tico.team, test a two-person call with a bot
+   speaking, one client on a network that blocks UDP (to use TURN over TLS on 443), and that the server's recorder
+   joins.
+6. **Run the same `update`** for each other company, at its own current release. New companies get the keys at `add`.
+
+**Rollback**, from least to most:
+
+- One company: there is no per-company switch. Re-running `update` while Tico Meet is on keeps the keys, so stop that
+  company's calls in Tico.
+- The whole cell: `cell init --meet-domain ""` removes `certs` and `livekit` (`--remove-orphans`), the `/rtc`
+  routes and the `INPUT` rules. Then `cell update --company <slug> --version <its current release>` for each company removes the
+  `TICO_MEET_*` keys, and calls answer `meet_unavailable` again.
+- AWS and DNS: delete the `tico-cloud-cell-1-meet` stack. That removes the rules and releases the IP, and the host
+  gets a new auto-assigned IP, which the tunnel does not mind. Then delete the Route53 A record.
+
+No database migration or company data is involved.
+
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `/srv/tico-cell/cell.json` | The cell's domain and the router's address |
+| `/srv/tico-cell/cell.json` | The cell's domain, the router's address, the page and Tico Meet domains when set, and the cell's KMS key (`init --kms-key`) |
 | `/srv/tico-cell/routes/<name>.json` | A route ([Routes](#routes)): its hosts, ports and noindex |
 | `/srv/tico-cell/edge.yaml`, `router/Caddyfile` | The router and tunnel. The Caddyfile is regenerated and swapped in one step on every change, then reloaded. A config the router refuses is replaced by the previous one |
 | `/etc/systemd/system/tico-cell-updater.service` | The cell updater, run from the checkout `init` last ran from |
 | `/etc/systemd/system/tico-cell-wake.service` | The wake service, run from the same checkout, on `127.0.0.1:8082` |
+| `/srv/tico-cell/meet/` (0700): `keys/keys.yaml`, `caddy/Caddyfile`, `certs/`, `livekit-cert.json` | Tico Meet ([Tico Meet](#tico-meet)): the cell's LiveKit key pair (0600), the certificate Caddy's config, its certificates (0700), and the expiry of the certificate LiveKit started with |
 | `/srv/tico-cell/tunnel/cloudflared.yml`, `tunnel.env` | The tunnel's routes (owned by 65532, the cloudflared user), and its token (0600) |
 | `/srv/tico-cell/companies/<slug>/.env` | The server's settings (0600), written by the same code as a hosted install's |
 | `.../compose.yaml` | The stock `compose.yaml` from the checkout, unchanged |

@@ -45,6 +45,7 @@ tico bot repos sales --own
 - `POST /api/v2/repositories/refresh`: refresh GitHub and return the same answer.
 - `PUT /api/v2/repositories/{owner}/{repo}`: `enabled` and/or `setup_command`.
 - `PUT /api/v2/repositories/settings`: `new_bot_default` (`own` or `all`).
+- `POST /api/v2/repositories/claim`: the Owner or an admin says the bot repositories Tico leaves alone as made by someone else are this company's (`tico repo claim [--bot SLUG ...]`, Health's **Claim**). Optional `bots` limits it to those bots. Answers `claimed` and `left` (`why: shared` for a repository two bots have as their own: point one elsewhere first). Audited as `bot.repository_claimed` ([GitHub App](github-app.md#creating-bot-repositories)).
 - `GET /api/v2/bots/{bot}/repositories`: `mode`, `all_access`, `chosen`, `all_repos`, `effective`. A bot may read its own (`tico bot repos <itself>`). A grant that may run workflows has `run_workflows: true`; one that may edit workflow files has `edit_workflows: true`. `all_repos` lists All repos in use's own ticks (`full_name` and the flags that are on), whatever the mode; they apply while the mode is All repos in use with write.
 - `PUT /api/v2/bots/{bot}/repositories`: `mode`, optional `all_access`, optional `chosen` entries with `full_name`, `access` and optional `run_workflows` and `edit_workflows` (write grants only; left out, a grant keeps its setting; setting or clearing either needs an Owner or admin), and optional `all_repos` entries with `full_name` and optional `run_workflows` and `edit_workflows` for a repository All repos in use reaches (on the same terms; turning one on needs `all_access` write).
 
@@ -80,7 +81,7 @@ The Rust runner releases its Git gate and task lock directly when the operation 
 
 On a Computer that does not run bots as a separate user, such as a Mac, a folder already at `<workspace>/repos/<owner>__<repo>` is taken over when it is a Git checkout of that repository: its `origin` is GitHub's HTTPS or SSH address for it, it belongs to the user the runner runs as, and it does not share objects with another repository or keep its work tree elsewhere. Tico adds the `tico-mirror` remote and updates the tracking refs. It leaves `origin`, branch settings, files and local work as they are. When no bot needs the repository any more, Tico stops managing the folder but never deletes it. Any other folder is left alone, and the error says why.
 
-A bot's repo, shared or named checkout, task and private meeting worktrees, managed bases, and scratch folders
+A bot's repo, shared or named checkout, task worktrees, managed bases, and scratch folders
 must stay outside the Tico installation running the Computer. Both runners check the final path before making
 a folder, reusing it, or running Git there. Tico follows links in the path, including linked parent folders. If a missing
 folder leaves a `..` part unresolved, Tico refuses the path rather than risk hiding a later link. A refused path

@@ -17,6 +17,7 @@ interface Window {
   ticoNativeFeatures?: any;
   ticoNativeLog?: any;
   ticoNativeVersion?: any;
+  ticoScreenCaptureUnavailable?: boolean;
   __callLeaveTimeoutMs?: number;
   threadHref: any;
   threadRowHref: any;
@@ -26,7 +27,7 @@ interface Window {
 declare var marked: { parse(src: string, options?: object): string };
 /** Vendored livekit-client.umd.min.js. */
 declare var LivekitClient: LivekitNamespace;
-/** Vendored docx-preview.min.js and jszip.min.js, loaded on first use by ui/app/file-review.ts. */
+/** Vendored docx-preview.min.js and jszip.min.js, loaded on first use by ui/app/viewer.ts (docxLib). */
 declare var docx: {renderAsync(data: Blob, body: HTMLElement, style: HTMLElement | null, options: Record<string, boolean>): Promise<unknown>} | undefined;
 declare var JSZip: {loadAsync(data: Blob): Promise<{file(name: string): {async(type: 'string'): Promise<string>} | null}>} | undefined;
 
@@ -69,6 +70,7 @@ declare var ticoAppUpdate: any;
 declare var ticoAssistantName: any;
 declare var ticoBootSnap: any;
 declare var ticoBootTiming: BootTimingReport | undefined;
+declare var ticoCallStartTiming: Partial<Record<CallStartMark, number | null>> | undefined;
 declare var ticoPageHidden: (() => { inCall: boolean }) | undefined;
 declare var ticoSearch: any;
 declare var ticoTheme: any;

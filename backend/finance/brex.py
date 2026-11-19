@@ -121,7 +121,7 @@ class Brex:
         return Answer(429, {})
 
     def card_accounts(self, cursor: str | None = None) -> Answer:
-        """The company's card accounts (GET /v2/accounts/card), a page at a time."""
+        """The company's card accounts (GET /v2/accounts/card). Brex answers them all at once as a bare array (_parse)."""
         return self._get("/v2/accounts/card", _page(cursor))
 
     def cash_accounts(self, cursor: str | None = None) -> Answer:
@@ -129,7 +129,8 @@ class Brex:
         return self._get("/v2/accounts/cash", _page(cursor))
 
     def card_transactions(self, posted_at_start: str, cursor: str | None = None) -> Answer:
-        """Settled card transactions posted on or after `posted_at_start` (RFC 3339), newest pages by cursor
+        """Settled card transactions posted on or after `posted_at_start`, a date-time with no zone
+        (`YYYY-MM-DDTHH:MM:SS`: Brex answers 400 to a `Z` or an offset), newest pages by cursor
         (GET /v2/transactions/card/primary)."""
         return self._get("/v2/transactions/card/primary", _page(cursor, posted_at_start=posted_at_start))
 
@@ -157,10 +158,14 @@ def _page(cursor: str | None, posted_at_start: str | None = None) -> list[tuple[
 
 
 def _parse(raw: bytes) -> dict[str, Any]:
+    """A Brex body as an object. GET /v2/accounts/card answers a bare JSON array of accounts, not a page: it reads as a page
+    of those items with no next cursor."""
     try:
         value = json.loads(raw or b"{}")
     except ValueError:
         return {}
+    if isinstance(value, list):
+        return {"items": value}
     return cast(dict[str, Any], value) if isinstance(value, dict) else {}
 
 

@@ -309,6 +309,12 @@ pub fn active() -> bool {
     setup().is_some()
 }
 
+/// The cgroup directory of the scope harness process `pid` gets under the stem `stem` (its `SCOPE_ENV`), or None
+/// where this runner does not limit turns. It is there while any process of the scope is left.
+pub fn scope_dir(stem: Option<&str>, pid: u32) -> Option<PathBuf> {
+    Some(setup()?.slice.join(scope_name(stem, pid)))
+}
+
 /// The command and arguments a harness runs under, or None to run it as before.
 pub fn prefix() -> Option<Vec<OsString>> {
     let s = setup()?;

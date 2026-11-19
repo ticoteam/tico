@@ -719,9 +719,20 @@ function frBotBannerHTML(e: FrBot | null | undefined): string {
 
 // goals-kpis.ts
 // A status dot: green, yellow, red, gray (stale, missing or no data) or a ring (fresh, no target to judge by).
-function gdot(status: string | null | undefined, title = '') {
+function gdot(status: string | null | undefined, title = '', label = '') {
   const s = ['green', 'yellow', 'red', 'none'].includes(status!) ? status! : 'gray';
-  return `<span class="gdot ${s}" role="img" aria-label="${esc(KPI_LABEL[s])}"${title ? ` title="${esc(title)}"` : ''}></span>`;
+  return `<span class="gdot ${s}" role="img" aria-label="${esc(label || KPI_LABEL[s])}"${title ? ` title="${esc(title)}"` : ''}></span>`;
+}
+// A goal with work done but no KPI on target or check-in to judge it by: gray, its automatic note starting with this
+// (backend/goals.py NO_MEASURE). Finished tasks never make a goal green.
+const GOAL_NO_MEASURE = 'No measure yet';
+function goalNoMeasure(g: {status?: string | null; status_source?: string | null; status_note?: string | null}) {
+  return g.status === 'gray' && g.status_source !== 'person' && String(g.status_note || '').startsWith(GOAL_NO_MEASURE);
+}
+// A goal's dot, and beside it the "No measure yet" label when that is what its colour means.
+function goalDotHtml(g: {status?: string | null; status_source?: string | null; status_note?: string | null}, title: string, name: string) {
+  const none = goalNoMeasure(g);
+  return gdot(g.status, title, none ? GOAL_NO_MEASURE : '') + name + (none ? `<span class="goal-nomeasure">${GOAL_NO_MEASURE}</span>` : '');
 }
 function kpiNum(value: number | string | null | undefined, unit: string | undefined = '') {
   if (value == null || value === '') return '';
@@ -1032,7 +1043,7 @@ const INBOX_STATUS: Record<string, [string, string]> = {ok: ['ok', 'Connected'],
 // app/cloud-machines.ts
 const cloudMachineShared = (e: CloudMachineBot) => cloudMachineOn(e) && e.cloud_machine?.placement !== 'own';
 // "Running · Default · $0.42 this month · 3 starts", then a size waiting for the restart, and a grow note only while it
-// needs someone ("Disk 96% full: XLarge is the largest size"); a problem replaces the state.
+// needs someone ("Disk 96% full at Large. Give its busiest bots their own Large machine"); a problem replaces the state.
 function cloudMachineStatus(m: CloudMachineRow): string {
   const parts: (string | null | undefined)[] = [m.problem || CLOUD_STATES[m.state ?? ''] || m.state, cloudSizeName(m.machine_size || m.size)];
   if (m.cost_month_usd) parts.push(`$${Number(m.cost_month_usd).toFixed(2)} this month`);
@@ -1099,7 +1110,7 @@ function settingsTierName(id: string | null | undefined) {
 // app/cloud-machines.ts
 const CLOUD_STATES: Record<string, string> = {none: 'Not started yet', starting: 'Starting', running: 'Running', stopping: 'Stopping',
   stopped: 'Stopped', deleted: 'Deleted', failed: 'Failed'};
-const cloudSizeName = (name: string | null | undefined) => name ? name.charAt(0).toUpperCase() + name.slice(1) : '';
+const cloudSizeName = (name: string | null | undefined) => name === 'xlarge' ? 'XLarge' : name ? name.charAt(0).toUpperCase() + name.slice(1) : '';
 
 // app/automations.ts
 // One page visit's state; a route within the page keeps it (the list, the chat), leaving drops it.

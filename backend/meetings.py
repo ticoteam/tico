@@ -10,11 +10,11 @@ from clients.transcript import readable_transcript
 from . import hubdb as H
 
 
-def snapshot(meta, transcript='', notes='', conn=None, readable=None):
+def snapshot(meta, transcript='', notes=None, conn=None, readable=None):
     """One meeting row, and one immutable version of it.
 
-    `readable` is the transcript formatted for reading; without it the deterministic formatter
-    (`clients/transcript.py`) writes it from `transcript`.
+    `notes=None` keeps the stored notes; `''` clears them. `readable` is the transcript formatted for reading;
+    without it the deterministic formatter (`clients/transcript.py`) writes it from `transcript`.
     """
     if conn is None:
         with closing(H.connect()) as db:
@@ -23,7 +23,7 @@ def snapshot(meta, transcript='', notes='', conn=None, readable=None):
     old = conn.execute('SELECT * FROM meetings WHERE id=?', (rid,)).fetchone()
     meta = {**meta, 'review_state': meta.get('review_state') or (old['review_state'] if old else 'live')}
     transcript = transcript or (old['transcript_original'] if old else '')
-    notes = notes or (old['notes'] if old else '')
+    notes = (old['notes'] if old else '') if notes is None else notes
     recorded = meta.get('recorded_by') or (old['recorded_by'] if old else None)
     uploaded = meta.get('uploaded_by') or (old['uploaded_by'] if old else None)
     readable = readable if readable is not None else (readable_transcript(transcript) if transcript else '')

@@ -1,0 +1,5 @@
+{
+  "backend/tests/test_docs_import_run.py": {
+    "timing-assert": 2
+  }
+}

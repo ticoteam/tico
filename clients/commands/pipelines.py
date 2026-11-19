@@ -34,8 +34,8 @@ PICK = "pick"  # a stage whose owner is "One of several": Tico picks one of `pic
 
 
 # ----------------------------------------------------------------------------- reading the pipelines
-def _bots(api):
-    found = api.get("bots")
+def _bots(api, fields=None):
+    found = api.get("bots", fields=fields)
     return found if isinstance(found, list) else (found or {}).get("bots") or []
 
 
@@ -44,7 +44,7 @@ def _pipelines(api, bots=None):
     the stages' holders, the bots list the rest (a manager, a bot named by its slug)."""
     found = api.get("pipelines")
     names = {}
-    for b in _bots(api) if bots is None else bots:
+    for b in _bots(api, "id,slug,display_name,name") if bots is None else bots:
         for ref in (b.get("id"), b.get("slug")):
             if ref:
                 names[f"bot:{ref}"] = b.get("display_name") or b.get("name") or b.get("slug")

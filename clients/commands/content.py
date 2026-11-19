@@ -57,16 +57,18 @@ def _files_fields(args, *names):
 @tool(
     "tico_file_list",
     "The files on your page (or another bot's, if you may see it), newest activity first: "
-    "id, title, kind, where each opens and when it last changed.",
+    "id, title, kind (stored) and library_kind, where each opens and when it last changed. "
+    "Filter with kind set to a file's library_kind (page, document, image, data, media, other), never its stored kind.",
     {
         "bot": _s("Bot slug; defaults to you"),
+        "kind": {"enum": ["page", "document", "image", "data", "media", "other"]},
         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
         "cursor": _s("next_cursor from the previous page"),
     },
 )
 def files_list(api, args):
     slug = args.get("bot") or str(api.get("me")["actor"]).split(":", 1)[-1]
-    return api.get(f"bots/{slug}/files", limit=args.get("limit"), cursor=args.get("cursor"))
+    return api.get(f"bots/{slug}/files", limit=args.get("limit"), cursor=args.get("cursor"), kind=args.get("kind"))
 
 
 @tool(

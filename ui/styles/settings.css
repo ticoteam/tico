@@ -51,11 +51,10 @@ input.people-switch:checked{background:var(--ink)}input.people-switch:checked::b
 input.people-switch:checked::before{transform:translateX(14px)}
 input.people-switch:disabled{opacity:.45;cursor:not-allowed}
 .people-list-card>header{align-items:center}
-.people-head,.people-row{display:grid;grid-template-columns:minmax(0,1fr) 120px 100px 72px 36px;align-items:center;gap:var(--s3)}
+.people-head,.people-row{display:grid;grid-template-columns:minmax(0,1fr) 120px 100px 36px;align-items:center;gap:var(--s3)}
 .people-head{padding:0 0 6px;border-bottom:1px solid var(--line);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
 .people-list{list-style:none;margin:0;padding:0}
 .people-head>span{white-space:nowrap}
-@media (min-width:761px){.people-no-recorder :is(.people-head,.people-row):not(.is-left){grid-template-columns:minmax(0,1fr) 120px 100px 36px}}
 .people-row{padding:10px 0;border-bottom:1px solid var(--line)}
 .people-row:last-child{border-bottom:0}
 .people-who{display:flex;align-items:center;gap:10px;min-width:0}
@@ -66,8 +65,6 @@ input.people-switch:disabled{opacity:.45;cursor:not-allowed}
 .people-role{font-size:var(--t-base)}.people-role[data-role=owner]{font-weight:600}
 .people-cell-signin{display:flex;align-items:center;gap:8px}
 .people-switch-label{display:none;font-size:var(--t-base);color:var(--muted)}
-.people-cell-recorder{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}.people-cell-recorder.is-old{color:var(--wait-ink)}
-.people-recorder-label{display:none}
 .people-cell-more{position:relative;display:flex;justify-content:flex-end;gap:var(--s1)}
 .people-more{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;overflow:hidden;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
 .people-more .nav-icon{width:20px;height:20px;font-size:20px}
@@ -97,8 +94,7 @@ button.people-danger{background:var(--fail);color:var(--surface)}
   .people-mode{align-self:stretch}.people-mode button{flex:1;padding:8px 6px}
   .people-add{flex-wrap:wrap}.people-add input[name=email]{flex:1 1 100%}
   .people-head{display:none}
-  .people-row{grid-template-areas:"who who more" "role signin signin" "recorder recorder recorder";row-gap:6px}
-  .people-cell-recorder{grid-area:recorder;padding-left:42px}.people-cell-recorder:empty{display:none}.people-recorder-label{display:inline}
+  .people-row{grid-template-areas:"who who more" "role signin signin";row-gap:6px}
   .people-who{grid-area:who}.people-cell-role{grid-area:role;padding-left:42px}.people-cell-signin{grid-area:signin}.people-cell-more{grid-area:more}
   .people-row{grid-template-columns:auto minmax(0,1fr) 44px}.people-more{width:44px;height:44px}
   .people-row.is-left{grid-template-areas:"who more"}
@@ -325,6 +321,9 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .settings-combo input.who-pick-q{width:100%;min-width:0;padding:7px 10px 7px 32px;font-size:var(--t-base);border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237f8a96' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E") no-repeat 10px center;color:var(--ink)}
 .settings-combo-list[popover]{position:fixed;inset:auto;right:auto;bottom:auto;margin:0;box-sizing:border-box;max-height:234px;color:var(--ink)}
 .settings-combo-list[popover]:popover-open{display:block}
+/* An inline who picker's list (who-picker.ts inline): part of the form under its field, about five rows, no card of its own. */
+.who-pick-inline .who-pick-list{display:block;position:static;max-height:200px;overflow:auto;margin:4px 0 0;padding:0;border:0;border-radius:0;background:none;box-shadow:none}
+.who-pick-inline .who-pick-list[hidden]{display:none}
 .settings-combo-opt{display:flex;align-items:center;gap:8px;min-height:32px;box-sizing:border-box;padding:4px 8px;border-radius:4px;font-size:var(--t-base);cursor:pointer}
 .settings-combo-opt[aria-selected=true],.settings-combo-opt:hover{background:var(--surface2)}
 .settings-combo-n{flex:none;max-width:70%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}

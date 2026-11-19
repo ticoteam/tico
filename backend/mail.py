@@ -25,6 +25,7 @@ from .views import human_only, roster
 from .api_contract import api_v2, error, ref
 
 LIMIT_DEFAULT, LIMIT_MAX = 50, 100
+ATTACHMENTS_MAX = 20
 DURATION = {"d": 86400, "h": 3600, "m": 60}
 ORGANIZE_ACTIONS = {
     "archive": ((), ("INBOX",), "unarchive"),
@@ -227,6 +228,8 @@ class DraftBody(Contract):
     subject: str = Field(default="", max_length=900)
     body: str = Field(min_length=1, max_length=mail_compose.BODY_MAX)
     reply_to: str = Field(default="", max_length=200)  # a thread id: the reply answers its newest message from others
+    # Tico files to attach, in order: FILE (its current version) or FILE@N, each one the caller may download.
+    attachments: list[str] = Field(default_factory=list, max_length=ATTACHMENTS_MAX)
     operation_id: str = Field(default="", max_length=200)
 
 
@@ -260,21 +263,98 @@ def _refused(c, who, addr, need):
     raise Problem("forbidden", f"You may not {words} {addr} (Tools > {addr} > Who can use it)", 403)
 
 
-def compose(c, who, addr, body, mid):
-    """(raw, thread id, recipients, subject, the message it answers or None) for a draft or a lint."""
+def compose(c, who, addr, body, mid, files=()):
+    """(raw, thread id, recipients, subject, the message it answers or None) for a draft or a lint. `files` are the
+    attachments' (name, content type, bytes), in order."""
     original = None
     if body.reply_to:
         original = mail_compose.answered_in(addr, gmail_live.thread(c, addr, body.reply_to))
     if original:
-        raw, thread, to, subject = mail_compose.reply(addr, original, body.body, mid, to=body.to, cc=body.cc)
+        raw, thread, to, subject = mail_compose.reply(
+            addr, original, body.body, mid, to=body.to, cc=body.cc, attachments=files
+        )
         return raw, thread, to, subject, original
     to = mail_compose.addresses(body.to)
     if not to:
         raise Problem("to", "A new email needs a recipient: --to, or --reply-to a thread", 422)
     raw = mail_compose.build(
-        to, body.subject, body.body, from_addr=addr, message_id=mid, cc=mail_compose.addresses(body.cc)
+        to,
+        body.subject,
+        body.body,
+        from_addr=addr,
+        message_id=mid,
+        cc=mail_compose.addresses(body.cc),
+        attachments=files,
     )
     return raw, "", to, body.subject, None
+
+
+def attachment_file(c, app, auth, who, ref):
+    """One attachment named by a Tico file id, FILE or FILE@N: {ref, name, content_type, size, digest}, read under the
+    check its download makes (GET /api/v2/files/{id}): a Library file through Files.readable_version, any other
+    stored file (a message's or a task's) through media.blob_for. One the caller may not read is not found."""
+    from .files import is_file_id
+    from .media import blob_for
+
+    fid, at, number = str(ref).strip().partition("@")
+    if not fid or at and not (number.isdigit() and int(number) >= 1):
+        raise Problem(
+            "attachments",
+            f"{ref} is not a Tico file id (FILE or FILE@N); a file on your computer goes up with "
+            "`tico email draft --attach PATH`",
+            422,
+        )
+    version = int(number) if number else None
+    library = is_file_id(fid) or c.execute("SELECT 1 FROM bot_files WHERE id=?", (fid,)).fetchone()
+    if library:
+        try:
+            v = app.state.files.readable_version(c, who, fid, version)
+            return {
+                "ref": f"{fid}@{v['version']}",
+                "name": v["name"],
+                "content_type": v["mime"],
+                "size": v["size"],
+                "digest": v["blob_digest"],
+            }
+        except Problem as exc:
+            # An adopted legacy blob id is also a plain stored file, as its download falls back to (media.py).
+            if is_file_id(fid) or version not in (None, 1) or exc.status not in (403, 404):
+                raise
+    if version not in (None, 1):
+        raise Problem("not_found", "File version not found", 404)
+    row = blob_for(c, auth, who, fid)
+    return {
+        "ref": fid,
+        "name": row["name"],
+        "content_type": row["content_type"],
+        "size": row["size"],
+        "digest": row["digest"],
+    }
+
+
+def attachment_files(store, app, auth, who, refs):
+    """The attachments' metadata (attachment_file) and then their bytes: (metadata, [(name, type, bytes)]). Files
+    together over the email's limit are refused before any is read."""
+    if not refs:
+        return [], []
+    with store.read() as c:
+        found = [attachment_file(c, app, auth, who, ref) for ref in refs]
+    total = sum(int(f["size"] or 0) for f in found)
+    if total * 4 // 3 > mail_compose.RAW_MAX:
+        raise Problem(
+            "attachments",
+            f"These files are {total / mail_compose.MB:.1f} MB; an email through Tico carries about "
+            f"{mail_compose.RAW_MAX * 3 // 4 // mail_compose.MB} MB of files. Send fewer or smaller files, or share "
+            "a link",
+            413,
+        )
+    blobs = app.state.blobs
+    return found, [(f["name"], f["content_type"] or "application/octet-stream", blobs.get(f["digest"])) for f in found]
+
+
+def _verdict(review):
+    """The second reviewer's verdict in a word: send, stop, or None when it gave none."""
+    return None if review is None else ("send" if review else "stop")
 
 
 def install_mail(app, store, auth):
@@ -462,7 +542,8 @@ def install_mail(app, store, auth):
     @app.post("/api/v2/mail/drafts")
     def draft(request: Request, body: DraftBody):
         """A Gmail draft in a mailbox the caller may write drafts in: a new email, or a reply in a thread. The same
-        draft asked again (the same words, or the same operation_id) finds the first one. A bot's own draft meets the
+        draft asked again (the same words and files, or the same operation_id) finds the first one. `attachments` are
+        Tico files the caller may download, sent as they are now (multipart/mixed). A bot's own draft meets the
         lint (an error refuses it) and the second reviewer, whose verdict comes back; who receives it, and whether it is
         sent at all, is the send gate's to decide when it is sent."""
         from . import email_sending as ES
@@ -472,16 +553,21 @@ def install_mail(app, store, auth):
         reader(who)
         addr = body.mailbox.strip().lower()
         bot = who.actor if who.role == "bot" else ""
-        # The draft's own words make its Message-ID: asked again (a retry, a rerun step) it is found, not made twice.
-        key = mail_compose.key(
-            who.actor, addr, body.operation_id, body.reply_to, body.to, body.cc, body.subject, body.body
-        )
-        mid = mail_compose.message_id("draft", key, addr)
         with store.read() as c:
             require_mailbox(c, who, addr)
             _refused(c, who, addr, "draft")
             _no_live_changes(store, "write")
-            raw, thread, to, subject, original = compose(c, who, addr, body, mid)
+        # The draft's own words make its Message-ID: asked again (a retry, a rerun step) it is found, not made twice.
+        # Each file counts as it is now, its version and the hash of its bytes: other files, or a file changed since,
+        # are another draft. A draft without files keeps the key it always had.
+        found, files = attachment_files(store, app, auth, who, body.attachments)
+        attached = [json.dumps([[f["ref"], f["digest"]] for f in found])] if found else []
+        key = mail_compose.key(
+            who.actor, addr, body.operation_id, body.reply_to, body.to, body.cc, body.subject, body.body, *attached
+        )
+        mid = mail_compose.message_id("draft", key, addr)
+        with store.read() as c:
+            raw, thread, to, subject, original = compose(c, who, addr, body, mid, files)
             snap = snapshot(raw, addr)
             review = None
             if bot:
@@ -500,14 +586,17 @@ def install_mail(app, store, auth):
                 ask = SimpleNamespace(reply_to_id=original["id"] if original else "", thread_id=thread, approval_id="")
                 review = ES.review_context(c, auth, bot, ask, addr, snap)
         made = mail_compose.ensure_draft(store, addr, raw, thread, mid)
-        verdict = ES.classify(app, store, snap, review)["review"] if bot else None
+        checked = ES.classify(app, store, snap, review) if bot else {}
+        verdict = checked.get("review")
+        # The verdict a bot's draft got, with its reason, is kept beside the draft: what the bot was told can be read back.
+        said = {"review": _verdict(verdict), "review_reason": checked.get("review_reason", "")} if bot else {}
         with store.transaction() as c:
             H.event(
                 c,
                 who.actor,
                 "mail.draft",
                 addr,
-                {"mailbox": addr, "draft": made["id"], "thread": made["thread"], "created": made["created"]},
+                {"mailbox": addr, "draft": made["id"], "thread": made["thread"], "created": made["created"], **said},
             )
         return {
             "mailbox": addr,
@@ -517,9 +606,12 @@ def install_mail(app, store, auth):
             "to": to,
             "cc": mail_compose.addresses(body.cc),
             "subject": subject,
+            "attachments": [{k: f[k] for k in ("ref", "name", "content_type", "size")} for f in found],
             "created": made["created"],
             # The second reviewer on a bot's own draft: send, stop (rewrite it), or None when it could not answer.
-            "review": None if verdict is None else ("send" if verdict else "stop"),
+            # `review_reason` says why in words whenever it is not send (backend/email_sending.py `reviewed`).
+            "review": _verdict(verdict),
+            "review_reason": checked.get("review_reason", ""),
         }
 
     @app.delete("/api/v2/mail/drafts/{draft_id}")

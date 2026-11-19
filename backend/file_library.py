@@ -84,7 +84,11 @@ def kind_filter(kind):
     if not kind:
         return "1", []
     if kind not in KINDS:
-        raise Problem("validation", "kind is " + ", ".join(KINDS), 422)
+        # A stored kind (a file's `kind`) is not a filter word; say which one is (its `library_kind`).
+        hint = next(
+            (f"{kind} is a stored kind; filter with {name}. " for name, group in STORED.items() if kind in group), ""
+        )
+        raise Problem("validation", hint + "kind is " + ", ".join(KINDS), 422)
     if kind == "page":
         return "p.file_id IS NOT NULL", []
     stored = [k for group in STORED.values() for k in group] if kind == "other" else list(STORED[kind])
@@ -396,8 +400,8 @@ class Library:
         return out
 
     def row_view(self, c, who, r, caches, known):
-        value = self.files.view(c, who, r, caches)
         page = r["page_cadence"] is not None
+        value = self.files.view(c, who, r, caches, page=page)
         value.update(
             kind_label=KINDS[library_kind(r["kind"], page)],
             library_kind=library_kind(r["kind"], page),

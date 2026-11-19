@@ -14,6 +14,8 @@ interface HlFix {
   login?: { runner_id: string; runtime: string; computer: string };
   move?: { bot: string; runner_id: string; computer: string };
   finish?: { bot: string };
+  /** Bot history's "made by someone else" repositories: POST /v2/repositories/claim. */
+  claim?: boolean;
 }
 
 interface HlCheck {
@@ -289,6 +291,7 @@ function hlFixHtml(fix: HlFix): string {
   if (fix.login) return `<button class="ghost" type="button" data-model-login data-runner="${esc(fix.login.runner_id)}" data-runtime="${esc(fix.login.runtime)}" data-machine="${esc(fix.login.computer)}">${esc(fix.label)}</button>`;
   if (fix.move) return `<button class="ghost" type="button" data-stuck-move="${esc(fix.move.bot)}" data-runner="${esc(fix.move.runner_id)}" data-machine="${esc(fix.move.computer)}">${esc(fix.label)}</button>`;
   if (fix.finish) return `<button class="ghost" type="button" data-stuck-finish="${esc(fix.finish.bot)}">${esc(fix.label)}</button>`;
+  if (fix.claim) return `<button class="ghost" type="button" data-hl-claim>${esc(fix.label)}</button>`;
   if (fix.click) return `<button class="ghost" type="button" data-hl-click="${esc(fix.click)}">${esc(fix.label)}</button>`;
   // A page outside the app (Add credit's billing page) opens in a new tab, as the credit strip's link does.
   const away = /^https?:/.test(fix.href || '') ? ' target="_blank" rel="noopener noreferrer"' : '';
@@ -376,13 +379,13 @@ function hlSeen(f: HlFinding): string {
 }
 
 // Checks: what Check health (the maintenance step) still has open, from GET /api/v2/health/findings. A setup problem is
-// being fixed by BotOps, with its task linked when there is one. A Tico bug is reported to the Tico team or waits for a
+// being fixed by BotOps, with its task linked when there is one. A Tico bug is reported to Tico support or waits for a
 // yes in Needs you; one nobody has reported gets Report to Tico. Seeing a problem again only adds to its count.
 function hlFindingHtml(f: HlFinding, botops: boolean | undefined): string {
   const setup = f.kind === 'setup';
   const kind = setup
     ? (botops === false ? 'not fixed: no BotOps bot' : f.task_id ? `<a href="#/task/${encodeURIComponent(f.task_id)}">being fixed by BotOps</a>` : 'being fixed by BotOps')
-    : f.ticket_id ? 'Tico bug, reported to the Tico team' : f.approval_id ? 'Tico bug, report waiting in Needs you' : 'Tico bug, not reported';
+    : f.ticket_id ? 'Tico bug, reported to Tico support' : f.approval_id ? 'Tico bug, report waiting in Needs you' : 'Tico bug, not reported';
   const report = !setup && !f.ticket_id && !f.approval_id ? `<button class="ghost" type="button" data-hl-report="${esc(f.key)}">Report to Tico</button>` : '';
   // A stopped bot's finding (run_hold:<bot>, turn_budget:<bot>, claim_failed:<bot>) carries the same Release as the bot's page.
   const m = /^(?:run_hold|turn_budget|claim_failed):(.+)$/.exec(f.key || '');
@@ -399,7 +402,7 @@ function hlFindingsHtml(list: HlFindings | null): string {
     ? '<p class="muted">No BotOps bot is set up, so setup problems are not being fixed.</p>' : '';
   const rule = HL?.audience === 'owner'
     ? `<label class="hl-monitor-row"><input type="checkbox" role="switch" data-hl-report-rule${list.reports_without_asking ? ' checked' : ''}>
-      <span>Report Tico bugs to the Tico team without asking <span class="muted">(only the finding and the redacted diagnostics, never task or message text)</span></span></label>` : '';
+      <span>Report Tico bugs to Tico support without asking <span class="muted">(only the finding and the redacted diagnostics, never task or message text)</span></span></label>` : '';
   return `<section class="hl-findings" data-hl-findings aria-labelledby="hl-findings-h"><h2 id="hl-findings-h">Checks</h2>
     ${note}${rows ? `<ul class="hl-bots">${rows}</ul>` : '<p class="muted">Nothing open.</p>'}${rule}</section>`;
 }
@@ -460,6 +463,21 @@ async function hlStuckFinish(button: HTMLButtonElement): Promise<void> {
   } catch (error) {
     toast(errorMessage(error, ''), true);
     button.disabled = false; button.textContent = 'Finish with defaults';
+  }
+}
+
+// Bot history: the repositories Tico left alone as made by someone else are this company's (a moved bot's, say).
+async function hlClaim(button: HTMLButtonElement): Promise<void> {
+  const label = button.textContent || '';
+  button.disabled = true;
+  try {
+    const result = await post('/v2/repositories/claim', {});
+    const n = (result.claimed || []).length, shared = (result.left || []).length;
+    toast(`${n} claimed${shared ? ` · ${shared} shared by two bots, left` : ''}`);
+    void hlRefresh();
+  } catch (error) {
+    toast(errorMessage(error, ''), true);
+    button.disabled = false; button.textContent = label;
   }
 }
 
@@ -554,7 +572,7 @@ async function hlCheckUpdates(): Promise<void> {
 
 // Setup check: `tico-setup doctor`'s checks run by the server against its own address, and Health's failing lines
 // (POST /v2/support/setup-check, backend/setup_check.py). It sits beside the Health list, not in it, so the minute's
-// redraw of that list keeps the result on screen; Send to Tico team attaches it to a message in the Tico team chat (ui/support.ts).
+// redraw of that list keeps the result on screen; Send to Tico support attaches it to a message in the Tico team chat (ui/support.ts).
 const hlSetupCheckHTML = () => `<section class="card hl-setup" id="hl-setup-check" aria-labelledby="hl-setup-h"><header><h2 id="hl-setup-h">Setup check</h2></header>
   <p class="muted">Runs the installer's checks from here and says how to fix what fails.</p>
   <button class="ghost" type="button" data-hl-setup-check>Setup check</button>
@@ -574,7 +592,7 @@ async function hlSetupCheck(button: HTMLButtonElement): Promise<void> {
       <ul class="hl-list">${rows.map(c => `<li class="hl-check ${esc(c.status)}" data-hl-setup-row="${esc(c.status)}"><span class="nav-icon hl-icon" aria-hidden="true">${HL_ICONS[c.status] || HL_ICONS.unknown}</span>
         <div class="hl-main"><strong>${esc(c.name)}</strong><p>${esc(c.detail)}</p>${c.status !== 'ok' && c.fix ? `<p class="hl-setup-fix">Fix: ${esc(c.fix)}</p>` : ''}</div></li>`).join('')}</ul>
       <p class="muted">${esc(r.doctor_only || '')}</p>
-      ${window.supportOn?.() && window.talkToUs ? '<button class="ghost" type="button" data-hl-setup-send>Send to Tico team</button>' : ''}`;
+      ${window.supportOn?.() && window.talkToUs ? '<button class="ghost" type="button" data-hl-setup-send>Send to Tico support</button>' : ''}`;
     host.querySelector('[data-hl-setup-send]')?.addEventListener('click', () => window.talkToUs?.({kind: 'setup_check', title: head, checks: rows,
       group: 'setup_check:' + rows.filter(c => c.status === 'bad').map(c => c.name).join(',')}));
   } catch (e) {
@@ -621,6 +639,8 @@ document.addEventListener('click', event => {
   if (move) { void hlStuckMove(move); return; }
   const finish = el?.closest<HTMLButtonElement>('[data-stuck-finish]');
   if (finish) { void hlStuckFinish(finish); return; }
+  const claim = el?.closest<HTMLButtonElement>('[data-hl-claim]');
+  if (claim) { void hlClaim(claim); return; }
   const open = el?.closest<HTMLElement>('[data-hl-click]');
   // After this click finishes: the page's outside-click handler would otherwise close the popup it opens.
   if (open) setTimeout(() => document.querySelector<HTMLElement>(String(open.dataset.hlClick))?.click(), 0);

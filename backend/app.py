@@ -20,7 +20,6 @@ from starlette.requests import ClientDisconnect
 from . import agents, app_view, mcp_oauth, oidc, runner_online, views
 from . import outcome_stats
 from . import pipeline_judges
-from . import recorder_installs
 from . import assistant_changes, why_here
 from . import tools_delegation
 from . import setup_failures
@@ -42,6 +41,7 @@ from . import (
     wake_rules,
 )
 from . import task_privacy as privacy
+from . import task_text_keys
 from . import turns as turn_work
 from . import models as M
 from .auth import LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth
@@ -539,7 +539,6 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
         stop = asyncio.Event()
         # Always runs: local 90-day retention must not depend on the inbound key or HQ (sync itself stays off).
         inbound_task = asyncio.create_task(app.state.inbound.loop(stop))
-        meeting_screen_task = asyncio.create_task(app.state.meeting_frames.run(stop))
         screen_relay_task = None
         if settings.screen_relay_url:
             await asyncio.to_thread(screen_sessions.start)
@@ -738,7 +737,6 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
             if start_jobs_task:
                 await start_jobs_task  # short, and each in its own transaction: let it finish
             app.state.live_meeting_routing.stop()
-            await meeting_screen_task
             if inbound_task:
                 await inbound_task
             if hook_relay_task:
@@ -830,6 +828,9 @@ def _install_request_guard(
 
     app.state.observability = telemetry
     app.state.census = census
+    from .fair_share import FairShare
+
+    app.state.fair_share = FairShare.from_settings(settings)
 
     def raw_who_may(c, request, acting):
         """The catalogue's who-may line for a setting's write its route refused this person (settings_catalog)."""
@@ -1025,7 +1026,7 @@ def _install_request_guard(
 
     @app.middleware("http")
     async def request_guard(request, call_next):
-        via_reset = delegation_reset = run_reset = cause_reset = token_reset = None
+        via_reset = delegation_reset = run_reset = cause_reset = token_reset = share = None
         try:
             # The sign-in exemptions below match on prefixes; a dot segment would carry one of
             # them onto the static files ("/download/../index.html").
@@ -1174,6 +1175,9 @@ def _install_request_guard(
                     who = replace(who, task_actor="bot:" + settings.assistant_bot)
                 request.state.auth_ms = (time.perf_counter() - began) * 1000
                 request.state.identity = who
+                # One API client's burst waits its turn, not the company's (backend/fair_share.py): refused before it
+                # reads anything else.
+                share = app.state.fair_share.admit(who, request.url.path)
                 app.state.sleep_idle.seen(who, request.url.path)
                 # A locked Tico Cloud company (backend/cloud_access.py): people reach only billing and the download.
                 cloud_access.gate(store, who, request.url.path)
@@ -1199,9 +1203,6 @@ def _install_request_guard(
                     raise Problem("privacy", reason, 403)
                 if census.person_due(who):
                     await asyncio.get_running_loop().run_in_executor(None, census.note_person, who)
-                # Which Recorder a person runs (backend/recorder_installs.py): a write only when one is due.
-                if (recorder := app.state.recorder_seen.due(who, request.headers)) is not None:
-                    await asyncio.get_running_loop().run_in_executor(None, app.state.recorder_seen.note, *recorder)
                 if who.via:
                     # The Assistant acting for a person (backend/assistant.py): what it writes is
                     # recorded via assistant, and unless the person just confirmed a proposal it may
@@ -1263,17 +1264,8 @@ def _install_request_guard(
                     re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path)
                     and request.headers.get("content-type", "").lower().startswith("multipart/form-data")
                 )
-                # The recorder's speech-to-text clip (backend/recorder_relay.py): up to 25 MB, from a person.
-                recorder_audio = (
-                    request.url.path == "/api/v2/recorder/audio/transcriptions"
-                    and request.state.identity.role in ("human", "owner")
-                )
                 limit = (
-                    1_000_000
-                    if re.fullmatch(r"/api/v2/live-meetings/[^/]+/screen/frame", request.url.path)
-                    else 26_214_400
-                    if recorder_audio
-                    else 1024 * 1024
+                    1024 * 1024
                     if request.url.path == "/api/v2/team/icon"
                     else 2 * 1024 * 1024
                     if request.url.path == "/api/v2/company-page/logo"
@@ -1330,6 +1322,17 @@ def _install_request_guard(
                             raise Problem("too_large", "Request exceeds the upload limit", 413)
                         chunks.append(chunk)
                     request._body = b"".join(chunks)
+                    # A key in task text is refused before any route reads the body (backend/task_text_keys.py).
+                    if task_text_keys.scope(request.method, request.url.path):
+                        await asyncio.to_thread(
+                            task_text_keys.refusal,
+                            store,
+                            str(getattr(getattr(request.state, "identity", None), "actor", "") or ""),
+                            request.method,
+                            request.url.path,
+                            request._body,
+                            request.headers.get("content-type", ""),
+                        )
                 # assistant_owns reads the database: off the event loop.
                 if (
                     getattr(request.state, "identity", None)
@@ -1612,6 +1615,8 @@ def _install_request_guard(
             ):
                 return RedirectResponse(owner_link.LINK_PATH, status_code=302)
             response = await problem_handler(request, exc)
+            if exc.status == 429 and (wait := (getattr(exc, "extra", None) or {}).get("retry_after")):
+                response.headers["Retry-After"] = str(wait)
             if exc.status == 401 and path == mcp_oauth.MCP_PATH:
                 # Where an agent with no token can sign in (backend/mcp_oauth.py, RFC 9728).
                 response.headers["WWW-Authenticate"] = mcp_oauth.challenge_header(settings)
@@ -1635,6 +1640,7 @@ def _install_request_guard(
                 )
             raise
         finally:
+            app.state.fair_share.done(share)
             if via_reset is not None:
                 H.VIA.reset(via_reset)
             if token_reset is not None:
@@ -1773,13 +1779,10 @@ def _register_environment(app, settings, store):
     @app.get("/api/v2/config", **api_v2("Team", "getConfig", "Team and app names, version, setup state", "Config"))
     def environment(request: Request):
         """Everything a client needs to name this environment and reach its runner."""
-        from .onboarding import config_view
+        from .onboarding import client_features, config_view
 
         with store.read_transaction() as c:
-            return {
-                **config_view(c, settings, request.state.identity),
-                "features": {"task_files_multipart": True, "file_media_stream": True},
-            }
+            return {**config_view(c, settings, request.state.identity), "features": client_features(request.app)}
 
 
 def _register_updates(app, census, mutate, owner_only, person_only, settings, store):
@@ -2321,7 +2324,6 @@ def _install_features(
     from .granola_mcp import install_granola
 
     install_granola(app)
-    recorder_installs.install(app, store)  # before /api/v2/meetings/{id}
     from .meeting_review import install_meeting_review
 
     install_meeting_review(app, store, auth, mutate)
@@ -2467,9 +2469,9 @@ def _install_features(
     from .calls import install_calls
 
     install_calls(app, store, auth, mutate)  # Tico Meet calls in threads (backend/calls.py)
-    from .recorder_relay import install_recorder_relay
+    from .call_notes import install_call_notes
 
-    install_recorder_relay(app, store, auth, settings)
+    install_call_notes(app, store, auth, mutate)  # the meeting window's notes and ringing (backend/call_notes.py)
     from .mail import install_mail
 
     install_mail(app, store, auth)

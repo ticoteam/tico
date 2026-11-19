@@ -16,8 +16,9 @@ have a Spec, a QA report and any number of other pages.
 - **Roles:** `writer` (a page's writers), `related` (the default), or a document name on a task: `Spec`, `QA report`,
   `Release report`, `Invoice`, or another document name. A task's document is a page linked to that task with the
   document's name as its role.
-- **Who may write a version.** The team owner, a linked writer (a person or an active bot), someone who may comment
-  on a linked task, or someone who may manage the page. Publishing adds the version's author as a linked writer.
+- **Who may write a version.** The team owner, a linked writer (a person or an active bot), a party to a linked task
+  (a bot: its owner, requester, their managers or delegates, or one who can work it; any bot may comment on a task it
+  reads, but that alone does not let it write the task's pages), or someone who may manage the page. Publishing adds the version's author as a linked writer.
 - **Who may read:** unchanged. A link never widens who can see a page. A page made on a private task stays private when
   it is linked elsewhere.
 - **Who may link or unlink:** anyone who may write the page. A task link also needs read access to that task, and a
@@ -227,8 +228,8 @@ Stable v2 (`GET /api/v2/openapi.json`, tag **Pages**):
 
 `src` is a fresh address to frame the current version, or `null` when this install cannot show pages inline. A page
 the caller may not read is a 404. `replaced_by` is `null` when the caller may not read the newer page. Lists carry no
-totals, so a count never says what a reader cannot see. Task reads list up to 50 readable documents. Page document entries include `page_id`,
-`links`, and `changed_since_ok`.
+totals, so a count never says what a reader cannot see. Task reads list up to 50 readable documents, newest change first, each with `created` (when it first appeared). Page
+document entries include `page_id`, `links`, and `changed_since_ok`.
 
 The owner can import a version with `written_by` and `written_at` in the publish request. Both fields are audited.
 

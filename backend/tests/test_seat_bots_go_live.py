@@ -11,6 +11,8 @@ import json
 import uuid
 from pathlib import Path
 
+import pytest
+
 from backend import never_stuck
 from backend.store import H
 from backend.tests.helpers.botops_parity import act
@@ -564,3 +566,72 @@ def test_only_a_seat_bot_that_reports_to_the_owner_ends_its_setup_with_the_one_p
     assert "add-to-flow" not in _words(api, builds["id"]) and not rows(api, query, ("bot:" + builder,))
     act(api, attempt, "POST", "bots/product-manager/go-live", {})
     assert len(rows(api, query, ("bot:" + manager,))) == 1
+
+
+FIRST_JOB_SEATS = {
+    "plan": "feature-owner",
+    "grow": "growth-manager",
+    "customers": "success-manager",
+    "legal": "legal-owner",
+}
+
+
+def _not_built_in(api):
+    """The slugs of the bots whose template is not a built-in's (a card with `required`): the seat bots."""
+    from backend import onboarding as O
+
+    required = {card["template"] for card in O.read_cards(api.app.state.onboarding.settings) if card["required"]}
+    found = rows(api, "SELECT b.slug, s.template FROM bots b JOIN bot_settings s ON s.bot_id=b.id")
+    return {row["slug"] for row in found if row["template"] not in required}
+
+
+@pytest.mark.parametrize("job,slug", sorted(FIRST_JOB_SEATS.items()))
+def test_the_one_bot_a_first_job_makes_runs_its_own_setup_first_with_every_other_seat_recruiting(
+    environment, job, slug
+):
+    """Setup's first job (#610, criterion 6): a company created with a first job has one bot that is not a built-in, and
+    that bot's setup starts alone. BotOps takes it live, it gets its own setup task first in its queue, and nothing waits
+    on a seat still Recruiting: it reports to a person or a live bot, its setup tasks depend on no task, and both are its
+    turn."""
+    api = environment()
+    saved = api.put("/api/v2/setup", json={"answers": {"first_job": job}}, headers=signed_in())
+    assert saved.status_code == 200, saved.text
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
+    assert done.status_code == 200, done.text
+    computer = machine(api)
+    assert _not_built_in(api) == {slug}
+    [seat_bot] = rows(
+        api,
+        "SELECT b.id, b.slug, json_extract(s.extra,'$.setup_task_id') AS task FROM bots b "
+        "JOIN bot_settings s ON s.bot_id=b.id WHERE json_extract(s.extra,'$.goes_live_on_setup')",
+    )
+    assert seat_bot["slug"] == slug and seat_bot["task"]
+    recruiting = {
+        row["id"] for row in rows(api, "SELECT id FROM seats WHERE COALESCE(filled_by,'')='' AND closed_at IS NULL")
+    }
+    assert recruiting, "the default chart's other seats are Recruiting seats"
+    _report(api, computer)
+
+    attempt = _claim(api, computer, "botops")
+    assert attempt, "BotOps claims the bot's Set up task"
+    assert act(api, attempt, "POST", f"bots/{slug}/go-live", {}).status_code == 202
+    _report(api, computer, present=[seat_bot["id"]])
+    state = _state(api, seat_bot["id"])
+    assert state["state"] == "active" and not state["onboarding_state"], state
+
+    [own] = rows(api, "SELECT id FROM tasks WHERE owner_id=? AND title='Set yourself up'", ("bot:" + seat_bot["id"],))
+    said = _words(api, own["id"])
+    assert "ask nothing" in said and "Not yet told:" in said
+    # Its line goes to a person or a live bot, never to an empty seat.
+    [line] = rows(api, "SELECT reports_to FROM bot_config WHERE bot=?", (seat_bot["id"],))
+    parent = line["reports_to"] or ""
+    assert parent not in recruiting and parent.removeprefix("bot:") not in recruiting, parent
+    assert parent.startswith("human:") or _state(api, parent.removeprefix("bot:"))["state"] == "active", parent
+    waits = "SELECT 1 FROM task_relations WHERE from_task=? AND kind IN ('depends_on','after')"
+    for task in (own["id"], seat_bot["task"]):
+        assert not rows(api, waits, (task,)), task
+    assert _turn(api, own["id"])["state"] == "bot"
+    first = _claim(api, computer, seat_bot["id"])
+    assert first and first["task"]["id"] == own["id"], first
+    # Still the only one: going live made no second bot that is not a built-in.
+    assert _not_built_in(api) == {slug}

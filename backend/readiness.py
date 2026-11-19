@@ -298,6 +298,15 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
         # Its turns run on the Gateway until it is signed in (backend/models_preset.py): say so, never "login required".
         out["gateway"] = line
         return verdict(True)
+    if signed in SIGNED_OUT and (plan := model_subscriptions.company_plan(c, runtime)):
+        # The company has a plan for it and this computer was given none: giving it one is the fix, not a sign-in.
+        return verdict(
+            False,
+            label + " has no " + plan,
+            "Give it one in Settings > Computers",
+            "#/settings",
+            sign_in=True,
+        )
     if signed in SIGNED_OUT:
         return verdict(
             False,

@@ -76,8 +76,7 @@ try { performance.mark('tico:head'); } catch { /* no User Timing */ }
   const read = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
   const under = (base: string) => hash === base || hash.startsWith(base + '/');
   root.classList.toggle('nav-co-shut', read('tico.nav.company') !== 'open' && !['#/strategy', '#/growth', '#/finance', '#/automations', '#/listening', '#/rules'].some(under));
-  // Contacts is on the Team header, so its page leaves Library as it is (redesign.ts rdInLibrary).
-  const inLibrary = ['#/docs', '#/meetings', '#/tools', '#/library'].some(under) && !under('#/library/contacts') && !under('#/library/directory');
+  const inLibrary = ['#/docs', '#/tools', '#/library'].some(under);
   root.classList.toggle('nav-lib-shut', read('tico.nav.library') !== 'open' && !inLibrary);
   // The Team section folded here (ui/app/sidebar.ts renderNavSections).
   let folded = [];

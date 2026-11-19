@@ -838,6 +838,11 @@ def describe(c, method, path, body, viewer=None, admins=()):
                 return cid
         return (c.execute("SELECT name FROM credentials WHERE id=?", (cid,)).fetchone() or {"name": cid})["name"]
 
+    def grant_holder(gid):
+        row = c.execute("SELECT subject FROM credential_grants WHERE id=?", (gid,)).fetchone()
+        subject = row["subject"] if row else ""
+        return "every computer" if subject == "computers" else who(subject) if subject else "its holder"
+
     def bot(slug):
         row = H.bot(c, slug) or {}
         return row.get("display_name") or row.get("slug") or slug
@@ -946,7 +951,9 @@ def describe(c, method, path, body, viewer=None, admins=()):
             lambda g: (
                 "Give "
                 + ("every computer" if body.get("subject") == "computers" else who(body.get("subject")))
-                + " a stored credential"
+                + " the stored credential “"
+                + credential_name(g[0])
+                + "”"
             ),
         ),
         (r"/api/v2/bots/([^/]+)/repositories", lambda g: plain_request(bot(g[0]), body)),
@@ -977,7 +984,31 @@ def describe(c, method, path, body, viewer=None, admins=()):
         ),
         (r"/api/v2/repositories/refresh", lambda g: "Refresh the repository list from GitHub"),
         (r"/api/v2/repositories/([^/]+)/([^/]+)", lambda g: f"Change repository {g[1]}: " + fields(body)),
-        (r"/api/v2/credentials/([^/]+)", lambda g: "Delete the stored credential “" + credential_name(g[0]) + "”"),
+        (
+            r"/api/v2/credentials/([^/]+)",
+            lambda g: (
+                ("Delete the stored credential “" if method == "DELETE" else "Change the stored credential “")
+                + credential_name(g[0])
+                + "”"
+                + ("" if method == "DELETE" or not body else ": " + fields(body))
+            ),
+        ),
+        (r"/api/v2/automations", lambda g: f"Create the automation “{body.get('name') or 'unnamed'}”"),
+        (
+            r"/api/v2/automations/([^/]+)",
+            lambda g: (
+                "Delete " + automation(c, g[0], deleting=True)
+                if method == "DELETE"
+                else "Change " + automation(c, g[0]) + (": " + values(body) if body else "")
+            ),
+        ),
+        (r"/api/v2/automations/([^/]+)/delete", lambda g: "Delete " + automation(c, g[0], deleting=True)),
+        (r"/api/v2/automations/([^/]+)/run", lambda g: "Run " + automation(c, g[0]) + " now"),
+        (
+            r"/api/v2/automations/([^/]+)/versions/(\d+)/restore",
+            lambda g: f"Bring back version {g[1]} of " + automation(c, g[0]),
+        ),
+        (r"/api/v2/automations/([^/]+)/versions/(\d+)", lambda g: f"Delete version {g[1]} of " + automation(c, g[0])),
         (
             r"/api/v2/(?:people|humans)/([^/]+)",
             lambda g: (
@@ -1044,7 +1075,10 @@ def describe(c, method, path, body, viewer=None, admins=()):
                 + ")"
             ),
         ),
-        (r"/api/v2/credentials/[^/]+/grants/[^/]+/revoke", lambda g: "Take a stored credential away from a bot"),
+        (
+            r"/api/v2/credentials/([^/]+)/grants/([^/]+)/revoke",
+            lambda g: "Take the stored credential “" + credential_name(g[0]) + "” away from " + grant_holder(g[1]),
+        ),
         (r"/api/v2/system/update", lambda g: "Update this Tico to the newest version"),
         (
             r"/api/v2/(?:goal-proposals|proposals)/[^/]+/decide",
@@ -1175,6 +1209,20 @@ def describe(c, method, path, body, viewer=None, admins=()):
             ),
         ),
     )
+    rules += (
+        # Any other route on one key still names it, last so every sentence above wins.
+        (
+            r"/api/v2/credentials/([^/]+)/(.+)",
+            lambda g: (
+                ("Remove something from" if method == "DELETE" else "Make a change to")
+                + " the stored credential “"
+                + credential_name(g[0])
+                + "” ("
+                + spoken(g[1].replace("/", " "))
+                + ")"
+            ),
+        ),
+    )
     for pattern, fn in rules:
         if mm := re.fullmatch(pattern, path):
             return fn(mm.groups()), diff
@@ -1190,6 +1238,31 @@ def spoken(name):
     return re.sub(r"[_\-]+", " ", str(name)).strip()
 
 
+def automation(c, aid, deleting=False):
+    """An automation as a person reads it: its name and whose it is, from the database; by its id when it is gone. A
+    delete also says when it is already off, since confirming then stops nothing that runs."""
+    row = (
+        c.execute("SELECT name, owner_id, enabled FROM automations WHERE id=?", (aid,)).fetchone()
+        if H._has_table(c, "automations")
+        else None
+    )
+    if not row:
+        return f"the automation {aid}"
+    kind, _, key = str(row["owner_id"] or "").partition(":")
+    owner = (
+        H.actor_name(c, "human:" + key)
+        if kind in ("person", "human")
+        else H.actor_name(c, "bot:" + key)
+        if kind == "bot"
+        else ""
+    )
+    return (
+        f"the automation “{row['name']}”"
+        + (f" of {owner}" if owner else "")
+        + (" (already switched off)" if deleting and not row["enabled"] else "")
+    )
+
+
 def unnamed(c, method, path, bot):
     """A plain line for a card whose route has no sentence of its own: what it touches, never the method and path
     (those are under the card's Details)."""
@@ -1197,6 +1270,8 @@ def unnamed(c, method, path, bot):
     verb = "Remove something from" if method == "DELETE" else "Make a change to"
     if len(parts) > 1 and parts[0] == "bots":
         return f"{verb} bot {bot(parts[1])}" + (f" ({spoken(' '.join(parts[2:]))})" if parts[2:] else "")
+    if len(parts) > 1 and parts[0] == "automations":
+        return f"{verb} {automation(c, parts[1])}" + (f" ({spoken(' '.join(parts[2:]))})" if parts[2:] else "")
     if len(parts) > 1 and parts[0] == "tasks":
         return f"{verb} task “{(H.task(c, parts[1]) or {}).get('title') or 'a task'}”"
     return (
@@ -1388,7 +1463,20 @@ def refuse_unrunnable(routes, method, path, body):
 
 
 def create_proposal(
-    c, settings, who, room, proposer, summary, method, path, body, asked=None, what=None, routes=None, shown=None
+    c,
+    settings,
+    who,
+    room,
+    proposer,
+    summary,
+    method,
+    path,
+    body,
+    asked=None,
+    what=None,
+    routes=None,
+    shown=None,
+    why="",
 ):
     """One pending action for `who` to confirm, and its card in `room`, written by the bot that proposed it.
 
@@ -1487,6 +1575,10 @@ def create_proposal(
 
         what = preview_change(c, settings, who.actor, m.group(1), body)
     what = what or said  # a route that tried the change first says what it does (backend/repositories.py)
+    if why:
+        # Server facts after the title, in view before Confirm: the work the proposer was doing and why it needs this
+        # person (backend/botops_act.py card_why).
+        what = what.rstrip(". ") + ". " + why
     if path == BATCH_PATH:
         # One line per step: what it does to which task, and the fields it changes.
         diff = groups(c, body["actions"])

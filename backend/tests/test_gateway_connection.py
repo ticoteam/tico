@@ -493,7 +493,7 @@ def test_opening_the_page_asks_the_gateway_at_most_once_a_minute(api, monkeypatc
     from backend import gateway_connection
 
     clock = [1000.0]
-    monkeypatch.setattr(gateway_connection.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(gateway_connection, "_monotonic", lambda: clock[0])
     with fake_gateway() as fake:
         fake.active(KEY, 0.1)
         save(api, fake)  # the save's own check
@@ -1142,6 +1142,46 @@ def test_an_unavailable_gateway_says_try_again(api, monkeypatch, acted):
     assert status["focus"].startswith("Tico AI Gateway is unavailable, try again"), status["focus"]
     # Nothing ran: back in the queue. A run that had acted is kept for a person, as any interrupted run.
     assert (job, "back in the queue" in status["focus"]) == (("uncertain", False) if acted else ("queued", True))
+
+
+# The Gateway's Cloudflare edge answering for it (Tico Team, Nov 18), as pi printed it and an older runner sent it on:
+# `limit` set, because its boilerplate says the origin "is overloaded".
+CLOUDFLARE_502 = "502 " + json.dumps(
+    {
+        "type": "https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/"
+        "error-502/",
+        "title": "Error 502: Bad gateway",
+        "status": 502,
+        "detail": "The origin web server returned an invalid or incomplete response to Cloudflare. This typically "
+        "indicates the origin is overloaded or misconfigured.",
+        "error_name": "origin_bad_gateway",
+        "ray_id": "a5c90c403eed9ea1",
+        "zone": "updates.tico.team",
+        "cloudflare_error": True,
+        "retryable": True,
+        "retry_after": 60,
+    }
+)
+
+
+def test_a_cloudflare_502_is_the_gateway_unavailable_not_a_usage_limit(api, monkeypatch):
+    from backend import run_diagnostics, run_failures
+
+    assert G.run_code(CLOUDFLARE_502) == G.UNAVAILABLE
+    assert not login_holds.capacity(CLOUDFLARE_502) and not run_failures.is_limit(CLOUDFLARE_502)
+    assert login_holds.capacity("HTTP 503 overloaded")  # a busy model is still a busy model
+    machine, attempt = tico_run(api, monkeypatch)
+    finish(api, machine, attempt, CLOUDFLARE_502, limited=True)
+    status, job = ended(api, attempt)
+    assert job == "queued" and status["focus"].startswith("Tico AI Gateway is unavailable, try again"), status
+    assert "retries after" in status["focus"] and "try 1 of 3" in status["focus"]
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT usage_reason FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
+        assert row["usage_reason"] != "usage_limited"
+        result = c.execute("SELECT result FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0]
+        assert json.loads(result).get("limited") is False
+        reason = run_diagnostics.metadata(c, attempt["id"])["end_reason"]
+    assert reason == "Model error: 502 Bad gateway from updates.tico.team (Cloudflare ray a5c90c403eed9ea1)"
 
 
 def test_a_gateway_outage_retries_a_run_a_few_times_each_later_then_ends_it(api, monkeypatch):

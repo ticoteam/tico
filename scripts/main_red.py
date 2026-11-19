@@ -17,8 +17,8 @@ the newest green run on main before it whose candidate is an ancestor of C:
   (.github/workflows/main-red.yml, on RunsOn). The bisect runs the failing tests at the red candidate, then at the
   midpoints of the first-parent commits in G..C, each run twice: both fail is bad, both pass is good, a mix is flaky.
   Only the pull request of the first bad commit gets a review, at most three. A mix ends the bisect as flaky: no
-  review, and the test is named as a candidate for ci/quarantine/ (scripts/flake_quarantine.py). A probe that cannot say, the 15 minute
-  budget running out, or a newer validation run finishing ends the bisect with no review.
+  review, and the test is named as flaky: it is fixed at its root cause the same day, or deleted. A probe that cannot
+  say, the 15 minute budget running out, or a newer validation run finishing ends the bisect with no review.
 - The review marker names G, so a pull request is told once per break, however often the red run repeats.
 - One open issue, labelled main-red, shows the current state and is edited in place. The next green run on main
   closes it and says which of the failing tests passed again with nothing they use changed.
@@ -515,7 +515,7 @@ def bisect_lines(report):
         ]
     elif verdict == "flaky":
         text = [
-            "Flaky: %s. Candidate for ci/quarantine/ (scripts/flake_quarantine.py): %s. No pull request was reviewed."
+            "Flaky: %s. Fix at its root cause today, or delete: %s. No pull request was reviewed."
             % (found["reason"], ", ".join("`%s`" % name for name in found["names"]))
         ]
     elif verdict == "not run":

@@ -74,6 +74,13 @@ body.board-holding .pv-cols{align-items:stretch}
 .pv-group{margin:0 0 10px}
 .pv-group-head{margin:12px 10px 4px;font-size:var(--t-sm)}
 .pv-empty{margin:24px 10px}
+/* A run of empty stages: one quiet line of stage chips in their place. A pipeline with nothing open: .empty-state. */
+.pv-fold{display:flex;flex-wrap:wrap;gap:6px;margin:8px 10px 12px}
+.pv-chip{display:inline-flex;align-items:center;height:22px;padding:0 9px;border:1px solid var(--line);border-radius:999px;background:none;color:var(--muted);font:inherit;font-size:var(--t-xs);line-height:1}
+button.pv-chip{cursor:pointer}
+button.pv-chip:hover{color:var(--ink);border-color:var(--g4)}
+.pv-chip:focus-visible{border-radius:999px}
+.pv-none{margin-top:72px}
 
 /* ▶ n beside a stage's header: the stage's review (decide.ts), with how many of its items wait on the person. */
 .pv-col-head,.pv-group-head{display:flex;align-items:center;gap:8px}

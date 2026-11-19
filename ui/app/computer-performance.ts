@@ -43,6 +43,8 @@ interface ComputerPerformance {
   points: ComputerPerfPoint[];
   scope: string | null;
   summary: string;
+  /** What to do about repeated overloads on a shared computer: give these bots their own Large machine. */
+  advice?: { text: string; bots: string[] } | null;
   runs: ComputerPerfRun[];
   busiest: {
     bots: { bot: string; model: string; runs: number }[];
@@ -104,6 +106,13 @@ async function perfLoad(state: ComputerPerfState): Promise<void> {
   perfPaint(state);
 }
 
+// "Give reviewer-1 and reviewer-2 their own Large machine.", then each bot's settings link, last on the line.
+function perfAdviceHTML(d: ComputerPerformance): string {
+  if (!d.advice) return '';
+  const links = d.advice.bots.map(bot => `<a href="#/bot/${encodeURIComponent(bot)}/settings">${esc(d.advice!.bots.length > 1 ? `${bot} settings` : 'Bot settings')}</a>`);
+  return `<p class="perf-summary muted" data-perf-advice>${esc(d.advice.text)} ${links.join(' · ')}</p>`;
+}
+
 function perfPaint(state: ComputerPerfState): void {
   const d = state.data, body: HTMLElement | null = $('#perf-body');
   // perfLoad stores the data before it paints, so d is set here; a missing body is a page that is no longer open.
@@ -116,7 +125,7 @@ function perfPaint(state: ComputerPerfState): void {
   const controls = d.may_switch ? `<div class="perf-controls">
       <button type="button" class="ghost" data-perf-mode="${d.performance === 'off' ? 'on' : 'off'}">${d.performance === 'off' ? 'Turn on' : 'Turn off'}</button>
       <button type="button" class="ghost danger-text" data-perf-erase>Delete history</button></div>` : '';
-  body.innerHTML = `${off}<p class="perf-summary">${esc(d.summary)}</p>
+  body.innerHTML = `${off}<p class="perf-summary">${esc(d.summary)}</p>${perfAdviceHTML(d)}
     <section class="card"><header><h2>CPU and memory</h2><span class="sub">${esc(scope)}</span></header>
       ${d.points.length ? perfLegendHTML(d) + '<div class="perf-chart" id="perf-chart"></div>' : '<p class="empty">Nothing recorded in this window yet. A computer reports every 30 seconds while performance is on.</p>'}
       ${d.points.length ? `<details class="perf-table" id="perf-table"><summary>Show as a table</summary><div class="scroll"></div></details>` : ''}</section>

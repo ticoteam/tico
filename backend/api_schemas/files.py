@@ -19,7 +19,16 @@ SCHEMAS.update(
                 "id": "s",
                 "bot": "s",
                 "title": "s",
-                "kind": "s",
+                "kind": {
+                    "type": "string",
+                    "description": "the stored kind (document, spreadsheet, slides, design, image, video, audio, data…); "
+                    "the list's `kind` filter takes `library_kind`, not this",
+                },
+                "library_kind": {
+                    "type": "string",
+                    "enum": ["page", "document", "image", "data", "media", "other"],
+                    "description": "the Library kind, the word `kind=` filters by: page for a page, else from the stored kind",
+                },
                 "mime": "s",
                 "locator": "s",
                 "scope": "s",
@@ -56,6 +65,7 @@ SCHEMAS.update(
                 "bot",
                 "title",
                 "kind",
+                "library_kind",
                 "locator",
                 "scope",
                 "version",

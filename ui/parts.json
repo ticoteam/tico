@@ -55,7 +55,8 @@
   "deps": [],
   "pages": [],
   "calls": [
-   "thvLibOpen"
+   "thvLibOpen",
+   "libPickerMount"
   ],
   "idle": []
  },
@@ -83,7 +84,7 @@
    "thvSheet"
   ],
   "idle": []
-  },
+ },
  "threads-rail": {
   "files": [
    "app/thread-rail.ts",
@@ -324,6 +325,7 @@
  },
  "task-docs": {
   "files": [
+   "app/prop-menu.ts",
    "app/task-docs.ts"
   ],
   "deps": [],
@@ -349,12 +351,28 @@
    "decideGoThrough",
    "decideOpen",
    "decideFlow",
-   "decideBotsFlow"
+   "decideBotsFlow",
+   "decideBrowserOpen"
   ],
   "idle": [
    "decideStop",
    "decideRefresh",
    "decidePaintBody"
+  ]
+ },
+ "rule-review": {
+  "files": [
+   "app/org-rule-review.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "ruleReviewMount",
+   "ruleReviewGroupInto"
+  ],
+  "idle": [
+   "ruleReviewTick",
+   "ruleReviewReset"
   ]
  },
  "setup-gaps": {
@@ -413,6 +431,7 @@
    "openPipelineEditor",
    "roadmapSettingsMount",
    "taskChatLive",
+   "taskChatOthersChange",
    "taskChatJump",
    "taskChatRead",
    "taskCommentsRender",
@@ -641,6 +660,15 @@
   ],
   "idle": []
  },
+ "who-picker": {
+  "files": [
+   "app/who-picker.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
  "library": {
   "files": [
    "docs-page.ts",
@@ -654,15 +682,15 @@
    "app/tools-api.ts",
    "app/tools-mcp.ts",
    "app/redesign-library.ts",
-   "app/tools-website.ts",
-   "app/who-picker.ts"
+   "app/tools-website.ts"
   ],
   "deps": [
    "finance",
    "webhooks",
    "docs-editor",
    "browser-view",
-   "thread-connect"
+   "thread-connect",
+   "who-picker"
   ],
   "pages": [
    "pageCompanyDocs",
@@ -721,13 +749,17 @@
    "app/meetings-sources.ts"
   ],
   "deps": [
-   "tool-icons"
+   "tool-icons",
+   "webhooks",
+   "who-picker"
   ],
   "pages": [
    "pageLiveMeetings",
    "pageNotes"
   ],
-  "calls": [],
+  "calls": [
+   "meetCallDialog"
+  ],
   "idle": [
    "liveMeetingsStop",
    "meetStop"
@@ -826,7 +858,8 @@
   "calls": [
    "frvShow",
    "frvAboveTask",
-   "frvTeardown"
+   "frvTeardown",
+   "fileShowInto"
   ],
   "idle": []
  },
@@ -869,14 +902,38 @@
  },
  "thread-call-live": {
   "files": [
+   "app/thread-call-start.ts",
    "app/thread-call-live.ts"
   ],
   "deps": [],
   "pages": [],
   "calls": [
+   "callStartThread",
+   "callStartBot",
+   "callStartTeammates",
    "callJoin",
-   "callHangUp"
+   "callHangUp",
+   "callHandOff"
   ],
-  "idle": []
+  "idle": [
+   "callBarDraw",
+   "callDone"
+  ]
+ },
+ "call-window": {
+  "files": [
+   "app/call-window.ts"
+  ],
+  "deps": [
+   "thread-call-live"
+  ],
+  "pages": [
+   "pageCallWindow"
+  ],
+  "calls": [],
+  "idle": [
+   "callWindowDraw",
+   "callWindowStop"
+  ]
  }
 }

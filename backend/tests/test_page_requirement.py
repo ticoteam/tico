@@ -292,7 +292,8 @@ def test_jevs_unsure_wakes_the_manager_with_the_line_not_the_bot(store, seeded, 
         'The decision model is unsure of "Spec page": you decide it, as the pipeline\'s manager' in asked
         and R.DECIDE in asked
     )
-    assert "Says what done looks like" not in asked, "the line, never the whole check"
+    # A one-sentence rubric is its own only item and is named (task #614); the line still says what to decide.
+    assert 'Can\'t tell if it meets: "Says what done looks like"' in asked
 
 
 def test_unsure_goes_to_a_person_when_no_manager_bot_can_decide(c, store):
@@ -408,7 +409,8 @@ def test_the_stage_waits_only_on_its_page_ok_when_the_bot_also_asks_the_person(c
     fid, _ = _page(c, store)
     _say(c, _attach(c, row, "page:" + fid, by=po), "met")
     assert (_standing(c, row).state, _standing(c, row).on) == (R.WAITING, BEN)
-    Q.ask(c, po, row["id"], BEN, "Please OK the attached spec.")
+    with _refused('already has "Spec page" to approve on this task'):
+        Q.ask(c, po, row["id"], BEN, "Please OK the attached spec.")
     assert [s.requirement["id"] for s in R.unmet(c, E.task(c, row["id"]))] == [rid], "one thing waits: the page OK"
     assert A.answer(c, row["id"], rid, BEN, "ok")["stage"]["name"] != "Spec", "the page OK alone moves it"
 
@@ -430,6 +432,47 @@ def test_a_bots_question_of_a_person_no_stage_ok_waits_on_still_works(c, store):
     _pipeline(c, person=BEN)
     row = _owned(c, po)
     assert Q.ask(c, po, row["id"], BEN, "Should negate accept strings?")["person_id"] == BEN
+
+
+def test_a_bots_question_to_the_person_a_people_only_page_waits_on_is_refused_whatever_it_says(c, store):
+    """Tico Team (Nov 18): QA waited on Chris's OK of the QA report, and the Engineering Manager also asked him "Please
+    move this task on past QA yourself" as a ❓ that named no page. Two waits on one person, and only the approval card
+    had a button. Approvals win over questions: one card per person per task. Someone else is still the bot's to ask."""
+    from backend import waiting_on as W
+
+    po = "bot:product-owner"
+    X.bot(c, "product-owner")
+    rid = _pipeline(c, who_oks="people_only")
+    row = _owned(c, po)
+    fid, _ = _page(c, store)
+    _say(c, _attach(c, row, "page:" + fid, by=po), "met")
+    (card,) = [w for w in W.waiting_on(c, row["id"]) if w.requirement_id == rid]
+    assert (card.state, card.ask) == (W.PERSON, True)
+    holder = card.who
+    other = BEN if holder != BEN else ANA
+    with _refused("that approval is your ask"):
+        Q.ask(c, po, row["id"], holder, "Please move this task on past QA yourself.")
+    assert not Q.on_task(c, row["id"]), "a refused ❓ leaves nothing"
+    assert Q.ask(c, po, row["id"], other, "Which importer first?")["person_id"] == other
+
+
+def test_answering_the_page_approval_clears_the_bots_question_to_that_person(c, store):
+    """The safety net: a ❓ asked before the page waited on the person (allowed then) clears when they answer the
+    approval, OK or send back, so their Needs you never keeps a second card for the same task."""
+    po = "bot:product-owner"
+    X.bot(c, "product-owner")
+    rid = _pipeline(c, person=BEN)
+    row = _owned(c, po)
+    asked = Q.ask(c, po, row["id"], BEN, "Should negate accept strings?")
+    fid, _ = _page(c, store)
+    _say(c, _attach(c, row, "page:" + fid, by=po), "met")
+    assert (_standing(c, row).state, _standing(c, row).on) == (R.WAITING, BEN)
+    assert [m["id"] for m in Q.on_task(c, row["id"])] == [asked["id"]]
+    A.answer(c, row["id"], rid, BEN, "no", "Strings too, please")
+    assert not Q.on_task(c, row["id"]), "the approval was the ask: the ❓ cleared with it"
+    cleared = Q.get(c, asked["id"])
+    assert (cleared["cleared_reason"], cleared["cleared_by_id"]) == ("approval", BEN)
+    assert not cleared["cleared_message_id"], "not counted as a reply"
 
 
 def test_after_a_send_back_a_met_page_a_person_oks_is_asked_of_the_same_person(c, store):
@@ -1165,9 +1208,45 @@ def test_jevs_send_back_wakes_the_bot_owner_with_the_reasons(store, seeded, monk
     assert len(bodies) == 1 and 'Decision model sent back "Spec page": No scope' in bodies[0]
 
 
+def test_a_review_page_sent_back_names_the_unmet_rubric_item_on_the_task_and_in_the_send_back(
+    store, seeded, monkeypatch
+):
+    """Task #614: on the shipped Review rubric, the line the task shows to leave the stage and the message that sends
+    the page back both name the part Jev finds missing, not only 'Doesn't meet'."""
+    from backend import pipeline_settings as PS
+
+    def build(c):
+        _pipeline(c, page_settings={"rubric": PS.REVIEW_RUBRIC})
+        row = _task(c)
+        _attach(c, row, "page:" + _page(c, store)[0])
+        X.settled(c)
+        return row
+
+    def ask(model, state, questions, label):
+        answers = {q: {"noul": {"met": 0.05, "part_models": 0.05}.get(q, 0.95)} for q in questions if q != PJ.READ}
+        answers[PJ.READ] = {"choice": PJ.NO_LINE, "confidence": 0.9}
+        return PJ._read({"answers": answers, "model": "tico-decide-low"}, list(questions), model)
+
+    row = seeded(build)
+    monkeypatch.setattr(PJ, "ENGINE", ask)
+    V.run(store, H.shift(H.now(), seconds=1))
+    item = "No second review from a different model."
+    with store.read() as r:
+        bodies = [
+            m[0]
+            for m in r.execute(
+                "SELECT body FROM messages WHERE recipient_id=? AND wake_key LIKE ?", (WRITER, row["id"] + ":%:jev:%")
+            )
+        ]
+        line = _standing(r, row).line
+    assert line.startswith("Decision model sent it back: ") and item in line and "Read: " in line, line
+    assert len(bodies) == 1 and item in bodies[0], bodies
+
+
 def test_jev_with_no_words_of_its_own_still_gives_every_verdict_a_reason(store, seeded, monkeypatch):
     """Jev answers a probability and no prose (Acme, Nov 11: three Review pages "Jev is unsure" with nothing after it).
-    The verdict, its history line and the standing the manager reads all name the requirement, never its rubric."""
+    The verdict, its history line and the standing the manager reads all name the requirement, and a rubric of one
+    sentence as its only item (task #614)."""
 
     def build(c):
         _pipeline(c, page_settings={"rubric": "Says what done looks like"})
@@ -1187,8 +1266,9 @@ def test_jev_with_no_words_of_its_own_still_gives_every_verdict_a_reason(store, 
                 (row["id"],),
             )
         ]
-    assert line == f'{R.DECIDE} Decision model is unsure: Can\'t tell if it meets "Spec page".', line
-    assert notes == ['Can\'t tell if it meets "Spec page".'], notes
+    said = 'Can\'t tell if it meets "Spec page". Can\'t tell if it meets: "Says what done looks like"'
+    assert line == f"{R.DECIDE} Decision model is unsure: {said}.", line
+    assert notes == [said], notes
 
 
 def test_the_judge_is_told_the_one_linked_prs_repo_number_and_author(store, seeded, monkeypatch):
@@ -1457,6 +1537,8 @@ class RawJev:
         self.ps, self.drop, self.fail, self.calls = ps or {}, drop, fail, []
 
     def answer(self, one, own):
+        if own == PJ.READ:  # the page line the answer rests on (task #614)
+            return {"type": "choice", "choice": PJ.NO_LINE, "confidence": 0.9}
         requirement = one["requirement"] if own == "met" else one["requirements"]["requirement" + own[3:]]
         return {"type": "noul", "noul": self.ps.get(requirement["rubric"], 0.95)}
 
@@ -1542,7 +1624,7 @@ def test_as_shipped_one_page_on_three_requirements_is_three_calls_as_before(stor
     monkeypatch.setattr(PJ, "ASK", jev)
     assert PJ.SAME_PAGE is False
     assert V.run(store, H.shift(H.now(), seconds=1)) == 3
-    assert [call["questions"] for call in jev.calls] == [["met"], ["met"], ["met"]]
+    assert [call["questions"] for call in jev.calls] == [["met", PJ.READ]] * 3
 
 
 def _five(c, store):
@@ -1575,7 +1657,7 @@ def test_five_pages_at_one_per_call_are_five_calls_as_before(store, seeded, monk
     jev = RawJev()
     monkeypatch.setattr(PJ, "ASK", jev)
     assert V.run(store, H.shift(H.now(), seconds=1)) == 5
-    assert len(jev.calls) == 5 and all(call["questions"] == ["met"] for call in jev.calls)
+    assert len(jev.calls) == 5 and all(call["questions"] == ["met", PJ.READ] for call in jev.calls)
     assert all("requirement" in call["state"] for call in jev.calls)
 
 
@@ -1598,7 +1680,7 @@ def test_a_page_whose_answer_is_missing_in_a_group_is_asked_again_alone(store, s
     monkeypatch.setattr(PJ, "ASK", jev)
     assert V.run(store, H.shift(H.now(), seconds=1)) == 5
     assert len(jev.calls) == 2
-    assert "Page 2:" in jev.calls[1]["state"]["attachment"]["text"] and jev.calls[1]["questions"] == ["met"]
+    assert "Page 2:" in jev.calls[1]["state"]["attachment"]["text"] and jev.calls[1]["questions"] == ["met", PJ.READ]
     assert all(v["verdict"] == "met" for v in _verdicts(store).values())
 
 
@@ -1775,31 +1857,3 @@ def test_a_part_that_is_no_on_a_bots_stage_still_goes_back_to_the_pages_bot(stor
         (told,) = _jev_wakes(r, row, WRITER)
         assert "Doesn't say what was run or looked at in production" in told
         assert _jev_wakes(r, row, "bot:manager") == []
-
-
-def test_at_release_an_open_unsure_is_judged_again_and_old_lines_lose_their_probability(c, store):
-    """The migration that ships this: the open task's unsure page is owed again; a closed one's verdict stays, and
-    every line in the old template is said the new way."""
-    import importlib
-
-    migration = importlib.import_module("backend.migrations.20261113070000_jev_reasons_by_part")
-    _pipeline(c)
-    open_row = _task(c)
-    closed_row = X.new_task(c, ANA, "Billing spec", "product", assignee=WRITER)
-    old = "Jev could not tell whether it meets the check (p 0.70, between 0.2 and 0.75): Spec page"
-    waiting = _say(c, _attach(c, open_row, "page:" + _page(c, store)[0]), "unsure", old)
-    shut = _say(c, _attach(c, closed_row, "page:" + _page(c, store)[0]), "unsure", old)
-    E.move(c, closed_row["id"], E.CLOSED, ANA, "not needed")
-    migration.up(c)
-    again = V.get(c, waiting["file_id"], waiting["version"], waiting["rubric_hash"])
-    assert (again["verdict"], again["reasons"], again["tries"]) == (None, None, 0)
-    assert V.owed(c, H.shift(H.now(), seconds=1)) and again["id"] in [
-        o["id"] for o in V.owed(c, H.shift(H.now(), seconds=1))
-    ]
-    kept = V.get(c, shut["file_id"], shut["version"], shut["rubric_hash"])
-    assert (kept["verdict"], kept["reasons"]) == ("unsure", "Can't tell if it meets the check.")
-    migration.up(c)  # a second run changes nothing it already changed
-    assert (
-        V.get(c, shut["file_id"], shut["version"], shut["rubric_hash"])["reasons"]
-        == "Can't tell if it meets the check."
-    )

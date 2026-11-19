@@ -305,14 +305,14 @@ async function modelsTab(browser: Browser) {
     ['Claude Max (Ana)', 'Claude', '3', '5h 38% left'],
     ['Claude Max (Sam)', 'Claude', '0', 'Sign in again'],
     ['Claude Max (Dee)', 'Claude', '1', 'No reading yet'],
-    ['ChatGPT Pro (Ana)', 'ChatGPT', '1', 'week 87% left resets in 111h'],
+    ['ChatGPT Pro (Ana)', 'ChatGPT', '1', 'week 87% left resets in 4d 15h'],
     ['ChatGPT Team (Cy)', 'ChatGPT', '1', 'week 100% left'],
     ['OpenAI key (company)', 'OpenAI API key', '0', '$41.20 this month']]);
   assert.equal(await pane.locator('[data-subs-row=s4] [data-subs-reconnect]').innerText(), 'Sign in again');
   assert.match(await pane.locator('[data-subs-row=s4] .subs-use').innerText(), /Sign-in expired/);
   assert.doesNotMatch(await pane.locator('#set-subs').innerText(), /Computer offline|Bring it online|No computer assigned|Connection unavailable|Held until|In use ·/);
-  // The hours until the window resets sit after the share left; the tooltip names the window and the reset time.
-  assert.match((await pane.locator('[data-subs-row=s2] .subs-usage').getAttribute('title'))!, /^Week: 87% left · resets \S.* \(in 111h\)$/);
+  // The time until the window resets sits after the share left; the tooltip names the window and the reset time.
+  assert.match((await pane.locator('[data-subs-row=s2] .subs-usage').getAttribute('title'))!, /^Week: 87% left · resets \S.* \(in 4d 15h\)$/);
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-reset').count(), 0);
   // The bar is the share left: a fresh plan's is full.
   assert.equal(await pane.locator('[data-subs-row=s5] .subs-bar b').getAttribute('style'), 'width:100%');
@@ -808,7 +808,7 @@ async function personGroups(browser: Browser) {
   assert.deepEqual(rows.slice(2).map(r => r[1]), ['Claude Max (Ana)', 'Plan 1']);
   assert.equal(rows[3]![2], '');
   assert.equal(await ana.locator('[data-subs-row=p2] .subs-mark').getAttribute('title'), 'In use on Tico Team box');
-  assert.match(await ana.locator('[data-subs-row=p1] .subs-use').innerText(), /^week\s+0% left\s+resets in 24h$/);
+  assert.match(await ana.locator('[data-subs-row=p1] .subs-use').innerText(), /^week\s+0% left\s+resets in 1d$/);
   assert.equal(await ana.locator('[data-subs-row=p1] .subs-bar').getAttribute('class'), 'subs-bar bad');
   assert.equal(await ana.locator('[data-subs-row=p2]').getAttribute('class'), 'subs-in-use');
   await shot(page, 'models-groups');
@@ -1012,7 +1012,7 @@ async function phoneReasons(browser: Browser) {
     mutate: d => { d.subs.push(extra('s7', 'Claude Max (Eve)', 'working', []), extra('s8', 'Claude Max (Flo)', 'failing', ['r1'])); }});
   await modelsReady(page);
   const width = 390;
-  for (const [id, reason] of [['s1', /^5h\s+38% left$/], ['s2', /^week\s+87% left\s+resets in 111h$/], ['s4', /Sign-in expired\s*Sign in again/],
+  for (const [id, reason] of [['s1', /^5h\s+38% left$/], ['s2', /^week\s+87% left\s+resets in 4d 15h$/], ['s4', /Sign-in expired\s*Sign in again/],
     ['s6', /^No reading yet$/], ['s7', /^No reading yet$/], ['s8', /^No reading yet$/]] as [string, RegExp][]) {
     const row = page.locator(`[data-subs-row=${id}]`);
     await row.scrollIntoViewIfNeeded();
@@ -1064,17 +1064,17 @@ async function usageLeft(browser: Browser) {
     await modelsReady(page);
     const pane = page.locator('#set-subs');
     const use = (id: string) => pane.locator(`[data-subs-row=${id}] .subs-use`);
-    // AC-1: a green bar 62% full, "62% left · resets in 98h", nothing else.
-    assert.match(await use('w').innerText(), /^week\s+62% left\s+resets in 98h$/);
+    // AC-1: a green bar 62% full, "62% left · resets in 4d 2h", nothing else.
+    assert.match(await use('w').innerText(), /^week\s+62% left\s+resets in 4d 2h$/);
     assert.equal(await use('w').locator('.subs-bar').getAttribute('class'), 'subs-bar');
     assert.equal(await use('w').locator('.subs-bar b').getAttribute('style'), 'width:62%');
-    assert.match((await use('w').locator('.subs-usage').getAttribute('title'))!, /^Week: 62% left · resets \S.* \(in 98h\)$/);
+    assert.match((await use('w').locator('.subs-usage').getAttribute('title'))!, /^Week: 62% left · resets \S.* \(in 4d 2h\)$/);
     // AC-2: the tighter window alone, its reset in hours; amber when 6-20% is left, red at 5% or less.
-    assert.match(await use('f').innerText(), /^5h\s+10% left\s+resets in 3h$/);
+    assert.match(await use('f').innerText(), /^5h\s+10% left\s+resets in 3h (10|9)m$/);
     assert.equal(await use('f').locator('.subs-bar').getAttribute('class'), 'subs-bar warn');
-    assert.match(await use('g').innerText(), /^week\s+15% left\s+resets in 60h$/);
+    assert.match(await use('g').innerText(), /^week\s+15% left\s+resets in 2d 12h$/);
     // AC-3: at its limit, 0% left and an empty red bar; "Held until" nowhere.
-    assert.match(await use('h').innerText(), /^week\s+0% left\s+resets in 30h$/);
+    assert.match(await use('h').innerText(), /^week\s+0% left\s+resets in 1d 6h$/);
     assert.equal(await use('h').locator('.subs-bar').getAttribute('class'), 'subs-bar bad');
     assert.equal(await use('h').locator('.subs-bar b').getAttribute('style'), 'width:0%');
     const edge = (id: string) => use(id).locator('.subs-bar').evaluate(e => getComputedStyle(e).boxShadow);

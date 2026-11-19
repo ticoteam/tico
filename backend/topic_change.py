@@ -43,7 +43,13 @@ from .store import H, encode
 from . import bot_settings as BS
 
 LOG = logging.getLogger("tico.topic_change")
-_clock = time.monotonic
+
+
+def _clock():
+    """The deadline clock: a test replaces this and not time.monotonic for the whole process."""
+    return time.monotonic()
+
+
 QUESTION_SET = "topic-change"
 RULE = "topic_fresh"
 # The most a send waits for the check, all of it: the read, the call and the answer.

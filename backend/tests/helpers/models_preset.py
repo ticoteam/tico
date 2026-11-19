@@ -41,7 +41,7 @@ def connected(api, monkeypatch):
         save(api, fake)
 
 
-def on_tico(api, machine, isolated):
+def on_tico(api, machine, isolated, capabilities=()):
     """ops on Tico Medium 1.0 itself, ready on `machine`, which says (or does not say) it runs bots as their own user."""
     from backend.tests.helpers.gateway_connection import put_bot_on
 
@@ -63,6 +63,6 @@ def on_tico(api, machine, isolated):
     post(
         api,
         "runners/heartbeat",
-        {"version": "test", "platform": "test", "readiness": readiness},
+        {"version": "test", "platform": "test", "readiness": readiness, "capabilities": list(capabilities)},
         token=machine["token"],
     )

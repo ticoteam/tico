@@ -41,8 +41,8 @@ NEEDS_ITEM = obj(
     },
     about={
         "type": "string",
-        "description": "An OK whose task is titled by its kind alone (\"Send an email\"): what this one is about, "
-        "in its subject's words (\"Send email: November update\"), for its party; the row's first line",
+        "description": "An OK whose task is titled by its kind alone (\"Mail a letter\"): what this one is about, "
+        "in its subject's words (\"Mail a letter to Ana Diaz\"), for its party; the row's first line",
     },
 )
 
@@ -148,6 +148,7 @@ SCHEMAS.update(
                 "pushed_past": "b",
                 "stage_since": "n",
                 "on_person": "b",
+                "visit_id": {"type": "string", "description": "Its open visit, only when its turn is an ask"},
             },
             [
                 "id",

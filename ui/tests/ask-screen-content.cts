@@ -4,6 +4,7 @@ import type {Route} from 'playwright';
 //   drawn, then sends the letter's shown_hash;
 // - a letter whose proof does not load leaves Approve off; Send back still works;
 // - a file's OK reads the pinned version (GET /api/v2/files/{id}/versions/{n}) and shows it; Approve sends the OK's hash;
+//   a Word file is drawn in its sandboxed frame;
 // - a stage's OK (no grant) is off while its page loads, on once it is shown, and off when its page does not load;
 // - a support report's OK shows the message and the version and install ID that go with it, off until they are read;
 // - an OK of a message shows every other field its content has too;
@@ -14,6 +15,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
+const {docxSample} = require('./support/docx-sample.cts') as import('./support/docx-sample.cts').Api;
 
 const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: true};
 const config = {version: '0.1.0', app_name: 'Tico', local: true};
@@ -42,16 +44,18 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
     need('r1', 'Mail the lease letter', 10),
     need('r2', 'Mail the notice', 11),
     need('r3', 'Approve the pricing notes', 12),
-    need('r4', 'Approve the launch post', 13, ['page:p1']),
-    need('r5', 'Approve the plan', 14, ['page:p2']),
-    need('r6', 'Send this report to Tico support?', 15),
-    need('r7', 'Approve the reply', 16),
-    {...need('r8', 'Spec page', 17), ask: {...need('r8', 'Spec page', 17).ask, kind: 'page', may: ['ok', 'no'], shows: ['page:pf@2'],
+    need('r9', 'Approve the draft letter', 13),
+    need('r4', 'Approve the launch post', 14, ['page:p1']),
+    need('r5', 'Approve the plan', 15, ['page:p2']),
+    need('r6', 'Send this report to Tico support?', 16),
+    need('r7', 'Approve the reply', 17),
+    {...need('r8', 'Spec page', 18), ask: {...need('r8', 'Spec page', 18).ask, kind: 'page', may: ['ok', 'no'], shows: ['page:pf@2'],
       page: {file_id: 'pf', version: 2, ref: 'page:pf@2'}}},
   ];
   const proof = gate(), page1 = gate(), compose = gate(), specPage = gate();
   let needsVersion = String(needs.length);
   const writes: {p: string; body: Record<string, unknown>}[] = [];
+  const letterDocx = await docxSample(['Dear Jo,', 'Your lease renews in May.'], 'Lease letter');
   const pdf = '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n';
   const pg = (id: string, title: string) => ({id, title, body: `${title} body.`, kind: 'doc', owner_id: 'bot:pm', updated_at: '2026-11-09T10:00:00Z'});
   try {
@@ -79,6 +83,9 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
       if (p === '/api/v2/files/b2') return json({error: 'not_found'}, 404);
       if (p === '/api/v2/oks/r3') return json({requirement_id: 'r3', subject: 'file:f1', content: {file: 'f1', version: 2, name: 'pricing.md', digest: 'x'}, shown_hash: 'e'.repeat(64), standing: 'waiting', task_id: 't-r3'});
       if (p === '/api/v2/files/f1/versions/2') return route.fulfill({contentType: 'text/markdown', body: '# Pricing\n\nPro is $29 a month.'});
+      if (p === '/api/v2/oks/r9') return json({requirement_id: 'r9', subject: 'file:f2', content: {file: 'f2', version: 1, name: 'lease-letter.docx', digest: 'x'}, shown_hash: '3'.repeat(64), standing: 'waiting', task_id: 't-r9'});
+      if (p === '/api/v2/files/f2/versions/1') return route.fulfill({contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', body: letterDocx});
+      if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile(p.slice(1)))});
       if (p === '/api/v2/oks/r4' || p === '/api/v2/oks/r5') return json({error: 'not_found'}, 404);
       if (p === '/api/v2/pages/p1') { await page1.p; return json({page: pg('p1', 'Launch post')}); }
       if (p === '/api/v2/pages/p2') return json({error: 'server_error'}, 500);
@@ -148,8 +155,18 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
     // r3: the file at its pinned version, shown; Approve sends the OK's hash.
     await dialog.getByText('Pro is $29 a month.').waitFor();
     await dialog.locator('[data-dc="approve"]:not([disabled])').click();
-    await dialog.locator('.dc-q', {hasText: 'Approve the launch post'}).waitFor();
+    await dialog.locator('.dc-q', {hasText: 'Approve the draft letter'}).waitFor();
     assert.deepEqual(writes.find(w => w.p === '/api/v2/tasks/t-r3/asks/r3/ok')?.body, {shown_hash: 'e'.repeat(64)});
+
+    // r9: a Word file at its pinned version, drawn in the sandboxed frame (no scripts, nothing that reaches out).
+    const word = dialog.locator('iframe.dc-proof.html-view');
+    await word.waitFor();
+    assert.equal(await word.getAttribute('sandbox'), 'allow-popups allow-popups-to-escape-sandbox');
+    assert.doesNotMatch(await word.getAttribute('srcdoc') || '', /javascript:|<script|evil\.example|DOCX_CHUNK/i);
+    await page.frameLocator('#need-card iframe.dc-proof.html-view').locator('p', {hasText: 'Your lease renews in May.'}).waitFor();
+    await dialog.locator('[data-dc="approve"]:not([disabled])').click();
+    await dialog.locator('.dc-q', {hasText: 'Approve the launch post'}).waitFor();
+    assert.deepEqual(writes.find(w => w.p === '/api/v2/tasks/t-r9/asks/r9/ok')?.body, {shown_hash: '3'.repeat(64)});
 
     // r4: a stage's OK: off while its page loads, on once it is shown.
     await page.waitForTimeout(400);

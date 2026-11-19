@@ -32,8 +32,10 @@ Tico's own releases (ticoteam/tico) go out on their own, at any hour, run by `.g
 - **Each step** first promotes the canary's release to stable once it is approved and nothing holds it (see
   [Approval](#approval)). Then it ships a green candidate, or dispatches Release validation (`ci.yml`) for main's head
   as the next patch.
-- **A green candidate ships.** The train tags that commit, publishes it (`release.yml`, dispatched on the tag) and
-  updates the canary. The release is published as not latest; only once the canary runs it healthy does the train make
+- **A green candidate ships, continuously.** The train tags that commit and publishes it (`release.yml`, dispatched on
+  the tag). As soon as it is published, the train validates main's head when main has moved (the next validation
+  compares with it), then updates the canary. Once the canary runs it healthy and it is approved, stable takes it in the
+  same step: an automatically approved release goes from green to stable in one step, with no wait for another event. The release is published as not latest; only once the canary runs it healthy does the train make
   it the latest GitHub release and move the images' `latest` tags, so new installs, update checks and desktop apps
   never get a release the canary has not run. Latest never moves backwards, and a marking that failed is retried by the
   backstop once the canary runs that release healthy.
@@ -47,7 +49,7 @@ Tico's own releases (ticoteam/tico) go out on their own, at any hour, run by `.g
   a file a failing test uses (a review, so Tico routes it to the pull request's owner). With more than three such
   pull requests and only pytest tests failing, the bisect job on RunsOn runs the failing tests at the commits between
   the last green run and the red one, twice each, and reviews only the merge where they first fail. A mix of results is
-  flaky: nothing is reviewed, and the test is a candidate for `ci/quarantine/` (see Quarantined tests). One open `main-red` issue lists
+  flaky: nothing is reviewed, and the test is fixed at its root cause the same day or deleted (see Flaky tests). One open `main-red` issue lists
   the suspects, the verdict and the likely flaky tests. The next green run on main closes it. See
   `scripts/main_red.py`.
 - **Canary and stable.** The canary is Tico Team's install, stable is TIDY's. Both are updated through their update
@@ -80,7 +82,8 @@ A validation the train dispatched fires no `workflow_run` (GitHub starts none fo
 Release validation's last job dispatches the train itself with `validation_run` set to its run id. The train's guard
 waits for that run to complete, and it counts as a finished run, not a manual one: `RELEASE_TRAINS` still applies. A
 step that ships a candidate also validates main's head when main has moved past the candidate, without waiting for
-another event. A quiet main has no pushes, and GitHub drops many backstop schedules.
+another event, as soon as the release is published and before the canary updates. A quiet main has no pushes, and
+GitHub drops many backstop schedules.
 
 Settings, in the GitHub environment `release` (deployments from `main` and `v*` tags only): variables `CANARY_URL`
 and `STABLE_URL`, secrets `CANARY_UPDATE_KEY` and `STABLE_UPDATE_KEY`. Repository variables: `RELEASE_TRAINS`
@@ -124,6 +127,10 @@ The train validates a head in one of two ways. A **full** validation is the whol
   says `the train waits` and why. A red run that names no failure, or whose diff cannot be read, is run again on the
   next commit, incrementally from the anchor (a full validation waits for a person, see above). A red run at main's
   head waits for a push.
+- **An incremental run stops at its first failure.** Its gate parts fail fast: the first part that fails cancels the
+  others, so a red incremental run ends minutes sooner and the train moves on. Such a run names the tests that did
+  fail (they are carried and waited for, as above), but its cancelled parts ran nothing, so it is no anchor: the next
+  validation selects from the anchor before it, which still covers its diff. A full validation runs every part.
 - **Limits.** Only full validations run every test: a changed file's slow tests run in an incremental one only through the
   contracts lane (which also runs the content sweeps a change reaches, see the selection rules below), and `alone` tests
   never do. A UI script runs when its own files or helpers change, its name matches the changed UI file, or a `UI_MAP`
@@ -151,7 +158,7 @@ risk is what the notes call it (`scripts/release_notes.py`): a pull request whos
 - **The issue.** Each candidate the canary takes gets an open issue, `Release vX.Y.Z: awaiting approval`, labelled
   `release-approval`. Its body is the release notes, built by `scripts/release_notes.py`: every pull request merged
   since the release stable runs. High-risk pull requests come first, then user-facing ones (`ui/`, `clients/`, `app/`),
-  then backend ones (`backend/`, `runner-rs/`, `recorder/`, `templates/`), then the internal ones, one line each. The
+  then backend ones (`backend/`, `runner-rs/`, `templates/`), then the internal ones, one line each. The
   first line counts the blocks by group. A block gives the pull request's Spec, its demo steps (written for the Acme
   Lights demo company) and its risk when it has them, and says so in one line when it has none of the three. It also
   gives its reviews and receipts, and the areas it touches. Its checks show only when one failed or none ran.
@@ -159,8 +166,8 @@ risk is what the notes call it (`scripts/release_notes.py`): a pull request whos
   repository's permission for that login is checked, and the account must be a person: a bot or a GitHub App does not
   count, even with write access, and neither does anyone without write access. The `hold` label keeps one release off
   stable.
-- **Promotion.** At each train step (the backstop runs one every 20 minutes), stable takes the canary's release once it
-  is approved, not held, nothing holds stable (`RELEASE_HOLD`, an open `release-blocker` issue) and the canary runs it
+- **Promotion.** Right after the canary takes a release, in the same step, and again at each later train step (the
+  backstop runs one every 20 minutes, for a person's approval), stable takes the canary's release once it is approved, not held, nothing holds stable (`RELEASE_HOLD`, an open `release-blocker` issue) and the canary runs it
   healthy. Stable's update closes the issue, and the issue says who approved it, or that it was approved automatically.
 - **Superseded.** A newer release on the canary closes an older issue with a link to the newer one. A candidate whose
   canary update failed is closed too, as not on the canary: there is nothing to approve.
@@ -231,7 +238,7 @@ What a server accepts is what the code enforces. This is the matrix the release 
 
 | Part | Accepted | Enforced by |
 |---|---|---|
-| Database | made or upgraded by v0.6.0-rc.1 (the compatibility floor) or later, up to this release's migrations | `backend/migrations` `preflight`, before the first write |
+| Database | made or upgraded by v0.6.0 (the compatibility floor) or later, up to this release's migrations | `backend/migrations` `preflight`, before the first write |
 | Runner | release `MIN_RUNNER_RELEASE` (0.6.0-rc.1) and newer | `backend/runner_versions.py`: claims from an older runner are paused, with the reason |
 | Runner wire | the current and previous minor release, both directions | `scripts/check_wire_contract.py`, [runner-wire-contract.md](runner-wire-contract.md) |
 | Desktop app | the release's own version, or the previous release's files when the shell did not change | the release workflow; see [Desktop apps follow the release](#desktop-apps-follow-the-release) |
@@ -256,7 +263,7 @@ failure leaves neither. Never edit a file that has run: its checksum is recorded
 it changed. Make the change in a new file, never in the baseline. Temporary views and tables (`CREATE TEMP`,
 `backend/sql.py`) are per connection and stay in code.
 
-The compatibility floor is v0.6.0-rc.1. The migration files it shipped are gone: `backend/migrations/retired.txt` lists
+The compatibility floor is v0.6.0. The migration files it shipped are gone: `backend/migrations/retired.txt` lists
 them, a database at the floor recorded them and a new one has them in the baseline. When the floor moves:
 list the files the new floor release shipped in `retired.txt` and delete them, write the baseline again
 (`python3 scripts/schema_baseline.py`) and the floor's schema fixture (`python3 scripts/cleanup/gen_upgrade_fixture.py
@@ -374,8 +381,7 @@ runs and prints. It names what only CI runs (Rust conformance). A change that re
 the suite (a catalog template, a shared module) selects most of it: with `TICO_HEAVY_REMOTE=1` each part runs on a RunsOn
 VM against the pushed head instead. Mark a pull request ready once:
 each later push runs its checks again. A push to a ready pull request runs the cheap checks on free GitHub-hosted runners:
-lint, the generated UI types, the runner wire contract, the migration names, shell scripts and workflows, and whether
-the recorder changed. A ready pull request from this repository also runs the tests its plan selects, on GitHub-hosted runners; the required check `checks` aggregates them all. A fork's pull request runs the cheap checks
+lint, the generated UI types, the runner wire contract, the migration names, and shell scripts and workflows. A ready pull request from this repository also runs the tests its plan selects, on GitHub-hosted runners; the required check `checks` aggregates them all. A fork's pull request runs the cheap checks
 only. The merge queue runs the tests again: once per queue group,
 it selects them from the group's merged change (base to group head) with the measured static dependency map: what each
 tracked file imports (transitively), runs by path (scripts, `-m` modules, shell and JavaScript) and reads by path (data
@@ -398,13 +404,14 @@ what a slow content sweep reads runs that sweep in the contracts job (rule 7, `C
 `clients/commands/`, `clients/cli_spec.py`, the CLI code or `e2e/cli/` run `test_e2e_cli.py` with every command
 (`TICO_E2E_CLI_ALL=1`, as the release gate runs it), and `templates/` or `clients/catalog.py` run `test_e2e_templates.py`.
 The Rust and desktop checks run on a ready pull request and in the queue when a
-crate or `app/` changed, and the macOS recorder tests when `recorder/` changed. A draft pull request runs no checks
+crate or `app/` changed, and the advisory scan when a dependency input changed (see
+[Advisory scan](../CONTRIBUTING.md#advisory-scan)). A draft pull request runs no checks
 (every job is skipped); marking it ready for review runs the lint checks and the selected tests. A skipped run is not a pass, so the
 ready-for-review run's `checks` must show passing, not skipped. Main has no check run of its own: the queue tests each
 change on the merged result, and Release validation runs the whole gate on each candidate. A daily cache run
 (`pr-cache.yml`) keeps the main-branch GitHub caches that PR and queue runs restore from fresh. The repository's caches share 10 GB, and an entry unused for seven days is evicted. A pull request's superseded run is canceled; a queue group is never canceled.
 
-**Runner switch.** The repository variable `TICO_CI_HOSTED=true` moves every RunsOn job in `ci.yml` (release validation) and `remote-run.yml` to a GitHub-hosted runner (`ubuntu-24.04`, or `ubuntu-24.04-arm` for arm64). Flip it only when RunsOn cannot launch machines. Unset or any other value keeps RunsOn, which stays the default there. `pr-checks.yml` and `pr-cache.yml` always run on GitHub-hosted runners and never read the variable. Hosted runners have about 14 GB free, so a hosted job first removes the preinstalled .NET, Android and GHC toolchains. Its cache is GitHub's own (10 GB per repository, entries unused for 7 days are evicted), and the timeouts stay as they are, so a slow hosted run can time out where RunsOn would not. `remote-run.yml` takes only `cpus=4` while the variable is set.
+**Runner switch.** The repository variable `TICO_CI_HOSTED=true` moves every RunsOn job in `ci.yml` (release validation) and `remote-run.yml` to a GitHub-hosted runner (`ubuntu-24.04`, or `ubuntu-24.04-arm` for arm64). Flip it only when RunsOn cannot launch machines. Unset or any other value keeps RunsOn, which stays the default there. Without it, every validation's critical path (candidate, the Linux binaries, the images) and its product and desktop parts run on RunsOn; only an incremental validation's python and browser parts run on GitHub-hosted runners. `pr-checks.yml` and `pr-cache.yml` always run on GitHub-hosted runners and never read the variable. Hosted runners have about 14 GB free, so a hosted job first removes the preinstalled .NET, Android and GHC toolchains. Its cache is GitHub's own (10 GB per repository, entries unused for 7 days are evicted), and the timeouts stay as they are, so a slow hosted run can time out where RunsOn would not. `remote-run.yml` takes only `cpus=4` while the variable is set.
 
 Python jobs install no npm packages, browsers or apt packages. The browser job caches both browser binaries and
 Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
@@ -449,8 +456,8 @@ checks on that merge commit, and moves main only when they pass.
 
 - **Each push to a pull request** (GitHub-hosted, free): plan, static checks and the `checks` gate. A draft runs nothing.
 - **A ready pull request from this repository** (GitHub-hosted): the selected Python and browser tests, and every other
-  job a queue group runs under the same conditions (the Caddy image, Rust lint, the desktop app and
-  the macOS recorder tests when the change reaches them), on each push, so a failure shows before the change is enqueued.
+  job a queue group runs under the same conditions (the Caddy image, Rust lint, and the desktop app
+  when the change reaches them), on each push, so a failure shows before the change is enqueued.
   The plan decides which of those the change reaches, so a job it does not reach starts no VM. The timing receipt,
   flake artifact and merge commit checks are queue-only. A failed leg cancels the run, so `checks` fails within minutes.
   A fork's pull request runs none of them.
@@ -459,14 +466,14 @@ checks on that merge commit, and moves main only when they pass.
   not reach starts no VM. The group's base is the head of the group ahead of it, so it selects from its own pull
   request's change. Its tests pack toward 19 test VMs at most (`NARROW`, and `CEILING` in
   `scripts/pr_checks.py`), each planned at the 330-second job target including setup; the organisation allows 500 concurrent hosted jobs, so a larger selection takes more VMs, up to `TICO_CI_MAX_JOBS`.
-- **Quarantined tests**. PR checks and queue groups retry up to five failed tests per Python or browser leg once.
-  When all pass on retry, the leg passes and logs each flake. A Python leg also passes if all remaining failures
-  match on the base commit. Release validation and main-red track those failures. Queue groups save retry passes
-  in the `queue-flaky` artifact. `.github/workflows/flaky-tests.yml` reads these artifacts and PR-check runs daily.
-  It reports Python and browser flakes and proposes `ci/quarantine/` entries for pytest tests that failed and passed on the same
-  commit. Write proposals with `python3 scripts/flake_quarantine.py detect --write ci/quarantine`. A listed test
-  runs as a non-strict xfail in PR checks and the queue. Release validation runs without retries or quarantine.
-  The weekly report fails when an entry is older than 14 days. The fix deletes the entry.
+- **Flaky tests**. PR checks and queue groups retry up to five failed tests per Python or browser leg once
+  (`scripts/pr_checks.py run --retry`). When all pass on retry, the leg passes and logs each flake. A Python leg also
+  passes if all remaining failures match on the base commit. Release validation and main-red track those failures.
+  Queue groups save retry passes in the `queue-flaky` artifact and hand them to the Release Owner (below).
+  `.github/workflows/flaky-tests.yml` reads these artifacts and PR-check runs daily (`scripts/flake_detect.py`): its
+  job summary lists each Python or browser test that failed and passed on the same commit, with the commit and the
+  runs, and the run fails when it finds one. Nothing quarantines a test: a flaky test is fixed at its root cause the
+  same day, or deleted. Release validation runs without retries.
 - **Required check**: `checks` on main. It fails when a job it needs failed or was cancelled; a skipped job passes.
 
 Agents open pull requests as drafts and run `python3 scripts/pr_checks.py local --ready` once the change is done; the
@@ -485,6 +492,21 @@ checks before enqueuing again.
 **Hotfixes do not bypass the queue.** Land the fix through the queue like any change, then dispatch `hotfix.yml` once it
 has landed (see Hotfixes above). The queue itself is a repository ruleset (`merge_queue`, and `checks` as the required
 check), set by a maintainer.
+
+### Who fixes a red or flaky test
+
+The Release Owner bot on Tico Team owns the release path. CI hands it three things the moment they happen
+(`scripts/ci/tell_release_owner.sh`, an incoming webhook on Tico Team signed with `TICO_RELEASE_OWNER_HOOK_SECRET`):
+
+- `queue-failed`: a step failed in a merge queue group, so the queue dropped it (the `release-owner` job in
+  `pr-checks.yml`). A group cancelled from outside names no failed step and is not sent.
+- `queue-flaky`: tests in a queue group passed only on their retry (the group still merged).
+- `validation-red`: a release validation of main went red (the `main-red` job in `ci.yml`).
+
+The bot decides what it is and acts the same day. A flaky test is fixed at its cause or deleted, never retried,
+quarantined or given a longer wait. A real break is fixed, or sent to the pull request's author with the failing test
+named. No rule re-queues or blocks a pull request: the owner decides. Without the two `TICO_RELEASE_OWNER_HOOK*`
+secrets (a fork, a copy of the repository) nothing is sent.
 
 ## Hosted release validation
 
@@ -739,7 +761,7 @@ rebuilds and pushes one small layer per image.
 ## Desktop apps follow the release
 
 The desktop app never holds up the server release. Only `validated`, `runner-changes` and `release` run before core
-publication; the Mac binaries, desktop, recorder and company build branches start afterwards so their fan-out cannot
+publication; the Mac binaries, desktop and company build branches start afterwards so their fan-out cannot
 compete with publication for job slots. A manual rebuild of an already published tag still runs those branches when
 `release` is skipped. The Release workflow compares the tag with the previous release
 tag: when nothing the shell is built from changed (`app/`, `scripts/app_release.py`, `scripts/company_apps.py` and the
@@ -752,12 +774,7 @@ workflow from the tag (Run workflow, `desktop` checked) once it is fixed. The ap
 (v0.3.6 → app 0.3.6, including any prerelease suffix), stamped from the tag at build time.
 
 The comparison excludes desktop tests (`app/tests/`, the vendored GLib's `tests/` and `benches/`),
-`app/src/testdata/` and Markdown docs anywhere under `app/`. Recorder follows the same carry-forward rule with
-`recorder/`, `scripts/app_release.py` and `.github/workflows/recorder.yml` as its inputs and
-`recorder-latest.json` as its manifest. Recorder tests (`recorder/tests/` and the `cfg(test)`-only
-`src/network_tests.rs`, `src/stream_tests.rs` and `src/app/tests.rs`), `recorder/bench/`, `recorder/ui/preview/`
-and Markdown docs anywhere under `recorder/` do not trigger an update. `recorder/CHANGES.md` still counts because
-it supplies updater notes. Changes to shipped Rust code, `ui/app`, configuration, icons, dependencies, packaging
+`app/src/testdata/` and Markdown docs anywhere under `app/`. Changes to shipped Rust code, `ui/app`, configuration, icons, dependencies, packaging
 or those build workflows still build new apps. A missing previous updater manifest or the manual `desktop`
 override also forces a build.
 

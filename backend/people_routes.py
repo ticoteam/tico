@@ -169,7 +169,9 @@ def register(app, auth, mutate, settings, store, visual_view):
         Otherwise my conversations, or the owner's view of a bot's."""
         who = request.state.identity
         auth.domain(who)
-        with store.read() as c:
+        # One snapshot from the start: each row's read check below reads its room, root, task and membership from
+        # read_cache, which prime_rooms and prime_members fill for the whole list first.
+        with store.read_transaction() as c:
             if bot and who.role != "owner":
                 raise Problem("forbidden", "Only the owner may inspect a bot's conversations", 403)
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
@@ -184,6 +186,12 @@ def register(app, auth, mutate, settings, store, visual_view):
                 if chat_with
                 else H.conversations_for(c, "bot:" + bot if bot else who.actor)
             )
+            from . import threads
+
+            if len(rows) > 1:  # one row is checked as cheaply alone
+                ids = [row["id"] for row in rows]
+                privacy.prime_rooms(c, ids)
+                threads.prime_members(c, who, ids, roots={row.get("root_id") or row["id"] for row in rows})
             visible = []
             for row in rows:
                 try:
@@ -225,7 +233,7 @@ def register(app, auth, mutate, settings, store, visual_view):
         **api_v2(
             "Conversations",
             "listMessages",
-            "The newest messages (up to 200, or limit=); before=<message id> pages back, since=<timestamp> only newer, max_bytes= ends the page at that many bytes of messages",
+            "The newest messages (up to 200, or limit=); before=<next_before> pages back, since=<timestamp> only newer, max_bytes= ends the page at that many bytes of messages",
             "MessagePage",
         ),
     )
@@ -238,20 +246,21 @@ def register(app, auth, mutate, settings, store, visual_view):
         max_bytes: int | None = None,
     ):
         with store.read() as c:
-            auth.conversation(c, request.state.identity, cid)
+            room = auth.conversation(c, request.state.identity, cid)
             page = privacy.page(
                 c,
                 request.state.identity,
                 cid,
                 since=views.since_time(since),
                 before=before,
+                chat=(auth, room),
                 **views.page_options(limit, max_bytes),
             )
             turn_work.annotate(c, auth, request.state.identity, page["messages"])
             visual_view(c, request.state.identity, page["messages"])
             known = teammate_access.Known(c, request.state.identity, auth)  # people the reader may not see
             return {
-                "conversation": known.conversation(H.conversation(c, cid)),
+                "conversation": known.conversation(room),
                 **page,
                 "messages": known.messages(page["messages"]),
             }

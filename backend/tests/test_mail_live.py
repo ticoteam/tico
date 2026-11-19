@@ -41,6 +41,7 @@ def test_owner_and_assistant_read_personal_and_shared_workspace_mail_without_a_c
             limit=999,
         )
         assert page["messages"][0]["mailbox"] == mailbox and "body" not in page["messages"][0]
+        assert page["messages"][0]["has_attachment"] and page["messages"][0]["attachment_count"] == 1
         assert page["next_cursor"] == NEXT
         nxt = read(api, "messages", token, mailbox=mailbox, cursor=NEXT)
         assert nxt["messages"][0]["msg_id"] == "m1" and nxt["next_cursor"] is None

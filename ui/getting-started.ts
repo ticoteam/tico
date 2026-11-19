@@ -54,7 +54,7 @@ function gsTourStart(): void {
   if (GS_TOUR) return;
   const phone = drawerMedia.matches;
   if (phone) setDrawer(true, false, $('#mobile-more'));
-  // Docs, Strategy and Meetings sit in Company and Library, which start folded: the tour shows them open while it runs
+  // Docs and Strategy sit in Library and Company, which start folded: the tour shows them open while it runs
   // and leaves the person's own fold as it was (getting-started.css html.gs-touring).
   document.documentElement.classList.add('gs-touring');
   const steps = GS_STEPS.filter(([selector]) => {

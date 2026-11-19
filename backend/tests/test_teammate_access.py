@@ -110,6 +110,23 @@ def test_a_bot_may_answer_a_person_who_narrowed_write(acme):
     assert levels(api, "counsel", "human:cara")["write"]
 
 
+def test_replies_answers_as_may_reply_for_every_target(acme):
+    """bot_levels asks `replies` once for all the bots a bot may not write to, not may_reply per bot: each target's
+    answer is the same, a person, a bot, `person:` spelled out and a group (never) included."""
+    api, tokens = acme
+    post(api, "chat/counsel", {"text": "Can you check this NDA?"}, token="cara-test")
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, "bot:analyst", "Look at this", "x", "bot:counsel")  # open work Analyst asked Counsel for
+    targets = ["human:cara", "person:cara", "human:dee", "bot:analyst", "bot:counsel", "group:legal", "human:eve"]
+    with api.app.state.store.read() as c:
+        for name in ("counsel", "analyst"):
+            viewer = who(api, name)
+            expected = {"%s:%s" % TA.parse_target(t) for t in targets if TA.may_reply(c, viewer, t)}
+            assert TA.replies(c, viewer, targets) == expected, name
+        assert TA.replies(c, who(api, "counsel"), targets) >= {"human:cara", "bot:analyst"}
+        assert TA.replies(c, who(api, "counsel"), []) == set()
+
+
 def test_see_hides_a_person_everywhere_people_are_shown(acme):
     """The privacy matrix for people: the chart, lists, the @mention roster, person reads and hub sql."""
     api, tokens = acme

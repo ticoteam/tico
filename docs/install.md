@@ -49,7 +49,7 @@ a local server, with no Open link.
   ([Handed over from setup](connect-an-agent.md#handed-over-from-setup)). Without the variable, nothing changes.
 - If the server computer cannot start, Tico keeps running and the installer says how to add it from **Settings >
   Computers > Add computer**.
-- It writes `TICO_INSTALL_PRESET=recommended`, `TICO_MODELS_PRESET=subscriptions-gateway` and
+- It writes `TICO_INSTALL_PRESET=recommended`, `TICO_MODELS_PRESET=subscriptions` and
   `TICO_SUPPORT` into `.env`; the server reads them on its first start. Every other choice below (the quick start, your own
   domain with Google, Microsoft or Cloudflare Access, your own API keys) installs as before.
 
@@ -155,7 +155,7 @@ Success: a draft file on the task, read by a person, and a task its requester cl
 Health issue.
 
 **Next: meeting notes.** Once this works, add **Project Coordinator** (`project-coordinator`, in **Operations**, or **Settings > Bots >
-Add from template**), add a fictional transcript with **Meetings > Add notes > Paste** ([Meetings](meetings.md)), and ask it for a
+Add from template**), add a fictional transcript with **Meetings > Log a meeting (the notes icon) > Paste** ([Meetings](meetings.md)), and ask it for a
 summary with decisions and action items. Close that task the same way.
 
 ### Sample answers for Content Owner

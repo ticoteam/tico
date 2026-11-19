@@ -274,6 +274,10 @@ SCHEMAS.update(
                 "thread": ref("ThreadView"),
                 "breadcrumb": items(ref("ThreadCrumb")),
                 "messages": items({"type": "object"}),
+                "task_activity": {
+                    **items(ref("ChatTaskActivity")),
+                    "description": "In a person's direct chat with a bot, readable task excerpts in this page's seq window",
+                },
                 "next_cursor": "n",
                 "bot_status": {
                     "type": "array",

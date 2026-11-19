@@ -33,7 +33,9 @@ WEBSITE_ACTIVITY_ROW = obj(
         'id': 's',
         'at': 's',
         'who': WEBSITE_WHO,
-        'verb': {'enum': ['open', 'fill', 'copy', 'code', 'needs_you', 'control', 'sign_in', 'download', 'upload']},
+        'verb': {
+            'enum': ['open', 'type', 'fill', 'copy', 'code', 'needs_you', 'control', 'sign_in', 'download', 'upload']
+        },
         'page': 's',
         'account': {'enum': ['shared', 'own']},
         'where': {'enum': ['central', 'own']},
@@ -135,7 +137,9 @@ SCHEMAS['ApiTool'] = obj(
                     'preview': 's',
                     'access_level': {'enum': ['read', 'read_write']},
                     'expires_on': 'n',
+                    'expires_source': 'n',
                     'last_used_at': 'n',
+                    'can_remove': 'b',
                 },
                 required=['id', 'name', 'preview', 'access_level'],
             )
@@ -277,6 +281,11 @@ SCHEMAS['WebsiteTool'] = obj(
                     ),
                     'can_use': 'b',
                     'can_manage': 'b',
+                    'can_open': {
+                        'type': 'boolean',
+                        'description': "The caller may open the account's live browser (the browser routes' own rule)",
+                    },
+                    'can_remove': 'b',
                 },
                 # `username` is left out for a bot, a run or a computer.
                 required=[
@@ -290,6 +299,7 @@ SCHEMAS['WebsiteTool'] = obj(
                     'session',
                     'can_use',
                     'can_manage',
+                    'can_open',
                 ],
             )
         ),

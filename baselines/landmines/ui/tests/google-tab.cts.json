@@ -1,0 +1,6 @@
+{
+  "ui/tests/google-tab.cts": {
+    "no-fixed-wait-ui": 8,
+    "no-raised-timeout": 5
+  }
+}

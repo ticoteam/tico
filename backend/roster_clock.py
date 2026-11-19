@@ -12,7 +12,13 @@ import sqlite3
 from . import bot_settings as BS
 
 TABLES = ("bots", "bot_config", "bot_settings")
-STATEMENTS = frozenset({BS.ROW_SQL, "SELECT * FROM bots ORDER BY slug"})
+# Every bot's settings and declaration. `bots` itself is read once per snapshot instead (read_cache.rows): a finished
+# turn writes its `last_turn_at`, so a shared copy would be out of date after every turn.
+STATEMENTS = frozenset({BS.ROW_SQL})
+# Every column of `bots` but `last_turn_at` moves the clock, for the values `shared` builds from a bot's id or slug
+# (views.entries). The turn's write moved it too, which threw the shared settings and entries away on every finished
+# turn on a busy server (migration 20261118211741).
+BOTS_CLOCKED = ("id", "slug", "display_name", "effort", "state", "created_at")
 
 
 def ensure(c):
@@ -20,14 +26,23 @@ def ensure(c):
     c.execute("INSERT OR IGNORE INTO roster_clock VALUES(1,0)")
     for table in TABLES:
         for operation in ("INSERT", "UPDATE", "DELETE"):
+            columns = f" OF {', '.join(BOTS_CLOCKED)}" if (table, operation) == ("bots", "UPDATE") else ""
             c.execute(
-                f"CREATE TRIGGER IF NOT EXISTS roster_clock_{table}_{operation.lower()} AFTER {operation} "
+                f"CREATE TRIGGER IF NOT EXISTS roster_clock_{table}_{operation.lower()} AFTER {operation}{columns} "
                 f"ON {table} BEGIN UPDATE roster_clock SET value=value+1 WHERE id=1; END"
             )
 
 
 def _clock(c):
-    return c.execute("SELECT value FROM roster_clock WHERE id=1").fetchone()[0]
+    # One snapshot sees one count, and its own writes discard read_cache: the count is read once per snapshot.
+    from . import read_cache
+
+    values = read_cache.cache(c)
+    if values is None:
+        return c.execute("SELECT value FROM roster_clock WHERE id=1").fetchone()[0]
+    if ("roster_clock",) not in values:
+        values[("roster_clock",)] = c.execute("SELECT value FROM roster_clock WHERE id=1").fetchone()[0]
+    return values[("roster_clock",)]
 
 
 def rows(c, statement):

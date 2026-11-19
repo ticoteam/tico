@@ -191,7 +191,7 @@ function pauseWrite() { hold = new Promise<void>(resolve => { release=resolve; }
       await a.evaluate(()=>meetItemsLoad(MEET,'m1'));
       assert.equal(await a.locator('[data-pending="i1"]').count(),0,'acknowledged drafts stay closed');
     }
-    // A readable Recorder proposal accepts the existing task without creating another one.
+    // A readable proposal accepts the existing task without creating another one.
     item.status='proposed'; item.proposed_task_id='existing-task'; item.detail.owner=''; item.version++;
     emit('meeting_items',{meeting_id:'m1',kind:'items'});
     const proposal=a.locator('[data-pending="i1"]');

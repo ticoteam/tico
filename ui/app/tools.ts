@@ -280,7 +280,7 @@ async function pageTools() {
   if (state.items) toolsDraw();
   // The hub's list, the tools bots declare, the teams and (for whoever may open it) the vault, read together so the
   // list draws once, in its final order. Only the hub's list failing is an error: the rest leave their rows out.
-  const vault = S.me?.credential_access ? vaultFetch().catch(() => null) : Promise.resolve(null);
+  const vault = vaultFetch().catch(() => null);
   const [index, catalog, groups] = await Promise.allSettled([
     get<{rows?: ToolsRow[]}>('/v2/tool-index', {fresh: true}),
     get<LcToolsResponse>('/v2/tools').then(r => r.integrations || []),

@@ -589,6 +589,9 @@ def restore_tasks(c, ids, actor=None):
         was = snap["rows"]["tasks"][0]
         try:
             task_engine.restore(c, e["task_id"], actor, {k: was.get(k) for k in PLACED})
+            back = c.execute("SELECT pipeline_id FROM tasks WHERE id=? AND number IS NULL", (e["task_id"],)).fetchone()
+            if back and back[0]:
+                H.number_task(c, actor, e["task_id"], back[0], "Numbered when it was restored")
         except H.Refused as refused:
             # No stage may take it (a private task none of its owners could read): nothing comes back.
             c.execute("ROLLBACK TO trash_restore_all")

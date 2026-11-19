@@ -30,12 +30,12 @@ def connect(api, *, title="Replay", client_id=None, fallback=30, reply_cap=3, co
 
 
 def test_connect_is_explicit_team_visible_and_second_human_must_join_to_chat(live):
-    meeting = connect(live, client_id="recorder-session-1")
+    meeting = connect(live, client_id="session-1")
     candidates = get(live, "live-meetings/bot-candidates")
     assert set(candidates) == {"bots"}
     assert all(set(bot) == {"id", "slug", "name", "description", "team"} for bot in candidates["bots"])
     assert any(bot["slug"] == "ops" for bot in candidates["bots"])
-    same = connect(live, client_id="recorder-session-1")
+    same = connect(live, client_id="session-1")
     assert same["id"] == meeting["id"]
     assert same["state"] == "live"
     assert get(live, "live-meetings/" + meeting["id"], token="ben-test")["id"] == meeting["id"]
@@ -642,7 +642,7 @@ def test_sse_replays_persisted_events_after_last_event_id(live, monkeypatch):
     }
     assert keepalive.startswith(": keep-alive")
 
-    # Recorder may resume using the query cursor instead; main-process fetch attaches Bearer auth.
+    # A client may resume using the query cursor instead; main-process fetch attaches Bearer auth.
     after_request = Request(
         {
             "type": "http",
@@ -769,8 +769,8 @@ def test_a_meeting_reply_runs_on_the_meeting_model_and_other_turns_keep_the_bots
     with live.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
-            "created_at,updated_at,started_at,visibility,client,meeting_model) "
-            "VALUES('m-company','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,NULL)",
+            "created_at,updated_at,started_at,visibility,meeting_model) "
+            "VALUES('m-company','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL)",
             (H.now(), H.now(), H.now()),
         )
         turn = live_meetings_module.turn_config(c, settings, own, "ops", "m-company", "")
@@ -813,8 +813,8 @@ def test_a_meeting_model_the_runner_cannot_run_falls_back_to_the_bots_model(live
     with live.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
-            "created_at,updated_at,started_at,visibility,client,meeting_model) "
-            "VALUES('m-fallback','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,NULL)",
+            "created_at,updated_at,started_at,visibility,meeting_model) "
+            "VALUES('m-fallback','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL)",
             (H.now(), H.now(), H.now()),
         )
         assert live_meetings_module.turn_config(c, settings, own, "ops", "m-fallback", "", turn_id="t-1") == {
@@ -845,8 +845,8 @@ def test_a_meeting_model_outside_the_catalog_falls_back_and_says_why(live, monke
     with live.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
-            "created_at,updated_at,started_at,visibility,client,meeting_model) "
-            "VALUES('m-gone','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,'retired-model')",
+            "created_at,updated_at,started_at,visibility,meeting_model) "
+            "VALUES('m-gone','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team','retired-model')",
             (H.now(), H.now(), H.now()),
         )
         assert live_meetings_module.turn_config(c, settings, own, "ops", "m-gone", "") == {**own, "session": "task"}
@@ -1174,8 +1174,8 @@ def test_a_gateway_meeting_model_a_computer_cannot_run_falls_back_to_mercury_on_
     def meeting(rid):
         c.execute(
             "INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
-            "created_at,updated_at,started_at,visibility,client,meeting_model) "
-            "VALUES(?,'human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,NULL)",
+            "created_at,updated_at,started_at,visibility,meeting_model) "
+            "VALUES(?,'human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL)",
             (rid, H.now(), H.now(), H.now()),
         )
 
@@ -1326,6 +1326,33 @@ def test_an_empty_reply_on_the_bots_own_model_is_asked_once_more_and_an_answer_t
     assert post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None
 
 
+def test_an_empty_meeting_reply_does_not_replay_a_run_that_created_a_task(live):
+    mid = connect(live)["id"]
+    attach(live, mid, "ops")
+    machine = runner(live)
+    assign(live, machine, "ops")
+    ready(live, machine, ["ops"])
+    chunk(live, mid, 1, 0, 1000, "Ops, file a task to check the rollout.")
+    attempt = claimed_turn(live, machine)
+    task = post(
+        live,
+        "tasks",
+        {"owner": "finance", "title": "Check the rollout", "body": "Review the synthetic rollout."},
+        token=attempt["token"],
+    )
+    post(
+        live,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "text": "", "last_seq": 0},
+        token=machine["token"],
+    )
+    assert retried(live, mid) == []
+    assert get(live, f"tasks/{task['id']}")["task"]["title"] == "Check the rollout"
+    turn = get(live, f"live-meetings/{mid}")["router"]["turns"][0]
+    assert (turn["status"], turn["skip_reason"]) == ("skipped", "empty_bot_reply")
+    assert post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None
+
+
 def test_a_chunk_that_arrives_after_its_window_closed_is_routed_once_by_the_next_open_window(live, monkeypatch):
     live.app.state.live_meeting_decider = lambda state, questions, label: {
         "model": "synthetic-decider",
@@ -1373,62 +1400,49 @@ def test_a_chunk_that_arrives_after_its_window_closed_is_routed_once_by_the_next
     assert later == []
 
 
-def test_only_a_private_meetings_turn_tells_the_bot_it_cannot_save_or_share_it(live):
+@pytest.mark.parametrize("visibility", ["private", "team"])
+def test_meeting_turn_runs_in_the_normal_lane_with_its_own_history(live, visibility):
     machine = runner(live)
     assign(live, machine, "ops")
-    ready(live, machine, ["ops"])
-    prompts = {}
-    for visibility in ("private", "team"):
-        meeting = post(live, "live-meetings", {"title": visibility, "visibility": visibility, "cooldown_seconds": 0})
-        attach(live, meeting["id"], "ops")
-        chunk(live, meeting["id"], 1, 0, 1000, "Ops, remember the word Tangerine")
-        attempt = claimed_turn(live, machine)
-        prompts[visibility] = attempt["message"]["body"]
-        post(
-            live,
-            f"attempts/{attempt['id']}/complete",
-            {"outcome": "completed", "text": "Noted.", "last_seq": 0},
-            token=machine["token"],
-        )
-    rule = "This meeting is private: you cannot save or share anything from it"
-    assert rule in prompts["private"] and rule not in prompts["team"]
-    assert "the meeting's owner can share its notes and action items after the meeting" in prompts["private"]
+    ready(live, machine, ["ops"], ["task_lanes_v2"])
+    meeting = post(live, "live-meetings", {"title": "Planning", "visibility": visibility, "cooldown_seconds": 0})
+    attach(live, meeting["id"], "ops")
+    chunk(live, meeting["id"], 1, 0, 1000, "Ops, can you track the review action items?")
+    attempt = claimed_turn(live, machine)
+    assert attempt["lane"] == "main"
+    assert attempt["config"]["session"] == "task"
+    assert attempt["message"]["id"] in [message["id"] for message in attempt["history"]]
 
 
-def test_a_private_meetings_turns_run_in_its_own_lane_whose_checkout_goes_when_it_ends(live):
-    """The runner keeps a private meeting's checkout apart from the bot's (runner-rs/src/sessions.rs, private lanes):
-    the server hands its turns that lane and says when the meeting ended. A team meeting's turns stay in the main lane."""
+def test_a_named_meeting_follow_up_waits_for_a_legacy_lane_lease(live):
     machine = runner(live)
     assign(live, machine, "ops")
-    ready(live, machine, ["ops"], ["task_lanes_v2", "private_lanes_v1"])
-    turns = {}
-    for visibility in ("private", "team"):
-        meeting = post(live, "live-meetings", {"title": visibility, "visibility": visibility, "cooldown_seconds": 0})
-        attach(live, meeting["id"], "ops")
-        chunk(live, meeting["id"], 1, 0, 1000, "Ops, the press embargo lifts Nov 17 9am PT. Got it?")
-        attempt = claimed_turn(live, machine)
-        turns[visibility] = (meeting["id"], attempt)
-        assert attempt["message"]["body"] in [m["body"] for m in attempt["history"]], "its own lane reads its room"
-        post(
-            live,
-            f"attempts/{attempt['id']}/complete",
-            {"outcome": "completed", "text": "Got it.", "last_seq": 0},
-            token=machine["token"],
-        )
-    mid, attempt = turns["private"]
-    conv = attempt["conversation"]["id"]
-    assert (attempt["lane"], turns["team"][1]["lane"]) == ("private:" + conv, "main")
-    mine = {"bot": "ops", "task": "private-" + conv}
-    sessions = [mine, {"bot": "ops", "task": "private-" + turns["team"][1]["conversation"]["id"]}]
-    asked = lambda: post(live, "runners/me/session-tasks", {"sessions": sessions}, token=machine["token"])["sessions"]
-    assert asked() == [{**mine, "status": "open"}]
-    post(live, f"live-meetings/{mid}/control", {"action": "end"})
-    assert asked() == [{**mine, "status": "done"}]
+    ready(live, machine, ["ops"], ["task_lanes_v2"])
+    mid = post(live, "live-meetings", {"title": "Private", "visibility": "private", "cooldown_seconds": 0})["id"]
+    attach(live, mid, "ops")
+    chunk(live, mid, 1, 0, 1000, "Ops, how is the rollout?")
+    first = claimed_turn(live, machine)
+    cid = first["conversation"]["id"]
+    with live.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET lane=? WHERE id=?", ("private:" + cid, first["id"]))
+
+    chunk(live, mid, 2, 1000, 2000, "Ops, and the rollback?")
+    assert post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None
+    post(
+        live,
+        f"attempts/{first['id']}/complete",
+        {"outcome": "completed", "text": "On track.", "last_seq": 0},
+        token=machine["token"],
+    )
+    follow_up = claimed_turn(live, machine)
+    assert follow_up["lane"] == "main" and follow_up["conversation"]["id"] == cid
+    assert (
+        follow_up["message"]["refs"]["live_meeting"]["turn_id"] != first["message"]["refs"]["live_meeting"]["turn_id"]
+    )
 
 
-def test_a_private_turn_with_no_copy_of_the_repository_ends_and_the_meeting_says_why_once(live):
-    """runner-rs sessions::PRIVATE_COPY_FAILED: a computer that can make no private copy of the bot's repository would
-    fail every retry alike, so the turn ends, the job is not resumed, and the meeting gets one plain notice."""
+def test_an_attempt_on_the_retired_meeting_lane_can_finish_and_its_checkout_can_be_swept(live):
+    """An attempt leased before a hub upgrade can still report an old checkout failure and sweep its worktree."""
     machine = runner(live)
     assign(live, machine, "ops")
     ready(live, machine, ["ops"])
@@ -1439,6 +1453,12 @@ def test_a_private_turn_with_no_copy_of_the_repository_ends_and_the_meeting_says
     def fails(text):
         chunk(live, mid, len(get(live, f"live-meetings/{mid}")["router"]["turns"]) + 1, 0, 1000, text)
         attempt = post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
+        # Persisted attempts keep the lane they received before the hub upgrade.
+        with live.app.state.store.transaction() as c:
+            c.execute(
+                "UPDATE attempts SET lane=? WHERE id=?",
+                ("private:" + attempt["conversation"]["id"], attempt["id"]),
+            )
         error = (
             "A private meeting's turn runs in a copy of the bot's repository kept for that meeting alone, "
             "and none could be made here (could not add the task's worktree: fatal: invalid reference)"
@@ -1482,13 +1502,16 @@ def test_a_private_turn_with_no_copy_of_the_repository_ends_and_the_meeting_says
                 "SELECT payload FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_failed'", (mid,)
             )
         ]
-    assert [(s["bot"], s["reason"], s["detail"]) for s in said] == [
-        (
-            "ops",
-            "private_checkout",
-            "ops can't answer in this private meeting: Test Mac couldn't make a private copy of its repository",
-        )
-    ], "said once"
+    assert [(s["bot"], s["reason"]) for s in said] == [("ops", "private_checkout")], "said once"
+    mine = {"bot": "ops", "task": "private-" + first["conversation"]["id"]}
+    sessions = {"sessions": [mine]}
+    assert post(live, "runners/me/session-tasks", sessions, token=machine["token"])["sessions"] == [
+        {**mine, "status": "open"}
+    ]
+    post(live, f"live-meetings/{mid}/control", {"action": "end"})
+    assert post(live, "runners/me/session-tasks", sessions, token=machine["token"])["sessions"] == [
+        {**mine, "status": "done"}
+    ]
 
 
 def test_the_meeting_view_says_the_model_its_replies_are_set_to_now(live, monkeypatch):
@@ -1501,17 +1524,12 @@ def test_the_meeting_view_says_the_model_its_replies_are_set_to_now(live, monkey
     assert get(live, f"live-meetings/{own['id']}")["meeting_model"] == ""  # the read says it too
 
 
-def test_recorder_discard_ends_without_filing_or_bot_runs(live):
-    """A Recorder Discard calls end only; finalization is the explicit filing boundary."""
+def test_ending_files_nothing_and_runs_no_bot(live):
+    """Ending a meeting only ends it; finalization is the explicit filing boundary."""
     mid = post(
         live,
         "live-meetings",
-        {
-            "title": "Synthetic discarded recording",
-            "client_id": "recorder:discard-fixture",
-            "client": "tico-recorder",
-            "visibility": "private",
-        },
+        {"title": "Synthetic ended recording", "client_id": "end-fixture", "visibility": "private"},
     )["id"]
     chunk(live, mid, 1, 0, 1000, "Public words before pause")
     post(live, f"live-meetings/{mid}/control", {"action": "pause"})
@@ -1527,160 +1545,7 @@ def test_recorder_discard_ends_without_filing_or_bot_runs(live):
         assert c.execute("SELECT count(*) FROM live_meeting_turns").fetchone()[0] == runs_before
 
 
-def screen_jpeg():
-    # A real, tiny JPEG fixture, decoded by browsers without screen capture.
-    import base64
-
-    return base64.b64decode(
-        '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAEf/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABAf/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPxB//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPxB//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxB//9k='
-    )
-
-
-def test_screen_is_people_only_ephemeral_and_revocation_clears_access(live):
-    mid = post(live, 'live-meetings', {'title': 'Private screen', 'visibility': 'private'})['id']
-    attach(live, mid, 'ops')
-    prefix = f'/api/v2/live-meetings/{mid}/screen'
-    assert live.get(prefix, headers=headers('ben-test')).status_code == 404
-    generation = live.post(prefix + '/start', headers=headers()).json()['generation']
-
-    def upload(seq=1, generation=generation, data=None):
-        return live.post(
-            prefix + f'/frame?generation={generation}&seq={seq}',
-            content=data or screen_jpeg(),
-            headers={**headers(), 'Content-Type': 'image/jpeg'},
-        )
-
-    with live.app.state.store.read() as c:
-        counts = tuple(
-            c.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in ('idempotency', 'live_meeting_events')
-        )
-    assert upload().status_code == 204
-    assert live.get(prefix + '/frame?wait=0', headers=headers('ops-live')).status_code == 403
-    assert live.get(prefix + '/frame?wait=0', headers=headers('ben-test')).status_code == 404
-    frame = live.get(prefix + '/frame?wait=0', headers=headers())
-    assert frame.content == screen_jpeg() and 'no-store' in frame.headers['cache-control']
-    assert upload().status_code == 409
-    assert upload(2, 'old-generation').status_code == 409
-    assert upload(2, data=b'bad jpeg').status_code == 422
-    assert upload(2, data=b'x' * 1_000_001).status_code == 413
-    with live.app.state.store.read() as c:
-        assert counts == tuple(
-            c.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in ('idempotency', 'live_meeting_events')
-        )
-    post(live, f'live-meetings/{mid}/access', {'add': ['human:ben']})
-    assert live.get(prefix + '/frame?wait=0', headers=headers('ben-test')).status_code == 200
-    post(live, f'live-meetings/{mid}/access', {'remove': ['human:ben']})
-    assert live.get(prefix + '/frame?wait=0', headers=headers('ben-test')).status_code == 404
-    # Pause erases the frame; resume never restores it or the publisher generation.
-    post(live, f'live-meetings/{mid}/control', {'action': 'pause'})
-    post(live, f'live-meetings/{mid}/control', {'action': 'resume'})
-    assert upload(3).status_code == 410
-    assert live.get(prefix + '/frame?wait=0', headers=headers()).status_code == 410
-
-
-def test_screen_expiry_generation_fencing_and_browser_links(live):
+def test_the_meeting_view_links_to_its_page_in_the_browser(live):
     mid = connect(live)['id']
-    settings = live.app.state.store.settings
-    settings.public_url = 'https://acme.example'
+    live.app.state.store.settings.public_url = 'https://acme.example'
     assert get(live, f'live-meetings/{mid}')['link'] == f'https://acme.example/#/meetings/live/{mid}'
-    assert get(live, 'recorder/browser')['url'] == 'https://acme.example'
-    prefix = f'/api/v2/live-meetings/{mid}/screen'
-    old = live.post(prefix + '/start', headers=headers()).json()['generation']
-    new = live.post(prefix + '/start', headers=headers()).json()['generation']
-    assert old != new
-    live.post(prefix + '/stop?generation=' + old, headers=headers())
-    assert mid in live.app.state.meeting_frames.shares
-    live.app.state.meeting_frames.shares[mid].alive -= 11
-    assert live.post(prefix + '/alive?generation=' + new, headers=headers()).status_code == 410
-    assert live.get(prefix + '/frame?wait=0', headers=headers()).status_code == 410
-    audience = live.get(prefix, headers=headers()).json()['audience']
-    newer = live.post(prefix + '/start', headers=headers()).json()['generation']
-    post(live, f'live-meetings/{mid}/access', {'visibility': 'team'})
-    assert live.post(prefix + '/alive?generation=' + newer, headers=headers()).status_code == 410
-    post(live, f'live-meetings/{mid}/access', {'visibility': 'private'})
-    assert live.post(prefix + '/start?expected_audience=' + audience, headers=headers()).status_code == 409
-
-
-def test_a_contended_screen_lock_does_not_block_the_async_server(live):
-    import threading
-    import httpx
-
-    mid = connect(live)['id']
-    prefix = f'/api/v2/live-meetings/{mid}/screen'
-    live.post(prefix + '/start', headers=headers())
-    held, release = threading.Event(), threading.Event()
-
-    def hold():
-        with live.app.state.meeting_frames.lock:
-            held.set()
-            release.wait(10)
-
-    holder = threading.Thread(target=hold)
-    holder.start()
-    assert held.wait(1)
-
-    async def run():
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=live.app), base_url='http://testserver'
-        ) as client:
-            pending = asyncio.create_task(client.get(prefix + '/frame?wait=0', headers=headers()))
-            await asyncio.sleep(0.02)
-            try:
-                # Answered while the screen lock is still held (it is held until `release`), not after it: a server
-                # blocked behind the lock could not answer before then, however fast the machine.
-                response = await asyncio.wait_for(client.get('/healthz'), 5)
-                assert response.status_code == 200
-                assert not release.is_set() and holder.is_alive()  # the lock is still held
-            finally:
-                release.set()
-                await pending
-
-    try:
-        asyncio.run(run())
-    finally:
-        release.set()
-        holder.join()
-
-
-def test_discard_removes_the_transcript_copies_sent_to_bots(live):
-    meeting = post(live, "live-meetings", {"title": "Kept here", "cooldown_seconds": 0})
-    other = post(live, "live-meetings", {"title": "Another room", "cooldown_seconds": 0})
-    for room in (meeting, other):
-        attach(live, room["id"], "ops")
-    machine = runner(live)
-    assign(live, machine, "ops")
-    ready(live, machine, ["ops"])
-    chunk(live, meeting["id"], 1, 0, 1000, "Ops, the synthetic codename is confidential")
-    turn = claimed_turn(live, machine)
-    assert "confidential" in turn["message"]["body"]
-    post(
-        live,
-        f"attempts/{turn['id']}/complete",
-        {"outcome": "completed", "text": "Noted the codename confidential.", "last_seq": 0},
-        token=machine["token"],
-    )
-    chunk(live, other["id"], 1, 0, 1000, "Ops, the synthetic harbour plan")
-    kept = claimed_turn(live, machine)
-    post(
-        live,
-        f"attempts/{kept['id']}/complete",
-        {"outcome": "completed", "text": "Harbour plan noted.", "last_seq": 0},
-        token=machine["token"],
-    )
-    run_log = lambda run: live.get(f"/api/runs/{run}/log", headers=headers())
-    assert "codename" in run_log(turn["id"]).text
-    post(live, f"live-meetings/{meeting['id']}/discard", {})
-    with live.app.state.store.read() as c:
-        conv = turn["conversation"]["id"]
-        bodies = [row[0] for row in c.execute("SELECT body FROM messages WHERE conversation_id=?", (conv,))]
-        closed = c.execute("SELECT closed_at FROM conversations WHERE id=?", (conv,)).fetchone()[0]
-        attempt = c.execute("SELECT final_text,result FROM attempts WHERE id=?", (turn["id"],)).fetchone()
-        events = [row[0] for row in c.execute("SELECT payload FROM attempt_events WHERE attempt_id=?", (turn["id"],))]
-    assert bodies and not any("codename" in (body or "") for body in bodies)
-    assert closed
-    assert attempt is not None and "codename" not in (attempt["final_text"] or "") + (attempt["result"] or "")
-    assert not any("codename" in payload for payload in events)
-    log = run_log(turn["id"])
-    assert log.status_code in (200, 404) and "codename" not in log.text and "confidential" not in log.text
-    # A run from another meeting keeps its words.
-    assert "Harbour plan noted." in run_log(kept["id"]).text

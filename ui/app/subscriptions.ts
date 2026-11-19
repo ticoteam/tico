@@ -15,7 +15,7 @@ interface SubsUsage {used_pct?: number | null; resets_at?: string | null; window
 type SubsComputer = string | {runner_id: string; label?: string};
 // `order`: where a plan comes in its owner's plans for its tool (the plan in use first, then the pick order; null when
 // held or waiting to be reconnected). `in_use_on`: the computers whose turns sign in with it now.
-interface SubsRow {id: string; name: string; kind: string; label?: string; runtime?: string; owner_id?: string; owner_name?: string; computers?: SubsComputer[]; status?: string; status_detail?: string; usage?: SubsUsage | null; usage_refresh?: {state?: string | null; requested_at?: string | null} | null; order?: number | null; place?: number | null; in_use_on?: string[]; reconnect_by?: string | null}
+interface SubsRow {id: string; name: string; kind: string; label?: string; runtime?: string; owner_id?: string; owner_name?: string; computers?: SubsComputer[]; status?: string; status_detail?: string; usage?: SubsUsage | null; usage_refresh?: {state?: string | null; requested_at?: string | null} | null; order?: number | null; place?: number | null; in_use_on?: string[]; reconnect_by?: string | null; can_remove?: boolean}
 // A computer given a person's plans: the plan in use (`on`) and why (backend model_subscriptions.set_state).
 interface SubsSetWhy {kind: 'soonest' | 'held' | 'reconnect' | 'all_held' | 'none' | string; plan?: string | null; until?: string | null}
 interface SubsSet {person: string; person_name: string; plans: number; on: string | null; on_name: string | null; why: SubsSetWhy}
@@ -101,19 +101,24 @@ const subsStopWords = (n: number) => `${subsPlural(n, 'running task')} ${n === 1
 
 // ---- Settings > Models > Subscriptions
 // Usage: what is left of the plan's tighter window (the server's reading is its most-used one, 5-hour or week), a bar
-// of that share, and the hours until it resets ("62% left · resets in 98h"); the window and the reset time in the
-// tooltip. A plan with no reading says so, with the server's reason in the tooltip. An API key shows the month's spend.
+// of that share, and the time until it resets in days and hours, hours and minutes, or minutes ("62% left · resets in
+// 4d 2h", "resets in 1h 3m", "resets in 40m"); the window and the reset time in the tooltip. A plan with no reading
+// says so, with the server's reason in the tooltip. An API key shows the month's spend.
 // Computers never show here: only on the count (subsCountHTML).
-function subsHoursUntil(iso: string | null | undefined) {
+function subsTimeUntil(iso: string | null | undefined) {
   const ms = Date.parse(iso || '') - Date.now();
   if (!(ms > 0)) return '';
-  return ms >= 3600e3 ? `${Math.round(ms / 3600e3)}h` : `${Math.max(1, Math.round(ms / 60000))}m`;
+  const all = Math.max(1, Math.round(ms / 60000));
+  const d = Math.floor(all / 1440), h = Math.floor((all % 1440) / 60), m = all % 60;
+  if (d) return h ? `${d}d ${h}h` : `${d}d`;
+  if (h) return m ? `${h}h ${m}m` : `${h}h`;
+  return `${m}m`;
 }
 function subsUsageHTML(sub: SubsRow) {
   const usage: SubsUsage = sub.usage || {};
   if (typeof usage.used_pct === 'number') {
     const left = 100 - Math.max(0, Math.min(100, Math.round(usage.used_pct)));
-    const resetIn = subsHoursUntil(usage.resets_at);
+    const resetIn = subsTimeUntil(usage.resets_at);
     const at = resetIn ? timeSaid(usage.resets_at) : '';
     const window = usage.window === 'week' ? 'Week' : usage.window === '5h' ? '5-hour window' : '';
     const words = [`${window ? `${window}: ` : ''}${left}% left`, at ? `resets ${at} (in ${resetIn})` : ''].filter(Boolean).join(' · ');
@@ -198,7 +203,7 @@ function subsRowHTML(sub: SubsRow, next = false) {
     <td class="muted subs-kind">${esc(subsKindLabel(sub))}</td>
     ${subsCountHTML(sub)}
     <td class="subs-use">${subsStatusHTML(sub) || `${subsUsageHTML(sub)}${subsReconnectByHTML(sub)}`}</td>
-    <td class="subs-more-cell">${subsRefreshHTML(sub)}${subsMayEdit() ?`<button type="button" class="ghost subs-more" data-subs-more="${esc(sub.id)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(sub.name)}">⋯</button>` : ''}</td></tr>`;
+    <td class="subs-more-cell">${subsRefreshHTML(sub)}${subsMayEdit() || sub.can_remove ?`<button type="button" class="ghost subs-more" data-subs-more="${esc(sub.id)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(sub.name)}">⋯</button>` : ''}</td></tr>`;
 }
 async function renderSettingsSubs() {
   const el = $('#set-subs'); if (!el) return;
@@ -293,10 +298,10 @@ function subsMenu(anchor: HTMLElement, sub: SubsRow | undefined) {
     document.body.append(pop);
   }
   pop.anchor = anchor;
-  pop.innerHTML = `<div class="tl-menu" role="menu" aria-label="${esc(sub.name)}">
+  pop.innerHTML = `<div class="tl-menu" role="menu" aria-label="${esc(sub.name)}">${subsMayEdit() ? `
     <button type="button" class="tl-mi" role="menuitem" data-subs-act="edit">Edit</button>
-    <button type="button" class="tl-mi" role="menuitem" data-subs-act="reconnect">Reconnect</button>
-    <button type="button" class="tl-mi danger" role="menuitem" data-subs-act="remove">Remove</button></div>`;
+    <button type="button" class="tl-mi" role="menuitem" data-subs-act="reconnect">Reconnect</button>` : ''}${(sub.can_remove ?? subsMayEdit()) ? `
+    <button type="button" class="tl-mi danger" role="menuitem" data-subs-act="remove">Remove</button>` : ''}</div>`;
   pop.onclick = (event: MouseEvent) => {
     const act = eventElement(event)?.closest<HTMLElement>('[data-subs-act]')?.dataset.subsAct;
     if (!act) return;

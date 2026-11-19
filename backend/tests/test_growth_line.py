@@ -3,11 +3,14 @@
 (an ad spend sheet, a customers query that went stale, and Stripe, which syncs nothing), a CAC guardrail on Search Ads
 and an input KPI that Search Ads moves."""
 
+import pytest
+
 from backend import growth_computed as GX
 from backend import growth_sync as GS
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post, put
 from backend.tests.helpers.company import bot
+from backend.tests.helpers.growth_cards import classic_cards  # noqa: F401 (the fixture)
 from backend.tests.helpers.growth_computed import TODAY, as_csv, september
 
 M = GS._month(GS._index(GS.this_month()) - 1)  # last month: inside a synced source's window
@@ -249,6 +252,7 @@ def test_a_trace_opened_or_a_source_picked_is_counted_once_a_day_per_reader(api)
     assert [(r["actor"], r["use"]) for r in rows] == [("human:ana", "trace"), ("human:cara", "source")]
 
 
+@pytest.mark.usefixtures("classic_cards")
 def test_the_funnel_shows_no_share_between_kpis_of_unlike_units(api):
     """AC-18: customers over dollars is no share; two counts still show theirs, whatever they count."""
     for name, unit, stage, value in (

@@ -241,7 +241,11 @@ def person_above(conn: "sqlite3.Connection", bot: object) -> str | None:
 def company_person(conn: "sqlite3.Connection") -> str | None:
     """The person the company falls back on: its owner while they can act, else the person who has been here longest
     (first on the roster, then anyone else in `humans` by id), so the choice is stable. None only when nobody can
-    sign in."""
+    sign in. A Needs you build asks it for each task's ladder: within one read snapshot it is read once (read_cache)."""
+    return read_cache.value(conn, ("company_person",), lambda: _company_person(conn), shared=True)
+
+
+def _company_person(conn: "sqlite3.Connection") -> str | None:
     owner = pipeline_rights.company_owner(conn)
     if R.active_person(conn, owner):
         return owner
@@ -265,11 +269,14 @@ def _bot_owner(conn: "sqlite3.Connection", bot: object) -> str | None:
     left, or anything that is not a bot."""
     if not is_bot(bot):
         return None
-    found = conn.execute("SELECT owner_id FROM bot_config WHERE bot=?", (actor_id(bot),)).fetchone()
+    found = read_cache.one(conn, _OWNER_SQL, (actor_id(bot),))  # `_blocked_bots` reads every bot's together
     if not found or not found[0]:
         return None
     owner = str(found[0]) if is_human(found[0]) else human_actor(found[0])
     return owner if R.active_person(conn, owner) else None
+
+
+_OWNER_SQL = "SELECT owner_id FROM bot_config WHERE bot=?"
 
 
 def holder(conn: "sqlite3.Connection", row: Row) -> str | None:
@@ -643,6 +650,13 @@ def turn(
     return bots[0].who
 
 
+def persons_turn(waits: Sequence[Wait]) -> bool:
+    """Whether all a task waits on is OKs and answers asked of people (a ❓ included). Such a task is never Late: the
+    bot is not behind (never_stuck._late, late_rule.late_of). A cause a person fixes first (`Wait.fix`, Connect GitHub)
+    is not one: its time is not given back when it ends, so it stays Late as before."""
+    return bool(waits) and all(wait.state == PERSON and wait.ask and not wait.fix for wait in waits)
+
+
 def on_person(
     conn: "sqlite3.Connection", row: Row, waits: Sequence[Wait], seen: dict[str, str | None] | None = None
 ) -> bool:
@@ -768,10 +782,14 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
             for row in conn.execute(many_sql % "SELECT value FROM json_each(?)", listed).fetchall():
                 found.setdefault(str(row[column]), row)
             read_cache.prime(conn, one_sql, {(task_id,): found.get(task_id) for task_id in unread})
+    # Their stages and pipelines, which `task_engine.task()` reads by id: one statement a table.
+    stored = [read_cache.one(conn, _TASK_READS[0][0], (task_id,)) for task_id in ids]
+    E.prime_parts(conn, (r["stage_id"] for r in stored if r), (r["pipeline_id"] for r in stored if r))
     rows = [row for row in (E.task(conn, task_id) for task_id in ids) if row]
     R.prime(conn, rows)
     task_wakes.prime_holds(conn, ids)  # each task's worktree wait and held run: a bot's turn may be Paused on it
     task_depends.prime(conn, ids)  # the tasks each depends on that are still open
+    question_marks.prime_on_tasks(conn, ids)  # each task's open ❓ (`of` asks question_marks.on_task of each)
     # "Can this bot run" for each bot whose turn a task may be: its owner, or its pipeline's manager.
     bots: list[str] = []
     for row in rows:
@@ -925,6 +943,18 @@ def _blocked_bots(conn: "sqlite3.Connection", person: str, company: bool) -> set
         ]
     actors = [f"bot:{bot}" for bot in bots]
     task_wakes.prime_bots(conn, actors)
+    # Each bot that cannot run asks who owns it (`_fixer`): every one's owner in one statement.
+    owners = (
+        {}
+        if not bots
+        else {
+            str(found[0]): (found[1],)
+            for found in conn.execute(
+                "SELECT bot, owner_id FROM bot_config WHERE bot IN (SELECT value FROM json_each(?))", _listed(bots)
+            ).fetchall()
+        }
+    )
+    read_cache.prime(conn, _OWNER_SQL, {(bot,): owners.get(bot) for bot in bots})
     seen = _seen(conn)
     out: set[str] = set()
     for bot in actors:
@@ -1301,6 +1331,8 @@ def _lists(
     paused: dict[str, dict[str, Row]] = {}
     seen = _seen(conn)
     fixers: dict[str, str | None] = {}
+    # Every open ❓, which the people's ❓ items below read anyway: each task's waits then take theirs from it.
+    question_marks.open_rows(conn)
     read = prime(conn, task_ids)
     for task_id in task_ids:
         row = read[str(task_id)] if str(task_id) in read else E.task(conn, task_id)

@@ -3,12 +3,12 @@
 import json
 import sqlite3
 from contextlib import closing
-from types import SimpleNamespace
-from unittest.mock import patch
-from backend import cloud_machines, page_owners, providers, settings_catalog
+from backend import cloud_access, page_owners, providers, settings_catalog
 from backend.store import H
 from backend.tests.helpers.api import get, post, runner
 from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.cloud_access import signals
+from backend.tests.helpers.cloud_machines import FakeHQ
 
 
 PEOPLE = {"owner": ("ana-test", "ana"), "admin": ("ben-test", "ben"), "member": ("cara-test", "cara")}
@@ -292,14 +292,17 @@ def ask(api, attempt, e, objects, person, token):
     if got != "card":
         return got
     if e.route == "cloud-machines/support":
-        # This switch exists only on cloud companies. Give its tap an available company and a synthetic HQ, so
-        # the shared sweep proves the owner's confirmation as well as refusing everyone else.
-        hq = SimpleNamespace(support=lambda on=None, **_: {"on": on is not False, "machines": []})
-        with (
-            patch.object(cloud_machines, "cloud_company", return_value=True),
-            patch.object(api.app.state.cloud_machines, "client", hq),
-        ):
+        # This switch exists only on cloud companies. For this one tap the company is one, and a fake HQ keeps the
+        # switch, so the shared sweep proves the owner's confirmation as well as refusing everyone else.
+        store, manager = api.app.state.store, api.app.state.cloud_machines
+        before = cloud_access.current(store)
+        cloud_access.apply(store, cloud_access.parse(signals("open")))
+        client, manager.client = manager.client, FakeHQ()
+        try:
             tap = tapped(api, planned.json(), token)
+        finally:
+            manager.client = client
+            cloud_access.apply(store, before)
     else:
         tap = tapped(api, planned.json(), token)
     if tap != "ran":

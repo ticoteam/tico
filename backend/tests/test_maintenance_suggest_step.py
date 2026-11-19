@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sqlite3
+import threading
 
 import httpx
 import pytest
@@ -85,20 +86,23 @@ def install(api, monkeypatch):
 def http(install, monkeypatch):
     calls, state = [], {"items": [item()], "status": 200, "reply": None}
     original = install.transaction
+    # The threads in a write transaction on this store now. The rule is about the thread that calls HTTP or KMS: it
+    # holds no write transaction. Another thread may write meanwhile: the app's inbound-mail loop runs its first tick,
+    # a write, on a worker thread when the app starts, and on a slow runner that tick overlapped this test's KMS call.
     writing = []
-    state["writing"] = writing
+    state["writing"] = lambda: threading.current_thread() in writing
 
     @contextmanager
     def transaction(*args, **kwargs):
         with original(*args, **kwargs) as c:
-            writing.append(c)
+            writing.append(threading.current_thread())
             try:
                 yield c
             finally:
-                writing.pop()
+                writing.remove(threading.current_thread())
 
     def handle(request):
-        assert not writing, "HTTP must run outside every write transaction"
+        assert not state["writing"](), "HTTP must run outside every write transaction"
         assert request.headers["authorization"] == "Bearer install-test-key"
         assert request.headers["user-agent"].startswith("Tico-Client/")  # the edge refuses a library's default
         payload = json.loads(request.content)
@@ -598,12 +602,12 @@ def test_saved_gateway_key_rewrap_uses_the_writer_with_kms_outside_it(install, h
 
     class KMS(KMSWithEncrypt):
         def encrypt(self, **kwargs):
-            assert not http[1]["writing"], "KMS must run outside every write transaction"
+            assert not http[1]["writing"](), "KMS must run outside every write transaction"
             calls.append("encrypt")
             return super().encrypt(**kwargs)
 
         def decrypt(self, **kwargs):
-            assert not http[1]["writing"], "KMS must run outside every write transaction"
+            assert not http[1]["writing"](), "KMS must run outside every write transaction"
             calls.append("decrypt")
             return super().decrypt(**kwargs)
 

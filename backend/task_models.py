@@ -300,12 +300,12 @@ def _named(model):
     return text[:1].upper() + text[1:]
 
 
-def warning(c, settings, bot, config, choice):
+def warning(c, settings, bot, config, choice, record=None):
     """The plain-words warning for a task model below the minimum on a high-stakes bot, or "". It never refuses: the
-    task model saves and its tasks run on it."""
+    task model saves and its tasks run on it. `record`: providers.load(c, settings), when the caller has read it."""
     if not choice:  # most bots: no lookups at all, so the bot list does not grow with them
         return ""
-    own = providers.bot_choice(c, settings, config)[1]
+    own = providers.bot_choice(c, settings, config, record)[1]
     if not below_minimum(own, choice):
         return ""
     found = stakes(c, settings, bot)

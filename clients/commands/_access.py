@@ -176,7 +176,8 @@ AUDIENCE = {
     # The Tools Owner gives and takes back a bot's key with the rights of the person who asked it (the server lends them
     # on Tools changes only, backend/tools_delegation.py); any other bot is refused with who can.
     **{name: REQUESTER + ("bot",) for name in ("tico_credential_grant", "tico_credential_revoke", "tico_tool_level")},
-    **{name: REQUESTER for name in ("tico_credential_import", "tico_credential_delete")},
+    "tico_credential_import": REQUESTER,
+    "tico_credential_delete": REQUESTER + ("bot", "agent"),
     # A bot registers, changes or removes its own bot.yaml tool entries; the Tools Owner any bot's (backend/bot_tools.py).
     **{name: REQUESTER + ("bot",) for name in ("tico_tool_add", "tico_tool_update", "tico_tool_remove")},
     **{
@@ -228,6 +229,8 @@ AUDIENCE = {
         )
     },
     **{name: REQUESTER for name in CALL_TOOLS},  # a person's act; BotOps acts as the person it works for
+    "tico_call_notes": NOT_ASSISTANT,
+    "tico_call_note": BOTS,
     # The Assistant only.
     # The Assistant bot's own background run (a routine, kind `bot`) proposes a card for its person too; the server admits
     # only the Assistant bot, and only with `for` naming an active person (backend/app.py propose).
@@ -343,6 +346,8 @@ ASSISTANT_HIDDEN = frozenset(
         # Finance ad spend setup, run from the CLI; hidden to keep the listing under its size cap.
         "tico_growth_source_campaigns",
         "tico_growth_segment_show",  # a segment owner bot's read, not a person's; hidden for the listing's size cap
+        "tico_growth_segment_list",  # the same
+        "tico_growth_segment_set",  # the Growth Manager's and an admin's setup, not a person's Assistant; same cap
         "tico_credential_grant",
         "tico_tools_propose_grant",  # the Tools owner proposes key grants in its own chat; never the Assistant
         "tico_credential_revoke",

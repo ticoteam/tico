@@ -35,7 +35,7 @@ def test_list_search_and_opaque_paging_use_metadata_and_readonly_scopes(gmail_ht
     assert calls[0][0] == "/gmail/v1/users/" + BOX + "/messages"
     assert calls[0][1]["q"] == ["from:sender newer_than:7d"] and calls[0][1]["maxResults"] == ["50"]
     assert calls[2][1]["pageToken"] == [NEXT] and calls[2][1]["maxResults"] == ["1"]
-    assert calls[1][1]["format"] == ["metadata"] and "Subject" in calls[1][1]["metadataHeaders"]
+    assert calls[1][1]["format"] == ["full"] and calls[1][1]["fields"] == [G.LIST_FIELDS]
     assert all(token == "readonly-token" for _, _, token in calls)
     assert minted == [(BOX, "gmail", False)] * 2
 
@@ -48,6 +48,22 @@ def test_thread_and_message_fetch_full_and_normalize_bodies_and_attachments(gmai
     assert message["attachments"] == [{"name": "contract.pdf", "type": "application/pdf", "size": 123}]
     assert all(query["format"] == ["full"] for _, query, _ in gmail_http["calls"])
     assert minted == [(BOX, "gmail", False)] * 2
+
+
+def test_a_listed_row_counts_the_attachments_opening_it_shows(gmail_http, minted):
+    """A sent email's PDF sits under multipart/mixed beside its alternative body: the list row counts it too."""
+    sent = gmail_http["messages"]["m2"]
+    sent["labelIds"] = ["SENT"]
+    sent["payload"]["headers"].append({"name": "Received", "value": "by mx; " + "x" * 4000})
+    body = sent["payload"]["parts"].pop(0)
+    sent["payload"]["parts"].insert(0, {"mimeType": "multipart/alternative", "parts": [body]})
+    sent["payload"]["parts"][1].update(filename="Exhibit-E3.pdf", body={"attachmentId": "a2", "size": 4794424})
+    listed = G.list(None, BOX)["messages"][0]
+    opened = G.message(None, BOX, "m2")
+    assert listed["id"] == "m2" and listed["attachments"] == opened["attachments"]
+    assert listed["attachments"] == [{"name": "Exhibit-E3.pdf", "type": "application/pdf", "size": 4794424}]
+    assert set(listed["headers"]) == {"from", "to", "subject", "list-id", "list-unsubscribe"}
+    assert listed["body"] == ""
 
 
 @pytest.mark.parametrize("status, expected", [(400, 422), (403, 403), (404, 404), (429, 503), (503, 502)])

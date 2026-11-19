@@ -750,12 +750,12 @@ def _page_of(conn: "sqlite3.Connection", visit_id: str, requirement: Row) -> Row
     """The page attached to a page requirement on this visit: {file_id, version, ref}, or None."""
     from . import task_pages
 
-    found = task_pages.current(conn, visit_id, requirement["id"])
-    if not found:
+    pages = task_pages.current_pages(conn, visit_id, requirement["id"])
+    if not pages:
         return None
+    found = pages[0]  # task_pages.current: the newest
     ref = f"page:{found['file_id']}@{found['version']}"
     page = {"file_id": found["file_id"], "version": int(found["version"]), "ref": ref}
-    pages = task_pages.current_pages(conn, visit_id, requirement["id"])
     if len(pages) > 1:
         page["pages"] = [
             {"file_id": p["file_id"], "version": int(p["version"]), "ref": f"page:{p['file_id']}@{p['version']}"}
@@ -1152,7 +1152,8 @@ def task_view(
     # in the line that says what this task waits on, nor its id, nor why it was closed (waiting_on.unnamed).
     hidden = hidden_filed(conn, row, viewer, visible_sql)
     shown: Callable[[str], bool] = lambda task_id: task_id not in hidden
-    waits = [W.view(wait, shown) for wait in W.of(conn, row, standings=standings)] if live else []
+    raw_waits = W.of(conn, row, standings=standings) if live else []
+    waits = [W.view(wait, shown) for wait in raw_waits]
     answers = R.newest_answers(conn, visit["id"]) if live else {}
     works = bool(viewer) and can_work(conn, str(viewer), row)
     to_leave = [_leave_entry(conn, row, standing, answers, viewer, hidden, works) for standing in standings]
@@ -1189,7 +1190,20 @@ def task_view(
     # The repositories the work is in (a filed Engineering task's from the start), for `tico task show`.
     repos = stage_inputs.repositories(conn, task_id, shown) if inputs else []
     snooze: Row | None = row.get("snooze")
-    late = late_rule.late_of(row, visit, stage.get("expected_minutes"), datetime.now(timezone.utc)) if live else None
+    late = (
+        late_rule.late_of(
+            row,
+            visit,
+            stage.get("expected_minutes"),
+            datetime.now(timezone.utc),
+            persons_turn=W.persons_turn(raw_waits),
+            answered_at=late_rule.last_answers(conn, [(str(visit["id"]), task_id, str(visit["entered_at"]))]).get(
+                str(visit["id"])
+            ),
+        )
+        if live and visit.get("late_told_at")
+        else None
+    )
     return {
         "id": task_id,
         "status": row["status"],
@@ -1204,6 +1218,8 @@ def task_view(
         },
         "came_from": task_reads.came_from(conn, [task_id]).get(task_id) if stage.get("side") else None,
         "stage_since": visit.get("entered_at") if live else None,
+        # Its open visit: with a requirement it names one ask in Needs you (waiting_on.ask_id), read by id there.
+        "visit_id": visit.get("id") if live else None,
         "owner_id": row.get("owner_id"),
         "assignee_id": row.get("assignee_id"),
         "turn": waits[0] if waits else None,

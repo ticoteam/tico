@@ -18,8 +18,8 @@ a send, a spend or a publish, by when they were asked. What waits on you stays i
 when you ask ("anything need me?"): one plain line per item, or per group of alike items.
 
 The Ask panel is only the Assistant. Talking to the people at Tico is a separate chat: the **?** beside Search (on a
-phone, beside Search in the More drawer), or any link to `#/support`, such as the Assistant's "Message the Tico team"
-reply, opens it ([Support](support.md)). Nothing from the DM goes to the Tico team.
+phone, beside Search in the More drawer), or any link to `#/support`, such as the Assistant's "Message Tico support"
+reply, opens it ([Support](support.md)). Nothing from the DM goes to Tico support.
 
 Nothing speaks up beside the dot. Confirm cards wait in the panel, and the dot never carries a sound or a count.
 
@@ -265,9 +265,12 @@ the list looks too long: the numbers come from the same query as the list ([Need
 
 **Every proposal is shown for what it is.** The card's title is the server's own plain sentence (what changes and for
 whom, never the bot's words), e.g. "Security Engineer: read-only on tico (was write). Loses access to tico-site
-and tico-recorder."; a route with no sentence of its own still gets plain words ("Make a change to bot Ops"), never the method
+and tico-docs."; a route with no sentence of its own still gets plain words ("Make a change to bot Ops"), never the method
 and path, and a setting's raw value ("all", "own") is never read out as a word: a field that holds a name (a model, a
-title) shows it, any other only names the field. A repository card made before this wording is titled from the request
+title) shows it, any other only names the field. An automation, task, bot or key is named as the app names it
+("Delete the automation “Receipts” of Cara (already switched off)"). A card BotOps makes while acting for you adds,
+after the title, the work it was on (the task and who asked for it, or your chat with it; a task you may not read is
+named only by who asked; a task that is gone, by its id) and why it waits for you, from the rule that made it a card (deleting an automation, who holds a key, a bot's repositories, spending limits). A repository card made before this wording is titled from the request
 it sends, with its old line under Details. Under a closed **Details** are the method, path and the request body as a key: value list (a long value is folded
 behind "Show more", never cut). The words a send carries (a message, a comment, a support request) show on the card
 itself, whole, since they are what you approve; for an answer the card shows the ask, and for a task update the exact

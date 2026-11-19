@@ -203,7 +203,11 @@ def _nonmanager_unchanged_and_refusal_names_managers(api, manager):
         api, 'tasks/' + task['id'], {'version': task['version'], 'title': 'Renamed'}, token=outsider, expected=403
     )
     assert 'managers' in str(refusal) and 'owner' in str(refusal)
-    post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Unrelated comment.'}, token=outsider, expected=403)
+    # Any bot that reads a task may comment on it, as a person may (task_reads.comment_rights); a private one it can't read
+    # stays closed. The comment is held for the owner's next run: commenting wakes nobody.
+    sent = post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Unrelated comment.'}, token=outsider)
+    assert sent['woke'] is False
+    post(api, 'tasks/' + private['id'] + '/comments', {'text': 'Unrelated comment.'}, token=outsider, expected=404)
 
 
 def _manager_cannot_edit_or_delete_another_authors_comment(api, bot_manager):

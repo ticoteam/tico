@@ -4,12 +4,12 @@
 Hourly and on demand (.github/workflows/stale-pr-sweep.yml). For each open pull request to main:
 
 1. Dropped by the queue (its last queue event is REMOVED_FROM_MERGE_QUEUE_EVENT and it is not back in the queue):
-   - failed_checks, and every failure in the failing queue run is a quarantined test (ci/quarantine/, read as
-     scripts/flake_quarantine.py reads it) or a pytest-xdist "worker ... crashed" in a pytest-only leg: re-enqueued
-     (enqueuePullRequest with expectedHeadOid=<head>), at most once per head sha. Re-enqueueing needs QUEUE_TOKEN
-     (GitHub refuses the workflow's own token); without it the comment says to re-enqueue by hand.
+   - failed_checks, and every failure in the failing queue run is a pytest-xdist "worker ... crashed" in a pytest-only
+     leg: re-enqueued (enqueuePullRequest with expectedHeadOid=<head>), at most once per head sha. Re-enqueueing needs
+     QUEUE_TOKEN (GitHub refuses the workflow's own token); without it the comment says to re-enqueue by hand.
    - otherwise one comment per head sha naming the failing tests (or the job and step when no test is named). When the
-     quarantine list or the queue run changes for that head, the same comment is updated, and a flake is re-enqueued.
+     queue run changes for that head, the same comment is updated, and a flake is re-enqueued. A test that failed is
+     never a flake here: it is fixed at its root cause or deleted (docs/releasing.md#who-fixes-a-red-or-flaky-test).
    - merge_conflict is left to the label below; a manual removal is a person's choice and is left alone. A pull request
      pushed since its removal is left to its own checks. A queue run still finishing is read on a later run.
 2. Conflicting with main and its own checks red: labelled needs-main-merge (a conflicting head runs no pull request
@@ -19,7 +19,7 @@ Hourly and on demand (.github/workflows/stale-pr-sweep.yml). For each open pull 
    GitHub record of its push; the commit date when it has none).
 
 The sweep writes one comment per head, edited as things change. Its hidden marker
-`<!-- stale-pr-keeper:comment <head> queue=<sha> quarantine=<hash>[ requeued][ deferred] -->` (after a line naming the
+`<!-- stale-pr-keeper:comment <head> queue=<sha>[ requeued][ deferred] -->` (after a line naming the
 failed tests) records what it was written for, so a later run never repeats it, and never re-enqueues a head twice.
 GitHub calls: one GraphQL page per 50 open pull requests; then, for dropped pull requests only, one GraphQL query per 25
 for their markers, and only where the markers leave something to decide: the queue run (by the removal's merge group
@@ -29,9 +29,7 @@ commit), its jobs, and the log of each failed job (streamed; only summary lines 
 import argparse
 import ast
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
-import hashlib
-import importlib.util
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -40,8 +38,6 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-QUARANTINE = "ci/quarantine"
-QUARANTINE_SCRIPT = "scripts/flake_quarantine.py"
 WORKFLOW = "pr-checks.yml"
 LABEL = "needs-main-merge"
 STALE_DAYS = 7
@@ -61,9 +57,10 @@ MAX_SHOWN = 300
 MAX_LINES = 40
 # The jobs that only report another job's failure: pr-checks.yml's required gate and its timing receipt.
 REPORTING_JOBS = {"checks", "PR job timings"}
+# An older comment's " quarantine=<hash>" (from when CI quarantined tests) is read and ignored.
 MARKER = re.compile(
     r"<!-- stale-pr-keeper:comment (?P<sha>[0-9a-f]{40})"
-    r"(?: queue=(?P<queue>[0-9a-f]{40}|none))?(?: quarantine=(?P<quarantine>[0-9a-f]+))?"
+    r"(?: queue=(?P<queue>[0-9a-f]{40}|none))?(?: quarantine=[0-9a-f]+)?"
     r"(?P<flags>(?: requeued| deferred)*) -->"
 )
 # The failed tests a comment named, as JSON (with "-->" escaped), on the line before its marker.
@@ -206,7 +203,6 @@ class Marker:
     sha: str  # the pull request head it was written for
     comment_id: int | None = None
     queue: str | None = None  # the merge group commit it diagnosed
-    quarantine: str | None = None  # quarantine_key() of its failed tests when it was written
     requeued: bool = False  # this head has been re-enqueued
     deferred: bool = False  # a flake left for a person because there was no queue token
     tests: list = field(default_factory=list)  # the failed tests it named
@@ -227,7 +223,6 @@ def markers(comments):
             m["sha"],
             comment_id,
             m["queue"],
-            m["quarantine"],
             " requeued" in m["flags"],
             " deferred" in m["flags"],
             _marked_tests(body),
@@ -237,75 +232,12 @@ def markers(comments):
     ]
 
 
-# Quarantine: ci/quarantine/<entry>.json, one per test (scripts/flake_quarantine.py, on chris/ci-flake-quarantine until
-# it merges, writes and checks them). When that script is in the checkout its load() decides which entries count;
-# until then the same rules are applied here. An id without [...] covers every parameter of that test.
-FIELDS = ("test", "first_seen", "commit", "runs", "ticket", "reason")
-REQUIRED = ("test", "first_seen", "runs", "ticket")
-
-
-def entry_name(test):
-    """flake_quarantine.entry_name: the readable id, at most 100 characters, and a short hash of the exact id."""
-    readable = re.sub(r"[^A-Za-z0-9._-]+", "-", test).strip("-")[:100].rstrip("-")
-    return f"{readable}-{hashlib.sha256(test.encode()).hexdigest()[:10]}.json"
-
-
-def _valid_entry(path, data, root):
-    if not isinstance(data, dict) or not isinstance(data.get("test"), str) or "::" not in data["test"]:
-        return False
-    if any(key not in data for key in REQUIRED) or set(data) - set(FIELDS):
-        return False
-    try:
-        date.fromisoformat(str(data["first_seen"]))
-    except ValueError:
-        return False
-    runs = data["runs"]
-    if not isinstance(runs, list) or not runs or not all(isinstance(u, str) and u.startswith("https://") for u in runs):
-        return False
-    if any(key in data and not isinstance(data[key], str) for key in ("ticket", "reason", "commit")):
-        return False
-    return path.name == entry_name(data["test"]) and (root / data["test"].split("::", 1)[0]).is_file()
-
-
-def quarantined(root=ROOT):
-    """The quarantined test ids: flake_quarantine.load() when the checkout has it, else the same rules here."""
-    root = Path(root)
-    script = root / QUARANTINE_SCRIPT
-    if script.is_file():
-        spec = importlib.util.spec_from_file_location("tico_flake_quarantine_for_keeper", script)
-        assert spec and spec.loader
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return set(module.load(root))
-    folder = root / QUARANTINE
-    tests = set()
-    for path in sorted(folder.glob("*.json")) if folder.is_dir() else []:
-        try:
-            data = json.loads(path.read_text())
-        except (OSError, ValueError):
-            continue
-        if _valid_entry(path, data, root):
-            tests.add(data["test"])
-    return tests
-
-
-def quarantine_key(failed, tests):
-    """Which of a run's failed tests are quarantined, as a short hash: a quarantine change that touches none of them
-    leaves a comment current, so it costs no reads."""
-    marked = sorted({test for test in failed if is_quarantined(test, tests)})
-    return hashlib.sha256("\n".join(marked).encode()).hexdigest()[:12]
-
-
-def is_quarantined(nodeid, tests):
-    return nodeid in tests or nodeid.split("[", 1)[0] in tests
-
-
 # Job logs: GitHub prefixes each line with a timestamp (the first with a byte order mark); pytest colours its summary.
 LOG_PREFIX = re.compile(r"^﻿?\d{4}-\d\d-\d\dT[\d:.]+Z ")
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 SUMMARY_HEADER = re.compile(r"^=+ short test summary info =+$")
 # A parameter id may hold " - " itself: the shortest bracketed id that leaves either the end or " - message" wins
-# (as flake_quarantine.py reads it).
+# (as scripts/flake_detect.py reads it).
 SUMMARY = re.compile(r"^(?:FAILED|ERROR) (?P<test>[^\s:]+\.py::[^\s\[]+(?:\[.*?\])?)(?: - (?P<message>.*))?$")
 UNLISTED = re.compile(r"^(?:FAILED|ERROR) (?P<name>\S+)")  # a collection error: a file, not a test id
 RESULTS = re.compile(r"^=*\s*\d+ (?:failed|passed|errors?|skipped|xfailed|xpassed|deselected)\b")
@@ -396,9 +328,9 @@ def failed_jobs(jobs):
     return out
 
 
-def flaky(findings, tests):
-    """True when every failure is a quarantined test or a crashed xdist worker in a pytest-only leg, and there is at
-    least one."""
+def flaky(findings):
+    """True when every failure is a crashed xdist worker in a pytest-only leg, and there is at least one. A test that
+    failed is never a flake to re-enqueue."""
     if not findings or not marked(findings)[1]:
         return False
     for f in findings:
@@ -406,7 +338,7 @@ def flaky(findings, tests):
             return False
         if not f.tests or f.scripts:
             return False
-        if not all(crashed or is_quarantined(test, tests) for test, crashed in f.tests):
+        if not all(crashed for _, crashed in f.tests):
             return False
     return True
 
@@ -432,14 +364,13 @@ def _short(name):
     return name if len(name) <= MAX_SHOWN else name[: MAX_SHOWN - 1] + "…"
 
 
-def describe(findings, tests):
+def describe(findings):
     """Markdown bullets naming each failure."""
     lines = []
     for f in findings:
         names = []
         for test, crashed in f.tests:
-            note = " (worker crashed)" if crashed else " (quarantined)" if is_quarantined(test, tests) else ""
-            names.append(f"`{_short(test)}`{note}")
+            names.append(f"`{_short(test)}`{' (worker crashed)' if crashed else ''}")
         names += [f"`{_short(name)}` (UI script)" for name in f.scripts]
         if not names:
             names = [f"{f.step} (no test named{'; log expired' if f.log_missing else ''})"]
@@ -458,14 +389,14 @@ REASONS = {
 }
 
 
-def comment_body(pr, findings, tests, run_url, note="", requeued=False, deferred=False, header=None):
+def comment_body(pr, findings, run_url, note="", requeued=False, deferred=False, header=None):
     """The sweep's one comment for a head. Its marker records the queue run and the failed tests it was written for,
     and whether the head was re-enqueued (requeued) or a flake was not re-enqueued for want of a token or because the
     pull request conflicted with main (deferred)."""
     why = REASONS.get(pr.removed_reason, pr.removed_reason.replace("_", " "))
     lines = [header or f"The merge queue removed this: {why}."]
     if findings:
-        lines += ["", describe(findings, tests)]
+        lines += ["", describe(findings)]
     elif pr.removed_reason in DIAGNOSED:
         lines += ["", "No failed job found in the queue run." if run_url else "No queue run found for it."]
     if run_url:
@@ -474,15 +405,15 @@ def comment_body(pr, findings, tests, run_url, note="", requeued=False, deferred
         lines += ["", note]
     failed = marked(findings)[0]
     flags = (" requeued" if requeued else "") + (" deferred" if deferred else "")
-    marker = f"queue={pr.queue_commit or 'none'} quarantine={quarantine_key(failed, tests)}{flags}"
+    marker = f"queue={pr.queue_commit or 'none'}{flags}"
     named = _escaped(json.dumps(failed))
     lines += ["", f"<!-- stale-pr-keeper:tests {named} -->\n<!-- stale-pr-keeper:comment {pr.head} {marker} -->"]
     return "\n".join(lines)
 
 
-def requeue_body(pr, findings, tests, run_url):
+def requeue_body(pr, findings, run_url):
     header = "Back in the merge queue. The queue run failed only on flakes:"
-    return comment_body(pr, findings, tests, run_url, requeued=True, header=header)
+    return comment_body(pr, findings, run_url, requeued=True, header=header)
 
 
 def needs_label(pr):
@@ -694,7 +625,7 @@ def _error(error):
     return (error.stderr or str(error)).strip()[:300]
 
 
-def keep(gh, tests, now, dry_run=False):
+def keep(gh, now, dry_run=False):
     """(markdown summary, every action succeeded)."""
     prs = parse_prs(gh.open_prs())
     done = {"requeued": [], "commented": [], "labelled": [], "unlabelled": [], "skipped": [], "errors": []}
@@ -750,7 +681,6 @@ def keep(gh, tests, now, dry_run=False):
         current = (
             comment is not None
             and comment.queue == (pr.queue_commit or "none")
-            and comment.quarantine == quarantine_key(comment.tests, tests)
             # a deferred flake is read again once it could be re-enqueued: a token was added, or the conflict is gone
             and not (comment.deferred and gh.can_enqueue and pr.mergeable == "MERGEABLE")
         )
@@ -770,9 +700,9 @@ def keep(gh, tests, now, dry_run=False):
                 halted.append(pr.number)
             continue
         run_url = run["html_url"] if run else None
-        is_flake = pr.removed_reason == "failed_checks" and flaky(findings, tests)
+        is_flake = pr.removed_reason == "failed_checks" and flaky(findings)
         if is_flake and not requeued and pr.mergeable != "CONFLICTING" and gh.can_enqueue:
-            body = requeue_body(pr, findings, tests, run_url)
+            body = requeue_body(pr, findings, run_url)
             existing = (comment.comment_id, dict(seen[pr.number])[comment.comment_id]) if comment else None
             act("requeued", pr, lambda pr=pr, body=body, existing=existing: requeue(gh, pr, body, existing))
             continue
@@ -783,12 +713,12 @@ def keep(gh, tests, now, dry_run=False):
             note, deferred = "Only flakes failed. It is re-enqueued once it no longer conflicts with main.", True
         elif is_flake:
             note, deferred = f"Only flakes failed. Re-enqueue it: `gh pr merge {pr.number}`.", True
-        body = comment_body(pr, findings, tests, run_url, note, requeued, deferred)
+        body = comment_body(pr, findings, run_url, note, requeued, deferred)
         names = ", ".join(_short(t) for f in findings for t, _ in f.tests[:3]) or pr.removed_reason
         if comment is None:
             act("commented", pr, lambda pr=pr, body=body: gh.comment(pr.number, body), names)
         else:
-            # The quarantine list or the queue run changed since the comment: it is brought up to date, not repeated.
+            # The queue run changed since the comment: it is brought up to date, not repeated.
             act("commented", pr, lambda c=comment, body=body: gh.edit_comment(c.comment_id, body), f"updated; {names}")
 
     stale = sorted(
@@ -829,7 +759,7 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true", help="print what it would do; change nothing")
     args = parser.parse_args(argv)
     gh = GitHub(args.repo, os.environ.get("QUEUE_TOKEN") or None)
-    text, ok = keep(gh, quarantined(), datetime.now(timezone.utc), args.dry_run)
+    text, ok = keep(gh, datetime.now(timezone.utc), args.dry_run)
     print(text)
     return 0 if ok else 1
 

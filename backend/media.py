@@ -18,6 +18,7 @@ from pydantic import Field, ValidationError
 
 from . import meetings as MS
 from . import models as M
+from . import task_text_keys
 from . import note_outcomes
 from .blobs import Blobs, brief, register
 from .files import is_file_id
@@ -228,6 +229,7 @@ async def form(request, model, blobs, store, admit=None):
                     else:
                         fields[name] = data.decode("utf-8")
                 for field in (
+                    "attachments",
                     "calendar",
                     "refs",
                     "acceptance_criteria",
@@ -303,7 +305,7 @@ def may_write(who, record):
     """Only the company owner and the person the source belongs to may change or send it."""
     if record.get("review_state", "live") != "live":
         return MS.filed_for(record, who)
-    # A meeting saved for its participants only is the recorder's, not the company owner's too.
+    # A meeting saved for its participants only is the filer's, not the company owner's too.
     owner = who.role == "owner" and effective_audience(record["metadata"]) != "participants"
     return owner or (
         who.role in ("human", "owner") and bool(who.email) and record["owner"].lower() == who.email.lower()
@@ -812,6 +814,10 @@ def install_media(
                 fields.setdefault("name", upload["filename"])
                 name = str(fields["name"])
                 body = TaskFile.model_validate(fields)
+                # A streamed form skips the request guard's body check: what is said with the file is checked here,
+                # before anything is stored (backend/task_text_keys.py).
+                if body.note:
+                    await asyncio.to_thread(task_text_keys.refuse_text, store, str(who.actor), tid, {"note": body.note})
                 supplied_type = upload["mime"].lower().split(";", 1)[0].strip()
                 content_type = guessed_type(name) or (
                     supplied_type
