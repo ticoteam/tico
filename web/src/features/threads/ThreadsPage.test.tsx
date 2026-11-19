@@ -118,6 +118,19 @@ describe('Threads @s156', () => {
     expect(screen.queryByTitle('Hiring')).toBeNull();
   });
 
+  it('returns to the filtered list from a thread opened through search', async () => {
+    serve((url) => ({
+      status: 200,
+      body: url.includes('/timeline') ? { messages: [], next_cursor: null } : {},
+    }));
+    queryClient.setQueryData(threadKeys.list, seeded());
+    show(<ThreadsPage pane="thread" thread="t1" q="launch price" open />, '/threads/t1?q=launch%20price');
+    const back = await screen.findByRole<HTMLAnchorElement>('link', { name: 'Back to Threads' });
+    const url = new URL(back.href);
+    expect(url.pathname).toBe('/threads');
+    expect(url.searchParams.get('q')).toBe('launch price');
+  });
+
   it('says so when there are no threads yet', async () => {
     serve(() => ({ status: 200, body: { count: 0, items: [] } }));
     queryClient.setQueryData(threadKeys.list, { pages: [{ rows: [], next: null }], pageParams: [null] });
