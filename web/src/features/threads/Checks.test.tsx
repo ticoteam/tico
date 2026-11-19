@@ -153,7 +153,7 @@ describe('New message @s158', () => {
     expect(sent('POST', '/api/v2/threads/dm')?.body).toEqual({ members: ['human:ana'], body: 'Lunch at noon?' });
   });
 
-  it('keeps the words in the box when a rule holds the message', async () => {
+  it('keeps the draft when a rule holds the message', async () => {
     serve((url, method) => (method === 'POST' && url.endsWith('/threads/dm') ? ok({ held: true }) : undefined));
     const router = show(<ThreadsPage pane="new" open />, '/threads/new');
     fireEvent.change(await screen.findByRole('textbox', { name: 'To' }), { target: { value: 'ana' } });
@@ -161,7 +161,46 @@ describe('New message @s158', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Message Ana Ruiz' }), { target: { value: 'Lunch at noon?' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(sent('POST', '/api/v2/threads/dm')).toBeTruthy());
-    await waitFor(() => expect((screen.getByRole('textbox', { name: 'Message Ana Ruiz' }) as HTMLTextAreaElement).value).toBe('Lunch at noon?'));
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false));
+    expect((screen.getByRole('textbox', { name: 'Message Ana Ruiz' }) as HTMLTextAreaElement).value).toBe('Lunch at noon?');
+    expect(router.state.location.pathname).toBe('/threads/new');
+  });
+
+  it('keeps the attachment when sending before choosing a recipient', async () => {
+    serve();
+    show(<ThreadsPage pane="new" open />, '/threads/new');
+    const box = (await screen.findByRole('textbox', { name: 'Message a teammate' })) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: 'A draft' } });
+    const file = new File(['draft'], 'notes.txt', { type: 'text/plain' });
+    fireEvent.change(box.parentElement!.querySelector('input[type="file"]')!, { target: { files: [file] } });
+    const send = screen.getByRole<HTMLButtonElement>('button', { name: 'Send' });
+    fireEvent.click(send);
+    await waitFor(() => expect(send.disabled).toBe(false));
+    expect(box.value).toBe('A draft');
+    expect(screen.getByRole('button', { name: 'Remove notes.txt' })).toBeTruthy();
+    expect(sent('POST', '/api/v2/threads/dm')).toBeUndefined();
+  });
+
+  it('keeps a first message with files when its thread timeline fails to load', async () => {
+    serve((url, method) => {
+      if (method === 'POST' && url.endsWith('/threads/dm')) return ok(thread({ id: 'new-with-files' }));
+      if (url.includes('/threads/new-with-files/timeline')) return { status: 500, body: { detail: 'unavailable' } };
+      return undefined;
+    });
+    const router = show(<ThreadsPage pane="new" open />, '/threads/new');
+    await screen.findByRole('textbox', { name: 'To' });
+    fireEvent.click(screen.getByRole('option', { name: /Ana Ruiz/ }));
+    const box = screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message Ana Ruiz' });
+    fireEvent.change(box, { target: { value: 'A draft' } });
+    const file = new File(['draft'], 'notes.txt', { type: 'text/plain' });
+    fireEvent.change(box.parentElement!.querySelector('input[type="file"]')!, { target: { files: [file] } });
+    const send = screen.getByRole<HTMLButtonElement>('button', { name: 'Send' });
+    fireEvent.click(send);
+    await waitFor(() => expect(sent('GET', '/threads/new-with-files/timeline')).toBeTruthy());
+    await waitFor(() => expect(send.disabled).toBe(false));
+    expect(box.value).toBe('A draft');
+    expect(screen.getByRole('button', { name: 'Remove notes.txt' })).toBeTruthy();
+    expect(sent('POST', '/uploads/threads/new-with-files/messages')).toBeUndefined();
     expect(router.state.location.pathname).toBe('/threads/new');
   });
 

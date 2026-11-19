@@ -47,6 +47,9 @@ textarea.composer-text::placeholder{color:var(--muted)}
 /* iPhone Safari zooms into a field under 16px (platforms.md 2) */
 @media (pointer:coarse){textarea.composer-text{font-size:var(--t-md)}}
 .composer input[type=file]{display:none}
+.composer-file{max-width:100%}
+.composer-file .ico{flex:none}
+.composer-file span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 
 /* a picture in a message opens full size over the page (kit/PictureViewer) */
 .msg .md-img{cursor:zoom-in}
