@@ -1,6 +1,6 @@
 // Company › Risk on a real hub seeded with three risks and four disputes (evals/redesign/seeds.py "risk"): the Company
 // row, the live risk open with its matters and the others one line each, a risk's own page, the Disputes table, a matter's
-// facts edited from ⋯, on a desktop and a phone. A member reads the same page without the private dispute.
+// facts edited from ⋯ (its product picked from ours), on a desktop and a phone. A member reads the same page without the private dispute.
 import type {Page} from 'playwright';
 import type * as RealHubSupport from './support/real-hub.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -66,7 +66,8 @@ async function flow(page: Page, tag: string, phone: boolean) {
   assert.match(await all(murphy), /AAA/);
   assert.equal(await table.locator('.rk-matter').filter({hasText: 'Sealed claim'}).count(), 1, tag + ': Dana reads the private dispute');
 
-  // ⋯ opens the matter's facts beside the list (full screen on a phone); a saved forum shows on its row.
+  // ⋯ opens the matter's facts beside the list (full screen on a phone); a saved forum shows on its row. The desktop
+  // also picks the matter's product, which the phone's save (the forum alone) keeps.
   const flores = table.locator('.rk-matter').filter({hasText: 'Flores'});
   await flores.locator('[data-rk-matter]').click();
   await page.waitForFunction(() => /[?&]matter=/.test(location.hash), null, {timeout: t(10000)});
@@ -75,6 +76,8 @@ async function flow(page: Page, tag: string, phone: boolean) {
   assert.equal(await page.locator('#rk-side').isVisible(), true, tag + ': the facts panel shows');
   const forum = phone ? 'Court' : 'Small claims';
   await form.locator('input[name="forum"]').fill(forum);
+  if (!phone) await form.locator('select[name="product"]').selectOption({label: 'Acme Kits'});
+  else assert.equal(await form.locator('select[name="product"] option:checked').innerText(), 'Acme Kits', tag + ': the form holds the product');
   await form.locator('button[type="submit"]').click();
   await page.locator('#rk-side').waitFor({state: 'hidden', timeout: t(10000)});
   assert.equal(/[?&]matter=/.test(await page.evaluate(() => location.hash)), false, tag + ': saving closes the panel');
@@ -97,6 +100,10 @@ async function flow(page: Page, tag: string, phone: boolean) {
     const madeAt = seeded.matters.find(m => m.task.title === 'Randazzo')?.task.created_at;
     if (!madeAt) throw new Error('the seed made no Randazzo');
     const hubNow = new Date(Date.parse(madeAt) + 3600e3);
+    const dana = {Authorization: 'Bearer ' + hub.tokens['dana'], 'Content-Type': 'application/json'};
+    const made = await fetch(hub.url + '/api/v2/products', {method: 'POST', headers: {...dana, 'Idempotency-Key': 'acme-kits'}, body: JSON.stringify({name: 'Acme Kits'})});
+    assert.ok(made.ok, await made.clone().text());
+    const kits = ((await made.json()) as {product: {key: string}}).product.key;
     browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
     for (const phone of [false, true]) {
       const page = await pageAs(browser, hub, 'dana', {phone});
@@ -112,6 +119,10 @@ async function flow(page: Page, tag: string, phone: boolean) {
         await page.context().close();
       }
     }
+    // The product's matters hold the one the desktop picked it for.
+    const about = await fetch(`${hub.url}/api/v2/matters?product=${encodeURIComponent(kits)}`, {headers: dana})
+      .then(r => r.json() as Promise<{matters: {task: {title: string}}[]}>);
+    assert.deepEqual(about.matters.map(m => m.task.title), ['Flores']);
     // A member reads the risks and disputes, without the private one.
     const member = await pageAs(browser, hub, 'omar');
     await member.clock.setFixedTime(hubNow);

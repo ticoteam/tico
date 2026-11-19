@@ -27,15 +27,15 @@ type RkProof = NonNullable<NonNullable<RkDue['mark']>['proof']>;
 type RkDetail = {risk: RkRisk; editable: boolean; matters: RkRow[]; next_offset: number | null; rules: RkLink[]; sources: RkLink[]; coverage: RkLink[]; obligations?: RkDue[]};
 type RkTab = 'risks' | 'disputes' | 'obligations' | 'one';
 // `dates`: the obligations on screen (every risk's on Obligations, the live risks' on Risks, the one risk's on its page).
-type RkPage = {run: number; tab: RkTab; slug: string; risks: RkRisk[]; rows: RkRow[]; closed: RkRow[]; detail: RkDetail | null; dates: RkDue[]; loaded: boolean; offs: (() => void)[]};
+type RkPage = {run: number; tab: RkTab; slug: string; risks: RkRisk[]; rows: RkRow[]; closed: RkRow[]; detail: RkDetail | null; dates: RkDue[]; datesCap: number; datesMore: boolean; loaded: boolean; offs: (() => void)[]};
 
 const RK_NEW_DAYS = 7;   // as backend/risk.py NEW_DAYS: a matter this new is marked New and makes its risk live
 const RK_KINDS: readonly [string, string][] = [['dispute', 'Dispute'], ['request', 'Request'], ['notice', 'Notice'], ['incident', 'Incident']];
 const RK_BASIS: Readonly<Record<string, string>> = {law: 'Law', order: 'Order', agency: 'Agency', contract: 'Contract', ours: 'Ours', asked: 'Asked', theirs: 'Theirs'};
 const RK_BINDING: ReadonlySet<string> = new Set(['law', 'order', 'agency', 'contract']);   // as backend/rule_due.py BINDING
 const RK_DUE_GROUPS: readonly [RkDue['group'], string][] = [['unconfirmed', 'Unconfirmed'], ['next', 'Next 14 days'], ['later', 'Later'], ['past', 'Past 30 days']];
-const RK_CAT_DATES = 6;
-const RK_DETAIL_DATES = 200;      // as backend/risk.py LIMIT_MAX: the most dates a risk's page read holds          // a live risk shows this many of its dates; the rest are on its page
+const RK_CAT_DATES = 6;           // a live risk shows this many of its dates; the rest are on its page
+const RK_DETAIL_DATES = 200;      // as backend/risk.py LIMIT_MAX: the most dates a risk's page read holds
 const RK_POLL_MS = 3 * 60000;    // dates with no task send no event: the ones on screen are read again this often
 let RKP: RkPage | null = null;   // the page on screen: a late answer for a page left behind draws nothing
 let RK_RUN = 0;
@@ -97,7 +97,7 @@ function rkStart(tab: RkTab, slug: string): RkPage | null {
   // The same page with only its panel changed: keep what is drawn and open or close the panel.
   if (RKP && RKP.tab === tab && RKP.slug === slug && document.getElementById('rk-root')) { void rkSideSync(); return null; }
   rkDrop();
-  const page: RkPage = {run: ++RK_RUN, tab, slug, risks: [], rows: [], closed: [], detail: null, dates: [], loaded: false, offs: []};
+  const page: RkPage = {run: ++RK_RUN, tab, slug, risks: [], rows: [], closed: [], detail: null, dates: [], datesCap: RK_ALL_MAX, datesMore: false, loaded: false, offs: []};
   RKP = page;
   page.offs.push(liveOn('tasks', (e: {id?: unknown; task_id?: unknown; kinds?: unknown}) =>
     rkLiveTask(page, String(e.id || e.task_id || ''), Array.isArray(e.kinds) && e.kinds.includes('obligations'))));
@@ -153,7 +153,7 @@ async function pageRisk(tab: 'risks' | 'disputes' | 'obligations'): Promise<void
       for (const row of more.flat()) if (!page.rows.some(x => x.task.id === row.task.id)) page.rows.push(row);
       page.dates = (await Promise.all(page.risks.filter(r => r.level === 'live').map(r => rkDatesAll(r.key)))).flat();
     } else if (tab === 'obligations') {
-      page.dates = await rkDatesAll(null);
+      await rkTabDates(page);
     } else {
       // Every open dispute, so the count and the total are whole; the latest closed ones under them.
       const [open, closed] = await Promise.all([
@@ -183,16 +183,29 @@ async function rkAll(path: string): Promise<RkRow[]> {
   }
   return rows;
 }
-// Every page of the dates of one risk (by its key), or of every risk with null, up to RK_ALL_MAX.
-async function rkDatesAll(key: string | null): Promise<RkDue[]> {
-  const out: RkDue[] = [];
+// Every page of the dates of one risk (by its key), or of every risk with null, up to `cap`; `more` says some are left.
+async function rkDatesUpTo(key: string | null, cap: number): Promise<{dates: RkDue[]; more: boolean}> {
+  const dates: RkDue[] = [];
   let offset: number | null = 0;
-  while (offset !== null && out.length < RK_ALL_MAX) {
+  while (offset !== null && dates.length < cap) {
     const page: {obligations: RkDue[]; next_offset: number | null} = await get(`/v2/risk/obligations?${key ? `risk=${encodeURIComponent(key)}&` : ''}limit=200&offset=${offset}`, {fresh: true});
-    out.push(...page.obligations);
+    dates.push(...page.obligations);
     offset = page.next_offset;
   }
-  return out;
+  return {dates, more: offset !== null};
+}
+const rkDatesAll = async (key: string | null): Promise<RkDue[]> => (await rkDatesUpTo(key, RK_ALL_MAX)).dates;
+// Obligations' dates, as many as it shows: More raises the cap, and a re-read keeps it, so a live update never cuts the
+// list back.
+async function rkTabDates(page: RkPage): Promise<void> {
+  const read = await rkDatesUpTo(null, page.datesCap);
+  if (!rkLive(page.run)) return;
+  page.dates = read.dates; page.datesMore = read.more;
+}
+async function rkDatesMore(page: RkPage): Promise<void> {
+  page.datesCap += RK_ALL_MAX;
+  try { await rkTabDates(page); } catch (e) { toast(errorMessage(e, 'Something went wrong.'), true); return; }
+  if (rkLive(page.run)) rkDraw(page);
 }
 
 async function pageRiskOne(slug: string): Promise<void> {
@@ -233,7 +246,7 @@ function rkDraw(page: RkPage): void {
   const waiting = rkWaiting();
   if (page.tab === 'risks') body.innerHTML = rkRisksHTML(page.risks, page.rows, waiting, page.dates);
   else if (page.tab === 'disputes') body.innerHTML = rkDisputesHTML(page.rows, page.closed, waiting);
-  else if (page.tab === 'obligations') body.innerHTML = rkDatesHTML(page.dates);
+  else if (page.tab === 'obligations') body.innerHTML = rkDatesHTML(page.dates, page.datesMore);
   else if (page.detail) {
     if (document.querySelector('#rk-root .ph-t')?.textContent !== page.detail.risk.label || !document.querySelector('[data-rk-edit]') === page.detail.editable) rkOneHead(page.detail);
     body.innerHTML = rkOneHTML(page.detail, waiting, page.dates);
@@ -377,7 +390,7 @@ function rkDueHTML(d: RkDue, shape: 'tab' | 'cat' | 'one'): string {
     <span class="rk-bs">${esc(RK_BASIS[d.basis] || '')}</span>${proof}<span class="rk-os">${rkDueState(d)}</span>${more}</div>`;
 }
 // Obligations: Unconfirmed, Next 14 days, Later, Past 30 days, each under its label.
-function rkDatesHTML(dates: readonly RkDue[]): string {
+function rkDatesHTML(dates: readonly RkDue[], more = false): string {
   if (!dates.length) return '<div class="empty" data-rk-empty>No dates.</div>';
   const sorted = rkDueSort(dates);
   return `<div class="rk-table rk-dues" data-rk-dates>
@@ -387,7 +400,7 @@ function rkDatesHTML(dates: readonly RkDue[]): string {
         const rows = sorted.filter(d => d.group === g);
         return rows.length ? `<div class="rk-lbl" data-rk-group="${g}">${label}</div>${rows.map(d => rkDueHTML(d, 'tab')).join('')}` : '';
       }).join('')}
-    </div>`;
+    </div>${more ? '<button type="button" class="ghost small rk-next" data-rk-dates-more>More</button>' : ''}`;
 }
 
 function rkBind(page: RkPage): void {
@@ -399,6 +412,7 @@ function rkBind(page: RkPage): void {
     const facts = at.closest<HTMLElement>('[data-rk-matter]');
     if (facts) { ev.preventDefault(); location.hash = rkWithAll({matter: facts.dataset['rkMatter'] || '', due: '', on: ''}); return; }
     if (at.closest('[data-rk-next]')) { void rkMore(page); return; }
+    if (at.closest('[data-rk-dates-more]')) { void rkDatesMore(page); return; }
     // A date's row, or its ⋯, opens it in the panel; its proof link opens the proof.
     const due = at.closest<HTMLElement>('[data-rk-due]');
     if (due && !at.closest('a')) { location.hash = rkWithAll({due: due.dataset['rkDue'] || '', on: due.dataset['rkOn'] || '', matter: ''}); return; }
@@ -500,7 +514,7 @@ function rkKeyOf(page: RkPage, id: string): string {
 async function rkDatesFor(page: RkPage, risks: ReadonlyMap<string, string>): Promise<void> {
   // Obligations lists every date: one read of them all keeps each date's full list of risks.
   if (page.tab === 'obligations') {
-    try { const all = await rkDatesAll(null); if (rkLive(page.run)) page.dates = all; } catch { /* unread: as they were */ }
+    try { await rkTabDates(page); } catch { /* unread: as they were */ }
     return;
   }
   const shown = [...risks].filter(([id]) => (page.tab === 'risks' && page.risks.some(r => r.id === id && r.level === 'live'))
@@ -538,9 +552,8 @@ async function rkPoll(page: RkPage): Promise<void> {
       if (!rkLive(page.run)) return;
       page.risks = risks; page.dates = dates;
     } else if (page.tab === 'obligations') {
-      const dates = await rkDatesAll(null);
+      await rkTabDates(page);
       if (!rkLive(page.run)) return;
-      page.dates = dates;
     } else if (page.tab === 'one' && page.detail) {
       const dates = await rkDatesAll(page.detail.risk.key);
       if (!rkLive(page.run) || !page.detail) return;
@@ -777,12 +790,32 @@ function rkFormHTML(m: RkMatter | null, close: string): string {
       <label><span>Kind</span><select name="kind"><option value="">—</option>${RK_KINDS.map(([k, w]) => `<option value="${k}"${m?.kind === k ? ' selected' : ''}>${w}</option>`).join('')}</select></label>
       <label><span>Party</span><span class="rk-party"><input name="party_q" type="search" autocomplete="off" placeholder="Contacts" aria-label="Party" value="${esc(m?.party?.name || '')}">
         <input name="party" type="hidden" value="${esc(m?.party_entity_id || '')}"><span class="rk-found" data-rk-found hidden></span></span></label>
+      <label><span>Product</span><select name="product"><option value="">—</option>${m?.product ? rkOption(m.product, m.product.id) : ''}</select></label>
       <label><span>Amount</span><span class="rk-amt"><input name="amount" inputmode="decimal" autocomplete="off" aria-label="Amount" value="${esc(amount)}">
         <input name="currency" maxlength="3" autocomplete="off" aria-label="Currency" value="${esc((m?.currency || 'USD').toUpperCase())}"></span></label>
       <label><span>Forum</span><input name="forum" maxlength="200" autocomplete="off" value="${esc(m?.forum || '')}"></label>
       <p class="rk-err" data-error hidden></p>
       <div class="rk-foot"><a class="btn ghost" href="${esc(close)}">Cancel</a><button type="submit" class="primary">Save</button></div>
     </form>`;
+}
+const rkOption = (o: {id: string; name: string}, chosen: string): string =>
+  `<option value="${esc(o.id)}"${o.id === chosen ? ' selected' : ''}>${esc(o.name)}</option>`;
+// The Product choices: our products, read when the form opens. Until then (or if they cannot be read) the select holds
+// the matter's own product, so a save never clears it unasked.
+async function rkProducts(form: HTMLFormElement, m: RkMatter | null, run: number): Promise<void> {
+  const pick = form.querySelector<HTMLSelectElement>('[name=product]');
+  if (!pick) return;
+  let list: {id: string; name: string}[];
+  try { list = (await get<{products: {id: string; name: string}[]}>('/v2/products', {fresh: true})).products; } catch {
+    // An unread list says so, so an empty select is not taken for no products; the other facts still save.
+    const err = form.querySelector<HTMLElement>('[data-error]');
+    if (err && rkLive(run) && pick.isConnected) { err.textContent = 'Products could not be read.'; err.hidden = false; }
+    return;
+  }
+  if (!rkLive(run) || !pick.isConnected) return;
+  const chosen = pick.value, own = m?.product;
+  const extra = own && !list.some(p => p.id === own.id) ? [own] : [];
+  pick.innerHTML = '<option value="">—</option>' + [...list, ...extra].map(p => rkOption(p, chosen)).join('');
 }
 // Minor units from what was typed ("1,240.50" is 124050), or null for a blank, or NaN for anything else.
 function rkMinor(typed: string): number | null {
@@ -796,6 +829,7 @@ function rkFormBind(side: HTMLElement, tid: string, m: RkMatter | null, run: num
   const err = side.querySelector<HTMLElement>('[data-error]'), found = side.querySelector<HTMLElement>('[data-rk-found]');
   if (!form || !err || !found) return;
   const q = form.querySelector<HTMLInputElement>('[name=party_q]'), pid = form.querySelector<HTMLInputElement>('[name=party]');
+  void rkProducts(form, m, run);
   let ask = 0, timer: ReturnType<typeof setTimeout> | null = null;
   q?.addEventListener('input', () => {
     if (pid) pid.value = '';
@@ -829,12 +863,13 @@ function rkFormBind(side: HTMLElement, tid: string, m: RkMatter | null, run: num
     if (amount !== null && !/^[A-Z]{3}$/.test(currency)) return fail('Currency is three letters.');
     if (text('party_q') && !text('party')) return fail('Pick a party from Contacts.');
     // Only the facts that changed: a party the viewer may not see reads as none, and saving another fact keeps it.
-    const was = {kind: m?.kind || '', party: m?.party_entity_id || '', amount: m?.amount ?? null, currency: (m?.currency || '').toUpperCase(), forum: m?.forum || ''};
+    const was = {kind: m?.kind || '', party: m?.party_entity_id || '', amount: m?.amount ?? null, currency: (m?.currency || '').toUpperCase(), forum: m?.forum || '', product: m?.product_id || ''};
     const body: Record<string, unknown> = {};
     if (text('kind') !== was.kind) body['kind'] = text('kind') || null;
     if (text('party') !== was.party && (text('party') || text('party_q') !== (m?.party?.name || ''))) body['party_entity_id'] = text('party') || null;
     if (amount !== was.amount || (amount !== null && currency !== was.currency)) { body['amount'] = amount; body['currency'] = amount === null ? null : currency; }
     if (text('forum') !== was.forum) body['forum'] = text('forum') || null;
+    if (text('product') !== was.product) body['product_id'] = text('product') || null;
     if (!Object.keys(body).length) { location.hash = rkWith('matter', ''); return; }
     if (m) body['version'] = m.version;
     const go = form.querySelector<HTMLButtonElement>('[type=submit]');

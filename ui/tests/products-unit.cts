@@ -8,7 +8,7 @@ const path: typeof import('node:path') = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../../build/ui/app/products.js'), 'utf8');
 const esc = (s: unknown): string => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 const context = vm.createContext({
-  esc, API: '/api', PRODUCTS_ROUTE: '#/products',
+  esc, API: '/api', PRODUCTS_ROUTE: '#/products', RISK_ROUTE: '#/risk',
   pageHref: (id: string) => '#/pages/' + id,
   actorLabel: (actor: string) => actor === 'human:ana' ? 'Ana' : actor,
   errorMessage: (_e: unknown, fallback: string) => fallback,
@@ -42,7 +42,7 @@ const risky = prTable([
   product({key: 'app'}),
 ]);
 assert.deepEqual(heads(risky), ['Name', 'Risks', 'Matters']);
-assert.match(risky, /data-label="Risks">Supplier &#60;recall&#62;</, 'a risk is its name, escaped');
+assert.match(risky, /data-label="Risks"><a href="#\/risk\/r\/supplier-recall">Supplier &#60;recall&#62;<\/a></, 'a risk opens its page, its name escaped');
 assert.match(risky, />2 open</);
 assert.deepEqual(heads(prTable([product({open_matters: 0, risks: []})])), ['Name'], 'no risks and no open matters: no columns');
 console.log('products-unit: ok');
