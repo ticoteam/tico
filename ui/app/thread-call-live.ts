@@ -1,12 +1,55 @@
 /* ui/app/thread-call-live.ts — In a Tico Meet call: joining it, the LiveKit room, the call bar, leaving and ending.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
-   A page part (ui/parts.json): it loads on the first join, so a cold open of Home does not download it (P05b). The call
-   state (CALL, CALL_GEN, CALL_JOINS), the header's phone button, Start and leaving the page stay in ui/app/thread-call.ts
-   with Home. The meeting window (ui/app/call-window.ts) draws the same call: its screen box takes a shared screen, and
-   each change here redraws it (callWindowDraw). What shows on the stage (a shared screen or a Tico file) is one record
+   The thread-call-live part (ui/parts.json) loads on the first Start or Join. The header's phone button and the
+   state needed to cancel a call when the page is hidden live in ui/app/thread-call.ts. The meeting window
+   (ui/app/call-window.ts) draws the same call: its screen box takes a shared screen, and each change here redraws it
+   (callWindowDraw). What shows on the stage (a shared screen or a Tico file) is one record
    on the call, the call view's `stage` (docs/meet.md, Sharing): one thing at a time, the newest write. */
 'use strict';
 
+// Tokens last five minutes; a fresh one a minute early keeps a slow answer from dropping the call.
+const CALL_REFRESH_MS = 4 * 60 * 1000;
+// A stalled leave must give up so a later Join can take its turn.
+const CALL_LEAVE_TIMEOUT_MS = 5000;
+// Call id -> joins of it still on their way, so a cancelled Start call never gives back a seat a Join has taken.
+const CALL_JOINING = new Map<string, number>();
+// Call id -> all leaves still on their way, so a rejoin cannot get ahead of cleanup of its previous seat.
+const CALL_LEAVING = new Map<string, Promise<void>>();
+// Start's seat waits for the last Join to settle: a cancelled or failed Join still owes it back.
+// Any leave settles it too, so the last Join cannot give it back twice.
+const CALL_OWED = new Set<string>();
+// A leave stays settled until the last Join finishes, including for a Start response still on its way.
+const CALL_SETTLED = new Set<string>();
+// Named here so scripts/build-icon-font.py keeps them in the icon subset.
+const CALL_ICONS = {mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', bot: 'smart_toy', leave: 'call_end',
+  window: 'open_in_new'};
+// The call's Tico voice in the LiveKit room (backend/call_media.py RECORDER_PREFIX): never shown as a person.
+const CALL_VOICE_PREFIX = 'tico-recorder-';
+
+const callMicAvailable = (): boolean => typeof navigator.mediaDevices?.getUserMedia === 'function';
+const callShareable = (): boolean =>
+  !window.ticoScreenCaptureUnavailable && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
+function callSeatSettled(id: string): void {
+  CALL_OWED.delete(id);
+  if (CALL_JOINING.has(id)) CALL_SETTLED.add(id);
+}
+function callPostLeave(id: string, opts: {keepalive?: boolean} = {}): Promise<void> {
+  const leave: Promise<unknown> = post(callPath(id) + '/leave', {}, undefined,
+    {...opts, timeout: window.__callLeaveTimeoutMs ?? CALL_LEAVE_TIMEOUT_MS}).catch((e: unknown) => {
+    // Every leave is a new one: a kept request id would make the next leave (after a rejoin) replay this one.
+    const signature = isErrorRecord(e) ? e.signature : undefined;
+    if (typeof signature === 'string') pendingWrites.delete(signature);
+  });
+  const pending: Promise<void> = Promise.all([CALL_LEAVING.get(id), leave]).then(() => {
+    if (CALL_LEAVING.get(id) === pending) CALL_LEAVING.delete(id);
+  });
+  CALL_LEAVING.set(id, pending);
+  return pending;
+}
+function callSeatLeave(id: string): void {
+  callSeatSettled(id);
+  void callPostLeave(id, {keepalive: true});
+}
 // `gen` is the join's number: Start call takes it at the click, so the one number runs through the whole join.
 async function callJoin(threadId: string, call: CallRecord, title: string, gen = ++CALL_GEN, timing?: CallStartTiming): Promise<void> {
   CALL_JOINS++;

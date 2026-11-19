@@ -85,79 +85,6 @@ interface CallState {
   stageN: number; staging: number; reconnecting: boolean;
 }
 
-type CallStartMark = 'click' | 'created' | 'window-opened' | 'boot-done' | 'token' | 'connected' | 'mic-published' | 'first-remote';
-interface CallStartTiming {
-  marks: Partial<Record<CallStartMark, number>>;
-  id?: string;
-  timer?: number;
-  reported?: boolean;
-  membersUnavailable?: true;
-}
-const CALL_START_KEY = 'tico.call-start';
-const CALL_START_MAX_AGE = 600_000;
-const CALL_START_MARKS: CallStartMark[] = ['click', 'created', 'window-opened', 'boot-done', 'token', 'connected', 'mic-published', 'first-remote'];
-type CallStartHandoff = [id: string, click: number, created: number, opened: number, membersUnavailable?: true];
-const CALL_MEMBERS_WARNING = 'Could not check for a bot. Tap its face to add it.';
-
-function callStartMark(timing: CallStartTiming | undefined, mark: CallStartMark): void {
-  if (!timing || timing.marks[mark] !== undefined) return;
-  const at = performance.now();
-  timing.marks[mark] = performance.timeOrigin + at;
-  performance.mark('tico:call-start:' + mark);
-  if (timing.marks['mic-published'] !== undefined && timing.marks['first-remote'] !== undefined) callStartReport(timing);
-}
-function callStartTiming(): CallStartTiming {
-  const timing: CallStartTiming = {marks: {}};
-  callStartMark(timing, 'click');
-  return timing;
-}
-// The browser's new tab and the desktop webview have their own clocks. Use their common time origin conversion.
-// Reading a handoff consumes it so a reload cannot reuse its timing or replay the warning.
-function callStartHandoffs(): CallStartHandoff[] {
-  const rows = JSON.parse(localStorage.getItem(CALL_START_KEY) || '[]') as CallStartHandoff[];
-  const now = performance.timeOrigin + performance.now();
-  return rows.filter(([, click, created, opened]) =>
-    [click, created, opened].every(Number.isFinite)
-    && click >= now - CALL_START_MAX_AGE && created >= click && opened >= created && opened <= now);
-}
-function callStartSend(id: string, timing: CallStartTiming): void {
-  timing.id = id;
-  const {click, created, 'window-opened': opened} = timing.marks;
-  if (click === undefined || created === undefined || opened === undefined) return;
-  try {
-    const rows = callStartHandoffs().filter(([key]) => key !== id);
-    const row: CallStartHandoff = [id, click, created, opened];
-    if (timing.membersUnavailable) row.push(true);
-    localStorage.setItem(CALL_START_KEY, JSON.stringify([...rows.slice(-7), row]));
-  } catch { /* storage is optional for timing */ }
-}
-function callStartTake(id: string): CallStartTiming | undefined {
-  try {
-    const rows = callStartHandoffs();
-    const row = rows.find(([key]) => key === id);
-    if (!row) return undefined;
-    localStorage.setItem(CALL_START_KEY, JSON.stringify(rows.filter(([key]) => key !== id)));
-    const [, click, created, opened, membersUnavailable] = row;
-    return {id, marks: {click, created, 'window-opened': opened}, ...(membersUnavailable === true ? {membersUnavailable} : {})};
-  } catch { return undefined; }
-}
-function callStartReport(timing: CallStartTiming | undefined): void {
-  if (!timing || timing.reported) return;
-  timing.reported = true;
-  clearTimeout(timing.timer);
-  const click = timing.marks.click;
-  if (click === undefined) return;
-  const marks = Object.fromEntries(CALL_START_MARKS.map(mark => {
-    const at = timing.marks[mark];
-    return [mark, at === undefined ? null : Math.max(0, Math.round(at - click))];
-  }));
-  window.ticoCallStartTiming = marks;
-  console.info('[call-start] ' + JSON.stringify(marks));
-  if (timing.id && nativeHas('callStartTiming')) {
-    try { Promise.resolve(nativeHandler('callStartTiming')?.postMessage({call: timing.id, marks})).catch(() => {}); } catch { /* shell gone */ }
-  }
-}
-
 function callLib(): Promise<LivekitNamespace> {
   if (window.LivekitClient) return Promise.resolve(window.LivekitClient);
   CALL_LIB_LOAD ||= new Promise<LivekitNamespace>((ok, fail) => {
@@ -172,10 +99,6 @@ function callLib(): Promise<LivekitNamespace> {
 const callWindowJoining = (): boolean => location.hash.startsWith(CALL_ROUTE) && /[?&]join=1(?:&|$)/.test(location.hash);
 
 const CALL_LIB = '/vendor/livekit-client.umd.min.js';
-// Tokens last five minutes; a fresh one a minute early keeps a slow answer from dropping the call.
-const CALL_REFRESH_MS = 4 * 60 * 1000;
-// A stalled leave must give up so a later Join can take its turn.
-const CALL_LEAVE_TIMEOUT_MS = 5000;
 const CALL_THREADS = new Map<string, CallThreadInfo>();
 let CALL: CallState | null = null;
 let CALL_LIB_LOAD: Promise<LivekitNamespace> | null = null;
@@ -183,21 +106,6 @@ let CALL_LIB_LOAD: Promise<LivekitNamespace> | null = null;
 let CALL_GEN = 0;
 // Joins on their way (asked for, not yet in the call or given up).
 let CALL_JOINS = 0;
-// Call id -> joins of it still on their way, so a cancelled Start call never gives back a seat a Join has taken.
-const CALL_JOINING = new Map<string, number>();
-// Call id -> all leaves still on their way, so a rejoin cannot get ahead of cleanup of its previous seat.
-const CALL_LEAVING = new Map<string, Promise<void>>();
-// Start's seat waits for the last Join to settle: a cancelled or failed Join still owes it back.
-// Any leave settles it too, so the last Join cannot give it back twice.
-const CALL_OWED = new Set<string>();
-// A leave stays settled until the last Join finishes, including for a Start response still on its way.
-const CALL_SETTLED = new Set<string>();
-// Named here so scripts/build-icon-font.py keeps them in the icon subset.
-const CALL_ICONS = {mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', bot: 'smart_toy', leave: 'call_end',
-  window: 'open_in_new', more: 'expand_more'};
-// The call's Tico voice in the LiveKit room (backend/call_media.py RECORDER_PREFIX): never shown as a person.
-const CALL_VOICE_PREFIX = 'tico-recorder-';
-
 // body.error of a failed call request: its code when it is an object, or the message string itself. '' when there is none.
 function callCode(e: unknown): string {
   if (!isErrorRecord(e) || !isErrorRecord(e.body)) return '';
@@ -206,33 +114,9 @@ function callCode(e: unknown): string {
   return typeof detail === 'string' ? detail : '';
 }
 const callPath = (id: string) => '/v2/calls/' + encodeURIComponent(id);
-const callMicAvailable = (): boolean => typeof navigator.mediaDevices?.getUserMedia === 'function';
-const callShareable = (): boolean =>
-  !window.ticoScreenCaptureUnavailable && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
 // Show the API's message when it answered the request. Browser, network and media exceptions get the action's message.
 const callErrorMessage = (e: unknown, fallback: string): string =>
   isErrorRecord(e) && 'body' in e && errorStatus(e) ? errorMessage(e, fallback) : fallback;
-function callSeatSettled(id: string): void {
-  CALL_OWED.delete(id);
-  if (CALL_JOINING.has(id)) CALL_SETTLED.add(id);
-}
-function callPostLeave(id: string, opts: {keepalive?: boolean} = {}): Promise<void> {
-  const leave: Promise<unknown> = post(callPath(id) + '/leave', {}, undefined,
-    {...opts, timeout: window.__callLeaveTimeoutMs ?? CALL_LEAVE_TIMEOUT_MS}).catch((e: unknown) => {
-    // Every leave is a new one: a kept request id would make the next leave (after a rejoin) replay this one.
-    const signature = isErrorRecord(e) ? e.signature : undefined;
-    if (typeof signature === 'string') pendingWrites.delete(signature);
-  });
-  const pending: Promise<void> = Promise.all([CALL_LEAVING.get(id), leave]).then(() => {
-    if (CALL_LEAVING.get(id) === pending) CALL_LEAVING.delete(id);
-  });
-  CALL_LEAVING.set(id, pending);
-  return pending;
-}
-function callSeatLeave(id: string): void {
-  callSeatSettled(id);
-  void callPostLeave(id, {keepalive: true});
-}
 function callViewsDraw(threadId: string): void { for (const v of THV_VIEWS) if (v.id === threadId && !v.gone) thvDraw(v); }
 function callNoted(threadId: string, e: unknown): void {
   if (errorStatus(e) === 503) CALL_THREADS.set(threadId, {...CALL_THREADS.get(threadId), off: true});
@@ -283,7 +167,7 @@ function callHeadHTML(view: ThvView): string {
   // Tico Meet is every call's default; a Google Meet is asked for by name, from the phone's menu.
   const meet = info.providers?.includes('google_meet') && info.providers[0] !== 'google_meet';
   return `<button type="button" class="thv-call" data-call="start" aria-label="Start call" title="Call">${CALL_SVG}</button>${
-    meet ? `<button type="button" class="thv-call thv-call-more" data-call="more" aria-label="More ways to call" title="More" aria-haspopup="menu"><span class="nav-icon" aria-hidden="true">${CALL_ICONS.more}</span></button>` : ''}`;
+    meet ? `<button type="button" class="thv-call thv-call-more" data-call="more" aria-label="More ways to call" title="More" aria-haspopup="menu"><span class="nav-icon" aria-hidden="true">expand_more</span></button>` : ''}`;
 }
 // Whether a bot can be called here: only Tico Meet calls take bots. `providers` is a thread's list answer (what the viewer
 // could start); without one, the server's config says whether it runs Tico Meet.
@@ -297,13 +181,9 @@ const callPhone = (): boolean => matchMedia('(max-width: 760px)').matches;
 // opened to join: a plain visit to its address shows Join instead. This tab's own seat in that call, if it has one,
 // moves to the window: its media stops here without a leave, and the window joins. False when no window could open (a
 // blocked pop-up): the caller joins here instead.
-function callWindowOpen(call: CallRecord, tab: Window | null = null, timing?: CallStartTiming): boolean {
+function callWindowOpen(call: CallRecord, tab: Window | null = null): boolean {
   const hash = CALL_ROUTE + encodeURIComponent(call.id) + '?join=1', name = 'tico-call-' + call.id;
   const close = (): void => { try { tab?.close(); } catch {} };
-  if (timing) {
-    callStartMark(timing, 'window-opened');
-    callStartSend(call.id, timing);
-  }
   if (callPhone() || location.hash.startsWith(CALL_ROUTE)) { close(); location.hash = hash; return true; }
   const native = (window.ticoNativeFeatures || []).includes('callWindow') && nativeHandler('callWindow');
   let opened = false;
@@ -337,73 +217,22 @@ async function callAction(view: ThvView, kind: string | undefined, from?: HTMLEl
   if (kind === 'join' && live?.provider === 'google_meet') { await callMeetJoin(live); return; }
   // A Tico Meet call opens its window, which joins it.
   if (kind === 'join' && live && callWindowOpen(live)) return;
-  // Start: a blank tab opens now, in the click and before anything is awaited, so a pop-up blocker lets it through. It
-  // goes to the call's window (or the Meet) once the start answers, and closes when the start fails. A phone opens a tab
-  // only for a Google Meet (its own call page is this tab). A call in a DM with one bot is a voice call with that bot,
-  // always Tico Meet.
-  const starting = kind === 'start' || kind === 'meet';
-  const timing = starting ? callStartTiming() : undefined;
-  const memberThread = kind === 'start' && view.thread?.audience === 'members' && !view.thread.parent_id;
-  let bot = kind === 'start' ? callDmBot(view.thread) || (memberThread ? callMemberBot(view.memberList, view.memberMore) : '') : '';
-  const meet = kind === 'meet' || (!bot && info.providers?.[0] === 'google_meet');
-  let tab = starting && (meet || !callPhone()) ? callTabOpen() : null;
-  const tabClose = (): void => { try { tab?.close(); } catch {} tab = null; };
-  // Counted as a join on its way from the click, so a page hidden while the call is being made says it is in one,
-  // and never joins the call once it is made.
+  if (kind === 'start' || kind === 'meet') {
+    const memberThread = kind === 'start' && view.thread?.audience === 'members' && !view.thread.parent_id;
+    const bot = kind === 'start' ? callDmBot(view.thread) || (memberThread ? callMemberBot(view.memberList, view.memberMore) : '') : '';
+    const meet = kind === 'meet' || (!bot && info.providers?.[0] === 'google_meet');
+    await callStartRun(attempt => callStartThread(view, id, kind, bot, memberThread, attempt), meet || !callPhone());
+    return;
+  }
   const gen = ++CALL_GEN;
   CALL_JOINS++;
   try {
-    let call: CallRecord | null | undefined = info.call;
-    if (starting) {
-      if (memberThread && !view.memberList) {
-        const path = thvPath(id) + '/members?limit=3';
-        type Members = {members?: {actor: string}[]; next_cursor?: string | null};
-        const members = await get<Members>(path)
-          .catch(() => gen === CALL_GEN ? get<Members>(path, {fresh: true}) : null)
-          .catch(() => null);
-        if (gen !== CALL_GEN) return;
-        bot = callMemberBot(members?.members, !!members?.next_cursor);
-        if (!members && timing) timing.membersUnavailable = true;
-      }
-      const made: CallRecord | null = await post(`/v2/threads/${encodeURIComponent(id)}/calls`,
-        bot ? {provider: 'tico', bots: [bot]} : {provider: kind === 'meet' ? 'google_meet' : 'auto'});
-      call = made?.call || made;
-      if (call?.id) callStartMark(timing, 'created');
-      if (call?.id && gen === CALL_GEN && timing?.membersUnavailable) {
-        toast(call.provider === 'google_meet' ? 'Could not check for a bot before starting the call.' : CALL_MEMBERS_WARNING, true);
-      }
-      if (call?.provider === 'google_meet') {
-        CALL_THREADS.set(id, {...CALL_THREADS.get(id), call});
-        const opened = tab; tab = null;
-        callMeetLanded(call, opened, call.join_url || '');
-        return;
-      }
-      if (call?.id && gen === CALL_GEN) {
-        const opened = tab; tab = null;
-        // The window joins it; the header here is the live call's pill until the window's join shows.
-        if (callWindowOpen(call, opened, timing)) { CALL_THREADS.set(id, {...CALL_THREADS.get(id), call}); callViewKeep(call); return; }
-        callStartTake(call.id);
-      }
-      tabClose();
-    }
-    if (gen !== CALL_GEN) {
-      // Hidden or overtaken while the call was being made: the server already counts this person in it, so the seat goes
-      // back, unless a Join of the same call (from the header the call's start redrew) is in it or on its way.
-      if (starting && call?.id) {
-        if (CALL_JOINING.get(call.id)) {
-          if (!CALL_SETTLED.has(call.id)) CALL_OWED.add(call.id);
-        } else if (CALL?.id !== call.id) callSeatLeave(call.id);
-      }
-      return;
-    }
-    if (call?.id) await callJoin(id, call, threadTitle(view.thread), gen, timing);
+    if (info.call?.id) await callJoin(id, info.call, threadTitle(view.thread), gen);
   } catch (e) {
-    tabClose();
     if (gen !== CALL_GEN) return;
     if (callCode(e) === 'call_in_progress') { void callLoad(view); toast('A call already started here'); return; }
     callNoted(id, e);
   } finally {
-    tabClose();
     CALL_JOINS--;
   }
 }
@@ -420,76 +249,25 @@ function callMemberBot(members: {actor: string}[] | null | undefined, more: bool
   if (more || members?.length !== 2 || !members.some(m => m.actor === myActor())) return '';
   return members.find(m => m.actor.startsWith('bot:'))?.actor.slice(4) || '';
 }
-// Call a bot from anywhere (the org chart): the viewer's DM with it (made when there is none), a Tico Meet call there
-// with the bot in it, joined here. A live call in that DM is joined instead.
-async function callBot(slug: string): Promise<void> {
-  const timing = callStartTiming();
-  const gen = ++CALL_GEN;
+interface CallStartAttempt { gen: number; tab: Window | null; timing: CallStartTiming; }
+
+// The click can open a blank tab before an awaited part load loses browser activation. Mark it as a pending join
+// straight away so hiding the page can cancel it even while the code is loading.
+async function callStartRun<T>(run: (attempt: CallStartAttempt) => Promise<T>, openTab = false): Promise<T> {
+  const click = performance.mark('tico:call-start:click').startTime;
+  const timing = {marks: {click: performance.timeOrigin + click}};
+  const attempt = {gen: ++CALL_GEN, tab: openTab ? callTabOpen() : null, timing};
   CALL_JOINS++;
-  try {
-    const r = await get<ThvThread & {thread?: ThvThread}>('/v2/threads/dm?with=' + encodeURIComponent('bot:' + slug), {fresh: true});
-    const t = (r?.thread !== undefined ? r.thread : r) || null;
-    if (!t?.id || gen !== CALL_GEN) return;
-    let call: CallRecord | null | undefined, started = false;
-    try {
-      const made: CallRecord | null = await post(`/v2/threads/${encodeURIComponent(t.id)}/calls`, {provider: 'tico', bots: [slug]});
-      call = made?.call || made; started = true;
-      if (call?.id) callStartMark(timing, 'created');
-    } catch (e) {
-      if (callCode(e) !== 'call_in_progress') throw e;
-      const list = await get<CallListReply>(`/v2/threads/${encodeURIComponent(t.id)}/calls?limit=1`, {fresh: true});
-      call = (list.calls || []).find(c => c.state === 'live');
-    }
-    if (!call?.id) return;
-    if (call.provider === 'google_meet') { await callMeetJoin(call); return; }
-    // Hidden or overtaken while the call was being made: the seat the start took goes back.
-    if (gen !== CALL_GEN) { if (started && CALL?.id !== call.id) callSeatLeave(call.id); return; }
-    await callJoin(t.id, call, threadTitle(t), gen, started ? timing : undefined);
-  } catch (e) {
-    if (gen === CALL_GEN) toast(callErrorMessage(e, 'Could not call'), true);
-  } finally {
+  try { return await run(attempt); } finally {
+    try { attempt.tab?.close(); } catch {}
     CALL_JOINS--;
   }
 }
-// Call teammates from anywhere (the Meetings page's Call now): one teammate is the viewer's DM with them (made when there
-// is none), more are a new thread with them all, named for the call's title, else for who is in it (a group needs a
-// name). A Tico Meet call starts there with the bots among them, and its meeting window opens and joins it, as the
-// header's Start does: the blank tab opens now, in the click, before anything is awaited. A live call already in that
-// DM is joined instead. Resolves to whether a call opened; a refusal is thrown for the caller to show.
+function callBot(slug: string): Promise<void> {
+  return callStartRun(attempt => callStartBot(slug, attempt));
+}
 async function callTeammates(actors: string[], title = ''): Promise<boolean> {
-  const timing = callStartTiming();
-  const bots = actors.filter(a => a.startsWith('bot:')).map(a => a.slice(4));
-  let tab = callPhone() ? null : callTabOpen();
-  const tabClose = (): void => { try { tab?.close(); } catch {} tab = null; };
-  const gen = ++CALL_GEN;
-  CALL_JOINS++;
-  try {
-    const t = await callThreadWith(actors, title);
-    if (!t?.id || gen !== CALL_GEN) return false;
-    let call: CallRecord | null | undefined, started = false;
-    try {
-      const made: CallRecord | null = await post(`/v2/threads/${encodeURIComponent(t.id)}/calls`,
-        {provider: 'tico', ...(bots.length ? {bots} : {}), ...(title ? {title} : {})});
-      call = made?.call || made; started = true;
-      if (call?.id) callStartMark(timing, 'created');
-    } catch (e) {
-      if (callCode(e) !== 'call_in_progress') throw e;
-      const list = await get<CallListReply>(`/v2/threads/${encodeURIComponent(t.id)}/calls?limit=1`, {fresh: true});
-      call = (list.calls || []).find(c => c.state === 'live');
-    }
-    if (!call?.id) return false;
-    if (call.provider === 'google_meet') { tabClose(); await callMeetJoin(call); return true; }
-    // Hidden or overtaken while the call was being made: the seat the start took goes back.
-    if (gen !== CALL_GEN) { if (started && CALL?.id !== call.id) callSeatLeave(call.id); return false; }
-    const opened = tab; tab = null;
-    if (callWindowOpen(call, opened, started ? timing : undefined)) { callViewKeep(call); return true; }
-    if (started) callStartTake(call.id);
-    await callJoin(t.id, call, threadTitle(t), gen, started ? timing : undefined);
-    return true;
-  } finally {
-    tabClose();
-    CALL_JOINS--;
-  }
+  return (await callStartRun(attempt => callStartTeammates(actors, title, attempt), !callPhone())) ?? false;
 }
 
 // The thread a call with these teammates goes in: one teammate is the viewer's DM with them, more are a new thread.
@@ -690,8 +468,7 @@ function callMeetLanded(call: CallRecord, tab: Window | null, url: string): void
   callTabGo(tab, url || call.join_url || call.meet_uri || '');
 }
 // Join a Google Meet call: the server notes the open and answers its link (with the viewer's Google account).
-async function callMeetJoin(call: CallRecord): Promise<void> {
-  const tab = callTabOpen();
+async function callMeetJoin(call: CallRecord, tab = callTabOpen()): Promise<void> {
   try {
     const j: {call?: CallRecord; url?: string} | null = await post(callPath(call.id) + '/join', {});
     callMeetLanded({...call, ...(j?.call || {})}, tab, j?.url || call.join_url || '');
