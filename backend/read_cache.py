@@ -101,7 +101,7 @@ def one(c: Any, statement: str, args: Iterable[Any] = ()) -> Any:
     return values[key]
 
 
-def one_dict(c: Any, statement: str, args: Iterable[Any] = ()) -> dict[str, Any] | None:
+def one_dict(c: Any, statement: str, args: Iterable[Any] = ()) -> Any:  # dict | None; Any as hubdb._row was
     """`one` as a dict of the caller's own, or None for no row (hubdb._one). A stored row (sqlite3.Row) is turned into
     a dict once a snapshot and each caller gets a copy of that: a Row's values are plain (text, numbers, bytes, None),
     so a shallow copy is a whole one, and copying a dict costs a fraction of building one from a Row (a task's 43
