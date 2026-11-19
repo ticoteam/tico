@@ -1099,11 +1099,14 @@ def enrolled(c, execution, runner_id, key):
             lend_plans(c, execution, bot, runner_id, chooser, new=True)
 
 
-def left(c, key, runner_id):
-    """Machine `key`'s row stops naming computer `runner_id` (made again: `adopt`, or deleted for a Replace: `deleted`)
-    before the next one enrolls. Kept, newest first, so `replaced` still finds it when the bots set to run there are no
+def left(c, key):
+    """Machine `key`'s row is about to stop naming its computer (made again: `adopt`, or deleted for a Replace:
+    `deleted`) before the next one enrolls. Kept, newest first, so `replaced` still finds it when the bots set to run there are no
     longer assigned to it by then: otherwise the new computer gets only what the company lends, and a person's plans
     given to the old one are lost (Tico Team, 2026-11-18: Reviewer 1 and Reviewer 2 lost Chris's Claude set)."""
+    runner_id = (row(c, key) or {}).get("runner_id")
+    if not runner_id:
+        return
     earlier = were(c, key)
     value = json.dumps([runner_id, *(r for r in earlier if r != runner_id)][:REPLACES_KEPT])
     c.execute(
@@ -2056,10 +2059,10 @@ class Manager:
             c.execute(
                 "UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), current["runner_id"])
             )
-            left(c, key, current["runner_id"])
             c.execute(
                 "UPDATE cloud_machine_deletions SET runner_id=? WHERE machine_id=?", (current["runner_id"], old_id)
             )
+            left(c, key)
         c.execute(
             "DELETE FROM enrollments WHERE code_hash IN (SELECT code_hash FROM cloud_machine_codes "
             "WHERE bot=? AND replacement_for IS NOT ?)",
@@ -3047,7 +3050,7 @@ def deleted(c, current, actor, changed_by=None, details=None):
     fresh_runner = replacement_runner(c, key, current["machine_id"]) if current["machine_id"] else None
     if current["runner_id"] and current["runner_id"] != fresh_runner:
         c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), current["runner_id"]))
-        left(c, key, current["runner_id"])
+        left(c, key)
     c.execute(
         "DELETE FROM enrollments WHERE code_hash IN (SELECT code_hash FROM cloud_machine_codes "
         "WHERE bot=? AND (replacement_for IS NOT ? OR ? IS NULL))",
