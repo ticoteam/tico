@@ -3895,23 +3895,28 @@ def install_runner(app, store, execution):
                     execution.contact(c, who)
 
         def start():
-            touch()
+            # Only the read before the response: a due contact stamp waits for the write lock beside the stream (Beat),
+            # as every keepalive's does, not ahead of it.
             with store.read() as c:
-                return latest(c), runner_latest(c)
+                due = execution.contact(c, who, check=True)
+                return latest(c), runner_latest(c), due
 
         def poll(cursor):
             with store.read() as c:
                 return runner_read(c, who.runner_id, who.actor, cursor)
 
-        now_seq, runner_seq = await asyncio.to_thread(start)
+        now_seq, runner_seq, contact_due = await asyncio.to_thread(start)
         doorbell.observe(runner_seq)
         cursor = after if after is not None and after >= 0 else now_seq
         from . import runner_versions
 
+        every, beat = keepalive_seconds(store), Beat(touch)
+        if contact_due:
+            beat.start()  # before the response, so a client that leaves at once still leaves its contact
+
         async def generate():
             nonlocal cursor
             leave = doorbell.reader(store)
-            every, beat = keepalive_seconds(store), Beat(touch)
             try:
                 yield "retry: 1000\n\n"
                 yield _frame(

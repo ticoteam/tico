@@ -101,6 +101,33 @@ def test_a_quiet_stream_keeps_sending_keepalives_while_the_database_is_busy(api,
         holder.close()
 
 
+def test_a_stream_opens_while_the_database_is_busy_and_writes_its_contact_beside_it(api, live, monkeypatch):
+    # Opening reads the computer's row; a due contact stamp waits for the write lock beside the stream, not before it.
+    # Keepalives (which stamp too) are later than the wait below, so the opening's own stamp is the one seen.
+    from backend.tests.helpers.wait import wait_for
+
+    monkeypatch.setattr(E, "KEEPALIVE_SECONDS", 5)
+    computer = runner(api, label="A")
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=NULL WHERE runner_id=?", (computer["runner_id"],))
+    holder = sqlite3.connect(str(store.settings.db_path), isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        stream = live(computer["token"], path="/api/v2/runners/me/events")
+        stream.until(topic("ready"), timeout=3)
+    finally:
+        holder.rollback()
+        holder.close()
+
+    def stamped():
+        with store.read() as c:
+            row = c.execute("SELECT last_seen_at FROM runner_states WHERE runner_id=?", (computer["runner_id"],))
+            return (row.fetchone() or [None])[0]
+
+    wait_for(stamped, "the opening contact stamp once the lock was free", seconds=3)
+
+
 def test_keepalives_go_out_while_other_computers_changes_keep_ringing_the_bell(api, live, monkeypatch):
     # Every wait ends with a ring for a change this computer is not sent: only keepalives hold its stream open.
     computer = runner(api, label="A")
