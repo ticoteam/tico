@@ -642,7 +642,7 @@ def _bot_checks(c, settings=None):
                     BUG_FIX["queue_idle"],
                 )
             )
-    from .worktrees import current_error, supported, statuses
+    from .worktrees import current_error, finished_and_retired, supported, statuses
 
     if supported(c):
         for r in statuses(
@@ -652,10 +652,7 @@ def _bot_checks(c, settings=None):
                 "WHERE l.kind='worktree' AND l.state<>'removed'"
             ),
         ):
-            # A finished task needs no checkout: re-adding one on another computer helps nobody, and work left
-            # unpushed on a retired computer cannot be fetched either way. Reopening the task restores the
-            # checkout, and its retirement shows here again then.
-            if r["state"] == "retired" and r["task_status"] in ("done", "closed"):
+            if finished_and_retired(r):
                 continue
             error = current_error(r["state"], json.loads(r["detail"] or "{}"))
             if error:

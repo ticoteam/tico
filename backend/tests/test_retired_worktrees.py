@@ -108,20 +108,26 @@ def test_health_skips_a_retired_checkout_of_a_finished_task(prepared, status):
     leave_on_old_computer(api, tid)
 
     def flagged():
+        """Both readers: the maintenance worktree_error finding and the Health page's Task worktrees check, whose
+        warnings Check health files as findings of their own (maintenance_steps/check_health.py `_page_findings`)."""
         with api.app_state.store.read() as c:
-            return [
+            found = [
                 f
                 for f in maintenance_health.findings(c, api.app_state.store.settings)
                 if f['check_id'] == 'worktree_error' and 'retired computer' in f['detail']
             ]
+        page = api.get('/api/v2/health', headers=auth())
+        assert page.status_code == 200, page.text
+        check = next(x for x in page.json()['checks'] if x['id'] == 'worktrees')
+        return len(found), check['status'], 'retired computer' in check['summary']
 
-    assert len(flagged()) == 1
+    assert flagged() == (1, 'warn', True)
     with api.app_state.store.transaction() as c:
         end(c, tid, status)
-    assert flagged() == []
+    assert flagged() == (0, 'ok', False)
     with api.app_state.store.transaction() as c:
         end(c, tid, 'open')
-    assert len(flagged()) == 1
+    assert flagged() == (1, 'warn', True)
 
 
 def test_live_other_computer_and_unauthorized_bot_still_refused(prepared):
