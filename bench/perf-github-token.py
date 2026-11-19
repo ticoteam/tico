@@ -227,8 +227,49 @@ def main():
             scenario(api, gh, meter, "restart", "git", before=lambda: restart(api))
             scenario(api, gh, meter, "hit+load", "git", load=True)
             scenario(api, gh, meter, "rst+load", "git", before=lambda: restart(api), load=True)
+            explain(app.state.store)
     finally:
         shutil.rmtree(folder, ignore_errors=True)
+
+
+KEYS = (
+    "repositories-confirmed-missing",
+    "repository-creation-grants",
+    R.PRODUCT_GRANTS,
+    *(key for _, key, *_ in R.FLAGS),
+    *R.ALL_STORED.values(),
+    R.SELECTION,
+    R.MADE,
+    R.CHOSEN,
+    R.TAKEN,
+    R.CREATED_ON_GITHUB,
+)
+
+
+def explain(store):
+    """The plan and time of each statement this change adds or replaces, on the seeded database."""
+    one = "SELECT value FROM registry_metadata WHERE key=?"
+    many = "SELECT value,key FROM registry_metadata WHERE key IN (" + ",".join("?" * len(KEYS)) + ")"
+    with store.read() as c:
+        has = c.execute("SELECT 1 FROM sqlite_master WHERE name='github_installation_tokens'").fetchone()
+        cases = [
+            (f"old: {len(KEYS)} x " + one, lambda: [c.execute(one, (k,)).fetchall() for k in KEYS], one, KEYS[:1]),
+            ("new: " + many, lambda: c.execute(many, KEYS).fetchall(), many, KEYS),
+        ]
+        if has:
+            kept = "SELECT expires_at,nonce,ciphertext FROM github_installation_tokens WHERE scope=?"
+            scope = c.execute("SELECT scope FROM github_installation_tokens LIMIT 1").fetchone()
+            args = (scope[0] if scope else "x",)
+            cases.append(("new: " + kept, lambda: c.execute(kept, args).fetchall(), kept, args))
+            prune = "SELECT count(*) FROM github_installation_tokens WHERE expires_at<?"  # the prune's scan
+            cases.append(("new: " + prune, lambda: c.execute(prune, ("0",)).fetchall(), prune, ("0",)))
+            print("kept tokens:", c.execute("SELECT count(*) FROM github_installation_tokens").fetchone()[0], "rows")
+        for label, run, sql, args in cases:
+            plan = " / ".join(r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql, args))
+            t = time.perf_counter()
+            for _ in range(2000):
+                run()
+            print(f"{label[:90]:90s} {(time.perf_counter() - t) / 2000 * 1000:.4f} ms  [{plan}]")
 
 
 def restart_all(api):
