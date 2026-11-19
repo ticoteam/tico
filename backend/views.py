@@ -1889,7 +1889,8 @@ def _mentions(c, who):
     privacy.prime_messages(c, list(stored.values()))
     from . import threads
 
-    threads.prime_members(c, who, [row["conversation_id"] for row in rows])
+    # Each row names its room's root already (open_mentions), so the rooms are not read again for it.
+    threads.prime_members(c, who, [row["conversation_id"] for row in rows], roots={row["root_id"] for row in rows})
     seen, out = set(), []
     for row in rows:
         if row["id"] in seen:
