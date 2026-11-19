@@ -277,10 +277,19 @@ def on_demand(store: Any, reader: str, at: str | None = None) -> Row:
     only compares and stores them. Working them out reads the ledger and bank feeds, seconds on a big company; inside
     the write it held the lock that long, so every other write (an email's preview, an OK) waited and answered `busy`."""
     now = at or H.now()
-    with store.read_transaction() as c:
-        lines = compute(c, reader, now)
+    for _ in range(2):
+        with store.read_transaction() as c:
+            lines = compute(c, reader, now)
+            seen, version = _row(c, reader), R.view_version(c)
+        with store.transaction() as c:
+            # Stored only as of the snapshot the lines came from: a grant revoked since (the reader may see less now) or
+            # a brief stored since (a turn start's, newer) means they are worked out again.
+            row = _row(c, reader)
+            if row == seen and R.view_version(c) == version:
+                return _save(c, reader, lines, fingerprint(lines), now, row, deliver=False)
+    # Moved under it twice: worked out under the write lock, as before.
     with store.transaction() as c:
-        return _save(c, reader, lines, fingerprint(lines), now, _row(c, reader), deliver=False)
+        return brief(c, reader, now)
 
 
 def for_turn(c: sqlite3.Connection, reader: str, at: str | None = None) -> Row | None:
