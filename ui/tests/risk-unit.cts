@@ -9,15 +9,19 @@ const path: typeof import('node:path') = require('node:path');
 const esc = (s: unknown): string => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 const context = vm.createContext({
   Intl, Date, Number, Math, Set, Map, URLSearchParams, encodeURIComponent,
-  document: {addEventListener: () => {}},
+  document: {addEventListener: () => {}, hidden: true, documentElement: {}},
+  setInterval: () => 0, requestAnimationFrame: () => 0, addEventListener: () => {}, matchMedia: () => ({matches: false}),
+  MutationObserver: class { observe() {} }, HTMLInputElement: class {},
   S: {v2: {needs: []}},
   RISK_ROUTE: '#/risk', RULES_ROUTE: '#/rules', DIR_ROUTE: '#/library/contacts',
   esc,
   needsMarkHTML: () => '<span class="needs-mark"></span>',
   actorAvatar: (id: string) => `<i data-face="${id}"></i>`,
-  dayWords: (v: string | null) => v ? 'Thu, Nov 19' : '',
 });
-vm.runInContext(fs.readFileSync(path.join(__dirname, '../../build/ui/app/risk.js'), 'utf8'), context);
+// The app's own date words (ui/app/format.ts dayWords): a risk's next date is a day (YYYY-MM-DD, from its obligations)
+// or a time (a task's due_at), and both read as the same local day.
+Object.defineProperty((context as {HTMLInputElement: {prototype: object}}).HTMLInputElement.prototype, 'value', {get: () => '', set: () => {}});
+for (const file of ['format.js', 'risk.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../../build/ui/app/', file), 'utf8'), context);
 const {rkMoney, rkClaimed, rkGroups, rkMinor, rkRisksHTML, rkDisputesHTML} = context;
 
 // Money: exact on a row, compact in a total, one total per currency, nothing when nothing is claimed.
@@ -51,7 +55,7 @@ const row = (id: string, riskKey: string, name: string, more: {days?: number; st
 const risks = [
   risk('theft', 'Customer theft claims', 'live', {open: 2, closed: 3, claimed: [{currency: 'USD', amount: 14_040_000}], has_rules: true, waits: true}),
   risk('pros', 'Pro disputes', 'open', {open: 1}),
-  risk('marks', 'Trademarks', 'quiet', {closed: 1, next_date: '2026-11-19'}),
+  risk('marks', 'Trademarks', 'quiet', {closed: 1, next_date: '2031-03-06'}),
   risk('privacy', 'Data privacy', 'quiet'),
 ];
 const g = rkGroups(risks);
@@ -72,10 +76,14 @@ assert.equal((live.match(/needs-mark/g) || []).length, 1);
 assert.match(live, /data-rk-task="t2"><span class="rk-mk"><span class="needs-mark">/);
 // Open and quiet: one line each, under a label; open names its parties, quiet its next date or what it closed.
 assert.match(html, /<div class="rk-lbl">Open<\/div>.*Pro disputes<\/span><span class="rk-x">Flores<\/span><span class="rk-c">1 open<\/span>/s);
-assert.match(html, /<div class="rk-lbl">Quiet<\/div>.*Trademarks<\/span><span class="rk-x">Thu, Nov 19<\/span><span class="rk-c">1 closed<\/span>/s);
+assert.match(html, /<div class="rk-lbl">Quiet<\/div>.*Trademarks<\/span><span class="rk-x">Thu, Mar 6, 2031<\/span><span class="rk-c">1 closed<\/span>/s);
 assert.match(html, /Data privacy<\/span><span class="rk-x"><\/span><span class="rk-c">None<\/span><span class="rk-r"><\/span>/, 'no rules, no icon');
 assert.equal((html.match(/rk-rules/g) || []).length, 1, 'the rules icon on the risk with rules alone');
 assert.match(rkRisksHTML([], [], new Set()), /No risks yet\./);
+// A day and a time on that day read alike, whichever shape the server sends.
+const quietOn = (next: string) => (rkRisksHTML([risk('q', 'Quiet one', 'quiet', {next_date: next})], [], new Set()) as string).match(/<span class="rk-x">([^<]*)</)?.[1];
+assert.equal(quietOn('2031-03-06'), 'Thu, Mar 6, 2031');
+assert.equal(quietOn('2031-03-06T12:00:00Z'), 'Thu, Mar 6, 2031');
 
 // Disputes: the count and the amount claimed head the columns; a closed matter is under Closed with no Next.
 const closed = [row('t9', 'pros', 'Maple', {status: 'done', amount: 95_000})];
