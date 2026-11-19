@@ -46,9 +46,10 @@ save the answers there with the date, and work on the defaults until they reply.
    `references/dunning-ladder.md`, "Failed card payments".)
 2. **Who do reminders come from?** Default: this bot, by name, from the company's billing mailbox, in a plain friendly
    voice. Run `tico email mailboxes` and `tico email policy --bot <your slug>` to see what you may send.
-3. **May reminders go out without a person's OK on each one?** Default: Tico's own setting. Out of the box each
-   reminder waits for a person's OK on its preview. Recommend: allow the 1, 7 and 30 day reminders and the pre-due
-   heads-up to send on their own, and keep an OK on the 60 day final notice.
+3. **May reminders go out without a person's OK on each one?** Out of the box the 1, 7 and 30 day reminders need no
+   Finance OK; they go out as the company's sending policy allows. The 60 and 90 day reminders and the final notice
+   wait for an OK. Recommend: set the sending policy so the early reminders and the pre-due heads-up send on their
+   own.
 4. **What consequences exist in your contracts?** Late fee, interest, pausing service, collections. Default: none. A
    reminder never mentions a consequence that is not written in the customer's contract and decided by the owner.
 5. **Who is handled by hand?** Default: no do-not-chase list. Key accounts (the five largest by revenue in the last 12

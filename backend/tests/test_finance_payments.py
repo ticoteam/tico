@@ -2714,7 +2714,7 @@ def test_a_finance_action_whose_wal_sync_fails_is_not_answered_as_done(api, monk
 
 def _finance_owner_pays(c):
     """The built-in Finance Owner as an install gives it: its default rights, an Everything view and the seeded
-    "a bot's payment asks a finance admin" rule (bookkeeper.ensure)."""
+    "a bot pays on its own up to $1,000" rule (bookkeeper.ensure)."""
     from backend import bookkeeper as BK
 
     FA.grant_defaults(c, BK.ACTOR, at=AT)
@@ -2723,9 +2723,10 @@ def _finance_owner_pays(c):
     return BK.ACTOR
 
 
-def test_the_finance_owners_payment_to_a_known_vendor_asks_a_finance_admin_and_is_sent_once_approved(books):
-    """Security condition for its default Everything view: a $50 payment to a vendor already paid, under every other
-    gate, still waits for a finance admin; once approved it is sent once."""
+def test_the_finance_owner_pays_a_known_vendor_up_to_the_limit_on_its_own_and_asks_above_it(books):
+    """Bots act by default: a $50 payment to a vendor already paid, inside budget, is made with nobody asked and sent
+    once. Above $1,000 the bots' rule asks a finance admin; while the company-wide "Payments over $1,000" rule is on,
+    the owner is the one asked (the higher approver wins)."""
     fake = FakeMercury()
     connect(books, fake)
     rid = _payee(books, fake)
@@ -2735,19 +2736,32 @@ def test_the_finance_owners_payment_to_a_known_vendor_asks_a_finance_admin_and_i
         first = act(c, OWNER, "payment_create", {**body, "amount": 1_000})
         assert first.status == "committed", first
         c.execute("UPDATE fin_payments SET status='settled' WHERE id=?", (first.result["payment_id"],))  # known now
-        asked = act(c, bot, "payment_create", {**body, "amount": 5_000})
-        assert (asked.status, asked.rule, asked.approver) == ("needs_approval", "rule:bot-payment", OWNER), asked
-        assert c.execute("SELECT count(*) FROM fin_payments WHERE created_by=?", (bot,)).fetchone()[0] == 0
-        give(c, OWNER, asked.approval_id)
-        done = FA.approval_decided(c, asked.approval_id, AT)
-        assert done.status == "committed", done
+        paid = act(c, bot, "payment_create", {**body, "amount": 5_000})
+        assert paid.status == "committed", paid
+        at_limit = act(c, bot, "payment_create", {**body, "amount": 100_000}, dry_run=True)
+        assert at_limit.status == "committed", at_limit
+        over = act(c, bot, "payment_create", {**body, "amount": 100_001}, dry_run=True)
+        assert (over.status, over.approver) == ("needs_approval", OWNER), over
+        off = act(c, OWNER, "rule_disable", {"rule_id": "rule:payment-over-1000"})
+        assert off.status == "committed", off
+        over = act(c, bot, "payment_create", {**body, "amount": 100_001}, dry_run=True)
+        assert (over.status, over.rule) == ("needs_approval", "rule:bot-payment"), over
     sync_once(books, fake, HOURS[1])
     sync_once(books, fake, HOURS[2])
     assert [b["amount"] for b in fake.sent("request_send_money")] == [50]
-    with books.transaction() as c:  # a person with the pay right is not asked by this rule
-        assert act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"}).status == "committed"
-        mine = act(c, "human:ben", "payment_create", {**body, "amount": 5_000, "tags": {"team": "eng"}}, dry_run=True)
-        assert mine.rule != "rule:bot-payment", mine
+
+
+def test_a_bots_payment_to_a_new_recipient_still_asks_a_finance_admin(books):
+    """The limit never covers a payee never paid before (or changed bank details): rule:new-recipient asks."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        bot = _finance_owner_pays(c)
+        body = {"recipient_id": rid, "account_id": account(c, "6100"), "money_account_id": _checking(c)}
+        asked = act(c, bot, "payment_create", {**body, "amount": 5_000})
+        assert (asked.status, asked.rule) == ("needs_approval", "rule:new-recipient"), asked
+        assert c.execute("SELECT count(*) FROM fin_payments WHERE created_by=?", (bot,)).fetchone()[0] == 0
 
 
 def test_a_payment_on_a_private_payroll_line_the_payer_cannot_see_in_full_is_refused(books):
@@ -2769,8 +2783,8 @@ def test_a_payment_on_a_private_payroll_line_the_payer_cannot_see_in_full_is_ref
         assert act(c, OWNER, "payment_create", body).status == "committed"
 
 
-def test_an_approved_bot_payment_whose_line_turns_private_is_canceled_at_send_not_sent(books):
-    """The send is judged again: a payment approved on an open line that is made private before it goes out, so the
+def test_a_bot_payment_whose_line_turns_private_is_canceled_at_send_not_sent(books):
+    """The send is judged again: a payment made on an open line that is made private before it goes out, so the
     payer no longer has full detail on it, is canceled at the send and never reaches the bank."""
     fake = FakeMercury()
     connect(books, fake)
@@ -2779,10 +2793,9 @@ def test_an_approved_bot_payment_whose_line_turns_private_is_canceled_at_send_no
         bot = _finance_owner_pays(c)
         line = account(c, "6100")
         body = {"recipient_id": rid, "account_id": line, "money_account_id": _checking(c), "amount": 5_000}
-        asked = act(c, bot, "payment_create", body)
-        assert asked.status == "needs_approval", asked
-        give(c, OWNER, asked.approval_id)
-        done = FA.approval_decided(c, asked.approval_id, AT)
+        first = act(c, OWNER, "payment_create", body)  # paid before: the bot's payment needs no OK under the limit
+        c.execute("UPDATE fin_payments SET status='settled' WHERE id=?", (first.result["payment_id"],))
+        done = act(c, bot, "payment_create", body)
         assert done.status == "committed", done
         made = act(c, OWNER, "private_lines_set", {"account_id": line, "private": True, "others_see": "hidden"})
         assert made.status == "committed", made

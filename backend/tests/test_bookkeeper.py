@@ -2,6 +2,7 @@
 once Finance is set up, outside the org chart, with exactly its default Finance rights; an hourly check that opens one
 task only when the queue has news (no task, no model call otherwise); emailed bills land once. Synthetic fixtures."""
 
+import json
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -514,16 +515,16 @@ def _bot_payment_events(c):
 
 
 def test_a_bots_payment_rule_is_seeded_once_and_an_owners_change_sticks(environment):
-    """The Security Owner's condition for the default view: one editable gate rule, "a bot's payment asks a finance
-    admin", seeded once per install with one event. The owner turns it off or deletes it on purpose and no start
-    restores it."""
+    """One editable gate rule, "a bot pays on its own up to $1,000 a payment; above that it asks a finance admin",
+    seeded once per install with one event. The owner turns it off or deletes it on purpose and no start restores it."""
     api = built(environment)
     ensure(api)
     ensure(api)
     store = api.app.state.store
     with store.read() as c:
-        ((rid, on, _),) = _bot_payment_rules(c)
+        ((rid, on, condition),) = _bot_payment_rules(c)
         assert on == 1 and _bot_payment_events(c) == 1
+        assert json.loads(condition) == {"kind": "payment_create", "actor.kind": "bot", "amount": {"gt": 100_000}}
     with store.transaction() as c:
         owner = "human:" + api.app.state.auth.owner_id(c)
         assert FA.act(c, owner, "rule_disable", {"rule_id": rid}, "rule-off").status == "committed"
@@ -563,3 +564,71 @@ def test_a_paused_finance_owner_still_gets_the_bots_payment_rule(environment):
     ensure(api)
     with store.read() as c:
         assert len(_bot_payment_rules(c)) == 1 and _bot_payment_events(c) == 1
+
+
+def _as_before_the_limit(c, **changes):
+    """The rule as an install before the payment limit seeded it ("a bot's payment asks a finance admin", any amount),
+    with the limit's own record gone: what an older install's next start finds."""
+    row = {
+        "name": "Bot payments",
+        "words": "A bot's payment asks a finance admin.",
+        "condition": json.dumps({"actor.kind": "bot", "kind": "payment_create"}),
+        "outcome": json.dumps({"outcome": "needs_approval", "who": "finance_admin"}),
+        "active": 1,
+        "updated_at": None,
+        **changes,
+    }
+    c.execute(
+        "UPDATE fin_rules SET name=?, words=?, condition=?, outcome=?, active=?, updated_at=? WHERE id=?",
+        (*row.values(), BK.BOT_PAYMENT_RULE),
+    )
+    c.execute("DELETE FROM events WHERE action=?", (BK.BOT_PAYMENT_LIMIT_EVENT,))
+    c.execute("DELETE FROM messages WHERE kind='notice' AND body=?", (BK.BOT_PAYMENT_NOTICE,))
+
+
+def _limit_notices(c):
+    return c.execute(
+        "SELECT count(*) FROM messages WHERE kind='notice' AND body=?", (BK.BOT_PAYMENT_NOTICE,)
+    ).fetchone()[0]
+
+
+def test_an_untouched_any_amount_rule_from_before_moves_to_the_limit_once_and_tells_the_owner(environment):
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        _as_before_the_limit(c)
+    ensure(api)
+    ensure(api)
+    with store.read() as c:
+        ((_, on, condition),) = _bot_payment_rules(c)
+        assert on == 1 and json.loads(condition)["amount"] == {"gt": BK.BOT_PAYMENT_LIMIT}
+        row = c.execute("SELECT name, updated_at FROM fin_rules WHERE id=?", (BK.BOT_PAYMENT_RULE,)).fetchone()
+        assert row["name"] == "Bot payments over $1,000" and row["updated_at"] is None
+        assert _limit_notices(c) == 1 and _bot_payment_events(c) == 1
+        assert c.execute("SELECT count(*) FROM events WHERE action=?", (BK.BOT_PAYMENT_LIMIT_EVENT,)).fetchone()[0] == 1
+
+
+def test_an_owners_edited_or_disabled_rule_from_before_is_never_moved(environment):
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    for changes in ({"updated_at": "2026-10-01T00:00:00Z"}, {"active": 0, "updated_at": "2026-10-01T00:00:00Z"}):
+        with store.transaction() as c:
+            _as_before_the_limit(c, **changes)
+        ensure(api)
+        with store.read() as c:
+            ((_, on, condition),) = _bot_payment_rules(c)
+            assert json.loads(condition) == {"actor.kind": "bot", "kind": "payment_create"}, changes
+            assert on == changes.get("active", 1) and _limit_notices(c) == 0
+    with store.transaction() as c:  # the owner's own wording on an unedited row (a hand change to the db): kept too
+        _as_before_the_limit(c, outcome=json.dumps({"outcome": "needs_approval", "who": "owner"}))
+    ensure(api)
+    with store.read() as c:
+        assert "amount" not in json.loads(_bot_payment_rules(c)[0]["condition"]) and _limit_notices(c) == 0
+    with store.transaction() as c:  # deleted: not brought back
+        c.execute("DELETE FROM fin_rules WHERE id=?", (BK.BOT_PAYMENT_RULE,))
+        c.execute("DELETE FROM events WHERE action=?", (BK.BOT_PAYMENT_LIMIT_EVENT,))
+    ensure(api)
+    with store.read() as c:
+        assert _bot_payment_rules(c) == [] and _limit_notices(c) == 0

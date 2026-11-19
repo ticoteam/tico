@@ -224,8 +224,12 @@ def queue_email(
     text: str,
     ref: str,
     metadata: dict[str, str],
+    held: bool = True,
 ) -> str:
-    """Freeze Finance's email through the same gate as a connector, on this install's transaction."""
+    """Freeze Finance's email through the same gate as a connector, on this install's transaction. Held: it always
+    waits for a person's OK of this exact send (the classification leaves it unclassified, which the policy asks
+    about), and the OK's id is returned. Not held: Tico's own fixed text with no commitment in it, decided by the
+    sending policy alone; the OK's id when the policy asks, else "send:" and the queued send's id."""
     from pathlib import Path
     from ...auth import Auth
     from ... import email_sending
@@ -252,7 +256,9 @@ def queue_email(
                 auth,
                 requester,
                 sending.Enqueue(mailbox=metadata["mailbox"], raw=raw, operation_id=ref),
-                {"legal_or_money": None, "status": "finance_preview_required"},
+                {"legal_or_money": None, "status": "finance_preview_required"}
+                if held
+                else {"legal_or_money": False, "status": "finance_fixed_text"},
                 via="finance",
             ),
         )
@@ -261,10 +267,12 @@ def queue_email(
     except Problem as exc:
         raise Refused(str(exc)) from exc
     # The send's OK (task_asks, `email_send:<id>`): the queue claims it before the provider is called, and nothing
-    # sends a Finance email without one.
-    if not queued.get("approval_id"):
+    # sends a held Finance email without one.
+    if queued.get("approval_id"):
+        return str(queued["approval_id"])
+    if held:
         raise Refused("Finance's email was not held for a person's OK")
-    return str(queued["approval_id"])
+    return "send:" + str(queued["id"])
 
 
 def is_person(actor: str) -> bool:

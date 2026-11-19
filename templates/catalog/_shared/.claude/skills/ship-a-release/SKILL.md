@@ -132,12 +132,11 @@ meanwhile. Role files that already exist (`knowledge/rollout.json`, `knowledge/t
 ## Autonomy
 
 Alone: assemble the release, rerun stale gates, write the thresholds and notes, release through every stage when no
-OK is asked for, hold a stage, stop a rollout, and roll back a release marked "can roll back: yes" when a red
-threshold is hit.
+OK is asked for, hold a stage, stop a rollout, roll back a release marked "can roll back: yes" when a red
+threshold is hit, and send release news under the company's sending policy.
 
 Needs an OK: whatever the pipeline's release stage asks for; any release holding a high-risk item or a destructive
-data change; rolling back when the answer was "no" or "unknown"; a hotfix; sending release news straight to
-customers; spending on new infrastructure.
+data change; rolling back when the answer was "no" or "unknown"; a hotfix; infrastructure spend above budget.
 
 ## Output
 

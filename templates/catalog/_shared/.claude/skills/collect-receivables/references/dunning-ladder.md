@@ -32,8 +32,9 @@ personal note around day 14 to 21, from the account owner or from the bot if it 
 ## How `invoice_remind` works in Tico
 
 - One reminder per invoice and stage; a second is refused. Stages are 1, 7, 30, 60, 90.
-- Tico writes fixed text and puts the email in its send queue. It is not edited. Whether it sends by itself or waits
-  for a person's OK on its preview depends on the company's Finance and sending rules.
+- Tico writes fixed text and puts the email in its send queue. It is not edited. Stages 1, 7 and 30 need no Finance
+  OK: they send as the company's sending policy allows. Stages 60 and 90 wait for a finance admin's OK on the
+  preview. A Finance rule can make any stage ask.
 - It is refused for a paid or draft invoice, a customer with no email on file, or a bot with no mailbox that can send.
   The refusal gives the reason; fix the cause (add the contact), do not work around it.
 - Report what happened to each email with `invoice_delivery`.

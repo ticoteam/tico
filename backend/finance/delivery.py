@@ -1,9 +1,12 @@
 """Invoice emails: the send approval a reminder or an invoice goes out under, and how each send went.
 
-A reminder or invoice enters the shared frozen send queue when the finance action commits. Its exact MIME,
-recipients and invoice document hash are bound to a send approval which still needs an authorized preview and yes.
-The finance decision alone never approves unseen MIME. The shared connector dispatches after approval and undo;
-the Finance Owner reports the delivery outcome. A failed send raises one Needs-you for the finance admin, and an
+A reminder or invoice enters the shared frozen send queue when the finance action commits. An invoice's own email and
+a late-stage reminder (60 or 90 days) are held: their exact MIME, recipients and invoice document hash are bound to a
+send approval which still needs an authorized preview and yes, so the finance decision alone never approves unseen
+MIME. An early reminder (1, 7 or 30 days, kinds.EARLY_REMIND_STAGES) is Tico's fixed text with no consequence in it: it
+is decided by the company's sending policy like any other email, so it goes out on its own where the policy lets the
+sender send, and waits for the policy's OK where it does not. The shared connector dispatches after approval and undo;
+the delivery outcome is reported back. A failed send raises one Needs-you for the finance admin, and an
 unreported send raises another after a day. Operation retries preserve the original frozen send.
 
 The ask carries the email's intent (`intent`: addresses, subject, text, document and mailbox), resolved when the action is
@@ -99,9 +102,13 @@ def issue(
     box: str,
     document: Mapping[str, Any],
     ref: str,
+    held: bool = True,
 ) -> str:
-    """Freeze an invoice email for its own preview and approval; the finance decision never approves unseen MIME."""
-    if not tico.is_person(decider):
+    """Freeze an invoice email. Held (the default): for its own preview and approval, which a person decides; the
+    finance decision never approves unseen MIME. Not held (an early reminder's fixed text): the sending policy decides
+    it as it would any email from `requester`, with no decider. What the invoice row keeps to follow the send: the OK's
+    id when one was asked, else SENT_PREFIX and the queued send's id."""
+    if held and not tico.is_person(decider):
         raise FinanceError(DENIED, "an invoice email is approved by a person, not by a bot")
     return tico.queue_email(
         c,
@@ -111,7 +118,16 @@ def issue(
         text,
         ref,
         {"mailbox": box, "document_sha256": document_digest(document), "ref": ref},
+        held=held,
     )
+
+
+SENT_PREFIX = "send:"  # an invoice email the sending policy let go with no OK: "send:<email_sends id>"
+
+
+def asked(follow: str) -> bool:
+    """Whether an invoice email's follow id (issue) is an OK a person decides, not a send the policy let go."""
+    return bool(follow) and not follow.startswith(SENT_PREFIX)
 
 
 def pending(c: Any, invoice_id: str | None = None) -> list[dict[str, Any]]:
@@ -246,6 +262,8 @@ def watch(ctx: Ctx) -> int:
 __all__ = [
     "FINANCE_OWNER",
     "MAIL",
+    "SENT_PREFIX",
+    "asked",
     "SEND",
     "digest",
     "document_digest",

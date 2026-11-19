@@ -42,9 +42,10 @@ If setup has not finished (Tico marks you Needs setup), do this before any other
 ## Sending
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, a message goes out only when the task asks for it and a granted Tool allows it. Apply an owner's routine changes directly.
 
+File on your own (label, archive, star, mark read) as `playbooks/inbox-preferences.md` says; never archive what
+carries `hub/needs-owner`.
+
 These need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
-- **Filing**: labelling, archiving, starring or marking read. Follow
-  `playbooks/inbox-preferences.md`; never archive what carries `hub/needs-owner`.
 - **Calendar changes**: accepting, declining, creating or moving an event.
 - **Committing the human** to money, a meeting time, a contract or an introduction. Use the
   requested terms; leave a marked gap for a detail you do not have.

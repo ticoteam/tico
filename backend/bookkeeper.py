@@ -8,8 +8,9 @@ rules), recorded by one `bookkeeper.rights_granted` event so a later revoke stic
 a default gets that one right at the next start, once (`bookkeeper.rights_version`, RIGHTS_VERSION). It sees the books
 by default: one Finance view grant of Everything in the owner's name, made once per install (`grant_view`, one
 `bookkeeper.view_granted` event, one notice to the owner), so revoking it in Finance → Access sticks and a change of
-owner pauses it. Before it, one editable gate rule makes any bot's payment ask a finance admin, seeded once per install
-(`seed_bot_payment_rule`, one `bookkeeper.bot_payment_rule` event, so an owner's edit or delete sticks). Payroll's private lines stay private: an Everything grant gives no full detail on a private line. An install from before gets the grant at its next start, unless an Everything grant to
+owner pauses it. Before it, one editable gate rule lets a bot pay on its own up to $1,000 a payment and asks a finance
+admin above that, seeded once per install (`seed_bot_payment_rule`, one `bookkeeper.bot_payment_rule` event, so an
+owner's edit or delete sticks; an untouched rule from before the limit is moved to it once). Payroll's private lines stay private: an Everything grant gives no full detail on a private line. An install from before gets the grant at its next start, unless an Everything grant to
 the Finance Owner was ever revoked, and its open "Let the Finance Owner see the books" task is closed for the owner.
 
 Its work comes two ways. Events that need an answer on the day are routines in its bot.yaml: finance.bill.due_soon,
@@ -145,32 +146,57 @@ VIEW_NOTICE = (
 
 BOT_PAYMENT_RULE = "rule:bot-payment"
 BOT_PAYMENT_EVENT = "bookkeeper.bot_payment_rule"
+BOT_PAYMENT_LIMIT_EVENT = "bookkeeper.bot_payment_limit"  # the rule is (or was checked to be) the limit version
+BOT_PAYMENT_LIMIT = (
+    100_000  # cents: a bot pays on its own up to $1,000 a payment (the same line as rule:payment-over-1000)
+)
 BOT_PAYMENT = (
-    "Bot payments",
-    "A bot's payment asks a finance admin.",
-    {"kind": "payment_create", "actor.kind": "bot"},
+    "Bot payments over $1,000",
+    "A bot pays on its own up to $1,000 a payment; above that it asks a finance admin.",
+    {"kind": "payment_create", "actor.kind": "bot", "amount": {"gt": BOT_PAYMENT_LIMIT}},
     {"outcome": "needs_approval", "who": "finance_admin"},
     [
-        {"input": {"kind": "payment_create", "actor.kind": "bot", "amount": 5000}, "expect": "needs_approval"},
-        {"input": {"kind": "payment_create", "actor.kind": "human", "amount": 5000}, "expect": "allow"},
+        {
+            "input": {"kind": "payment_create", "actor.kind": "bot", "amount": BOT_PAYMENT_LIMIT + 1},
+            "expect": "needs_approval",
+        },
+        {"input": {"kind": "payment_create", "actor.kind": "bot", "amount": BOT_PAYMENT_LIMIT}, "expect": "allow"},
+        {"input": {"kind": "payment_create", "actor.kind": "human", "amount": 500_000}, "expect": "allow"},
     ],
+)
+# The rule as installs before the limit got it: every bot payment, any amount, asked a finance admin. A row still
+# exactly like this, never edited or turned off (updated_at is NULL), is moved to BOT_PAYMENT once.
+OLD_BOT_PAYMENT = (
+    "Bot payments",
+    {"kind": "payment_create", "actor.kind": "bot"},
+    {"outcome": "needs_approval", "who": "finance_admin"},
+)
+BOT_PAYMENT_NOTICE = (
+    "Bots now pay on their own up to $1,000 a payment, inside their budget. Above that, a new payee or changed bank "
+    "details still ask a finance admin. Change the limit on the rule \"Bot payments over $1,000\" in Finance."
 )
 
 
 def seed_bot_payment_rule(c, at: str | None = None) -> bool:
-    """The Security Owner's condition for the default view (grant_view): with Everything in view and finance.pay, the
-    Finance Owner could pay any known vendor up to the $1,000 rule, against any line, with nobody asked. So one gate
-    rule, "a bot's payment asks a finance admin" (any amount, any recipient, any bot), is seeded once per install and
-    recorded by one `bookkeeper.bot_payment_rule` event: the owner may edit it, turn it off or delete it in Finance and
-    no later start restores it (unlike gates.DEFAULTS, which setup re-inserts by id). It does not wait for the view
-    grant or an active Finance Owner: an install that got the view before this rule existed gets it at its next start.
-    A bot's rule change already asks a finance admin (gating._gate), so the Finance Owner cannot turn it off itself.
-    Whether it was seeded now."""
+    """One gate rule for bots' payments, seeded once per install and recorded by one `bookkeeper.bot_payment_rule`
+    event: a bot pays on its own up to BOT_PAYMENT_LIMIT a payment, and above it asks a finance admin. The owner may
+    edit it, turn it off or delete it in Finance and no later start restores it (unlike gates.DEFAULTS, which setup
+    re-inserts by id). The other money gates still hold for bots: a new payee or changed bank details ask a finance
+    admin (rule:new-recipient, payments.RECIPIENT_RULE), spend past a budget's limit asks (payments.payment_create),
+    and the company-wide rule:payment-over-1000 asks the owner while it is on (the higher approver wins). A bot's rule
+    change asks a finance admin (gating._gate), so a bot cannot loosen this rule itself.
+
+    Installs from before the limit got "a bot's payment asks a finance admin" (any amount). That row is moved to the
+    limit once (`_move_to_limit`), only while it is exactly as seeded: one the owner edited, turned off or deleted
+    stays as they left it. It does not wait for the view grant or an active Finance Owner. Whether it was seeded now."""
     from .finance import reads as FR
     from .finance.context import owner as finance_owner
     from .finance.store import banking as SK
 
-    if not FR.is_set_up(c) or _has_event(c, BOT_PAYMENT_EVENT):
+    if not FR.is_set_up(c):
+        return False
+    if _has_event(c, BOT_PAYMENT_EVENT):
+        _move_to_limit(c, at or H.now())
         return False
     name, words, when, outcome, examples = BOT_PAYMENT
     by = finance_owner(c) or H.TICO_ACTOR
@@ -186,7 +212,44 @@ def seed_bot_payment_rule(c, at: str | None = None) -> bool:
         at=at or H.now(),
     )
     H.event(c, H.TICO_ACTOR, BOT_PAYMENT_EVENT, SLUG, {"rule_id": BOT_PAYMENT_RULE, "made": made})
+    H.event(c, H.TICO_ACTOR, BOT_PAYMENT_LIMIT_EVENT, SLUG, {"rule_id": BOT_PAYMENT_RULE, "moved": False})
     return made
+
+
+def _move_to_limit(c, at: str) -> bool:
+    """Once per install: the old "a bot's payment asks a finance admin" row, still exactly as seeded (same name,
+    condition and outcome, on, never edited: updated_at NULL), becomes BOT_PAYMENT. Recorded by one
+    `bookkeeper.bot_payment_limit` event whether or not it moved, so a rule the owner later sets back is never touched
+    again. The owner gets one notice when it moved. Whether it moved."""
+    from .finance.context import owner as finance_owner
+    from .finance.store import banking as SK
+
+    if _has_event(c, BOT_PAYMENT_LIMIT_EVENT):
+        return False
+    old_name, old_when, old_outcome = OLD_BOT_PAYMENT
+    row = c.execute(
+        "SELECT name, condition, outcome, active, updated_at FROM fin_rules WHERE id=? AND kind='gate'",
+        (BOT_PAYMENT_RULE,),
+    ).fetchone()
+    moved = bool(
+        row is not None
+        and row["updated_at"] is None
+        and int(row["active"]) == 1
+        and str(row["name"]) == old_name
+        and SK.loads(row["condition"]) == old_when
+        and SK.loads(row["outcome"]) == old_outcome
+    )
+    if moved:
+        name, words, when, outcome, examples = BOT_PAYMENT
+        c.execute(
+            "UPDATE fin_rules SET name=?, words=?, condition=?, outcome=?, examples=? WHERE id=?",
+            (name, words, SK.dump(when), SK.dump(outcome), SK.dump(list(examples)), BOT_PAYMENT_RULE),
+        )
+        owner = finance_owner(c)
+        if owner and H.is_human(owner):
+            H.notice(c, H.TICO_ACTOR, owner, BOT_PAYMENT_NOTICE, refs={"finance_rule": BOT_PAYMENT_RULE})
+    H.event(c, H.TICO_ACTOR, BOT_PAYMENT_LIMIT_EVENT, SLUG, {"rule_id": BOT_PAYMENT_RULE, "moved": moved, "at": at})
+    return moved
 
 
 def grant_view(c, owner: str, at: str | None = None):
@@ -251,7 +314,7 @@ def ensure(c, onboarding, auth):
         return None
     made = onboarding.ensure_bookkeeper(c)
     grant_defaults(c)
-    seed_bot_payment_rule(c)  # before the view: Everything plus finance.pay asks a finance admin from the start
+    seed_bot_payment_rule(c)  # before the view: a bot's payment over the limit asks a finance admin from the start
     grant_view(c, _owner(c, auth))
     from .finance import tax as FT
 

@@ -23,10 +23,22 @@ line. Revoking that view in Finance → Access sticks; no later start gives it b
 view at its next start, unless an Everything view for the Finance Owner was revoked before, and the owner's old
 "Let the Finance Owner see the books" to-do is closed for them. A paused or archived Finance Owner gets no view.
 
-Its payments ask a finance admin by default: one Finance rule, "A bot's payment asks a finance admin" (any amount,
-any recipient, any bot), is added once per install, before its view, and an install from before gets it at its next
-start. The owner may edit it or turn it off on purpose in Finance; no later start puts it back. It never pays
-against a private payroll line it has no full detail of.
+It pays on its own, inside its budget, up to a payment limit. One Finance rule, "Bot payments over $1,000" (a bot
+pays on its own up to $1,000 a payment; above that it asks a finance admin), is added once per install, before its
+view, and an install from before gets it at its next start. The other money rules still apply to every bot: a new
+payee or changed bank details ask a finance admin, spending past a budget's limit asks, and while the company-wide
+"Payments over $1,000" rule is on, the owner is the one asked above $1,000. To change the bots' limit, edit the rule's
+amount in Finance. The owner may edit it or turn it off on purpose; no later start puts it back. An install
+whose old rule, "A bot's payment asks a finance admin" (any amount), was never edited or turned off is moved to the
+limit once, and the owner gets one notice saying so. An old rule the owner edited, turned off or deleted stays as
+they left it. It never pays against a private payroll line it has no full detail of.
+
+Its payment reminders go out on their own where the company's [sending policy](mail.md) lets it send. Tico's
+fixed reminder at 1, 7 and 30 days late (`invoice_remind`) states the invoice's own facts and no consequence, so no
+finance admin is asked for it; the sending policy decides its email like any other, and where the policy asks first
+(the default for new senders), the email waits for that OK of its preview. The 60 and 90 day stages sit at the final
+notice: a bot's reminder there asks a finance admin, and its email always waits for a person's OK. A company rule in
+Finance can still make any stage ask.
 
 It touches the books only through the [Finance tools](finance-tools.md), as itself. Approvals follow the company's
 rules; it never approves its own action. The owner approves a month's close and each import of a spreadsheet's history.

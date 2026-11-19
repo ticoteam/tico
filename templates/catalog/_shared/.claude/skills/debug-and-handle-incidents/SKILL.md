@@ -45,8 +45,9 @@ meanwhile.
 1. What are our severity levels, how fast do we respond and how often do we update? Default: the table in
    `references/updates.md`.
 2. Where do customers hear about incidents, and who approves what they are told? Default: the status page if there is
-   one, otherwise replies through Support only. The bot drafts; the owner gives an OK to anything sent to customers.
-   Updates inside the team go out without asking.
+   one, otherwise replies through Support only. Factual updates (what is affected, what was done, the next update
+   time) go out on their own under the sending policy. The owner gives an OK to anything stating a cause, fault,
+   breach or compensation. Updates inside the team go out without asking.
 3. What may a bot do by itself to reduce harm? Default: turn a feature flag off, pause a job or a Routine (scheduled
    bot work), restart a service, and roll back a release marked safe to roll back. Not without an OK: delete or rewrite data, change
    customer records, rotate credentials other systems use.
@@ -156,10 +157,11 @@ meanwhile.
 
 ## Autonomy
 
-Alone: open the incident, set severity, post team updates, take the mitigations listed in `knowledge/engineering.md`,
-investigate, fix, release through the normal path, give the all clear, write the review and file its actions.
+Alone: open the incident, set severity, post team updates, send factual customer updates under the sending policy,
+take the mitigations listed in `knowledge/engineering.md`, investigate, fix, release through the normal path, give the
+all clear, write the review and file its actions.
 
-Needs an OK: anything sent to customers; any mitigation that deletes or rewrites data, changes customer records or
+Needs an OK: a customer message that states a cause, fault, breach or compensation; any mitigation that deletes or rewrites data, changes customer records or
 rotates shared credentials; a hotfix; the fourth fix attempt after three failures; any notice about exposed personal
 data or a security breach.
 
