@@ -167,14 +167,20 @@ def test_only_readers_follow_a_private_task(api):
     assert rows(api, row["id"])["human:ben"][0] == 1
 
 
-def test_a_bot_adds_followers_only_in_its_reach(api):
+def test_a_bot_adds_anyone_to_a_task_it_owns_and_others_only_in_its_reach(api):
     row = made(api)
     token = bot_token(api)
     assert follow(api, row["id"], {"actor": "cara"}, token).status_code == 200
     r = api.put("/api/v2/reach/settings/bot:ops", json={"mode": "closed"}, headers=headers())
     assert r.status_code == 200, r.text
-    r = follow(api, row["id"], {"actor": "ben"}, token)
+    # Its own task: sharing it is never out of reach, whatever its reach rule.
+    assert follow(api, row["id"], {"actor": "ben"}, token).status_code == 200
+    with api.app.state.store.transaction() as c:  # a task ops asked for and does not own
+        theirs = H.task_create(c, "bot:ops", "Vendor check", "Check the vendor.", "human:ana", lint=False)
+    r = follow(api, theirs["id"], {"actor": "ben"}, token)
     assert r.status_code == 409 and r.json()["error"]["code"] == "reach_closed", r.text
+    assert "reach rule, Closed (set for it) on Rules › Internal" in r.json()["error"]["detail"]
+    assert unfollow(api, row["id"], {"actor": "ben"}, token).status_code == 200
     # Taking someone off, or its own level, needs no reach.
     assert unfollow(api, row["id"], {"actor": "cara"}, token).status_code == 200
     assert follow(api, row["id"], {"notify": "digest"}, token).status_code == 200

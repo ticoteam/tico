@@ -1522,14 +1522,17 @@ def require_create(
     return reach
 
 
-def require_readers(c, who, task_id, readers, shared):
-    """A bot adds readers within its reach (reach.check), and a private run only those who read every private task it
-    carries, the task they are added to counted as read. `readers` are the ones being added;
-    `shared` is the task reach counts them as sharing with the bot: the task itself, or a new task's parent."""
+def require_readers(c, who, task_id, readers, shared, owner=None):
+    """A bot adds readers within its reach (reach.check), any teammate to a task it owns, and a private run only those
+    who read every private task it carries, the task they are added to counted as read. `readers` are the ones being
+    added; `shared` is the task reach counts them as sharing with the bot: the task itself, or a new task's parent.
+    `owner`: the task's owner, read from `task_id` when not given (a task not yet made has none to read)."""
     from . import reach
 
+    if owner is None and task_id:
+        owner = (H.task(c, task_id) or {}).get("owner_id")
     for reader in readers:
-        reach.check(c, who, reader, "task", task_id=shared)
+        reach.check(c, who, reader, "task", task_id=shared, owner=owner)
         if private_execution(c, who):
             require_destination(c, who, reader, None, {}, reach=(task_id, reader) if task_id else None)
 

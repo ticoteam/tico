@@ -751,6 +751,8 @@ def _refused(ctx, code, sender, receiver, mode, line=None, cap=None, unseen=froz
     else:
         head = f"{r} is outside {s}'s reach: it reaches only who its lines on Rules › Internal name"
         head += f" ({shown})." if shown else "."
+    if code == "reach_closed":
+        head += " " + _rule(ctx, sender, receiver, mode)
     if via:
         step = f" Send it to {name(ctx, via)}, who can pass it on."
     elif reached:
@@ -762,6 +764,30 @@ def _refused(ctx, code, sender, receiver, mode, line=None, cap=None, unseen=froz
         )
     again = " Do not retry: sending it again is refused the same way."
     return Decision(False, code, head + " Nothing was sent." + step + again, via, tuple(reached))
+
+
+def _rule(ctx, sender, receiver, mode):
+    """The rule a reach refusal comes from: the sender's mode and who set it, and what still opens the receiver: a task
+    the bot owns, shared with them (a person sees it there; a bot teammate is then reached on it)."""
+    at = effective(ctx, sender)["from"]["mode"]
+    where = (
+        "the company default"
+        if not at
+        else "set for Everyone"
+        if at == "*"
+        else f"set for {name(ctx, at)}"
+        if at != sender
+        else "set for it"
+    )
+    share = (
+        "add them to its task as a reader or follower: on that task it reaches them"
+        if H.is_bot(receiver)
+        else "it may add them to its task as a reader or follower, so they see it"
+    )
+    return (
+        f"This is its reach rule, {mode.capitalize()} ({where}) on Rules › Internal; a person who manages "
+        f"{name(ctx, sender)} can open it. To bring {name(ctx, receiver)} into work it owns, {share}."
+    )
 
 
 def _refused_for_their_message(ctx, sender, receiver, wrote):
@@ -890,6 +916,15 @@ def task_parties(c, task_id, before=None):
                 r[0]
                 for r in c.execute(
                     "SELECT actor FROM thread_members WHERE thread_id=? LIMIT 500", (row["conversation_id"],)
+                )
+            }
+        if not before and H._has_table(c, "thread_followers"):
+            # Its followers (task_followers): an owner who added a teammate to its task reaches them on it.
+            out |= {
+                r[0]
+                for r in c.execute(
+                    "SELECT actor FROM thread_followers WHERE thread_id=? AND following=1 LIMIT 500",
+                    (row["conversation_id"],),
                 )
             }
     return {a for a in out if a}
@@ -1131,15 +1166,26 @@ def _sender(who):
 
 
 def check(
-    c, who, receiver, kind="task", *, task_id=None, conversation_id=None, in_reply_to=None, ctx=None, exclude=None
+    c,
+    who,
+    receiver,
+    kind="task",
+    *,
+    task_id=None,
+    conversation_id=None,
+    in_reply_to=None,
+    ctx=None,
+    exclude=None,
+    owner=None,
 ):
     """Refuse (409, nothing written) a bot's task, hand-off, question or message to a teammate out of its reach. The
     exemptions that need the database are read only when the write would be refused without them: for a bot teammate,
     a task they share or a teammate who came to the bot first; for a person, only person_asked (a reply to them, a
-    conversation they wrote in, a task they handed the bot)."""
+    conversation they wrote in, a task they handed the bot). `owner`: the owner of the task the receiver is being added
+    to as a reader or follower. A bot shares a task it owns with any teammate in the company: that is never refused."""
     sender = _sender(who)
     receiver = str(receiver or "")
-    if not sender or receiver == sender or not receiver.startswith(("bot:", "human:")):
+    if not sender or receiver == sender or not receiver.startswith(("bot:", "human:")) or owner == sender:
         return
     ctx = ctx or context(c)
     memo = {}
