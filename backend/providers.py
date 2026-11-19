@@ -1144,6 +1144,19 @@ def check_order(record):
     return order
 
 
+def skipped_check_models(record):
+    """The owner's check-model entries check_order leaves out, each with why ("gpt 6.1 sol is retired; ..."): a
+    provider turned off or a model retired. They stay saved and come back when they work again; until then a check
+    says in its history which it skipped, so a retired choice is never passed over silently."""
+    skipped = []
+    for entry in record["check_models"]:
+        try:
+            _check_row(entry, record)
+        except ProviderError as error:
+            skipped.append((entry, error.detail))
+    return skipped
+
+
 def never_gateway(record):
     """Whether the company's models choice never spends the Gateway on bots' work: `subscriptions` or `own-keys`.
     No choice (as before presets) and the two Gateway choices keep the Gateway in reach."""

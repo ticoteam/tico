@@ -4,7 +4,7 @@ model, never Tico Medium (Claude Sonnet underneath)."""
 
 from backend import bot_settings as BS, gateway_tiers, providers, usage_records
 from backend.store import encode
-from backend.tests.helpers.api import post
+from backend.tests.helpers.api import get, post
 from backend.tests.helpers.check_models import check_row, computer, parent_turn
 from backend.tests.usage_rows import segment
 
@@ -98,3 +98,83 @@ def test_a_gpt_reviewer_of_an_opus_build_gets_the_companys_gpt_check_model(api):
     # A check of the bot's own work still counts its own runs: GPT and Claude both wrote it, so Grok checks it.
     check = file("check", "Check my own part")
     assert tuple(check_row(api, check["id"]))[:2] == ("grok", "grok-4.6")
+
+
+def history_note(api, task_id):
+    with api.app.state.store.read() as c:
+        row = c.execute(
+            "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model'",
+            (task_id,),
+        ).fetchone()
+    return row[0] if row else ""
+
+
+def test_a_retired_company_check_model_is_skipped_and_the_history_says_so(api):
+    machine, parent, turn = parent_turn(api)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE registry_metadata SET value=? WHERE key='providers'",
+            (
+                encode(
+                    {
+                        "revision": 1,
+                        "enabled": ["anthropic", "openai"],
+                        "runtime": "claude",
+                        "model": "claude-sonnet-5-5",
+                        "check_models": ["codex:gpt-6.1-sol", "codex:gpt-6.2-sol"],
+                    }
+                ),
+            ),
+        )
+    computer(api, machine)
+    sub = post(
+        api,
+        "tasks",
+        {"owner": "ops", "title": "Check it", "body": "Read the PR.", "check_model": "auto", "parent": parent["id"]},
+        turn["token"],
+    )
+    assert tuple(check_row(api, sub["id"]))[:2] == ("codex", "gpt-6.2-sol")
+    note = history_note(api, sub["id"])
+    assert "skipped codex:gpt-6.1-sol" in note and "retired" in note, note
+
+
+def test_a_review_on_the_check_model_skips_the_builder_not_the_reviewer(api):
+    """review_default: cpo (set to review on the check model) has its own GPT runs on ops's Claude-built task."""
+    machine, parent, turn = parent_turn(api)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE registry_metadata SET value=? WHERE key='providers'",
+            (
+                encode(
+                    {
+                        "revision": 1,
+                        "enabled": ["anthropic", "openai", "xai"],
+                        "runtime": "claude",
+                        "model": "claude-sonnet-5-5",
+                        "check_models": ["codex:gpt-6.2-sol"],
+                    }
+                ),
+            ),
+        )
+    run(api, parent["id"], "built", "ops", "claude-sonnet-5-5", "anthropic", "claude")
+    run(api, parent["id"], "read", "cpo", "gpt-6.1-terra", "openai", "codex")
+    computer(api, machine)
+    post(
+        api,
+        "bots/cpo/definition",
+        {
+            "review_model": "check",
+            "expected_revision": next(b for b in get(api, "bots") if b["slug"] == "cpo")["revision"],
+        },
+    )
+    review = post(
+        api,
+        "tasks",
+        {
+            "owner": "cpo",
+            "title": "Review PR 703",
+            "body": "https://github.com/ticoteam/tico/pull/703",
+            "parent": parent["id"],
+        },
+    )
+    assert tuple(check_row(api, review["id"])) == ("codex", "gpt-6.2-sol", "review")

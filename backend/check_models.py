@@ -108,6 +108,8 @@ def choose(c, settings, bot, spec, role, authors=()):
     note = ""
     if str(spec or "").strip() == AUTO:
         runtime, model, note = _auto(c, settings, bot, set(authors))
+        skipped = "; ".join(f"skipped {entry}: {why}" for entry, why in providers.skipped_check_models(record))
+        note = "; ".join(part for part in (skipped, note) if part)
     else:
         runtime, model = parse(spec)
     try:
