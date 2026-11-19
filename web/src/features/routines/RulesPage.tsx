@@ -159,7 +159,16 @@ function StagesTab({ search, confirm, asked }: TabProps) {
             label={g}
             items={rs}
             getKey={(r) => r.id}
-            draw={(r) => <StageRow key={r.id} r={r} team={team} selected={search.panel === `stage:${r.id}`} search={{ tab: 'stages', panel: `stage:${r.id}` }} confirm={confirm} />}
+            draw={(r) => (
+              <StageRow
+                key={r.id}
+                r={r}
+                team={team}
+                selected={search.panel === `stage:${r.id}`}
+                search={{ tab: 'stages', ...(search.q ? { q: search.q } : {}), panel: `stage:${r.id}` }}
+                confirm={confirm}
+              />
+            )}
           />
         </Section>
       ))}
@@ -195,7 +204,7 @@ function OutsideTab({ search, confirm, asked }: TabProps) {
             <OrgRuleRow
               key={r.id}
               r={r}
-              search={{ tab: 'outside', panel: `org:${r.id}` }}
+              search={{ tab: 'outside', ...(search.q ? { q: search.q } : {}), panel: `org:${r.id}` }}
               selected={search.panel === `org:${r.id}`}
               holds={holdsOf(holds, r.id)}
               onRemove={() => confirm('this rule', () => void press('rules.remove', { rule: r.id, kind: 'org' }))}
@@ -221,7 +230,7 @@ function DueTab({ search, asked }: TabProps) {
       {grouped([...list].sort((a, b) => a.due_on.localeCompare(b.due_on)), when, 'Late').map(([g, ds]) => (
         <Section key={g} name={g} count={ds.length}>
           {ds.map((d) => (
-            <DueRow key={d.id} d={d} selected={search.panel === `due:${d.id}`} />
+            <DueRow key={d.id} d={d} q={search.q} selected={search.panel === `due:${d.id}`} />
           ))}
         </Section>
       ))}
@@ -230,14 +239,14 @@ function DueTab({ search, asked }: TabProps) {
 }
 
 /** A due date: what is due, how early its task opens, and who gets that task. */
-function DueRow({ d, selected }: { d: DueDate; selected: boolean }) {
+function DueRow({ d, q, selected }: { d: DueDate; q?: string; selected: boolean }) {
   const owner = useName(d.owner);
   return (
     <RuleRow
       how="date"
       parts={[agentWords(d.rule.text), ...(d.task_days ? [`${d.task_days} days before`, ...(owner ? [`${owner} gets a task`] : [])] : [])]}
       to={RULES}
-      search={{ tab: 'due', panel: `due:${d.id}` }}
+      search={{ tab: 'due', ...(q ? { q } : {}), panel: `due:${d.id}` }}
       selected={selected}
       word={d.status === 'overdue' ? 'Late' : undefined}
       cols={{ who: true, at: true }}
@@ -326,7 +335,7 @@ function SuggestedTab({ search, asked }: TabProps) {
               who={r.created_by}
               at={r.updated_at ? <Ago at={r.updated_at} /> : ''}
               to={RULES}
-              search={{ tab: 'suggested', panel: `stage:${r.id}` }}
+              search={{ tab: 'suggested', ...(search.q ? { q: search.q } : {}), panel: `stage:${r.id}` }}
               selected={opened(r.id)}
               verb={{ label: retires ? 'Retire' : r.suggests ? 'Accept change' : 'Add', onClick: () => void press('rules.accept', { rule: r.id, kind: 'stage' }) }}
               more={<MenuItem label="Set aside" icon="archive" onSelect={() => void press('rules.skip', { rule: r.id, kind: 'stage' })} />}

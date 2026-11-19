@@ -1,4 +1,4 @@
-import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
+import { useQueries, useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { Avatar } from '@/kit/Avatar';
 import { useAction } from '@/actions';
@@ -20,6 +20,7 @@ import {
   monthSpendQuery,
   peopleQuery,
   seatsQuery,
+  teamDoneCountQueries,
   teammateAccessQuery,
   type AgentRow,
   type Group,
@@ -43,7 +44,6 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
   const people = useQuery(peopleQuery);
   const [since] = useState(() => startOfWeek(new Date()).toISOString());
   const openTasks = useQuery(allTasksQuery());
-  const done = useQuery(allTasksQuery(since));
   const addOpen = useAction('team.addTeammate');
   const reach = useQuery(teammateAccessQuery('team', group.id)).data;
   const [access, setAccess] = useState(false);
@@ -52,7 +52,9 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
   const lead = managerOf(group, roster.data ?? [], people.data ?? []);
   const manager = lead ? actorOf(lead) : undefined;
   const under = membersUnder(all, group.id);
-  const everyone = new Set(memberIds(under).map((k) => actorOf(k)?.id).filter(Boolean));
+  const everyone = new Set(memberIds(under).map((k) => actorOf(k)?.id).filter((id): id is string => !!id));
+  const doneCounts = useQueries({ queries: teamDoneCountQueries(everyone, since) });
+  const done = doneCounts.reduce<number | undefined>((sum, { data }) => sum === undefined || !data?.counts ? undefined : sum + data.counts.total, 0);
   const tally = (tasks: readonly OwnTask[] | undefined) => {
     const by = new Map<string, OwnTask[]>();
     for (const t of tasks ?? []) {
@@ -62,8 +64,7 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
     return by;
   };
   const openBy = tally(openTasks.data?.tasks);
-  const doneBy = tally(done.data?.tasks);
-  const sum = (by: Map<string, OwnTask[]>) => [...everyone].reduce((n, id) => n + (by.get(id!)?.length ?? 0), 0);
+  const openTotal = [...everyone].reduce((n, id) => n + (openBy.get(id)?.length ?? 0), 0);
   const paused = new Set((roster.data ?? []).filter((r: AgentRow) => r.status === 'paused').map((r) => r.slug));
   const slugs = (roster.data ?? []).filter((r) => everyone.has(`bot:${r.id}`)).map((r) => r.slug);
   const spend = useQuery(monthSpendQuery(slugs)).data;
@@ -111,6 +112,7 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
       </Section>,
       ...(depth < 4 ? nested(s, depth + 1) : []),
     ]);
+  const innerSections = nested(group);
 
   return (
     <>
@@ -140,15 +142,15 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
             </PageMore>
           ) : undefined
         }
-        state={everyone.size ? 'ready' : 'empty'}
+        state={manager || everyone.size || open.length || innerSections.length ? 'ready' : 'empty'}
         empty={{ title: 'No teammates yet' }}
         figures={
           <FiguresStrip
             label={`${group.name} at a glance`}
             figures={[
               { label: 'Teammates', value: everyone.size },
-              { label: 'Open tasks', value: openTasks.data ? sum(openBy) : '' },
-              { label: 'Done this week', value: done.data ? sum(doneBy) : '' },
+              { label: 'Open tasks', value: openTasks.data ? openTotal : '' },
+              { label: 'Done this week', value: done ?? '' },
               { label: 'Spend this month', value: spend === undefined ? '' : fmtMoney(spend) },
             ]}
           />
@@ -162,12 +164,12 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
                 {open}
               </Section>
             )}
-            {nested(group)}
+            {innerSections}
           </>
         }
       />
       {add && <AddTeammate step={add} team={group.id} />}
-      {reach?.you?.manage && <AccessDialog open={access} onOpenChange={setAccess} kind="team" id={group.id} name={group.name} now={reach} />}
+      {reach?.you?.manage && access && <AccessDialog open onOpenChange={setAccess} kind="team" id={group.id} name={group.name} now={reach} />}
     </>
   );
 }

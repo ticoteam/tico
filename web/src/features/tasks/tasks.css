@@ -48,6 +48,7 @@ html[data-layout="cards"] .tk-item>.tk-more{display:none}
 .row-stage{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* Select: a picked card, and the box that stands in a row's or a card's mark */
+html[data-layout="cards"] .tasks-page.pk-list .filter-row[data-phone]{display:flex}
 .card.is-selected{--surface:var(--selected);background:var(--selected)}
 .row-mark>.check,.card-marks>.check{min-height:0}
 

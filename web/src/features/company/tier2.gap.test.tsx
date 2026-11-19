@@ -210,6 +210,7 @@ describe('One risk @n:re:risk-one', () => {
     expect(href(row)).toBe('/company/risk?risk=r1&panel=due:d1:2026-11-24');
     fireEvent.click(row);
     const panel = await screen.findByRole('complementary', { name: 'Send evidence to Stripe' });
+    expect(href(within(panel).getByRole('link', { name: 'Send evidence within 7 days' }))).toBe('/company/rules?panel=org:ru1');
     expect(within(panel).getByRole('button', { name: 'Waive' })).toBeTruthy();
     expect(within(panel).getByRole('button', { name: 'Missed' })).toBeTruthy();
     fireEvent.click(within(panel).getByRole('button', { name: 'Add proof' }));
@@ -218,6 +219,21 @@ describe('One risk @n:re:risk-one', () => {
     await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/rule-due/d1/satisfied', method: 'POST', body: { due_on: '2026-11-24', proof: { kind: 'link', ref: 'https://stripe.example/case/1' } } }]));
     bind({ router: createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ['/company/risk'] }) }) });
     expect(await run('risk.markDate', { risk: 'r1', date: 'd1', on: '2026-11-24', how: 'waived', note: 'Settled' }, { via: 'tico' })).toMatchObject({ ok: false });
+  });
+
+  it('keeps unsaved proof with the occurrence it was entered for', async () => {
+    const sent = serve(nothing);
+    const obligations = [date(), date({ due_on: '2026-12-01', title: 'Send more evidence' })] as RiskDetail['obligations'];
+    queryClient.setQueryData(riskQuery('r1').queryKey, detail({ obligations }));
+    show(riskPage(), '/company/risk?risk=r1&panel=due:d1:2026-11-24');
+    const first = within(await screen.findByRole('complementary', { name: 'Send evidence to Stripe' }));
+    fireEvent.click(first.getByRole('button', { name: 'Add proof' }));
+    fireEvent.change(first.getByRole('textbox', { name: 'Link' }), { target: { value: 'https://example.com/proof' } });
+    fireEvent.click(screen.getByRole('link', { name: 'Send more evidence' }));
+    const second = within(await screen.findByRole('complementary', { name: 'Send more evidence' }));
+    fireEvent.click(second.getByRole('button', { name: 'Add proof' }));
+    expect((second.getByRole('textbox', { name: 'Link' }) as HTMLInputElement).value).toBe('');
+    expect(sent).toEqual([]);
   });
 });
 
@@ -239,12 +255,28 @@ const product = {
 };
 
 describe('One product @n:re:product', () => {
+  it('opens a different product without carrying over an unfinished rename', async () => {
+    const sent = serve(nothing);
+    const second = { ...product, id: 'product/tool-kit', key: 'tool-kit', name: 'Tool kit' };
+    queryClient.setQueryData(productsQuery.queryKey, { products: [product, second] });
+    show((s) => <ProductsPage search={s} />, '/company/products?panel=garden-kit');
+    const first = within(await screen.findByRole('complementary', { name: 'Garden kit' }));
+    fireEvent.click(first.getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    fireEvent.change(first.getByRole('textbox', { name: 'Name' }), { target: { value: 'Raised bed kit' } });
+    fireEvent.click(screen.getByRole('link', { name: 'Tool kit' }));
+    const panel = within(await screen.findByRole('complementary', { name: 'Tool kit' }));
+    expect(panel.queryByRole('textbox', { name: 'Name' })).toBeNull();
+    expect(sent).toEqual([]);
+  });
+
   it('adds and removes an agreement, a repository and a vendor, the whole set sent', async () => {
     const sent = serve((_url, method) => (method === 'POST' ? ok({ product }) : nothing()));
     queryClient.setQueryData(productsQuery.queryKey, { products: [product] } as unknown as ProductList);
     show((s) => <ProductsPage search={s} />, '/company/products?panel=garden-kit', '/next');
     const panel = await screen.findByRole('complementary', { name: 'Garden kit' });
     expect(href(within(panel).getByText('Terms of sale, v4'))).toBe('/next/library/f1');
+    expect(href(within(panel).getByText('Tall Oaks Timber'))).toBe('/next/library/contacts?type=organization&panel=organization/oaks');
     fireEvent.click(within(panel).getByRole('button', { name: 'Add an agreement' }));
     fireEvent.change(within(panel).getByRole('textbox', { name: 'Agreement' }), { target: { value: 'Rental terms' } });
     fireEvent.click(within(panel).getByRole('button', { name: 'Add' }));
@@ -300,7 +332,7 @@ describe('One matter @n:re:matter', () => {
     queryClient.setQueryData(matterFilesQuery('t1').queryKey, [{ id: 'f1', name: 'tracking.pdf', title: 'tracking.pdf', archived: false }] as never);
     show(riskPage(), '/company/risk?panel=matter:t1');
     const panel = await screen.findByRole('complementary', { name: 'Refund dispute A' });
-    expect(href(within(panel).getByText('Pat Doe'))).toBe('/library/contacts?contact=person/c9');
+    expect(href(within(panel).getByText('Pat Doe'))).toBe('/library/contacts?panel=person/c9');
     expect(href(within(panel).getByText('Garden kit'))).toBe('/company/products?panel=garden-kit');
     const dates = within(panel).getByRole('region', { name: 'Dates' });
     expect(href(within(dates).getByText('Send evidence to Stripe'))).toBe('/company/risk?risk=r1&panel=due:d1:2026-11-24');
@@ -362,7 +394,7 @@ describe("A matter's own facts @n:re:matter", () => {
     fireEvent.change(within(panel).getByRole('textbox', { name: 'Party' }), { target: { value: 'Sam' } });
     fireEvent.click(await within(panel).findByRole('button', { name: 'Sam Lee' }));
     await waitFor(() => expect(posted(sent)).toEqual([{ party_entity_id: 'person/c4', version: 2 }]));
-    expect(href(await within(panel).findByText('Sam Lee'))).toBe('/library/contacts?contact=person/c4');
+    expect(href(await within(panel).findByText('Sam Lee'))).toBe('/library/contacts?panel=person/c4');
     refuse = true;
     fireEvent.click(within(panel).getByRole('button', { name: 'Change product' }));
     fireEvent.click(within(panel).getByRole('combobox', { name: 'Product' }));

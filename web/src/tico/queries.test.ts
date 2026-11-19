@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ticoRoomQuery } from '@/conversation';
 import { queryClient } from '@/data';
 import { FakeEventSource, frame, opening } from '@/live/fake-stream';
 import { flushFrame } from '@/live/frame';
@@ -26,6 +27,13 @@ afterEach(() => {
 });
 
 describe("Tico's power follows the server", () => {
+  it('reads the room again when Tico changes after a roomless load', () => {
+    queryClient.setQueryData(ticoRoomQuery.queryKey, null);
+    FakeEventSource.last.feed(frame(901, 'bots', { bot: 'assistant', status: null }));
+    flushFrame();
+    expect(queryClient.getQueryState(ticoRoomQuery.queryKey)?.isInvalidated).toBe(true);
+  });
+
   it('reads the power again when the stream says the Assistant changed, whatever status it carries', () => {
     // a status line that looks "on" is not trusted: the power is read again, not set from it
     FakeEventSource.last.feed(frame(901, 'bots', { bot: 'assistant', status: { state: 'active' } }));

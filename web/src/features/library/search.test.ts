@@ -21,7 +21,7 @@ afterEach(() => {
 describe('library search', () => {
   it('finds docs, skills and tools from what Library read, each opening itself', async () => {
     const doc = { id: 'd1', title: 'Frost guide', path: '', locked: false, updated_at: '2026-01-02T10:00:00Z', updated_by_id: '', updated_by_name: '', version: 1 };
-    queryClient.setQueryData(docsListQuery.queryKey, { docs: [doc, { ...doc, id: 'd2', title: 'Seed list' }] } as never);
+    queryClient.setQueryData(docsListQuery.queryKey, { pages: [{ docs: [doc, { ...doc, id: 'd2', title: 'Seed list' }], next_cursor: null }], pageParams: [''] });
     queryClient.setQueryData(skillsQuery.queryKey, [{ id: 'k1', name: 'frost-date-lookup', description: '', latest: null, installs_count: 0, on: [] }]);
     queryClient.setQueryData(toolsQuery.queryKey, { rows: [{ id: 'tl1', name: 'Frost Weather', vendor_name: 'Weather Co' }, { id: 'tl2', name: 'Mailer' }] } as never);
 

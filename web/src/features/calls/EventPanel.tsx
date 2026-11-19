@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
+import { Link, useRouter } from '@tanstack/react-router';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { CalendarOccurrence } from '@/api/schema';
 import { useActor, useActors } from '@/data';
@@ -37,18 +37,17 @@ import {
 
 export function EventPanel({
   id,
-  list,
+  event: o,
   pending,
   now,
   onClose,
 }: {
   id: string;
-  list: readonly CalendarOccurrence[];
+  event: CalendarOccurrence | undefined;
   pending: boolean;
   now: Date;
   onClose: () => void;
 }) {
-  const o = list.find((x) => x.occurrence_id === id);
   const [editing, setEditing] = useState(false);
   const [removing, setRemoving] = useState(false);
   // A booked Tico call: its time is the call's (PATCH /calls/{id}), and it is cancelled rather than removed.
@@ -376,15 +375,18 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
 
 /** A shared meeting's ⋯ (meetings.ts: Team / Private, Share's agents and link, Delete). */
 function MeetingMenu({ m, canSend, onDelete }: { m: MeetingMore; canSend: boolean; onDelete: () => void }) {
+  const router = useRouter();
   const actors = useActors();
   const nameOf = useNameOf();
   const agents = actors.filter((a) => a.kind === 'agent');
   const sent = m.sent?.bot;
-  const copy = () =>
-    void navigator.clipboard?.writeText(`${location.origin}/calendar?view=list&panel=${encodeURIComponent(`meeting:${m.id}`)}`).then(
+  const copy = () => {
+    const { publicHref } = router.buildLocation({ to: '/calendar', search: { view: 'list', panel: `meeting:${m.id}` } });
+    void navigator.clipboard?.writeText(new URL(publicHref, location.origin).href).then(
       () => toast({ text: 'Link copied' }),
       () => toast({ text: "Couldn't copy", kind: 'failed' }),
     );
+  };
   return (
     <Menu trigger={<IconButton icon="more" label="More" size="sm" />}>
       {m.can_edit && <MenuItem label={m.private ? 'Show to team' : 'Make private'} onSelect={() => void press('calls.setPrivate', { meeting: m.id, private: !m.private })} />}

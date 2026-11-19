@@ -29,20 +29,23 @@ export interface ComposerProps {
   me: string;
   /** Who it goes to: "Message Tico". */
   to: string;
-  /** Send; the box clears at once and the message shows in the list. */
-  onSend: (text: string, files: File[]) => void;
+  /** An optimistic send returns nothing. A send without a pending row resolves to whether it accepted the draft. */
+  onSend: (text: string, files: File[]) => void | Promise<boolean>;
   /** Words to put back in the box (a failed message taken back); a new object each time. */
   fill?: { text: string } | null;
   /** The box's words in place of "Message <to>" ("Reply to Sam Lee"). */
   label?: string;
   /** false: no files (a mail reply attaches none). */
   attach?: boolean;
+  /** false: the chat has not loaded enough to keep a pending message. */
+  canSend?: boolean;
 }
 
 /** Where you type. Enter sends, Shift+Enter breaks the line; the draft survives a reload. */
-export function Composer({ id, me, to, onSend, fill, label: own, attach = true }: ComposerProps) {
+export function Composer({ id, me, to, onSend, fill, label: own, attach = true, canSend = true }: ComposerProps) {
   const [text, setText] = useState(() => readDraft(me, id));
   const [files, setFiles] = useState<File[]>([]);
+  const [sending, setSending] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const [shownFor, setShownFor] = useState(`${me}:${id}`);
@@ -59,15 +62,29 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true }
     if (fill) setText(fill.text);
   }
 
-  const ready = text.trim().length > 0 || files.length > 0;
+  const ready = canSend && (text.trim().length > 0 || files.length > 0);
 
   const send = () => {
-    if (!ready) return;
-    onSend(text.trim(), files);
-    setText('');
-    setFiles([]);
-    writeDraft(me, id, '');
-    box.current?.focus();
+    if (!ready || sending) return;
+    const clear = () => {
+      setText('');
+      setFiles([]);
+    };
+    const accepted = onSend(text.trim(), files);
+    if (!accepted) {
+      clear();
+      writeDraft(me, id, '');
+      box.current?.focus();
+      return;
+    }
+    setSending(true);
+    void accepted.then((ok) => {
+      if (ok) {
+        clear();
+        if (readDraft(me, id) === text) writeDraft(me, id, '');
+      }
+      setSending(false);
+    }, () => setSending(false));
   };
 
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -80,7 +97,7 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true }
   return (
     <>
       {files.map((f, i) => (
-        <button key={`${f.name}:${i}`} type="button" className="file" aria-label={`Remove ${f.name}`} title={`Remove ${f.name}`}
+        <button key={`${f.name}:${i}`} type="button" className="file composer-file" aria-label={`Remove ${f.name}`} title={`Remove ${f.name}`} disabled={sending}
           onClick={() => setFiles(files.filter((_, j) => j !== i))}>
           <Icon name="file" />
           <span>{f.name}</span>
@@ -94,6 +111,7 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true }
           aria-label={label}
           placeholder={label}
           value={text}
+          readOnly={sending}
           onChange={(e) => {
             setText(e.target.value);
             writeDraft(me, id, e.target.value);
@@ -114,10 +132,10 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true }
                 if (picked.length) setFiles([...files, ...picked].slice(0, 10));
               }}
             />
-            <IconButton icon="attach" label="Attach a file" size="sm" onClick={() => picker.current?.click()} />
+            <IconButton icon="attach" label="Attach a file" size="sm" disabled={sending} onClick={() => picker.current?.click()} />
           </>
         )}
-        <button className={ready ? 'send is-ready' : 'send'} type="button" aria-label="Send" disabled={!ready} onClick={send}>
+        <button className={ready ? 'send is-ready' : 'send'} type="button" aria-label="Send" disabled={!ready || sending} onClick={send}>
           <Icon name="send" />
         </button>
       </div>

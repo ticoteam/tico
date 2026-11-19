@@ -18,6 +18,7 @@ import {
   contactsQuery,
   countsQuery,
   docQuery,
+  docRows,
   docsListQuery,
   docVersionsQuery,
   installTargetsQuery,
@@ -85,8 +86,8 @@ const doc = (id: string, title: string) => ({ id, title, locked: false, path: 'c
 describe('archived docs', () => {
   it('lists archived docs from their own read, each with Restore @s791', async () => {
     const sent = serve();
-    queryClient.setQueryData(docsListQuery.queryKey, { docs: [doc('d1', 'Live doc')], next_cursor: null });
-    queryClient.setQueryData(archivedDocsQuery.queryKey, { docs: [doc('d2', 'Old plan')], next_cursor: null });
+    queryClient.setQueryData(docsListQuery.queryKey, { pages: [{ docs: [doc('d1', 'Live doc')], next_cursor: null }], pageParams: [''] });
+    queryClient.setQueryData(archivedDocsQuery.queryKey, { pages: [{ docs: [doc('d2', 'Old plan')], next_cursor: null }], pageParams: [''] });
     at('/library/docs?archived=1', <DocsPage search={{ archived: 1 }} />);
     expect(await screen.findByText('Old plan')).toBeTruthy();
     expect(screen.queryByText('Live doc')).toBeNull();
@@ -100,17 +101,17 @@ describe('archived docs', () => {
 
   it('archives a doc: off the list at once, and sent with its version @s791', async () => {
     const sent = serve();
-    queryClient.setQueryData(docsListQuery.queryKey, { docs: [doc('d1', 'Live doc')], next_cursor: null });
+    queryClient.setQueryData(docsListQuery.queryKey, { pages: [{ docs: [doc('d1', 'Live doc')], next_cursor: null }], pageParams: [''] });
     at('/library/d1');
     const done = run('docs.archive', { doc: 'd1', version: 3, archived: true }, { via: 'click' });
-    await waitFor(() => expect(queryClient.getQueryData<{ docs: unknown[] }>(docsListQuery.queryKey)?.docs).toEqual([]));
+    await waitFor(() => expect(docRows(queryClient.getQueryData(docsListQuery.queryKey))).toEqual([]));
     expect((await done).ok).toBe(true);
     expect(writes(sent)).toEqual([{ url: '/api/v2/docs/d1', method: 'PATCH', body: { version: 3, archived: true } }]);
   });
 
   it('turns the archived view on from the head’s ⋯ @s791', async () => {
     serve(() => ({ docs: [], next_cursor: null }));
-    queryClient.setQueryData(docsListQuery.queryKey, { docs: [doc('d1', 'Live doc')], next_cursor: null });
+    queryClient.setQueryData(docsListQuery.queryKey, { pages: [{ docs: [doc('d1', 'Live doc')], next_cursor: null }], pageParams: [''] });
     const router = at('/library/docs', <DocsPage search={{}} />);
     fireEvent.click(await screen.findByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Archived' }));
@@ -119,6 +120,16 @@ describe('archived docs', () => {
 });
 
 describe('editing a doc', () => {
+  it('can open the docs list after saving a doc from a direct link', async () => {
+    const saved = { ...doc('d1', 'Renamed notes'), body: 'Notes', archived: false, created_at: '', created_by_id: '', created_by_name: '', version: 4 };
+    serve((_url, method) => (method === 'PATCH' ? { doc: saved } : { docs: [saved], next_cursor: null }));
+    queryClient.setQueryData(docQuery('d1').queryKey, { ...saved, title: 'Notes', version: 3 });
+    at('/library/d1');
+    expect((await run('docs.save', { doc: 'd1', version: 3, title: saved.title }, { via: 'click' })).ok).toBe(true);
+    const list = await queryClient.ensureInfiniteQueryData(docsListQuery);
+    expect(docRows(list).map((d) => d.title)).toEqual([saved.title]);
+  });
+
   it('keeps what the person typed when the save is refused, and sends the version they started from again @s815', async () => {
     const full = { ...doc('d1', 'Notes'), body: 'Old text', archived: false, created_at: '', created_by_id: '', created_by_name: '' };
     const patches: unknown[] = [];
@@ -150,15 +161,36 @@ describe('editing a doc', () => {
 });
 
 describe('docs list', () => {
+  it('loads the next page from Load more at the end of the docs list', async () => {
+    const sent = serve(() => ({ docs: [doc('d2', 'Another doc')], next_cursor: null }));
+    queryClient.setQueryData(docsListQuery.queryKey, {
+      pages: [{ docs: [doc('d1', 'First doc')], next_cursor: 'next-cursor' }],
+      pageParams: [''],
+    });
+    at('/library/docs', <DocsPage search={{}} />);
+    await screen.findByRole('link', { name: /First doc/ });
+    expect(sent).not.toContainEqual(expect.objectContaining({ url: '/api/v2/docs?limit=200&cursor=next-cursor' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    expect(await screen.findByRole('link', { name: /Another doc/ })).toBeTruthy();
+    expect(screen.getByRole('link', { name: /First doc/ })).toBeTruthy();
+    expect(sent).toContainEqual(expect.objectContaining({ url: '/api/v2/docs?limit=200&cursor=next-cursor' }));
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+  });
+
   it('names a section as a person reads it, and puts the head’s ⋯ after New doc @s773', async () => {
     serve();
     queryClient.setQueryData(docsListQuery.queryKey, {
-      docs: [
-        { ...doc('d1', 'Fern index'), path: '_greenhouse/index.md' },
-        { ...doc('d2', 'Watering how-to'), path: 'plant-care/watering.md' },
-        { ...doc('d3', 'Readme'), path: 'README.md' },
+      pages: [
+        {
+          docs: [
+            { ...doc('d1', 'Fern index'), path: '_greenhouse/index.md' },
+            { ...doc('d2', 'Watering how-to'), path: 'plant-care/watering.md' },
+            { ...doc('d3', 'Readme'), path: 'README.md' },
+          ],
+          next_cursor: null,
+        },
       ],
-      next_cursor: null,
+      pageParams: [''],
     });
     at('/library/docs', <DocsPage search={{}} />);
     expect(await screen.findByText('Greenhouse')).toBeTruthy();
@@ -173,11 +205,16 @@ describe('docs list', () => {
   it('files a doc under the folders below its section, never its own file name', async () => {
     serve();
     queryClient.setQueryData(docsListQuery.queryKey, {
-      docs: [
-        { ...doc('d1', 'Glossary'), path: 'plant-care/glossary.md' },
-        { ...doc('d2', 'Repotting'), path: 'plant-care/how-to/repotting.md' },
+      pages: [
+        {
+          docs: [
+            { ...doc('d1', 'Glossary'), path: 'plant-care/glossary.md' },
+            { ...doc('d2', 'Repotting'), path: 'plant-care/how-to/repotting.md' },
+          ],
+          next_cursor: null,
+        },
       ],
-      next_cursor: null,
+      pageParams: [''],
     });
     at('/library/docs', <DocsPage search={{}} />);
     const glossary = (await screen.findByText('Glossary')).closest('.drow') as HTMLElement;
@@ -190,7 +227,7 @@ describe('docs list', () => {
   it('puts the owner’s face in the head, opening their chat; a phone’s head keeps only search, the filled button and ⋯', async () => {
     serve();
     queryClient.setQueryData(['settings', 'page-owners'], { docs: { bot: 'fern-librarian' }, skills: { bot: 'fern-ops' } });
-    queryClient.setQueryData(docsListQuery.queryKey, { docs: [doc('d1', 'Fern index')], next_cursor: null });
+    queryClient.setQueryData(docsListQuery.queryKey, { pages: [{ docs: [doc('d1', 'Fern index')], next_cursor: null }], pageParams: [''] });
     at('/library/docs', <DocsPage search={{}} />);
     const face = await screen.findByRole('link', { name: /^Chat with/ });
     expect(face.closest('[data-phone]')).toBeNull();

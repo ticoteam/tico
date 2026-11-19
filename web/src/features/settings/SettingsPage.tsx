@@ -7,6 +7,7 @@ import { Empty } from '@/kit/Empty';
 import { Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { Link as To } from '@/kit/Link';
+import { useCards } from '@/kit/Popover';
 import { Section, Settings } from '@/pagekinds';
 import { StateBody } from '@/pagekinds';
 import { AddComputer, Agents, Computers, Models } from './Agents';
@@ -212,10 +213,12 @@ export function SettingsPage({ section, open, who, list = false }: { section: Se
   // section list. The union of each section's options, typed loosely because only its error is used.
   const forbidden = isForbidden(useQuery(mainQuery(section) as UseQueryOptions<unknown, Error, unknown, readonly unknown[]>).error);
   const Body = BODY[section];
+  const cards = useCards();
   const [q, setQ] = useState('');
-  const asked = useSettled(q.trim());
-  const searching = !!q.trim();
-  const { hits, loaded } = useHits(asked);
+  const term = q.trim();
+  const asked = useSettled(term);
+  const searching = !!term;
+  const { hits, loaded } = useHits(asked === term ? asked : '');
   // The result the arrow keys are on; Enter opens it (the first when none is).
   const [at, setAt] = useState(-1);
   const results = useRef<HTMLDivElement>(null);
@@ -240,6 +243,7 @@ export function SettingsPage({ section, open, who, list = false }: { section: Se
     <Settings
       title="Settings"
       path={`/settings/${section}`}
+      crumb={cards && !list ? [{ label: 'Settings', to: '/settings' }] : undefined}
       className="set-page"
       open={!list || searching}
       nav={<Nav current={section} />}
@@ -259,7 +263,7 @@ export function SettingsPage({ section, open, who, list = false }: { section: Se
       }
       body={
         searching ? (
-          asked && loaded ? (
+          asked === term && loaded ? (
             <div ref={results}>
               <Results hits={hits} at={at} onPick={pick} />
             </div>

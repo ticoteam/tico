@@ -409,6 +409,41 @@ describe('Finance books @s420 @s455 @s456 @s458 @s459 @s464 @s465', () => {
     expect(screen.getByText('2 entries')).toBeTruthy();
   });
 
+  it('keeps all transaction filters and the viewed teammate on later pages', async () => {
+    const pages: URLSearchParams[] = [];
+    serve((url) => {
+      if (url.endsWith('/finance/access')) return ok(access);
+      if (!url.includes('/finance/transactions')) return { status: 404, body: {} };
+      const params = new URL(url, 'http://x').searchParams;
+      pages.push(params);
+      return params.has('cursor') ? ok({ rows: [tx('t2', 'Paper Co', -2000)], next: null }) : ok({ rows: [tx('t1', 'Ink Co', -1000)], next: 'page 2' });
+    });
+    show('finance', '/company/finance?tab=transactions&src=feed&status=posted&line=acc_soft&as=human:sam');
+    expect(await screen.findByText('Paper Co')).toBeTruthy();
+    expect(screen.getByText('Ink Co')).toBeTruthy();
+    expect(pages.map((p) => Object.fromEntries(p))).toEqual([
+      { limit: '200', source: 'feed', status: 'posted', account_id: 'acc_soft', view_as: 'human:sam' },
+      { limit: '200', cursor: 'page 2', source: 'feed', status: 'posted', account_id: 'acc_soft', view_as: 'human:sam' },
+    ]);
+  });
+
+  it('keeps earlier transactions visible and retries the failed cursor', async () => {
+    let attempts = 0;
+    serve((url) => {
+      if (url.endsWith('/finance/access')) return ok(access);
+      if (!url.includes('/finance/transactions')) return { status: 404, body: {} };
+      if (!url.includes('cursor=')) return ok({ rows: [tx('t1', 'Ink Co', -1000)], next: 'page 2' });
+      if (++attempts === 1) return { status: 503, body: {} };
+      return ok({ rows: [tx('t2', 'Paper Co', -2000)], next: null });
+    });
+    show('finance', '/company/finance?tab=transactions');
+    const retry = await screen.findByRole('button', { name: 'Try again' });
+    expect(screen.getByText('Ink Co')).toBeTruthy();
+    fireEvent.click(retry);
+    expect(await screen.findByText('Paper Co')).toBeTruthy();
+    expect(attempts).toBe(2);
+  });
+
   it("a line's shares are saved from its row", async () => {
     const posted: Record<string, unknown>[] = [];
     serve((url, method, body) => {
@@ -529,10 +564,11 @@ describe('Finance tabs and sources', () => {
   const access = {
     can_edit_defaults: true,
     can_view_as: true,
+    finance_approver: 'human:lee',
     defaults: { manager: 'none', manager_payroll: 'totals', member: 'none' },
     teammates: [
       { teammate: 'human:me', kind: 'human', default: 'everything', rights: [] },
-      { teammate: 'human:lee', kind: 'human', default: 'team_expenses', rights: ['approve'] },
+      { teammate: 'human:lee', kind: 'human', default: 'team_expenses', rights: [] },
       { teammate: 'human:sam', kind: 'human', default: 'none', rights: [] },
     ],
   };
@@ -605,6 +641,7 @@ describe('Finance tabs and sources', () => {
     });
     show('finance', '/company/finance?tab=access');
     const table = await screen.findByRole('table', { name: 'Access' });
+    expect(within(table).getByText('Everything').closest('tr')!.textContent).toContain('Yes');
     expect(within(table).getByText("Their team's lines").closest('tr')!.textContent).toContain('Yes');
     // Those who see nothing fold into one line, which opens them.
     fireEvent.click(screen.getByRole('button', { name: /1 other sees nothing/ }));

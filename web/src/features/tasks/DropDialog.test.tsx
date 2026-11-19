@@ -100,4 +100,18 @@ describe('a card let go over another card @s25', () => {
     expect(within(dialog).getByText('#8 is already under #7.')).toBeTruthy();
     expect((within(dialog).getByRole('button', { name: 'Make subtask' }) as HTMLButtonElement).disabled).toBe(true);
   });
+
+  it('shows the first refusal immediately when both choices are blocked', async () => {
+    const subtask = 'These tasks are already linked.';
+    const merge = 'Only open tasks can be merged.';
+    serve(checks({ subtask, merge }));
+    show(<DropDialog task="t1" onto="t2" onClose={() => undefined} />);
+    const dialog = within(await screen.findByRole('dialog', { name: 'Drop #7 on #8' }));
+    expect(dialog.getByText(subtask)).toBeTruthy();
+    expect((dialog.getByRole('button', { name: 'Make subtask' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(dialog.getByRole('button', { name: 'Merge' }));
+    expect(dialog.getByText(merge)).toBeTruthy();
+    expect((dialog.getAllByRole('button', { name: 'Merge' }).at(-1) as HTMLButtonElement).disabled).toBe(true);
+    expect(posts).toEqual([]);
+  });
 });

@@ -50,11 +50,11 @@ export const useFileOpen = (): boolean => useSyncExternalStore(viewing.subscribe
 // Both Docs tabs show both counts.
 export const loadDocs = (qc: QueryClient, s: Pick<DocsSearch, 'tab' | 'archived'>) => {
   if (s.tab === 'sources') {
-    void qc.prefetchQuery(docsListQuery);
+    void qc.prefetchInfiniteQuery(docsListQuery);
     return qc.ensureQueryData(sourcesQuery);
   }
   void qc.prefetchQuery(sourcesQuery);
-  return qc.ensureQueryData(s.archived ? archivedDocsQuery : docsListQuery);
+  return qc.ensureInfiniteQueryData(s.archived ? archivedDocsQuery : docsListQuery);
 };
 export const loadDoc = (qc: QueryClient, doc: string, revision: string | undefined) => {
   if (doc === 'new') return;

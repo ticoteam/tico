@@ -301,10 +301,13 @@ describe('an email waiting to send', () => {
     expect(document.activeElement?.tagName).not.toBe('INPUT');
   });
 
-  it('when its preview does not load, says so in place of what Approve does, with Try again @approvals', async () => {
+  it.each([
+    { problem: 'fails', response: { status: 503, body: { error: { code: 'busy', detail: 'Try again', retryable: true } } } },
+    { problem: 'is incomplete', response: { body: { ...mail, body: '', preview_complete: false, shown_hash: null } } },
+  ])('offers a retry when the email preview $problem @approvals', async ({ response }) => {
     shown = task({ title: titled });
     let busy = true;
-    reply = (url) => (busy && url.endsWith('/api/v2/email/sends/s1') ? { status: 503, body: { error: { code: 'busy', detail: 'Tico is busy; retry shortly', retryable: true } } } : null);
+    reply = (url) => (busy && url.endsWith('/api/v2/email/sends/s1') ? response : null);
     show(<TaskChat task="12" />, '/tasks/p1/12');
     const box = await decision();
     expect(await within(box).findByText('Part of it did not load')).toBeTruthy();

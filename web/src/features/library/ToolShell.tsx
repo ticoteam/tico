@@ -39,6 +39,7 @@ export const KIND: Record<string, string> = {
 /** A tool's address, keeping the list's filter. */
 export const toolHref = (id: string, s: ToolsSearch = {}) => {
   const p = new URLSearchParams();
+  if (s.q) p.set('q', s.q);
   if (s.kind) p.set('kind', s.kind);
   if (s.needs) p.set('needs', '1');
   if (s.who) p.set('who', s.who);
@@ -113,7 +114,7 @@ export function ToolPage(p: ToolPageProps) {
         target={target}
         more={p.more}
         onRename={p.onRename}
-        back={{ to: '/library/tools', label: 'Tools' }}
+        back={{ to: '/library/tools', label: 'Tools', search: (prev) => ({ ...prev, tool: undefined }) }}
         lead={<KindTile kind={kind} mcp={p.mcp} big />}
         actions={
           <>
