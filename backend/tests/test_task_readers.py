@@ -369,7 +369,7 @@ def test_create_a_private_task_with_readers(api):
     assert r.status_code == 422 and "make it private" in r.text, r.text
 
 
-def test_a_bot_adds_readers_within_its_reach_and_never_a_group(api):
+def test_a_bot_adds_anyone_to_a_task_it_owns_others_within_its_reach_and_never_a_group(api):
     gid = post(api, "groups", {"name": "Payroll desk", "add": {"people": ["cara"]}})["id"]
     row = task(api, "human:ana", "bot:ops", "Payroll review")
     token = bot_token(api)
@@ -377,10 +377,14 @@ def test_a_bot_adds_readers_within_its_reach_and_never_a_group(api):
     assert r.status_code == 403 and "Only a person adds a group to Who can see" in r.text, r.text
     r = api.put("/api/v2/reach/settings/bot:ops", json={"mode": "closed"}, headers=headers())
     assert r.status_code == 200, r.text
-    r = change(api, row["id"], {"add": ["cara"]}, token)
+    theirs = task(api, "bot:ops", "human:ana", "Vendor dispute")  # asked for by ops, owned by Ana
+    r = change(api, theirs["id"], {"add": ["cara"]}, token)
     assert r.status_code == 409 and r.json()["error"]["code"] == "reach_closed", r.text
-    r = change(api, row["id"], {"readers": ["cara"]}, token, method="put")
+    r = change(api, theirs["id"], {"readers": ["cara"]}, token, method="put")
     assert r.status_code == 409, r.text
+    # Its own task: sharing it is never out of reach.
+    assert change(api, row["id"], {"add": ["cara"]}, token).status_code == 200
+    assert change(api, row["id"], {"remove": ["cara"]}, token).status_code == 200
     # A person adds both; the bot may still take a reader off.
     assert change(api, row["id"], {"add": ["cara", "group:" + gid]}).status_code == 200
     r = change(api, row["id"], {"remove": ["cara"]}, token)
