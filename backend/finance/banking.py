@@ -49,6 +49,8 @@ OTHER, BANK, CARDS, OPENING = "6900", "1000", "2100", "3900"
 BOOKS_PROVIDERS = ("quickbooks", "xero")
 RULE = "rule"  # _settle's answer when a posting rule posted the row
 MATCH_DAYS = 5  # a transfer's two sides post within this many days of each other
+# A card paid from a bank on another connection: the bank's debit posts up to a week from the card's credit.
+CARD_PAY_DAYS = 7
 AUTH_DAYS = 30  # an authorization's hold lasts this long without its settlement
 
 
@@ -1558,10 +1560,14 @@ def _counterpart(ctx: Ctx, row: Any, money: Any) -> Any:
 
 
 def _card_payment(ctx: Ctx, row: Any, money: Any) -> bool:
-    """A payment from a bank account to a credit card program of the same connection (Mercury IO's autopay: a plain
-    row on each side, no transfer kind) posts as a transfer: Dr the card liability, Cr the bank. Whichever side comes
-    second pairs them; a bank side already posted to Other expenses (still waiting for a category) is taken back, one
-    a rule or match posted elsewhere is not. No pair, or several, and the row posts as any other."""
+    """A payment from a bank account to a credit card program (Mercury IO's autopay, or a Brex card paid from a Mercury
+    bank: a plain row on each side, no transfer kind) posts as a transfer: Dr the card liability, Cr the bank. Whichever
+    side comes second pairs them; a bank side still on the automatic Other expenses default is taken back, one a person
+    categorized or a rule or match posted elsewhere is not. The other side is looked for on the same connection first
+    (within MATCH_DAYS). Only a card side with none there looks at the book's other connections (within CARD_PAY_DAYS),
+    and a card side that waits pairs at the end of its connection's sync pass (pair_card_payments): every row of that
+    pass, and of the bank's own pass, is in by then, so a pair on one connection always wins. Exactly the opposite
+    amount and exactly one candidate, else nothing pairs and the row posts as any other."""
     kind, amount = str(money["kind"]), int(row["amount"])
     if kind == "card_program" and str(money["subtype"]) == "credit" and amount > 0:
         want = "bank"
@@ -1570,27 +1576,16 @@ def _card_payment(ctx: Ctx, row: Any, money: Any) -> bool:
     else:
         return False
     conn = str(money["connection_id"] or "")
-    others = [
-        str(m["id"])
+    accounts = [
+        m
         for m in SK.money_accounts(ctx.c, ctx.book.id)
-        if conn
-        and str(m["kind"]) == want
-        and str(m["connection_id"] or "") == conn
-        and (want == "bank" or str(m["subtype"]) == "credit")
+        if str(m["kind"]) == want and (want == "bank" or str(m["subtype"]) == "credit") and m["connection_id"]
     ]
-    if not others:
-        return False
-    day = dates.day(str(row["txn_date"]))
-    start, end = (day - timedelta(days=MATCH_DAYS)).isoformat(), (day + timedelta(days=MATCH_DAYS)).isoformat()
-    other_line = by_code(ctx, OTHER)
-    found = [
-        r
-        for r in SK.transfer_candidates(ctx.c, others, -amount, start, end)
-        if str(r["kind"]) not in (*F.CARD_KINDS, *F.TRANSFER_KINDS)
-        and not r["card_id"]
-        and not r["request_id"]
-        and (not r["entry_id"] or other_line is not None and _only_other(ctx, r, other_line.id))
-    ]
+    same = [str(m["id"]) for m in accounts if conn and str(m["connection_id"]) == conn]
+    found = _payment_sides(ctx, row, same, MATCH_DAYS)
+    if not found and want == "bank":  # the card side looks across: its own connection has had its say by then
+        cross = [str(m["id"]) for m in accounts if str(m["connection_id"]) != conn]
+        found = _payment_sides(ctx, row, cross, CARD_PAY_DAYS)
     if len(found) != 1:
         return False
     other = found[0]
@@ -1598,7 +1593,32 @@ def _card_payment(ctx: Ctx, row: Any, money: Any) -> bool:
         unpost_row(ctx, other, "it pays the card")
         other = SK.get(ctx.c, "fin_feed_txns", str(other["id"]))
     transfer(ctx, row, money, other)
+    for fid in (str(row["id"]), str(other["id"])):
+        SK.withdraw_asks(ctx.c, CATEGORY_EVENT, fid)  # an ask not yet sent on: neither side waits for a person now
     return True
+
+
+def _payment_sides(ctx: Ctx, row: Any, money_ids: Sequence[str], days: int) -> list[Any]:
+    """The rows on these money accounts that may be the other side of a card payment: the opposite amount within `days`,
+    no card, request, card or transfer kind, and not posted, or posted to the automatic Other expenses default alone."""
+    if not money_ids:
+        return []
+    day = dates.day(str(row["txn_date"]))
+    start, end = (day - timedelta(days=days)).isoformat(), (day + timedelta(days=days)).isoformat()
+    other_line = by_code(ctx, OTHER)
+    return [
+        r
+        for r in SK.transfer_candidates(ctx.c, money_ids, -int(row["amount"]), start, end)
+        if str(r["kind"]) not in (*F.CARD_KINDS, *F.TRANSFER_KINDS)
+        and not r["card_id"]
+        and not r["request_id"]
+        and (
+            not r["entry_id"]
+            or other_line is not None
+            and _only_other(ctx, r, other_line.id)
+            and not SAP.categorized_into(ctx.c, str(r["entry_id"]))
+        )
+    ]
 
 
 def _only_other(ctx: Ctx, row: Any, other_id: str) -> bool:
