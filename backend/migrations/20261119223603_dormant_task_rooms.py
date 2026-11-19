@@ -105,7 +105,7 @@ TRIGGERS = (
 
 INDEXES = (
     "CREATE INDEX IF NOT EXISTS conversations_awake_task_roots ON conversations(task_id) "
-    "WHERE task_id IS NOT NULL AND parent_id IS NULL AND dormant_at IS NULL",
+    "WHERE parent_id IS NULL AND task_id IS NOT NULL AND dormant_at IS NULL",
     "CREATE INDEX IF NOT EXISTS conversations_awake_open_roots ON conversations(id) "
     "WHERE parent_id IS NULL AND archived_at IS NULL AND closed_at IS NULL AND dormant_at IS NULL",
 )

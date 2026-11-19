@@ -99,3 +99,20 @@ def test_the_mark_is_in_no_answer(api):
     with api.app.state.store.read() as c:
         assert "dormant_at" not in H.conversation(c, task["conversation_id"])
     assert "dormant_at" in sql.HIDDEN["conversations"]
+
+
+def test_the_awake_indexes_hold_exactly_the_rows_their_readers_name(api):
+    # A query naming an index (INDEXED BY) must AND in its WHERE: thread_rail.AWAKE_ROOT is the open roots' index's, and
+    # threads.AWAKE_TASK_ROOT is in the task roots' index's.
+    from backend import thread_rail, threads
+
+    with api.app.state.store.read_transaction() as c:
+        found = dict(
+            c.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type='index' "
+                "AND name IN ('conversations_awake_open_roots','conversations_awake_task_roots')"
+            ).fetchall()
+        )
+    where = found["conversations_awake_open_roots"].split(" WHERE ", 1)[1]
+    assert " ".join(where.split()) == thread_rail.AWAKE_ROOT.replace("r.", "")
+    assert threads.AWAKE_TASK_ROOT.format(r="r").replace("r.", "") in found["conversations_awake_task_roots"]
