@@ -1,5 +1,5 @@
 import { queryOptions } from '@tanstack/react-query';
-import { api } from '@/api/client';
+import { ApiError, api } from '@/api/client';
 import type {
   ChangelogList,
   CloudSupportView,
@@ -119,6 +119,103 @@ export const setRule = (rule: string, value: boolean) =>
     optimistic: (v: AccessView | undefined) => v && { ...v, rules: { ...v.rules, [rule]: value } },
     send: (idempotencyKey) => api.put('/api/v2/access/rules', { [rule]: value }, { idempotencyKey }),
   });
+
+// ---------------------------------------------------------------- directory sync (owner; /api/v2/directory, not in the generated schema yet)
+
+export type DirectorySource = '' | 'google' | 'entra' | 'scim';
+
+export interface DirectoryFilter {
+  groups: string[];
+  org_units: string[];
+  domains: string[];
+}
+
+export interface DirectoryView {
+  source: DirectorySource;
+  filter: DirectoryFilter;
+  interval_minutes: number;
+  mass_leave_limit: number;
+  revision: number;
+  last: { at?: string; ok?: boolean; error?: string; held?: boolean };
+  /** A saved key is never read back: only whether there is one and its last few characters. */
+  credentials: Partial<Record<'google' | 'entra', { configured?: boolean; hint?: string }>>;
+  scim: { enabled?: boolean; created_at?: string; url?: string };
+}
+
+export interface DirectoryCredentials {
+  service_account_json?: string;
+  admin_email?: string;
+  tenant?: string;
+  client_id?: string;
+  client_secret?: string;
+}
+
+export interface DirectoryPlanRow {
+  email: string;
+  name?: string;
+  reason?: string;
+}
+
+/** POST /api/v2/directory/preview: what a sync would do. Nothing changes until it is applied. */
+export interface DirectoryPreview {
+  plan: { hash: string } & Record<'adds' | 'updates' | 'restores' | 'leaves' | 'protected' | 'skipped', DirectoryPlanRow[]>;
+  needs_confirmation: { first?: boolean; mass_leave?: boolean };
+  mass_leave_limit: number;
+  applied?: boolean;
+  stale?: boolean;
+}
+
+export const directorySyncQuery = queryOptions({
+  queryKey: ['settings', 'directory-sync'],
+  queryFn: async ({ signal }) => {
+    const v = await api.get<Partial<DirectoryView>>('/api/v2/directory', { signal });
+    return {
+      source: '',
+      interval_minutes: 360,
+      mass_leave_limit: 10,
+      revision: 0,
+      ...v,
+      last: { ...v.last },
+      filter: { groups: [], org_units: [], domains: [], ...v.filter },
+      credentials: { ...v.credentials },
+      scim: { ...v.scim },
+    } as DirectoryView;
+  },
+  ...quiet,
+});
+
+export interface DirectorySave {
+  source: DirectorySource;
+  interval_minutes: number;
+  mass_leave_limit: number;
+  filter: DirectoryFilter;
+  /** Only when the person typed new ones; they are never read back. */
+  credentials?: DirectoryCredentials;
+  replace_lost_key?: boolean;
+}
+
+export const saveDirectory = async (body: DirectorySave) => {
+  const expected_revision = queryClient.getQueryData(directorySyncQuery.queryKey)?.revision ?? 0;
+  const r = await api.put<{ revision: number }>('/api/v2/directory', { ...body, expected_revision });
+  await queryClient.invalidateQueries({ queryKey: directorySyncQuery.queryKey });
+  return r;
+};
+
+/** A new SCIM token. It goes back to the press that asked for it and nowhere else: not the cache, not a toast. */
+export const newScimToken = async () => {
+  const r = await api.post<{ token: string }>('/api/v2/directory/scim-token', {});
+  await queryClient.invalidateQueries({ queryKey: directorySyncQuery.queryKey });
+  return r.token;
+};
+
+export const previewDirectory = () => api.post<DirectoryPreview>('/api/v2/directory/preview', {});
+
+export const syncDirectory = async (planHash: string, confirm: boolean) => {
+  const r = await api.post<DirectoryPreview>('/api/v2/directory/sync', { confirm, plan_hash: planHash });
+  await queryClient.invalidateQueries({ queryKey: directorySyncQuery.queryKey });
+  await queryClient.invalidateQueries({ queryKey: accessQuery.queryKey });
+  return r;
+};
 
 // ---------------------------------------------------------------- page owners
 
@@ -321,6 +418,13 @@ export const healthQuery = queryOptions({
 export const changelogQuery = queryOptions({
   queryKey: ['settings', 'changelog'],
   queryFn: ({ signal }) => api.get<ChangelogList>('/api/v2/changelog?kind=product&limit=60', { signal }),
+  ...quiet,
+});
+
+/** What agents shipped: each line may name the task it came from, whose outcome opens over the page. */
+export const activityQuery = queryOptions({
+  queryKey: ['settings', 'changelog', 'activity'],
+  queryFn: ({ signal }) => api.get<ChangelogList>('/api/v2/changelog?kind=activity&limit=60', { signal }),
   ...quiet,
 });
 
@@ -654,6 +758,63 @@ export const reconcileRun = (bot: string, job: string, run: string, decision: 'r
         { idempotencyKey },
       ),
   });
+
+// ---------------------------------------------------------------- a destination that changes (409 destination_change)
+
+/** The server's 409 when a saved address changes and credentials were saved for the old one. */
+export interface DestinationChange {
+  name: string;
+  old: string;
+  new: string;
+  /** The saved credentials, by label. */
+  credentials: string[];
+}
+
+export type DestinationChoice = 'keep' | 'clear';
+
+const addressOf = (v: unknown) => (typeof v === 'object' && v ? String((v as { address?: unknown }).address ?? '') : String(v ?? ''));
+
+/** The change the server asks about, or null when the error is anything else. */
+export function destinationChange(e: unknown): DestinationChange | null {
+  if (!(e instanceof ApiError) || e.code !== 'destination_change') return null;
+  const x = e.extra;
+  return {
+    name: String(x.name || x.integration || 'it'),
+    old: addressOf(x.old),
+    new: addressOf(x.new),
+    credentials: Array.isArray(x.credentials) ? x.credentials.map(String) : [],
+  };
+}
+
+/** Send a change of address; when the server asks what to do with the old address's credentials, ask the person
+    (`ask` resolves null for Cancel) and send again with their answer. Cancel saves nothing. */
+export async function withDestination<T>(
+  send: (credentials?: DestinationChoice) => Promise<T>,
+  ask: (change: DestinationChange) => Promise<DestinationChoice | null>,
+): Promise<T> {
+  try {
+    return await send();
+  } catch (e) {
+    const change = destinationChange(e);
+    if (!change) throw e;
+    const choice = await ask(change);
+    if (!choice) throw new Error('Nothing was saved', { cause: e });
+    return send(choice);
+  }
+}
+
+/** What an agent's tasks run on (backend BotTaskChoice); a missing model is the agent's own. */
+export interface TaskModel {
+  harness?: string | null;
+  model?: string | null;
+  effort?: string | null;
+  compact_at?: number | null;
+}
+
+/** The model an agent's tasks run on; null runs them on the agent's own model. `warning`: a cheaper pick on an agent
+    that sends, spends or publishes, in plain words; it still saves. Not in the generated schema yet. */
+export const setTaskModel = (bot: string, pick: TaskModel | null, revision: number) =>
+  api.post<{ warning?: string }>(`/api/v2/bots/${enc(bot)}/task-model`, { task_model: pick, expected_revision: revision });
 
 // ---------------------------------------------------------------- computers: sleep when idle, hosted servers
 

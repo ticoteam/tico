@@ -4,3 +4,6 @@ export { UsagePage, type UsageSearch } from './Usage';
 export { SECTION_IDS, isSection, type SectionId } from './sections';
 export { loadSection } from './main';
 export { loadUsage } from './Usage';
+// A held change of address (409 destination_change): the editor that moves an address sends through withDestination.
+export { DestinationDialog, useDestination } from './Destination';
+export { withDestination, destinationChange, type DestinationChange, type DestinationChoice } from './queries';

@@ -32,7 +32,7 @@ const BODY: Record<SectionId, (p: { open?: string; who?: string }) => ReactNode>
   billing: () => <Billing />,
   history: ({ who }) => <History who={who} />,
   health: () => <Health />,
-  changelog: () => <Changelog />,
+  changelog: ({ open }) => <Changelog open={open} />,
 };
 
 function Nav({ current }: { current: SectionId }) {

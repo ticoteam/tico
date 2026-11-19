@@ -52,7 +52,7 @@ div.row{cursor:default}
 .g-cred{--g:minmax(0,1fr) 96px 96px 96px}
 .g-comp{--g:minmax(0,1fr) 120px 96px 118px}
 .g-model{--g:minmax(0,1fr) 120px 96px}
-.g-bots{--g:16px var(--av-sm) minmax(0,1fr) 164px 124px 120px 76px}
+.g-bots{--g:16px var(--av-sm) minmax(0,1fr) 176px 124px 44px 140px 48px}
 .g-ret{--g:minmax(0,1fr) auto}
 .g-host{--g:minmax(0,1fr) 118px 72px}
 .g-fsub{--g:minmax(0,1fr) 128px 74px 172px 28px}
@@ -78,6 +78,7 @@ div.row{cursor:default}
 .foot{display:flex;flex-wrap:wrap;gap:calc(var(--s-6) + var(--s-0));padding:var(--s-2h) var(--s-2) 0}
 .open .field{max-width:320px}
 .set-add{display:grid;gap:var(--s-3)}
+.set-dir{max-width:320px;padding:var(--s-1h) var(--s-2)}
 
 /* a thin bar */
 .meter{display:block;height:4px;border-radius:var(--r-chip);background:var(--line-strong);position:relative;overflow:hidden}
@@ -128,6 +129,7 @@ div.row{cursor:default}
 .cl-list{list-style:none;margin:0;padding:0 var(--s-2) var(--s-1h);display:grid;gap:var(--s-1h)}
 .cl-list li{display:grid;grid-template-columns:52px minmax(0,1fr);align-items:baseline;line-height:1.4;color:var(--ink-2)}
 .cl-kind{font-size:var(--t-xs);color:var(--muted)}
+.cl-list li.cl-act{grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-3)}
 
 /* ---- agents, computers and models (anchor) ---- */
 
@@ -145,6 +147,41 @@ div.row{cursor:default}
 /* a dialog's list of people to check, and a stopped run's words and verbs */
 .set-picks,.set-level,.set-stop{display:grid;gap:var(--s-1)}
 .set-stop .open-foot{margin-top:0;padding:var(--s-1) 0 0;box-shadow:none}
+
+/* Agents as one screen (a trial, Nov 19). A value you change where it stands: its words, a small chevron; a wash under
+   the pointer and while its menu is open. */
+.dd{max-width:calc(100% + 12px);min-width:0;height:var(--ctl-sm);display:inline-flex;align-items:center;gap:var(--s-1);justify-self:start;margin:0 calc(var(--s-1h) * -1);padding:0 var(--s-1h);border:0;border-radius:var(--r-chip);background:none;color:var(--ink-2);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer;transition:background var(--dur-fast) var(--ease)}
+.dd>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.dd>.ico{width:13px;height:13px;flex:none;color:var(--faint);stroke-width:2}
+.dd:hover,.dd[aria-expanded="true"]{background:var(--well-2);color:var(--ink)}
+.dd:hover>.ico,.dd[aria-expanded="true"]>.ico{color:var(--ink-2)}
+.dd.is-same{color:var(--muted)}
+.dd:disabled{cursor:default;background:none}
+.dd:disabled>.ico{display:none}
+.row-own{display:grid}
+/* over the table: search (or what to do with the checked rows) at the left, how it is grouped at the right */
+.fl-tools .bulk{margin-left:0}
+.fl-tools .tools-n{margin-left:0}
+.fl-tools .search{flex:0 1 300px;max-width:none}
+.fl-by{margin-left:auto;display:flex;align-items:center;gap:var(--s-2);flex:none;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
+.g-fleet .row-cell{color:var(--ink-2)}
+/* a limit you change where it stands: a figure that is a button */
+.fl-lim{justify-self:end;height:var(--ctl-sm);margin:0 calc(var(--s-1h) * -1);padding:0 var(--s-1h);border:0;border-radius:var(--r-chip);background:none;color:var(--ink-2);font:inherit;font-size:var(--t-sm);font-variant-numeric:tabular-nums;white-space:nowrap;cursor:text;transition:background var(--dur-fast) var(--ease)}
+.fl-lim:hover{background:var(--well-2);color:var(--ink)}
+.fl-lim:disabled{cursor:default;background:none}
+.fl-none{height:var(--row);display:flex;align-items:center;gap:var(--s-4);padding:0 var(--s-2) 0 calc(var(--s-8) + var(--s-1));color:var(--muted);font-size:var(--t-sm)}
+/* folded, Subscriptions and keys is one line: a fault first, a quiet chip for each kind, Add at the right */
+.fs-kinds,.fs-bad{display:inline-flex;align-items:center;gap:var(--s-1h);flex:none;margin-left:var(--s-1)}
+.fs-chip{display:inline-flex;align-items:center;gap:var(--s-1);margin:0}
+.fs-chip b{font-weight:var(--w-text);color:var(--faint);font-variant-numeric:tabular-nums}
+.fs-chip .ico{width:12px;height:12px;stroke-width:2.2}
+.tbl-head.g-fsub{column-gap:var(--s-3);box-shadow:none;height:24px}
+.pk-sec+.list-tools{border-top:1px solid var(--line)}
+/* a narrow page: the model for tasks and the owner give way */
+@container page (max-width:740px){
+  .g-bots.g-fleet{--g:16px var(--av-sm) minmax(0,1fr) 176px 72px 34px}
+  .g-fleet .c-tasks,.g-fleet .c-own,.dd-more{display:none}
+}
 
 /* ---- usage (anchor) ---- */
 
@@ -191,3 +228,6 @@ html[data-layout="cards"] .g-lim .u-per{grid-area:per;text-align:right}
 html[data-layout="cards"] .g-utask{--g:minmax(0,1fr) 56px 44px}
 html[data-layout="cards"] .g-utask>:nth-child(2),html[data-layout="cards"] .g-utask>:nth-child(4),html[data-layout="cards"] .g-utask>:nth-child(5){display:none}
 html[data-layout="cards"] .cl-list li{grid-template-columns:48px minmax(0,1fr)}
+html[data-layout="cards"] .cl-list li.cl-act{grid-template-columns:minmax(0,1fr) auto}
+html[data-layout="cards"] .fl-tools{flex-wrap:wrap}
+.set-leaves{margin:0;white-space:normal;overflow-wrap:anywhere;font-size:var(--t-sm)}

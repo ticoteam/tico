@@ -2,21 +2,23 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { run } from '@/actions/run';
-import { directoryQuery, meQuery } from '@/data';
-import { agentsQuery } from '@/features/team/exports';
+import { directoryQuery, meQuery, type Actor } from '@/data';
+import { agentsQuery, computersQuery } from '@/features/team/exports';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Checkbox } from '@/kit/Checkbox';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Field, Search } from '@/kit/Field';
+import { Icon } from '@/kit/Icon';
 import { Facts } from '@/kit/LabelValue';
 import { Link as To } from '@/kit/Link';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
-import { Foot, Line, Meter, SwitchLine, Verb, act, usd } from './parts';
+import { Foot, Line, SwitchLine, Verb, act, usd } from './parts';
 import {
   SAFE_RETRY,
   accessQuery,
@@ -26,14 +28,18 @@ import {
   limitsQuery,
   modelsQuery,
   stoppedRunsQuery,
+  subscriptionsQuery,
   type Audience,
   type BotAccess,
   type BotListed,
   type StoppedRun,
+  type Subscription,
+  type TaskModel,
 } from './queries';
 
-/* Settings › Agents, the list (pages/8-settings/settings.js botsDesk): search, check several and change their model at
-   once; open one in place for its model, owners, access, mail and stopped runs; bring back a retired one. */
+/* Settings › Agents, the fleet (pages/8-settings/settings.js fleet): search, group by team, computer or subscription,
+   change a row where it stands, check several to change their model or move them; open one in place for its model,
+   owners, access, mail and stopped runs; bring back a retired one. */
 
 const bare = (id: string) => id.replace(/^(human|bot):/, '');
 
@@ -399,102 +405,386 @@ function AgentOpen({ slug, name, listed }: { slug: string; name: string; listed?
   );
 }
 
-// ---------------------------------------------------------------- the list
+// ---------------------------------------------------------------- the fleet (settings.js fleet, a trial)
+
+/* One table of agents, grouped by team, computer or subscription. A row is changed where it stands: its model, what
+   its tasks run on, its computer and its limit. Check several to change their model or move them at once. */
+
+type By = 'team' | 'computer' | 'subscription';
+const BY = [
+  { value: 'team', label: 'Team' },
+  { value: 'computer', label: 'Computer' },
+  { value: 'subscription', label: 'Subscription' },
+] as const;
+const THIRD: Record<By, string> = { team: 'Computer', computer: 'Team', subscription: 'Next' };
+
+const useRows = () => useQuery(agentsQuery).data;
+const useMachines = () => useQuery(computersQuery).data;
+/** The server also sends where an agent compacts and what its tasks run on. */
+type Row = NonNullable<ReturnType<typeof useRows>>[number] & { compact_at?: number | null; task_model?: TaskModel | null };
+type Machine = NonNullable<ReturnType<typeof useMachines>>[number];
+
+const brief = (m?: string | null) => (m ?? '').replace(/^Claude /, '');
+const cap = (w?: string | null) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : '');
+const tokensK = (n?: number | null) => (!n ? '' : n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}K`);
+
+/** "Haiku 5.5, High, 400K": the model without its maker's name, its effort, where it compacts. */
+export function modelWords(r?: Row): string {
+  return [brief(r?.resolved_model_label ?? r?.resolved_model ?? r?.model), cap(r?.resolved_effort ?? r?.reasoning_effort), tokensK(r?.compact_at)]
+    .filter(Boolean)
+    .join(', ');
+}
+
+/** A value changed where it stands: its words and a small chevron. `more` shows on a wide table only. */
+function dd(text: string, o: { label: string; more?: string; title?: string; cls?: string; disabled?: boolean; onClick?: () => void }) {
+  return (
+    <button
+      type="button"
+      className={o.cls ? `dd ${o.cls}` : 'dd'}
+      title={o.title ?? text}
+      aria-label={o.label}
+      disabled={o.disabled}
+      onClick={o.onClick}
+    >
+      <span>
+        {text}
+        {o.more && <span className="dd-more">{`, ${o.more}`}</span>}
+      </span>
+      <Icon name="chevdown" />
+    </button>
+  );
+}
+
+const agentsWord = (n: number) => `${n} ${n === 1 ? 'agent' : 'agents'}`;
+
+function MoveItems({ machines, rows, onPick }: { machines: Machine[]; rows: Row[]; onPick: (m: Machine) => void }) {
+  return (
+    <>
+      {machines.map((m) => {
+        const n = rows.filter((r) => r.machine?.runner_id === m.id).length;
+        return (
+          <MenuItem
+            key={m.id}
+            label={m.label || m.id}
+            meta={`${n ? agentsWord(n) : 'No agents'}${m.online ? '' : ', off'}`}
+            onSelect={() => onPick(m)}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+type Change = { what: 'model' | 'tasks' | 'limit'; slug: string; name: string };
+
+function TasksDialog({ slug, name, now, onClose }: { slug: string; name: string; now?: TaskModel | null; onClose: () => void }) {
+  const models = useQuery(modelsQuery);
+  const [model, setModel] = useState(now?.model ?? '');
+  const [effort, setEffort] = useState(now?.effort ?? '');
+  const [busy, setBusy] = useState(false);
+  const v = models.data;
+  const on = v?.enabled_providers;
+  const usable = (v?.models ?? []).filter((m) => !m.deprecated && (!on || on.includes(m.provider)));
+  const efforts = usable.find((m) => m.id === model)?.efforts ?? [];
+  const save = async () => {
+    setBusy(true);
+    const r = await run('settings.taskModel', { agent: slug, model, ...(model && effort ? { effort } : {}) }, { via: 'click' });
+    setBusy(false);
+    if (!r.ok) return toast({ text: "Couldn't change it", kind: 'failed' });
+    toast({ text: r.did ?? 'Changed', kind: 'done' });
+    onClose();
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={`${name}'s tasks`}
+      actions={
+        <>
+          <Button variant="quiet" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" busy={busy} onClick={() => void save()}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <div className="set-add">
+        <Select
+          label="Model"
+          value={model}
+          options={[{ value: '', label: 'Same as the agent' }, ...usable.map((m) => ({ value: m.id, label: m.label }))]}
+          onValueChange={(m) => {
+            setModel(m);
+            if (!usable.find((x) => x.id === m)?.efforts?.includes(effort)) setEffort('');
+          }}
+        />
+        {efforts.length > 0 && (
+          <Select
+            label="Effort"
+            value={effort}
+            options={[{ value: '', label: 'Default' }, ...efforts.map((e) => ({ value: e, label: cap(e) }))]}
+            onValueChange={setEffort}
+          />
+        )}
+      </div>
+    </Dialog>
+  );
+}
+
+function LimitDialog({ slug, name, now, onClose }: { slug: string; name: string; now?: number | null; onClose: () => void }) {
+  const [value, setValue] = useState(now != null ? String(now) : '');
+  const [busy, setBusy] = useState(false);
+  const n = value.trim() === '' ? undefined : Number(value);
+  const bad = n !== undefined && (!Number.isFinite(n) || n < 0);
+  const save = async () => {
+    setBusy(true);
+    const ok = await act('usage.setLimit', { agent: slug, ...(n !== undefined ? { monthly: n } : {}) });
+    setBusy(false);
+    if (ok) onClose();
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={`${name}'s limit`}
+      actions={
+        <>
+          <Button variant="quiet" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" busy={busy} disabled={bad} onClick={() => void save()}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <Field label="Dollars a month" type="number" value={value} onValueChange={setValue} error={bad ? 'Not a number' : undefined} autoFocus />
+    </Dialog>
+  );
+}
+
+interface LineProps {
+  a: Actor;
+  slug: string;
+  r?: Row;
+  by: By;
+  picked: boolean;
+  open: boolean;
+  owner?: Actor;
+  machines: Machine[];
+  next: string;
+  limit?: { monthly_usd?: number | null; blocked?: string | null; may_edit?: boolean };
+  onPick: (on: boolean) => void;
+  onEdit: (e: Change) => void;
+}
+
+function FleetLine({ a, slug, r, by, picked, open, owner, machines, next, limit, onPick, onEdit }: LineProps) {
+  const models = useQuery(modelsQuery);
+  const manage = r?.can_manage !== false;
+  const tm = r?.task_model;
+  const tasks = tm?.model ? brief(models.data?.models.find((m) => m.id === tm.model)?.label ?? tm.model) : '';
+  const at = r?.machine?.runner_id;
+  const computer = r?.machine?.label ?? machines.find((m) => m.id === at)?.label;
+  const edit = (what: Change['what']) => () => onEdit({ what, slug, name: a.name });
+  return (
+    <div
+      className={['row g-bots g-fleet', picked && 'is-selected', limit?.blocked && 'is-bad'].filter(Boolean).join(' ')}
+      title={a.name}
+      data-target={`agent:${slug}`}
+    >
+      <Checkbox label={<span className="set-hide">{`Check ${a.name}`}</span>} checked={picked} disabled={!manage} onCheckedChange={onPick} />
+      <Avatar kind="agent" name={a.name} hue={a.hue} decorative />
+      <Link to="/settings/$section" params={{ section: 'agents' }} search={open ? {} : { open: slug }} className="row-title" aria-expanded={open}>
+        {a.name}
+      </Link>
+      {dd(modelWords(r) || 'None', { label: `${a.name}'s model`, disabled: !manage, onClick: edit('model') })}
+      {tm?.model || tm?.effort
+        ? dd(tasks || 'Same', { label: `${a.name}'s tasks`, more: cap(tm.effort), cls: 'c-tasks', disabled: !manage, onClick: edit('tasks') })
+        : dd('Same', { label: `${a.name}'s tasks`, title: "The agent's own model", cls: 'c-tasks is-same', disabled: !manage, onClick: edit('tasks') })}
+      <span className="row-own c-own">{owner && <Avatar kind="person" name={owner.name} hue={owner.hue} />}</span>
+      {by === 'team' ? (
+        <Menu
+          align="start"
+          trigger={dd(computer ?? 'No computer', { label: `${a.name}'s computer`, cls: computer ? undefined : 'is-same', disabled: !manage })}
+        >
+          {machines.map((m) => (
+            <MenuItem
+              key={m.id}
+              label={m.label || m.id}
+              meta={m.online ? undefined : 'Off'}
+              on={m.id === at}
+              onSelect={() => void act('agents.move', { slug, computer: m.id })}
+            />
+          ))}
+        </Menu>
+      ) : (
+        <span className="row-cell">{by === 'computer' ? (a.team ?? 'No team') : next}</span>
+      )}
+      <button type="button" className="fl-lim" title="Limit a month" aria-label={`${a.name}'s limit`} disabled={limit?.may_edit === false} onClick={edit('limit')}>
+        {limit?.monthly_usd != null ? usd(limit.monthly_usd) : 'None'}
+      </button>
+    </div>
+  );
+}
+
+interface Group {
+  key: string;
+  name: string;
+  slugs: string[];
+}
 
 export function AgentList({ open }: { open?: string }) {
   const dir = useQuery(directoryQuery);
-  const agents = useQuery(agentsQuery);
+  const subs = useQuery(subscriptionsQuery);
   const limits = useQuery(limitsQuery);
   const bots = useQuery({ ...botsQuery, retry: false });
   const mayRestore = useMayRestore();
   const [q, setQ] = useState('');
+  const [by, setBy] = useState<By>('team');
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const [changing, setChanging] = useState(false);
+  const [editing, setEditing] = useState<Change | null>(null);
   const all = (dir.data?.actors ?? []).filter((a) => a.kind === 'agent');
-  const rowOf = (slug: string) => agents.data?.find((r) => r.slug === slug);
+  const rows = (useRows() ?? []) as Row[];
+  const live = useMachines() ?? [];
+  const plans = (subs.data?.subscriptions ?? []) as Subscription[];
+  const slugOf = (a: Actor) => a.slug ?? bare(a.id);
+  const rowOf = (slug: string) => rows.find((r) => r.slug === slug);
   const listedOf = (slug: string) => bots.data?.find((b) => b.slug === slug || b.id === rowOf(slug)?.id);
+  const onPlan = (slug: string, fallback: boolean) => {
+    const id = rowOf(slug)?.id;
+    return plans.find((s) => (s.agents ?? []).some((x) => (x.id === id || x.id === slug) && !!x.fallback === fallback));
+  };
+  const computerOf = (slug: string) => {
+    const m = rowOf(slug)?.machine;
+    return m?.label ?? live.find((c) => c.id === m?.runner_id)?.label ?? '';
+  };
   const term = q.trim().toLowerCase();
   const shown = term
     ? all.filter((a) => {
-        const r = rowOf(a.slug ?? '');
-        return [a.name, a.team, r?.resolved_model_label, r?.resolved_model].some((w) => w?.toLowerCase().includes(term));
+        const r = rowOf(slugOf(a));
+        return [a.name, a.team, r?.resolved_model_label, r?.resolved_model, computerOf(slugOf(a))].some((w) => w?.toLowerCase().includes(term));
       })
     : all;
-  const checked = [...picked].filter((s) => shown.some((a) => a.slug === s));
+  const checked = [...picked].filter((s) => shown.some((a) => slugOf(a) === s));
   const retired = (bots.data ?? []).filter((b) => b.state === 'archived' && mayRestore(b));
+
+  // A computer or a subscription with no agents is still a group; an agent sits under the plan it uses first.
+  const groups: Group[] = [];
+  const put = (key: string, name: string, slug?: string) => {
+    let g = groups.find((x) => x.key === key);
+    if (!g) groups.push((g = { key, name, slugs: [] }));
+    if (slug) g.slugs.push(slug);
+  };
+  if (by === 'computer') live.forEach((m) => put(`computer:${m.id}`, m.label || m.id));
+  if (by === 'subscription') plans.forEach((s) => put(`subscription:${s.id}`, s.name));
+  for (const a of shown) {
+    const slug = slugOf(a);
+    if (by === 'team') put(`team:${a.team ?? ''}`, a.team ?? 'No team', slug);
+    else if (by === 'computer') {
+      const m = rowOf(slug)?.machine?.runner_id;
+      if (m && live.some((c) => c.id === m)) put(`computer:${m}`, '', slug);
+      else put('computer:', 'No computer', slug);
+    } else {
+      const s = onPlan(slug, false);
+      put(s ? `subscription:${s.id}` : 'subscription:', s?.name ?? 'No subscription', slug);
+    }
+  }
+
+  const move = async (m: Machine) => {
+    const r = await run('settings.moveAgents', { agents: checked, computer: m.id }, { via: 'click' });
+    toast(r.ok ? { text: r.did ?? 'Moved', kind: 'done' } : { text: "Couldn't move them", kind: 'failed' });
+    if (r.ok) setPicked(new Set());
+  };
+
+  const line = (a: Actor) => {
+    const slug = slugOf(a);
+    const r = rowOf(slug);
+    const isOpen = open === slug;
+    const owner = r?.owner_id ? dir.data?.byId[`human:${bare(r.owner_id)}`] : undefined;
+    const el = (
+      <FleetLine
+        key={a.id}
+        a={a}
+        slug={slug}
+        r={r}
+        by={by}
+        picked={picked.has(slug)}
+        open={isOpen}
+        owner={owner}
+        machines={live}
+        next={onPlan(slug, true)?.name ?? 'None'}
+        limit={limits.data?.bots[slug]}
+        onPick={(on) => setPicked((s) => toggled(s, slug, on))}
+        onEdit={setEditing}
+      />
+    );
+    return isOpen ? (
+      <div key={a.id} className="open">
+        {el}
+        <AgentOpen slug={slug} name={a.name} listed={listedOf(slug)} />
+      </div>
+    ) : (
+      el
+    );
+  };
+
+  const editRow = editing ? rowOf(editing.slug) : undefined;
   return (
     <>
-      <Section name="Agents" count={all.length} target="setting:agents">
-        {all.length === 0 ? (
-          <Empty title="No agents yet" />
-        ) : (
-          <>
-            <div className="list-tools">
-              <Search label="Search agents or models" placeholder="Search agents or models" value={q} onValueChange={setQ} />
-              {checked.length > 0 ? (
-                <span className="bulk">
-                  <b>{checked.length} checked</b>
-                  <Button onClick={() => setChanging(true)}>Change model</Button>
-                  <Verb onClick={() => setPicked(new Set())}>Clear</Verb>
-                </span>
+      {all.length === 0 ? (
+        <Empty title="No agents yet" />
+      ) : (
+        <>
+          <div className="list-tools fl-tools" data-target="setting:agents">
+            {checked.length > 0 ? (
+              <span className="bulk">
+                <b>{checked.length} checked</b>
+                <Button onClick={() => setChanging(true)}>Change model</Button>
+                <Menu align="start" trigger={<Button>Move</Button>}>
+                  <MoveItems machines={live} rows={rows} onPick={(m) => void move(m)} />
+                </Menu>
+                <Verb onClick={() => setPicked(new Set())}>Clear</Verb>
+              </span>
+            ) : (
+              <>
+                <Search label="Search agents, models or computers" placeholder="Search agents, models or computers" value={q} onValueChange={setQ} />
+                <span className="tools-n">{agentsWord(shown.length)}</span>
+              </>
+            )}
+            <span className="fl-by">
+              <span>Group by</span>
+              <Segmented label="Group by" options={BY} value={by} onValueChange={setBy} />
+            </span>
+          </div>
+          <div className="tbl-head g-bots g-fleet" aria-hidden="true">
+            <span />
+            <span />
+            <span>Agent</span>
+            <span>Model</span>
+            <span className="c-tasks">Tasks</span>
+            <span className="c-own is-mid">Owner</span>
+            <span>{THIRD[by]}</span>
+            <span className="is-num">Limit</span>
+          </div>
+          {groups.map((g) => (
+            <Section key={g.key} name={g.name} count={g.slugs.length} target={`group:${g.key}`}>
+              {g.slugs.length === 0 ? (
+                <div className="fl-none">
+                  <span>No agents yet</span>
+                </div>
               ) : (
-                <span className="tools-n">{`${shown.length} ${shown.length === 1 ? 'agent' : 'agents'}`}</span>
+                g.slugs.map((slug) => {
+                  const a = shown.find((x) => slugOf(x) === slug);
+                  return a ? line(a) : null;
+                })
               )}
-            </div>
-            <div className="tbl-head g-bots" aria-hidden="true">
-              <span />
-              <span />
-              <span>Agent</span>
-              <span>Model</span>
-              <span>Team</span>
-              <span>This month</span>
-              <span className="is-num">Limit</span>
-            </div>
-            {shown.map((a) => {
-              const slug = a.slug ?? bare(a.id);
-              const l = limits.data?.bots[slug];
-              const isOpen = open === slug;
-              const line = (
-                <div
-                  key={a.id}
-                  className={['row g-bots', picked.has(slug) && 'is-selected', l?.blocked && 'is-bad'].filter(Boolean).join(' ')}
-                  title={a.name}
-                  data-target={`agent:${slug}`}
-                >
-                  <Checkbox
-                    label={<span className="set-hide">{`Check ${a.name}`}</span>}
-                    checked={picked.has(slug)}
-                    disabled={rowOf(slug)?.can_manage === false}
-                    onCheckedChange={(on) => setPicked((s) => toggled(s, slug, on))}
-                  />
-                  <Avatar kind="agent" name={a.name} hue={a.hue} decorative />
-                  <Link
-                    to="/settings/$section"
-                    params={{ section: 'agents' }}
-                    search={isOpen ? {} : { open: slug }}
-                    className="row-title"
-                    aria-expanded={isOpen}
-                  >
-                    {a.name}
-                  </Link>
-                  <span className="row-cell">{rowOf(slug)?.resolved_model_label ?? ''}</span>
-                  <span className="row-cell">{a.team ?? ''}</span>
-                  <span className="row-cell">{l ? <Meter pct={l.percent} over={!!l.blocked} /> : null}</span>
-                  <span className="row-fig">{l?.monthly_usd != null ? usd(l.monthly_usd) : 'None'}</span>
-                </div>
-              );
-              return isOpen ? (
-                <div key={a.id} className="open">
-                  {line}
-                  <AgentOpen slug={slug} name={a.name} listed={listedOf(slug)} />
-                </div>
-              ) : (
-                line
-              );
-            })}
-          </>
-        )}
-      </Section>
+            </Section>
+          ))}
+        </>
+      )}
       {retired.length > 0 && (
         <Section name="Retired" count={retired.length} defaultOpen={false} target="setting:retired">
           {retired.map((b) => {
@@ -509,6 +799,11 @@ export function AgentList({ open }: { open?: string }) {
         </Section>
       )}
       {changing && <ModelDialog agents={checked} onClose={() => setChanging(false)} onDone={() => setPicked(new Set())} />}
+      {editing?.what === 'model' && <ModelDialog agents={[editing.slug]} onClose={() => setEditing(null)} />}
+      {editing?.what === 'tasks' && <TasksDialog slug={editing.slug} name={editing.name} now={editRow?.task_model} onClose={() => setEditing(null)} />}
+      {editing?.what === 'limit' && (
+        <LimitDialog slug={editing.slug} name={editing.name} now={limits.data?.bots[editing.slug]?.own_monthly_usd} onClose={() => setEditing(null)} />
+      )}
     </>
   );
 }

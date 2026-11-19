@@ -1,12 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { run } from '@/actions/run';
 import { configQuery, meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Field } from '@/kit/Field';
+import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
@@ -311,6 +312,74 @@ function SubRow({ s, open, owned }: { s: Subscription; open: boolean; owned: boo
 
 type Adding = { sign: 'claude_login' | 'codex_login' } | { key: string; label: string } | null;
 
+// A plan's kind, as its chip names it; anything else is a key.
+const PLAN: Partial<Record<Subscription['kind'], string>> = { claude_login: 'Claude', claude_token: 'Claude', codex_login: 'ChatGPT' };
+
+/** Folded, the section is one line: the fix for an expired sign-in, a quiet chip for each kind, then Add. */
+function Chips({ list }: { list: Subscription[] }) {
+  const bad = list.find((s) => s.status === 'needs_reconnect');
+  const kinds = [...new Set(list.flatMap((s) => (PLAN[s.kind] && s !== bad ? [PLAN[s.kind] as string] : [])))];
+  const keys = list.filter((s) => !PLAN[s.kind]).length;
+  const chip = (label: string, n = 1) => (
+    <span key={label} className="pill fs-chip">
+      {label}
+      {n > 1 && <b>{n}</b>}
+    </span>
+  );
+  return (
+    <>
+      {bad && (
+        <span className="fs-bad">
+          <span className="pill pill-flag fs-chip" title={bad.label}>
+            <Icon name="alert" />
+            {`${bad.name} expired`}
+          </span>
+        </span>
+      )}
+      <span className="fs-kinds">
+        {kinds.map((k) => chip(k, list.filter((s) => PLAN[s.kind] === k && s !== bad).length))}
+        {keys > 0 && chip(keys === 1 ? '1 key' : `${keys} keys`)}
+      </span>
+    </>
+  );
+}
+
+function Subs({ list, open, owned, add }: { list: Subscription[]; open?: string; owned: Set<string>; add: ReactNode }) {
+  const [shown, setShown] = useState(() => list.some((s) => s.id === open));
+  return (
+    <Section
+      name="Subscriptions and keys"
+      count={list.length}
+      open={shown}
+      onOpenChange={setShown}
+      actions={
+        <>
+          {!shown && <Chips list={list} />}
+          {add}
+        </>
+      }
+      target="setting:subscriptions"
+    >
+      {list.length === 0 ? (
+        <Empty title="Nothing connected" />
+      ) : (
+        <>
+          <div className="tbl-head g-fsub" aria-hidden="true">
+            <span>Name</span>
+            <span>On</span>
+            <span>Agents</span>
+            <span>Used</span>
+            <span />
+          </div>
+          {list.map((s) => (
+            <SubRow key={s.id} s={s} open={open === s.id} owned={owned.has(s.kind)} />
+          ))}
+        </>
+      )}
+    </Section>
+  );
+}
+
 export function Agents({ open }: { open?: string }) {
   const subs = useQuery(subscriptionsQuery);
   const computers = useQuery(computersQuery);
@@ -335,15 +404,10 @@ export function Agents({ open }: { open?: string }) {
   );
   return (
     <>
-      <Section name="Subscriptions and keys" count={list.length} actions={add} target="setting:subscriptions">
-        {list.length === 0 ? (
-          <Empty title="Nothing connected" text="Agents run on a Claude or Codex plan, or on a key." />
-        ) : (
-          list.map((s) => <SubRow key={s.id} s={s} open={open === s.id} owned={owned.has(s.kind)} />)
-        )}
-      </Section>
+      <Subs list={list} open={open} owned={owned} add={add} />
+      <AgentList open={open} />
       {live.length > 0 && (
-        <Section name="When a plan runs out" target="setting:fallback">
+        <Section name="When a plan runs out" defaultOpen={false} target="setting:fallback">
           <Facts label="When a plan runs out">
             {live.map((c) => (
               <SwitchLine
@@ -362,7 +426,6 @@ export function Agents({ open }: { open?: string }) {
           </Facts>
         </Section>
       )}
-      <AgentList open={open} />
       {adding && 'sign' in adding && <SignInDialog kind={adding.sign} onClose={() => setAdding(null)} />}
       {adding && 'key' in adding && <KeyDialog kind={adding.key} label={adding.label} onClose={() => setAdding(null)} />}
     </>

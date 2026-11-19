@@ -6,7 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { ActionsRoot } from '@/actions';
 import { run } from '@/actions/run';
 import { queryClient } from '@/data';
-import { agentsQuery } from '@/features/team/exports';
+import { agentsQuery, computersQuery as teamComputers } from '@/features/team/exports';
 import { Toasts } from '@/kit/Toast';
 import { botsQuery, limitsQuery, modelsQuery, providersQuery, subscriptionsQuery } from './queries';
 import { SettingsPage, hitHref } from './SettingsPage';
@@ -102,10 +102,92 @@ describe('Settings › Agents', () => {
   it('the search narrows the list by name, team or model', async () => {
     serve(() => ({ status: 200, body: {} }));
     show(<SettingsPage section="agents" />, '/settings/agents');
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Search agents or models' }), { target: { value: 'growth' } });
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Search agents, models or computers' }), { target: { value: 'growth' } });
     expect(await screen.findByText('1 agent')).toBeTruthy();
     expect(screen.queryByTitle('Alpha Agent')).toBeNull();
     expect(screen.getByTitle('Beta Agent')).toBeTruthy();
+  });
+
+  it('a row reads its model, effort and where it compacts, and its tasks follow it unless set', async () => {
+    queryClient.setQueryData(agentsQuery.queryKey, [
+      { ...ROWS[0], resolved_model_label: 'Claude Model One', resolved_effort: 'high', compact_at: 400000 } as never,
+      { ...ROWS[1], task_model: { model: 'model-two', effort: 'low' } } as never,
+    ]);
+    serve(() => ({ status: 200, body: {} }));
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    expect((await screen.findByRole('button', { name: "Alpha Agent's model" })).textContent).toBe('Model One, High, 400K');
+    expect(screen.getByRole('button', { name: "Alpha Agent's tasks" }).textContent).toBe('Same');
+    expect(screen.getByRole('button', { name: "Beta Agent's tasks" }).textContent).toBe('Model Two, Low');
+    // Grouped by team: each team is a section.
+    expect(screen.getByRole('button', { name: /Product/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Growth/ })).toBeTruthy();
+  });
+
+  it('by computer, every computer is a group; checked agents move to one at once', async () => {
+    queryClient.setQueryData(teamComputers.queryKey, [
+      { id: 'r1', label: 'Shared One', online: true },
+      { id: 'r2', label: 'Spare Two', online: false },
+    ]);
+    queryClient.setQueryData(agentsQuery.queryKey, [{ ...ROWS[0], machine: { runner_id: 'r1', label: 'Shared One', generation: 7 } }, ROWS[1]] as never);
+    serve(() => ({ status: 200, body: {} }));
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    fireEvent.click(await screen.findByRole('button', { name: 'Computer' }));
+    expect(await screen.findByRole('button', { name: /Spare Two/ })).toBeTruthy();
+    expect(screen.getByText('No agents yet')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /No computer/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Check Alpha Agent' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Check Beta Agent' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Move' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Spare Two/ }));
+    await waitFor(() => expect(sent.filter((s) => s.url.endsWith('/transitions'))).toHaveLength(2));
+    for (const m of sent) expect(m.body).toMatchObject({ kind: 'machine', runner_id: 'r2' });
+  });
+
+  it('a limit is changed where it stands', async () => {
+    queryClient.setQueryData(limitsQuery.queryKey, {
+      bots: { alpha: { monthly_usd: 120, own_monthly_usd: 120, percent: 10, month_spent: 12, blocked: null, may_edit: true } as never },
+      default: { count_subscription: false, daily_usd: null, hourly_usd: null, monthly_usd: null, per_30m_usd: null, weekly_usd: null },
+      may_edit_default: true,
+      pools: null,
+    });
+    serve(() => ({ status: 200, body: {} }));
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    const lim = await screen.findByRole('button', { name: "Alpha Agent's limit" });
+    expect(lim.textContent).toBe('$120');
+    fireEvent.click(lim);
+    fireEvent.change(await screen.findByRole('spinbutton', { name: 'Dollars a month' }), { target: { value: '80' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/usage/limits/alpha', method: 'PUT', body: { monthly_usd: 80 } }));
+  });
+
+  it("what an agent's tasks run on goes to the server with its revision; empty is the agent's own", async () => {
+    serve(() => ({ status: 200, body: {} }));
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    await screen.findByText('2 agents');
+    expect(await run('settings.taskModel', { agent: 'alpha', model: 'model-two', effort: 'low' }, { via: 'tico' })).toMatchObject({ ok: true });
+    expect(sent.at(-1)).toMatchObject({
+      url: '/api/v2/bots/a1/task-model',
+      body: { task_model: { model: 'model-two', harness: 'claude', effort: 'low' }, expected_revision: 3 },
+    });
+    await run('settings.taskModel', { agent: 'beta', model: '' }, { via: 'click' });
+    expect(sent.at(-1)).toMatchObject({ url: '/api/v2/bots/b2/task-model', body: { task_model: null, expected_revision: 5 } });
+  });
+
+  it('folded, Subscriptions and keys shows a chip for each kind and a count of keys', async () => {
+    const sub = (id: string, kind: string, status = 'working') => ({ id, kind, name: `Plan ${id}`, label: 'sample', status, in_use_on: [] }) as never;
+    queryClient.setQueryData(subscriptionsQuery.queryKey, {
+      kinds: [],
+      subscriptions: [sub('s1', 'claude_login'), sub('s2', 'claude_login'), sub('s3', 'codex_login', 'needs_reconnect'), sub('s4', 'anthropic_key'), sub('s5', 'openai_key')],
+    });
+    serve(() => ({ status: 200, body: {} }));
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    expect(await screen.findByText('Plan s3 expired')).toBeTruthy();
+    expect(screen.getByText('Claude').closest('.fs-chip')?.textContent).toBe('Claude2');
+    expect(screen.getByText('2 keys')).toBeTruthy();
+    expect(screen.queryByText('ChatGPT')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Subscriptions and keys/ }));
+    expect(await screen.findByTitle('Plan s1')).toBeTruthy();
+    expect(screen.queryByText('2 keys')).toBeNull();
   });
 
   it('a retired agent can be brought back by its owner', async () => {
@@ -128,6 +210,9 @@ describe('Settings actions', () => {
       ['settings.removePerson', { person: 'p2' }],
       ['settings.agentOwners', { agent: 'a1', add: ['p2'], remove: [] }],
       ['settings.agentMail', { agent: 'a1', on: true }],
+      ['settings.saveDirectory', { source: 'scim', interval: 60, massLeave: 10, groups: [], orgUnits: [], domains: [] }],
+      ['settings.scimToken', {}],
+      ['settings.syncDirectory', { plan: 'h1', confirm: true }],
     ];
     for (const [id, input] of asks) expect(await run(id, input, { via: 'tico' })).toEqual({ ok: false, error: 'not_allowed' });
     expect(sent).toEqual([]);

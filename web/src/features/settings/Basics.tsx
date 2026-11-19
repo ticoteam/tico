@@ -16,15 +16,20 @@ import { toast } from '@/kit/Toast';
 import type { MotionChoice } from '@/motion';
 import { Section } from '@/pagekinds';
 import { THEME_KEY, usePref, type Theme } from '@/prefs';
-import { Foot, Line, SwitchLine, Verb, act } from './parts';
+import { Foot, Line, SwitchLine, Verb, Word, act } from './parts';
 import {
   accessQuery,
+  directorySyncQuery,
   humansQuery,
   pageOwnersQuery,
   screeningQuery,
   supportQuery,
   tokensQuery,
   type AccessPerson,
+  type DirectoryCredentials,
+  type DirectoryPreview,
+  type DirectorySource,
+  type DirectoryView,
   type ScreenMode,
 } from './queries';
 
@@ -298,6 +303,7 @@ export function People({ open }: { open?: string }) {
   const mayEdit = v.you === 'owner' || v.you === 'admin';
   const owner = v.people.find((p) => p.owner);
   return (
+    <>
     <Section name="People" count={people.length} actions={mayEdit ? <AddPerson /> : undefined}>
       {people.length === 0 ? (
         <Empty title="No one yet" />
@@ -339,6 +345,285 @@ export function People({ open }: { open?: string }) {
             );
           })}
         </>
+      )}
+    </Section>
+    {v.you === 'owner' && <DirectorySync />}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------- directory sync (owner): people from Google, Entra or SCIM
+
+const SOURCES = [
+  { value: '', label: 'Off' },
+  { value: 'google', label: 'Google Workspace' },
+  { value: 'entra', label: 'Microsoft Entra ID' },
+  { value: 'scim', label: 'SCIM' },
+] as const;
+
+const EVERY: Record<number, string> = { 0: 'By hand', 60: 'Every hour', 360: 'Every 6 hours', 1440: 'Every day' };
+
+const PLAN_LINES = [
+  ['adds', 'Join'],
+  ['updates', 'Change'],
+  ['restores', 'Come back'],
+  ['leaves', 'Leave'],
+  ['protected', 'Kept'],
+  ['skipped', 'Skipped'],
+] as const;
+
+const toLines = (text: string) =>
+  text
+    .split('\n')
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+/** The fields a source's key needs; all of them, or none is sent. */
+const KEY_FIELDS: Record<'google' | 'entra', [keyof DirectoryCredentials, string, 'area' | 'email' | 'text' | 'password'][]> = {
+  google: [
+    ['service_account_json', 'Service account key (JSON)', 'area'],
+    ['admin_email', 'Admin it acts as', 'email'],
+  ],
+  entra: [
+    ['tenant', 'Tenant', 'text'],
+    ['client_id', 'Client ID', 'text'],
+    ['client_secret', 'Client secret', 'password'],
+  ],
+};
+
+function DirectorySync() {
+  const sync = useQuery({ ...directorySyncQuery, retry: false });
+  // A new SCIM token is shown once: it lives here, in this component's state, and nowhere else.
+  const [token, setToken] = useState<string | null>(null);
+  if (!sync.data) return null;
+  return (
+    <>
+      <SyncForm key={sync.data.revision} v={sync.data} onToken={setToken} />
+      <Dialog
+        open={token != null}
+        onOpenChange={(o) => !o && setToken(null)}
+        title="Directory token"
+        description="Copy it now. It is not shown again."
+        actions={
+          <Button variant="primary" onClick={() => setToken(null)}>
+            Done
+          </Button>
+        }
+      >
+        <code className="fs-code">{token}</code>
+      </Dialog>
+    </>
+  );
+}
+
+function SyncForm({ v, onToken }: { v: DirectoryView; onToken: (token: string) => void }) {
+  const [source, setSource] = useState<DirectorySource>(v.source);
+  const [every, setEvery] = useState(String(v.interval_minutes));
+  const [massLeave, setMassLeave] = useState(String(v.mass_leave_limit));
+  const [groups, setGroups] = useState(v.filter.groups.join('\n'));
+  const [orgUnits, setOrgUnits] = useState(v.filter.org_units.join('\n'));
+  const [domains, setDomains] = useState(v.filter.domains.join('\n'));
+  const [cred, setCred] = useState<DirectoryCredentials>({});
+  const [replacing, setReplacing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [lostKey, setLostKey] = useState(false);
+  const [newToken, setNewToken] = useState(false);
+  const [preview, setPreview] = useState<DirectoryPreview | null>(null);
+  const [reviewed, setReviewed] = useState(false);
+  const keyed = source === 'google' || source === 'entra' ? source : null;
+  const saved = keyed ? v.credentials[keyed] : undefined;
+  const asking = keyed && (!saved?.configured || replacing) ? KEY_FIELDS[keyed] : [];
+  const typed = asking.length > 0 && asking.every(([k]) => (cred[k] ?? '').trim());
+  const limit = Number(massLeave);
+  const bad = !Number.isInteger(limit) || limit < 0;
+  const intervals = [...new Set([0, 60, 360, 1440, v.interval_minutes])].map((m) => ({ value: String(m), label: EVERY[m] ?? `Every ${m} min` }));
+
+  const save = async (replaceLostKey = false, off = false) => {
+    setBusy(true);
+    const r = await run(
+      'settings.saveDirectory',
+      {
+        source: off ? '' : source,
+        interval: Number(every),
+        massLeave: limit,
+        groups: toLines(groups),
+        orgUnits: toLines(orgUnits),
+        domains: toLines(domains),
+        ...(typed && !off ? { credentials: Object.fromEntries(asking.map(([k]) => [k, (cred[k] ?? '').trim()])) } : {}),
+        ...(replaceLostKey ? { replaceLostKey: true } : {}),
+      },
+      { via: 'click' },
+    );
+    setBusy(false);
+    if (!r.ok && r.error === 'github_key_missing') return setLostKey(true);
+    toast(r.ok ? { text: r.did ?? 'Saved', kind: 'done' } : { text: "Couldn't save", kind: 'failed' });
+  };
+
+  const makeToken = async () => {
+    setNewToken(false);
+    const r = await run('settings.scimToken', {}, { via: 'click' });
+    const made = r.ok ? (r.out as { token?: string } | undefined)?.token : undefined;
+    if (made) onToken(made);
+    else toast({ text: "Couldn't make a token", kind: 'failed' });
+  };
+
+  const look = async () => {
+    setBusy(true);
+    const r = await run('settings.previewDirectory', {}, { via: 'click' });
+    setBusy(false);
+    if (!r.ok) return toast({ text: "Couldn't read the directory", kind: 'failed' });
+    setReviewed(false);
+    setPreview(r.out as DirectoryPreview);
+  };
+
+  const p = preview?.plan;
+  const needs = !!(preview?.needs_confirmation.first || preview?.needs_confirmation.mass_leave);
+  const any = !!p && (['adds', 'updates', 'restores', 'leaves'] as const).some((k) => p[k].length > 0);
+  const apply = async () => {
+    if (!p) return;
+    setBusy(true);
+    const r = await run('settings.syncDirectory', { plan: p.hash, confirm: needs && reviewed }, { via: 'click' });
+    setBusy(false);
+    if (!r.ok) return toast({ text: "Couldn't sync", kind: 'failed' });
+    toast({ text: r.did ?? 'Synced', kind: 'done' });
+    if ((r.out as DirectoryPreview | undefined)?.applied) setPreview(null);
+  };
+
+  const last = v.last.at ? `${v.last.ok === false ? 'Failed' : v.last.held ? 'Held for a check' : 'Synced'}, ${new Date(v.last.at).toLocaleString('en-US')}` : 'Never';
+  return (
+    <Section name="Directory sync" defaultOpen={!!v.source} target="setting:directory-sync">
+      <div className="set-add set-dir">
+        <Select label="Sync people from" value={source} options={SOURCES} onValueChange={(s) => setSource(s as DirectorySource)} />
+      </div>
+      <Facts label="Directory sync">
+        {saved?.configured && !replacing && (
+          <Line label="Key">
+            {saved.hint || 'Saved'}
+            <Verb onClick={() => setReplacing(true)}>Replace key</Verb>
+          </Line>
+        )}
+        {source === 'scim' && (
+          <>
+            <Line label="Address">{v.scim.url ?? ''}</Line>
+            <Line label="Token">
+              {v.scim.enabled ? 'Made' : 'None'}
+              <Verb onClick={() => (v.scim.enabled ? setNewToken(true) : void makeToken())}>{v.scim.enabled ? 'Replace token' : 'Make token'}</Verb>
+            </Line>
+          </>
+        )}
+        {v.source && <Line label="Last sync">{v.last.ok === false && v.last.error ? `${last}: ${v.last.error}` : last}</Line>}
+      </Facts>
+      <div className="set-add set-dir">
+          {asking.map(([k, label, kind]) => (
+            <Field
+              key={k}
+              label={label}
+              value={cred[k] ?? ''}
+              onValueChange={(x) => setCred((c) => ({ ...c, [k]: x }))}
+              area={kind === 'area'}
+              type={kind === 'area' ? undefined : kind}
+              autoComplete="off"
+            />
+          ))}
+          {keyed && <Field label="Groups, one a line" value={groups} onValueChange={setGroups} area />}
+          {keyed === 'google' && <Field label="Org units, one a line" value={orgUnits} onValueChange={setOrgUnits} area />}
+          {keyed && <Field label="Domains, one a line" value={domains} onValueChange={setDomains} area />}
+          {source && <Select label="Sync" value={every} options={intervals} onValueChange={setEvery} />}
+          {source && (
+            <Field
+              label="Ask first if more than this many leave"
+              type="number"
+              value={massLeave}
+              onValueChange={setMassLeave}
+              error={bad ? 'Not a number' : undefined}
+            />
+          )}
+      </div>
+      <Foot>
+        <Button variant="primary" busy={busy} disabled={bad || (asking.length > 0 && !typed && !saved?.configured)} onClick={() => void save()}>
+          Save
+        </Button>
+        {v.source && <Verb onClick={() => void look()}>Sync now</Verb>}
+        {v.source && <Verb onClick={() => void save(false, true)}>Stop syncing</Verb>}
+      </Foot>
+      <Dialog
+        open={newToken}
+        onOpenChange={setNewToken}
+        alert
+        title="Replace the directory token?"
+        description="The directory stops syncing until it has the new one."
+        actions={
+          <>
+            <Button variant="quiet" onClick={() => setNewToken(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={() => void makeToken()}>
+              Replace
+            </Button>
+          </>
+        }
+      />
+      <Dialog
+        open={lostKey}
+        onOpenChange={setLostKey}
+        alert
+        title="Replace the lost key?"
+        description="The key that opens the saved GitHub App and directory keys is lost. Replacing it removes them all; you enter them again."
+        actions={
+          <>
+            <Button variant="quiet" onClick={() => setLostKey(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setLostKey(false);
+                void save(true);
+              }}
+            >
+              Replace
+            </Button>
+          </>
+        }
+      />
+      {preview && p && (
+        <Dialog
+          open
+          onOpenChange={(o) => !o && setPreview(null)}
+          title="Sync now"
+          description="Nothing changes until you apply it."
+          actions={
+            <>
+              <Button variant="quiet" onClick={() => setPreview(null)}>
+                Cancel
+              </Button>
+              <Button variant="primary" busy={busy} disabled={!any || (needs && !reviewed)} onClick={() => void apply()}>
+                {any ? 'Apply' : 'Nothing to apply'}
+              </Button>
+            </>
+          }
+        >
+          <div className="set-add">
+            <Facts label="What changes">
+              {PLAN_LINES.map(([k, label]) => (
+                <LabelValue key={k} label={label}>
+                  {String(p[k].length)}
+                </LabelValue>
+              ))}
+            </Facts>
+            {p.leaves.length > 0 && (
+              // who loses their sign-in is the part to check by name
+              <p className="fact-dim set-leaves">
+                {p.leaves.slice(0, 20).map((r) => r.email).join(', ')}
+                {p.leaves.length > 20 ? ` and ${p.leaves.length - 20} more` : ''}
+              </p>
+            )}
+            {preview.needs_confirmation.mass_leave && (
+              <Word icon="alert">{`More than ${preview.mass_leave_limit} would leave`}</Word>
+            )}
+            {needs && <Checkbox label="I checked this list" checked={reviewed} onCheckedChange={setReviewed} />}
+          </div>
+        </Dialog>
       )}
     </Section>
   );

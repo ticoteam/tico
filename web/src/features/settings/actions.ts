@@ -48,8 +48,13 @@ import {
   setRule,
   setScreening,
   setSupport,
+  setTaskModel,
   subscriptionsQuery,
   tokensQuery,
+  newScimToken,
+  previewDirectory,
+  saveDirectory,
+  syncDirectory,
 } from './queries';
 import { SECTION_IDS } from './sections';
 
@@ -224,6 +229,85 @@ export const changeEmail = defineAction({
   run: (_ctx, { email: to, again }) => changeOwnerEmail(to, again),
   did: () => 'Email changed',
   target: () => setting('people'),
+});
+
+// ---------------------------------------------------------------- directory sync (owner)
+
+const lines = s.array(s.string({ min: 1, max: 200 }), { max: 50 });
+
+export const saveSync = defineAction({
+  id: 'settings.saveDirectory',
+  title: 'Change where people sync from',
+  kind: 'change',
+  input: s.object({
+    source: s.oneOf(['', 'google', 'entra', 'scim'] as const),
+    // Minutes between syncs; 0 syncs only when a person presses Sync now.
+    interval: s.number({ int: true, min: 0, max: 10080 }),
+    massLeave: s.number({ int: true, min: 0, max: 10000 }),
+    groups: lines,
+    orgUnits: lines,
+    domains: lines,
+    credentials: s.optional(
+      s.object({
+        service_account_json: s.optional(s.string({ max: 20000 })),
+        admin_email: s.optional(s.string({ max: 320 })),
+        tenant: s.optional(s.string({ max: 200 })),
+        client_id: s.optional(s.string({ max: 100 })),
+        client_secret: s.optional(s.string({ max: 400 })),
+      }),
+    ),
+    replaceLostKey: s.optional(s.boolean()),
+  }),
+  // Who may sign in, and the directory's own keys: a security change only the owner makes.
+  tico: false,
+  run: (_ctx, { source, interval, massLeave, groups, orgUnits, domains, credentials, replaceLostKey }) =>
+    saveDirectory({
+      source,
+      interval_minutes: interval,
+      mass_leave_limit: massLeave,
+      filter: { groups, org_units: orgUnits, domains },
+      ...(credentials ? { credentials } : {}),
+      ...(replaceLostKey ? { replace_lost_key: true } : {}),
+    }),
+  did: ({ source }) => (source ? 'Directory sync saved' : 'Stopped syncing'),
+  target: () => setting('directory-sync'),
+});
+
+export const scimToken = defineAction({
+  id: 'settings.scimToken',
+  title: 'Make a SCIM token',
+  kind: 'change',
+  input: s.object({}),
+  // Shown once, to the press that made it; the one before stops at once.
+  tico: false,
+  run: async () => ({ token: await newScimToken() }),
+  did: () => 'Token made',
+  target: () => setting('directory-sync'),
+});
+
+export const previewSync = defineAction({
+  id: 'settings.previewDirectory',
+  title: 'See what a directory sync would change',
+  kind: 'view',
+  input: s.object({}),
+  run: () => previewDirectory(),
+  did: () => 'Previewed',
+  target: () => setting('directory-sync'),
+});
+
+export const applySync = defineAction({
+  id: 'settings.syncDirectory',
+  title: 'Sync people from the directory',
+  kind: 'change',
+  input: s.object({
+    plan: s.string({ min: 1, max: 64, what: 'the hash of the previewed plan' }),
+    confirm: s.boolean(),
+  }),
+  // People join, change and leave: who may sign in changes at once.
+  tico: false,
+  run: (_ctx, { plan, confirm }) => syncDirectory(plan, confirm),
+  did: (_input, out) => (out?.applied ? 'Synced' : out?.stale ? 'The directory changed. Preview again.' : 'Held for a check'),
+  target: () => setting('directory-sync'),
 });
 
 // ---------------------------------------------------------------- general
@@ -510,6 +594,48 @@ export const changeModels = defineAction({
   target: () => setting('agents'),
 });
 
+export const moveAgents = defineAction({
+  id: 'settings.moveAgents',
+  title: 'Move several agents to another computer',
+  kind: 'change',
+  input: s.object({
+    agents: s.array(s.string({ min: 1, max: 120, what: 'an agent slug' }), { max: 200 }),
+    computer: s.string({ min: 1, max: 100, what: "a computer's id" }),
+  }),
+  run: async (_ctx, { agents, computer }) => {
+    if (!agents.length) throw new Error('Pick at least one agent');
+    const done = await Promise.all(agents.map((slug) => run('agents.move', { slug, computer }, { via: 'click' })));
+    const failed = agents.filter((_slug, i) => !done[i]?.ok);
+    if (failed.length === agents.length) throw new Error(done[0] && !done[0].ok ? done[0].error : "Couldn't move them");
+    return { moved: agents.length - failed.length, failed };
+  },
+  did: (_input, out) => (out ? `Moved ${out.moved}${out.failed.length ? `, ${out.failed.length} failed` : ''}` : 'Moved'),
+  target: () => setting('agents'),
+});
+
+export const taskModel = defineAction({
+  id: 'settings.taskModel',
+  title: "Change the model an agent's tasks run on",
+  kind: 'change',
+  input: s.object({
+    agent: s.string({ min: 1, max: 120, what: 'an agent slug' }),
+    model: s.string({ max: 120, what: "a model id from GET /api/v2/models; empty for the agent's own" }),
+    effort: s.optional(s.string({ max: 20 })),
+  }),
+  run: async (ctx, { agent: slug, model, effort }) => {
+    const [rows, catalog] = await Promise.all([ctx.queryClient.ensureQueryData(agentsQuery), ctx.queryClient.ensureQueryData(modelsQuery)]);
+    const row = rows.find((r) => r.slug === slug);
+    if (!row) throw new Error('No such agent');
+    const runs = catalog.models.find((m) => m.id === model)?.harnesses;
+    const harness = !runs?.length || (row.harness && runs.includes(row.harness)) ? row.harness : runs[0];
+    const out = await setTaskModel(row.id, model ? { model, ...(harness ? { harness } : {}), ...(effort ? { effort } : {}) } : null, row.revision ?? 1);
+    void ctx.queryClient.invalidateQueries({ queryKey: agentsQuery.queryKey });
+    return { warning: out?.warning };
+  },
+  did: ({ model }, out) => out?.warning || (model ? 'Tasks moved' : "Tasks run on the agent's own model"),
+  target: ({ agent: slug }) => ({ kind: 'agent', id: slug }),
+});
+
 const agent = (bot: string) => ({ kind: 'agent', id: bot });
 
 export const restore = defineAction({
@@ -650,6 +776,17 @@ export const productUpdate = defineAction({
   },
   did: () => 'Published',
   target: () => ({ kind: 'page', id: '/settings/changelog' }),
+});
+
+export const openOutcome = defineAction({
+  id: 'settings.openOutcome',
+  title: 'Open the outcome of a task in the changelog',
+  kind: 'view',
+  input: s.object({ task: id('a task id') }),
+  run: ({ router }, { task }) => router.navigate({ to: '/settings/$section', params: { section: 'changelog' }, search: { open: task } }),
+  show: ({ router }, { task }) => router.navigate({ to: '/settings/$section', params: { section: 'changelog' }, search: { open: task } }),
+  did: () => 'Opened the outcome',
+  target: ({ task }) => ({ kind: 'outcome', id: task }),
 });
 
 // ---- usage (anchor: the Usage builder adds its actions below) ----

@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { directoryQuery } from '@/data';
+import { taskDetailQuery } from '@/features/task/exports';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
@@ -8,12 +10,13 @@ import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Field } from '@/kit/Field';
 import { Link as To } from '@/kit/Link';
+import { Markdown } from '@/kit/Markdown';
 import { Select } from '@/kit/Select';
 import { run } from '@/actions/run';
 import { FiguresStrip, Section } from '@/pagekinds';
 import { fixHref } from './fixes';
 import { Foot, Verb, Word, act, micros } from './parts';
-import { billingQuery, changelogQuery, healthQuery, historyFilter, historyFor, type HealthFix } from './queries';
+import { activityQuery, billingQuery, changelogQuery, healthQuery, historyFilter, historyFor, type HealthFix } from './queries';
 
 /* The sections that are mostly read: Billing, History, Health, Changelog. */
 
@@ -230,15 +233,64 @@ function AddUpdate() {
   );
 }
 
-export function Changelog() {
+/** What a task an agent shipped came to: its title and its outcome note, over the changelog (?open=<task id>). */
+function Outcome({ task }: { task: string }) {
+  const navigate = useNavigate();
+  const t = useQuery({ ...taskDetailQuery(task), retry: false });
+  const close = () => void navigate({ to: '/settings/$section', params: { section: 'changelog' }, search: {} });
+  const note = (t.data as { note?: string | null } | undefined)?.note?.trim();
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && close()}
+      title="Reported task outcome"
+      description={t.data?.title ?? (t.isError ? "Couldn't open the task" : undefined)}
+      actions={
+        <Button variant="quiet" onClick={close}>
+          Close
+        </Button>
+      }
+    >
+      {t.data && <Markdown text={note || 'No outcome recorded.'} compact />}
+    </Dialog>
+  );
+}
+
+/** Lines agents shipped; one that came from a task opens its outcome. */
+function Activity() {
+  const log = useQuery(activityQuery);
+  const entries = log.data?.entries ?? [];
+  if (entries.length === 0) return null;
+  return (
+    <Section name="Agent activity" count={entries.length} defaultOpen={false} target="setting:activity">
+      <ul className="cl-list">
+        {entries.map((e) => (
+          <li key={e.id} className="cl-act">
+            <span>{e.title}</span>
+            {e.task_id && <Verb onClick={() => void run('settings.openOutcome', { task: e.task_id }, { via: 'click' })}>View outcome</Verb>}
+          </li>
+        ))}
+      </ul>
+    </Section>
+  );
+}
+
+export function Changelog({ open }: { open?: string }) {
   const log = useQuery(changelogQuery);
   const entries = log.data?.entries ?? [];
   if (!log.data) return null;
   const add = log.data.can_add ? <AddUpdate /> : null;
+  const more = (
+    <>
+      <Activity />
+      {open && <Outcome task={open} />}
+    </>
+  );
   if (entries.length === 0)
     return (
       <>
         <Empty title="No changes yet" />
+        {more}
         {add}
       </>
     );
@@ -261,6 +313,7 @@ export function Changelog() {
           </ul>
         </Section>
       ))}
+      {more}
       {add}
     </>
   );
