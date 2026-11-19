@@ -82,6 +82,7 @@
     }
    },
    "health": {
+    "basis": "customers",
     "mismatch": 0,
     "no_segment": 0,
     "reconciled": "not_reconciled",

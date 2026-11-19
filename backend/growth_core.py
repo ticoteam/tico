@@ -902,13 +902,16 @@ def channels(scope: Scope, month: str) -> list[Row]:
 
 def health(scope: Scope, month: str) -> Row:
     data = scope.data
-    unknown = sum(int(r["entered"]) for r in scope.at("customer", month) if not r["channel"])
-    total = scope.entered("customer", month) or 0
-    out: Row = {"unknown_share": round(unknown / total, 2) if total else None}
+    # Customers when the company pushes any, else sign-ups: a team that pushes only sign-ups still sees its gaps.
+    anchor = "customer" if any(r["anchor"] == "customer" for r in data.rows) else "signup"
+    unknown = sum(int(r["entered"]) for r in scope.at(anchor, month) if not r["channel"])
+    total = scope.entered(anchor, month) or 0
+    out: Row = {"basis": "customers" if anchor == "customer" else "signups"}
+    out["unknown_share"] = round(unknown / total, 2) if total else None
     if data.segs.rows:
         no_segment = mismatch = 0
         for r in data.rows:
-            if r["anchor"] != "customer" or r["period"] != month:
+            if r["anchor"] != anchor or r["period"] != month:
                 continue
             if not r["segment"]:
                 no_segment += int(r["entered"])
@@ -1080,7 +1083,7 @@ def _scope(c: sqlite3.Connection, data: Data, said: str) -> tuple[str, str, Row 
         if not slug:
             raise Problem("not_found", "No such channel: tico growth channel list names them", 404)
         return "channel", slug, None
-    raise Problem("validation", "scope is all, mine, segment:<slug> or channel:<slug>", 422)
+    raise Problem("validation", "scope is all, mine, segment:<slug> (or none) or channel:<slug> (or unknown)", 422)
 
 
 def read(
@@ -1125,6 +1128,12 @@ def read(
         }
     top = out["headline"] = headline(seen, month, value_kind)
     out["channels"] = channels(seen, month)
+    if month >= data.on.isoformat()[:7]:
+        # An unfinished month against full ones always looks down: no verdicts until it is over.
+        out["partial"] = True
+        for figure in [*top.values(), *(top.get("value") or {}).values(), *out["channels"]]:
+            if isinstance(figure, dict) and "verdict" in figure:
+                figure["verdict"] = None
     out["health"] = health(seen, month)
     out["metrics"] = metrics(c, seen, month, hidden)
     if "campaigns" in wanted:

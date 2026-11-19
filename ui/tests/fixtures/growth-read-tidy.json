@@ -117,6 +117,7 @@
     }
    },
    "health": {
+    "basis": "customers",
     "mismatch": 0,
     "no_segment": 4,
     "reconciled": "not_reconciled",
@@ -447,6 +448,7 @@
     }
    },
    "health": {
+    "basis": "customers",
     "mismatch": 0,
     "no_segment": 4,
     "reconciled": "not_reconciled",

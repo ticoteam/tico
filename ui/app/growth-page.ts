@@ -23,7 +23,7 @@ type GpWin = 'kept_d30' | 'kept_d90' | 'kept_d180';
 type GpCohort = { cohort: string; entered: number } & Partial<Record<GpWin, {value: number | null; n: number; status: string}>>;
 interface GpMetric { id: string; name: string; unit: string; value: number | null; estimate?: boolean }
 interface GpHealth { unknown_share?: number | null; no_segment?: number; mismatch?: number; reconciled?: string; stale_sources?: string[] }
-interface GpRead { scope: string; period: string; headline: GpHeadline; channels: GpChannel[]; health: GpHealth; metrics: GpMetric[]; series?: GpPoint[]; retention?: GpCohort[] }
+interface GpRead { scope: string; period: string; headline: GpHeadline; channels: GpChannel[]; health: GpHealth; metrics: GpMetric[]; series?: GpPoint[]; retention?: GpCohort[]; partial?: boolean }
 interface GpSegment { slug: string; name: string }
 interface GrState { load: number; scope: string; month: string; read: GpRead | null; segments: GpSegment[] }
 // A KPI as the Goals views hand it over: its latest reading and unit.
@@ -158,7 +158,7 @@ function gpHead(state: GrState, r: GpRead) {
   const tabs = state.segments.length ? [tab('all', 'All'), ...state.segments.map(s => tab('segment:' + s.slug, s.name))] : undefined;
   const months = [...new Set([r.period, ...gpYear()])].sort().reverse();
   const tools = `<label class="gp-month"><span class="sr-only">Month</span><select data-gp-month>${months.map(m =>
-    `<option value="${esc(m)}"${m === r.period ? ' selected' : ''}>${esc(grMonth(m))}</option>`).join('')}</select></label>`;
+    `<option value="${esc(m)}"${m === r.period ? ' selected' : ''}>${esc(grMonth(m))}</option>`).join('')}</select>${r.partial ? ' ' + gpWord('partial') : ''}</label>`;
   return pageHead({title: 'Growth', hook: 'gr-head', tabs, tabsAttrs: 'aria-label="Segment"', tools, more: PAGE_HEAD_COPY});
 }
 // The picker may be folded into ⋯, which the header draws again: the page listens rather than the element.
@@ -167,7 +167,7 @@ document.addEventListener('change', ev => {
   if (sel && GR && GR_MONTH_RE.test(sel.value)) location.hash = gpHref(GR.scope, sel.value);
 });
 
-const GP_WORD: Record<string, string> = {too_few: 'too few', not_supplied: 'not supplied', no_spend: 'no spend', not_yet: 'not yet', no_customers: 'no customers', not_split: 'not split'};
+const GP_WORD: Record<string, string> = {too_few: 'too few', not_supplied: 'not supplied', no_spend: 'no spend', not_yet: 'not yet', no_customers: 'no customers', not_split: 'not split', partial: 'partial'};
 const gpWord = (status: string | undefined) => `<span class="muted gp-word">${esc(GP_WORD[status || ''] || '—')}</span>`;
 const gpCount = (v: number) => grX(v, 0);
 const gpRate = (v: number) => `${grX(v * 100, v < 0.1 ? 1 : 0)}%`;
