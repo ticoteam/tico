@@ -15,6 +15,7 @@ import { FiguresStrip, Record as RecordPage, Section, type PageState } from '@/p
 import { computerStatus, modelLine, whoHref } from './model';
 import { ModelPicker } from './ModelPicker';
 import { ConfirmDialog, Foot, MateRow } from './parts';
+import { SignIns } from './SignIns';
 import { agentsQuery, computersQuery, modelsQuery, performanceQuery, type AgentRow, type Computer, type PerfPoint } from './queries';
 
 const time = (d: Date) => fmtDate(d);
@@ -133,6 +134,7 @@ function Info({ c, onRestart }: { c: Computer; onRestart: () => void }) {
           );
         })}
       </Section>
+      <SignIns c={c} />
       <Section name="Computer">
         <Facts label="Computer">
           <LabelValue label="Kind">{c.cloud_machine ? 'Cloud machine' : 'Own computer'}</LabelValue>

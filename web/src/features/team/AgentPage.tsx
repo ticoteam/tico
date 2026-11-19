@@ -17,7 +17,8 @@ import type { Tab } from './actions';
 import { ComputerPage } from './ComputerPage';
 import { bareId, historyOf, modelLine, runFigures, startOfWeek, teamOf, type HistLine } from './model';
 import { ModelPicker } from './ModelPicker';
-import { ConfirmDialog, EditDialog, Fold, OwnRow, PickDialog, SecLink, waitsOn } from './parts';
+import { CredentialDialog, WorksForDialog } from './dialogs';
+import { ConfirmDialog, EditDialog, Foot, Fold, OwnRow, PickDialog, SecLink, waitsOn } from './parts';
 import {
   agentQuery,
   agentsQuery,
@@ -163,6 +164,7 @@ function AgentHead({
 
 function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head }) {
   const { data: me } = useQuery(meQuery);
+  const actors = useActors();
   const [since] = useState(() => startOfWeek(new Date()).toISOString());
   const open = useQuery(openTasksQuery(actor.id));
   const done = useQuery(doneTasksQuery(actor.id, since));
@@ -175,7 +177,10 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
   const working = actor.working ? tasks.filter((t) => t.id === nowId) : [];
   const mine = tasks.filter((t) => !working.includes(t));
   const waits = mine.filter((t) => waitsOn(t, me?.id));
-  const rest = mine.filter((t) => !waitsOn(t, me?.id));
+  // Stuck on someone else (ui bot-tasks blocked): who it waits on is the row's note.
+  const waiting = mine.filter((t) => !waitsOn(t, me?.id) && t.turn?.state === 'person' && !!t.turn.who);
+  const rest = mine.filter((t) => !waits.includes(t) && !waiting.includes(t));
+  const nameOf = (id: string) => actors.find((a) => a.id === id)?.name ?? 'someone';
   const { turns, spend } = runFigures(runs.data ?? [], new Date());
   const lines = (update.data?.body ?? '')
     .split('\n')
@@ -227,6 +232,13 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
               ))}
             </Section>
           )}
+          {waiting.length > 0 && (
+            <Section name="Waiting" count={waiting.length}>
+              {waiting.map((t) => (
+                <OwnRow key={t.id} task={t} me={me?.id} sub={`On ${nameOf(t.turn?.who ?? '')}`} />
+              ))}
+            </Section>
+          )}
           {lines.length > 0 && update.data && (
             <Section name="Latest update" actions={<Ago at={update.data.updated_at ?? update.data.created_at} className="row-age" />}>
               <ul className="upd">
@@ -272,7 +284,7 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
   const runs = useQuery(runsQuery(slug));
   const learned = useQuery(learnedQuery(slug));
   const changes = useQuery(changesQuery(slug));
-  const [editing, setEditing] = useState<'' | 'role' | 'team' | 'reports' | 'model'>('');
+  const [editing, setEditing] = useState<'' | 'role' | 'team' | 'reports' | 'model' | 'computer' | 'users' | 'credential'>('');
   const close = (o: boolean) => !o && setEditing('');
 
   const botId = bareId(actor.id);
@@ -281,6 +293,8 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
   const boss = actors.find((a) => bareId(a.id) === reportsTo);
   const computer = computers.data?.find((c) => c.id === row?.machine?.runner_id) ?? computers.data?.find((c) => c.bots?.includes(botId));
   const role = row?.description ?? detail.data?.description ?? '';
+  const manage = row?.can_manage !== false;
+  const users = row?.users ?? [];
   const history = historyOf(runs.data ?? [], learned.data ?? [], changes.data ?? []);
   const lead = (instructions.data?.content ?? '')
     .split(/\n\s*\n/)
@@ -307,7 +321,10 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
               <LabelValue label="Reports to" onEdit={() => setEditing('reports')}>
                 {boss?.name ?? detail.data?.reports_to_name ?? 'Nobody'}
               </LabelValue>
-              <LabelValue label="Computer">
+              <LabelValue label="Works for" onEdit={manage ? () => setEditing('users') : undefined}>
+                {users.length ? users.map((u) => u.name ?? u.id).join(', ') : 'Nobody'}
+              </LabelValue>
+              <LabelValue label="Computer" onEdit={manage && computers.data?.length ? () => setEditing('computer') : undefined}>
                 <Link className="fact-link" href={`${path}?tab=computer`}>
                   {computer?.label ?? row?.machine?.label ?? (row?.cloud_machine?.shared ? 'Shared' : 'None')}
                   <Icon name="arrow" />
@@ -329,6 +346,13 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
                 </Link>
                 {instructions.data.updated_at && <p className="ins-by">{fmtDate(new Date(instructions.data.updated_at))}</p>}
               </div>
+            )}
+            {row?.agent && manage && (
+              <Foot>
+                <button className="verb" type="button" onClick={() => setEditing('credential')}>
+                  New credential
+                </button>
+              </Foot>
             )}
           </Section>
           <Section name="Rules" count={rules.data?.length}>
@@ -388,6 +412,17 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
             action="agents.setReportsTo"
             input={(to) => ({ slug, to })}
           />
+          <PickDialog
+            open={editing === 'computer'}
+            onOpenChange={close}
+            title="Computer"
+            options={(computers.data ?? []).map((c) => ({ value: c.id, label: c.label }))}
+            value={row?.machine?.runner_id ?? computer?.id ?? ''}
+            action="agents.move"
+            input={(c) => ({ slug, computer: c })}
+          />
+          <WorksForDialog open={editing === 'users'} onOpenChange={close} slug={slug} name={actor.name} now={users.map((u) => u.id)} />
+          {row?.agent && <CredentialDialog open={editing === 'credential'} onOpenChange={close} slug={slug} name={actor.name} row={row} />}
           {row && (
             <ModelPicker
               agent={row}

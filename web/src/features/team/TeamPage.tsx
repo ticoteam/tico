@@ -4,12 +4,14 @@ import { useAction } from '@/actions';
 import { directoryQuery, meQuery, type Actor } from '@/data';
 import { useFollow } from '@/live/follow';
 import { IconButton } from '@/kit/IconButton';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { FiguresStrip, List, Section, type PageState } from '@/pagekinds';
 import type { AddStep } from './actions';
 import { AddTeammate } from './AddTeammate';
+import { AccessDialog } from './dialogs';
 import { managerOf, memberIds, membersUnder, startOfWeek, subTeams, teamSlug } from './model';
 import { MateRow, OwnerButton, waitsOn } from './parts';
-import { agentsQuery, allTasksQuery, groupsQuery, peopleQuery, type AgentRow, type Group, type OwnTask } from './queries';
+import { agentsQuery, allTasksQuery, groupsQuery, peopleQuery, teammateAccessQuery, type AgentRow, type Group, type OwnTask } from './queries';
 
 export interface TeamPageProps {
   group: Group;
@@ -28,6 +30,8 @@ export function TeamPage({ group, add }: TeamPageProps) {
   const open = useQuery(allTasksQuery());
   const done = useQuery(allTasksQuery(since));
   const addOpen = useAction('team.addTeammate');
+  const reach = useQuery(teammateAccessQuery('team', group.id)).data;
+  const [access, setAccess] = useState(false);
 
   const all = groups.data ?? [];
   const actorOf = (key: string) => dir.data?.byId[key];
@@ -87,6 +91,13 @@ export function TeamPage({ group, add }: TeamPageProps) {
             {manager && <OwnerButton actor={manager.id} />}
           </>
         }
+        more={
+          reach?.you?.manage ? (
+            <Menu trigger={<IconButton icon="more" label="More" />}>
+              <MenuItem label="Access" icon="lock" onSelect={() => setAccess(true)} />
+            </Menu>
+          ) : undefined
+        }
         state={state}
         onRetry={() => void groups.refetch()}
         empty={{ title: 'No teammates yet' }}
@@ -113,6 +124,7 @@ export function TeamPage({ group, add }: TeamPageProps) {
         }
       />
       {add && <AddTeammate step={add} team={group.id} />}
+      {reach?.you?.manage && <AccessDialog open={access} onOpenChange={setAccess} kind="team" id={group.id} name={group.name} now={reach} />}
     </>
   );
 }

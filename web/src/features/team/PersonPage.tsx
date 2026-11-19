@@ -10,8 +10,9 @@ import { Row } from '@/kit/Row';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { FiguresStrip, Record as RecordPage, Section, type PageState } from '@/pagekinds';
 import { bareId, startOfMonth, teamOf } from './model';
+import { AccessDialog, GiveTaskDialog, PasswordDialog } from './dialogs';
 import { ConfirmDialog, EditDialog, Foot, Fold, MateRow, OwnRow, PickDialog, SecLink, waitsOn } from './parts';
-import { accessQuery, agentsQuery, doneTasksQuery, groupsQuery, openTasksQuery, peopleQuery } from './queries';
+import { accessQuery, agentsQuery, doneTasksQuery, groupsQuery, openTasksQuery, peopleQuery, reachLine, teammateAccessQuery } from './queries';
 
 export interface PersonPageProps {
   actor: Actor;
@@ -68,6 +69,7 @@ function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: He
   const open = useQuery(openTasksQuery(actor.id));
   const goals = (useQuery(goalsTreeQuery).data?.goals ?? []).filter((g) => g.owner_id === actor.id);
   const done = useQuery(doneTasksQuery(actor.id, since));
+  const [giving, setGiving] = useState(false);
   const tasks = open.data?.tasks ?? [];
   const waits = tasks.filter((t) => waitsOn(t, me?.id));
   const rest = tasks.filter((t) => !waitsOn(t, me?.id));
@@ -114,11 +116,20 @@ function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: He
               ))}
             </Section>
           )}
-          <Section name="Tasks" actions={<SecLink href="/tasks">All tasks</SecLink>}>
+          <Section
+            name="Tasks"
+            actions={
+              <>
+                <IconButton icon="plus" size="sm" quiet label={`Give ${actor.name} a task`} onClick={() => setGiving(true)} />
+                <SecLink href="/tasks">All tasks</SecLink>
+              </>
+            }
+          >
             {rest.map((t) => (
               <OwnRow key={t.id} task={t} me={me?.id} />
             ))}
             {doneN > 0 && <Fold label="Done" text={`${doneN} this month`} />}
+            <GiveTaskDialog open={giving} onOpenChange={setGiving} person={id} name={actor.name} />
           </Section>
           {manages.length > 0 && (
             <Section name="Manages" count={manages.length}>
@@ -141,7 +152,8 @@ function PersonSettings({ actor, id, head }: { actor: Actor; id: string; head: H
   const { data: access } = useQuery(accessQuery);
   const actors = useActors();
   const remove = useAction('people.remove');
-  const [editing, setEditing] = useState<'' | 'title' | 'team' | 'role' | 'remove'>('');
+  const reach = useQuery(teammateAccessQuery('person', id)).data;
+  const [editing, setEditing] = useState<'' | 'title' | 'team' | 'role' | 'remove' | 'access' | 'password'>('');
   const close = (o: boolean) => !o && setEditing('');
 
   const p = people.data?.find((x) => x.id === id);
@@ -174,16 +186,28 @@ function PersonSettings({ actor, id, head }: { actor: Actor; id: string; head: H
                 {role.role === 'owner' ? 'Owner' : role.role === 'admin' ? 'Admin' : 'Member'}
               </LabelValue>
             )}
+            {reach?.you?.manage && (
+              <LabelValue label="Access" onEdit={() => setEditing('access')}>
+                {reachLine(reach)}
+              </LabelValue>
+            )}
             {p?.slack && <LabelValue label="Slack">{p.slack}</LabelValue>}
             {p?.github && <LabelValue label="GitHub">{p.github}</LabelValue>}
           </Facts>
-          {admin && !self && role?.removable !== false && role?.role !== 'owner' && (
+          {admin && !self && (
             <Foot>
-              <button className="verb" type="button" onClick={() => setEditing('remove')}>
-                Remove from {company}
+              <button className="verb" type="button" onClick={() => setEditing('password')}>
+                Make a password
               </button>
+              {role?.removable !== false && role?.role !== 'owner' && (
+                <button className="verb" type="button" onClick={() => setEditing('remove')}>
+                  Remove from {company}
+                </button>
+              )}
             </Foot>
           )}
+          {reach?.you?.manage && <AccessDialog open={editing === 'access'} onOpenChange={close} kind="person" id={id} name={actor.name} now={reach} />}
+          <PasswordDialog open={editing === 'password'} onOpenChange={close} person={id} name={actor.name} />
           <EditDialog
             open={editing === 'title'}
             onOpenChange={close}

@@ -95,6 +95,24 @@
 .tpl-line{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:var(--t-sm);color:var(--muted)}
 .tpl-check{display:grid}
 .tpl-check .ico{stroke-width:2.2}
+/* The mock draws these as links; here they are buttons, and the base reset (parts.css) keeps the browser's border and fill. */
+button.add-pick,button.add-person,button.tpl{border:0;background:none;text-align:left}
+button.add-pick:hover,button.add-person:hover,button.tpl:hover,button.tpl.is-on{background:var(--raised-hover)}
+
+/* ---------- a secret shown once; who can reach a teammate ---------- */
+.once{display:block;padding:var(--s-2h) var(--s-3);border-radius:var(--r-ctl);background:var(--well);font-family:var(--font-code);font-size:var(--t-sm);overflow-wrap:anywhere;user-select:all}
+.lvl{display:grid;gap:var(--s-1h);margin:0;padding:0;border:0;min-width:0}
+
+/* ---------- sign-ins on a computer (mates.css .plan) ---------- */
+.plan{grid-template-columns:24px 184px minmax(0,1fr) auto 168px 36px;column-gap:0}
+.plan-name{min-width:0;padding-right:var(--s-3);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.plan-acct{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:var(--t-sm);color:var(--muted)}
+.plan .row-pills{padding:0 var(--s-3)}
+.plan-use{display:flex;align-items:center;gap:var(--s-2h);min-width:0}
+.plan-use .num{font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.meter{width:52px;height:4px;flex:none;border-radius:var(--r-pill);background:var(--well-2);overflow:hidden}
+.meter i{display:block;height:100%;border-radius:var(--r-pill);background:var(--ink-2)}
+.plan.is-off .plan-name,.plan.is-off .plan-use{color:var(--muted);opacity:.6}
 
 /* ---------- the page answers to its own width, not the window's ----------
    Both names: `page` is the sheet's own (pagekinds.css lays the figures two by two under 480 px on it), `rec` the mock's. */
@@ -157,11 +175,19 @@
     .rule-marks{align-self:start;min-height:30px}
     .bm{grid-template-columns:24px var(--av-sm) 160px minmax(0,1fr) auto 188px}
     .m-pick{width:188px}
+    .plan{grid-template-columns:24px 136px minmax(0,1fr) auto 152px 36px}
   }
   /* with the menu open too (about 440 px): every row puts its marks under its title */
   @container rec (max-width:540px){
     .stage-head{padding-left:var(--s-4)}
     .status,.now-step,.rec .foot,.stage-fold{padding-left:var(--s-4)}
+    .plan{height:auto;min-height:var(--row);grid-template-columns:16px minmax(0,1fr) auto 36px;grid-template-areas:"mark name pills sw" ". acct use use";padding:calc(var(--s-1h) + 1px) var(--s-2) calc(var(--s-1h) + 1px) 0;row-gap:calc(var(--s-0) + 1px)}
+    .plan .row-mark{grid-area:mark}
+    .plan-name{grid-area:name}
+    .plan-acct{grid-area:acct}
+    .plan .row-pills{grid-area:pills}
+    .plan-use{grid-area:use;justify-self:end}
+    .plan .ib{grid-area:sw}
     .upd{padding-left:calc(var(--s-8) + var(--s-0))}
     .row-mark{width:12px}
     .task{height:auto;min-height:var(--row);grid-template-columns:16px minmax(0,1fr) var(--av-sm) 34px;grid-template-areas:"mark title av age" ". pills pills pills";padding:calc(var(--s-1h) + 1px) var(--s-2) calc(var(--s-1h) + 1px) 0;row-gap:calc(var(--s-1) + 1px)}
@@ -223,4 +249,11 @@
   .bm{grid-template-columns:20px var(--av-sm) minmax(0,1fr) auto}
   .bm .mate-now{display:none}
   .m-pick{width:auto;grid-column:3/-1}
+  .plan{height:auto;min-height:var(--row);grid-template-columns:minmax(0,1fr) auto 44px;grid-template-areas:"name pills sw" "acct use use";padding:calc(var(--s-2) + 1px) var(--s-2);row-gap:calc(var(--s-0) + 1px)}
+  .plan .row-mark{display:none}
+  .plan-name{grid-area:name}
+  .plan-acct{grid-area:acct}
+  .plan .row-pills{grid-area:pills}
+  .plan-use{grid-area:use;justify-self:end}
+  .plan .ib{grid-area:sw;justify-self:end}
 }

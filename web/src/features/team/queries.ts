@@ -1,6 +1,6 @@
 import { queryOptions } from '@tanstack/react-query';
 import { api, ApiError } from '@/api/client';
-import type { Task } from '@/api/schema';
+import type { Task, TeammateAccessView } from '@/api/schema';
 import { keys, queryClient, quietRoot, QUIET_STALE_MS, write } from '@/data';
 
 // Teammates, teams and computers have no live topic of their own (status lines come through the directory): read
@@ -43,6 +43,10 @@ export interface AgentRow {
   cloud_machine?: { mode?: string; placement?: string; shared?: boolean; size?: string; state?: string } | null;
   can_manage?: boolean;
   online?: boolean;
+  /** Who it works for (its owner ids), as people. */
+  users?: { id: string; name?: string }[];
+  /** An agent that runs elsewhere (a Hermes or OpenClaw profile) on a standing credential instead of a computer. */
+  agent?: { harness?: string; profile?: string; credential?: unknown } | null;
 }
 
 export const agentsQuery = queryOptions({
@@ -224,6 +228,8 @@ export interface Model {
 export interface Harness {
   id: string;
   name: string;
+  /** What its CLI can do from here: a sign-in in the browser, a sign-out. */
+  capabilities?: { browser_sign_in?: boolean; sign_out?: boolean };
 }
 export interface Models {
   models: Model[];
@@ -334,7 +340,20 @@ export interface Computer {
   performance?: string;
   may_manage?: boolean;
   cloud_machine?: { size?: string; placement?: string; shared?: boolean } | null;
-  readiness?: { disk?: { free_bytes?: number; total_bytes?: number } } | null;
+  readiness?: {
+    disk?: { free_bytes?: number; total_bytes?: number };
+    /** Each AI tool on it, as it last reported: installed, signed in ('ready'), and this week's use. */
+    runtimes?: Record<string, Runtime | undefined>;
+    harnesses?: Record<string, { runtime?: string; name?: string } | undefined>;
+  } | null;
+}
+
+export interface Runtime {
+  installed?: boolean;
+  /** 'ready' signed in, 'rejected' its login expired, 'missing' signed out. */
+  authenticated?: string;
+  account?: { email?: string } | null;
+  weekly?: { used_percent?: number; resets_at?: string } | null;
 }
 
 /** Every computer still in use (GET /api/v2/operations). */
@@ -558,7 +577,6 @@ export async function setPersonTitle(person: string, title: string) {
   return out;
 }
 
-/** Remove them: their sign-in and tokens end; their history stays. */
 /** A person's name: an owner's or admin's edit (POST /api/v2/access/humans/{id}). */
 export async function renamePerson(person: string, name: string) {
   const out = await write({
@@ -570,6 +588,7 @@ export async function renamePerson(person: string, name: string) {
   return out;
 }
 
+/** Remove them: their sign-in and tokens end; their history stays. */
 export async function removePerson(person: string) {
   const out = await write({
     key: peopleQuery.queryKey,
@@ -587,3 +606,126 @@ export function restartComputer(id: string) {
     send: (idempotencyKey) => api.post<{ requested?: boolean; running?: number }>(`/api/v2/computers/${at(id)}/restart`, {}, { idempotencyKey }),
   });
 }
+
+/** Onto another computer: a transition, against the agent's computer generation and revision. */
+export function moveAgent(slug: string, runner: string) {
+  const row = queryClient.getQueryData(agentsQuery.queryKey)?.find((r) => r.slug === slug);
+  const label = queryClient.getQueryData(computersQuery.queryKey)?.find((c) => c.id === runner)?.label ?? null;
+  return write({
+    key: agentsQuery.queryKey,
+    optimistic: patchRows(slug, { machine: { ...row?.machine, runner_id: runner, label } }),
+    send: (idempotencyKey) =>
+      api.post<{ id: string }>(
+        `/api/v2/bots/${at(slug)}/transitions`,
+        { kind: 'machine', runner_id: runner, expected_generation: row?.machine?.generation ?? 0, expected_revision: revisionOf(slug) },
+        { idempotencyKey },
+      ),
+  });
+}
+
+/** Who it works for: the people it serves (POST .../owners), at least one. */
+export function setWorksFor(slug: string, people: string[]) {
+  const names = new Map((queryClient.getQueryData(peopleQuery.queryKey) ?? []).map((p) => [p.id, p.name]));
+  return write({
+    key: agentsQuery.queryKey,
+    optimistic: patchRows(slug, { users: people.map((id) => ({ id, name: names.get(id) })) }),
+    send: (idempotencyKey) =>
+      api.post<{ revision?: number }>(`/api/v2/bots/${at(slug)}/owners`, { owners: people, expected_revision: revisionOf(slug) }, { idempotencyKey }),
+  });
+}
+
+/** A new standing credential for an agent that runs elsewhere: shown once; the one before stops at once. */
+export interface Credential {
+  token: string;
+  harness?: string;
+  setup?: { url?: string };
+}
+
+export const newCredential = (slug: string) => api.post<Credential>(`/api/v2/bots/${at(slug)}/agent-credential`, {});
+
+/** A task for a person: theirs at once on their page, taken back if the server refuses. */
+export async function giveTask(actor: string, title: string, message?: string) {
+  const now = new Date().toISOString();
+  const row: OwnTask = { id: `tmp:${now}`, number: null, title, status: 'open', pipeline_id: null, stage_id: null, owner_id: actor, late: null, turn: null, updated_at: now } as OwnTask;
+  return write<{ task?: OwnTask }>({
+    key: openTasksQuery(actor).queryKey,
+    optimistic: (cur: OwnTasks | undefined) => (cur ? { ...cur, tasks: [row, ...cur.tasks] } : cur),
+    send: (idempotencyKey) => api.post(`/api/v2/tasks`, { title, owner: actor, ...(message ? { message } : {}) }, { idempotencyKey }),
+  });
+}
+
+/** Who may see, read and write to a person or a team. Refused (null) to anyone who does not manage them. */
+export type AccessView = Pick<TeammateAccessView, 'see' | 'read' | 'write' | 'revision' | 'you'>;
+export type Levels = Pick<AccessView, 'see' | 'read' | 'write'>;
+const accessPath = (kind: 'person' | 'team', id: string): `/api/${string}` => `/api/v2/${kind === 'person' ? 'humans' : 'groups'}/${at(id)}/access`;
+
+export const teammateAccessQuery = (kind: 'person' | 'team', id: string) =>
+  queryOptions({
+    queryKey: ['team', 'access', kind, id] as const,
+    queryFn: async ({ signal }): Promise<AccessView | null> => {
+      try {
+        return await api.get<AccessView>(accessPath(kind, id), { signal });
+      } catch (e) {
+        if (e instanceof ApiError && (e.status === 403 || e.status === 401 || e.status === 404)) return null;
+        throw e;
+      }
+    },
+    staleTime: QUIET_STALE_MS,
+  });
+
+/** One line for the Access fact: open to everyone, or narrowed. */
+export const reachLine = (a: Levels) => (a.see.everyone && a.read.everyone && a.write.everyone ? 'Everyone' : 'Limited');
+
+export function setTeammateAccess(kind: 'person' | 'team', id: string, levels: Levels) {
+  const key = teammateAccessQuery(kind, id).queryKey;
+  const revision = queryClient.getQueryData(key)?.revision ?? 0;
+  return write({
+    key,
+    optimistic: (cur: AccessView | null | undefined) => (cur ? { ...cur, ...levels } : cur),
+    send: (idempotencyKey) => api.put(accessPath(kind, id), { ...levels, revision }, { idempotencyKey }),
+  });
+}
+
+/** A Tico account for someone on the roster, with a made-up password answered once and kept nowhere. */
+export const makePassword = (person: string) =>
+  api.post<{ person: string; email?: string; password: string }>(`/api/v2/access/humans/${at(person)}/password`, {});
+
+/* ---------------------------------------------------------------- sign-ins on a computer */
+
+/** A sign-in or sign-out the computer runs, read back until it ends. */
+export interface Login {
+  id: string;
+  runner_id?: string;
+  state: string;
+  url?: string | null;
+  code?: string | null;
+  accepts_code?: boolean;
+  code_sent?: boolean;
+  message?: string | null;
+}
+
+export const LIVE_LOGIN = ['requested', 'starting', 'waiting', 'finishing'];
+const logins = (rid: string) => `/api/v2/computers/${at(rid)}` as const;
+
+export const startLogin = (rid: string, runtime: string) => api.post<Login>(`${logins(rid)}/logins`, { runtime });
+export const startLogout = (rid: string, runtime: string) => api.post<Login>(`${logins(rid)}/logouts`, { runtime });
+export const sendLoginCode = (rid: string, lid: string, code: string) => api.post<Login>(`${logins(rid)}/logins/${at(lid)}/code`, { code });
+export const cancelLogin = (rid: string, lid: string) => api.post<Login>(`${logins(rid)}/logins/${at(lid)}/cancel`, {});
+
+/** The one timer here: a sign-in or sign-out under way is read every 3 s until it ends, while its dialog is open. */
+export const loginQuery = (rid: string, lid: string) =>
+  queryOptions({
+    queryKey: ['team', 'login', rid, lid] as const,
+    queryFn: ({ signal }) => api.get<Login>(`${logins(rid)}/logins/${at(lid)}`, { signal }),
+    refetchInterval: (q) => (LIVE_LOGIN.includes(q.state.data?.state ?? 'requested') ? 3000 : false),
+    staleTime: 0,
+  });
+
+/** The agents a sign-out would stop, for the question before it. */
+export const signOutStopsQuery = (rid: string, runtime: string) =>
+  queryOptions({
+    queryKey: ['team', 'logout-bots', rid, runtime] as const,
+    queryFn: async ({ signal }) =>
+      (await api.get<{ bots?: { bot: string; name?: string }[] }>(`${logins(rid)}/logouts/bots?${q({ runtime })}`, { signal })).bots ?? [],
+    staleTime: 0,
+  });

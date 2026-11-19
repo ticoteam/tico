@@ -5,17 +5,27 @@ import { toast } from '@/kit/Toast';
 import {
   addAgent,
   archiveAgent,
+  cancelLogin,
   changeAgent,
   computersQuery,
   controlAgent,
+  giveTask,
   invitePerson,
+  makePassword,
+  moveAgent,
   moveToTeam,
+  newCredential,
   removePerson,
   renamePerson,
   restartComputer,
+  sendLoginCode,
   setAgentModel,
   setPersonRole,
   setPersonTitle,
+  setTeammateAccess,
+  setWorksFor,
+  startLogin,
+  startLogout,
 } from './queries';
 
 const slug = s.string({ min: 1, max: 100, what: "an agent's slug" });
@@ -155,6 +165,42 @@ export const archive = defineAction({
   did: ({ slug }, out) => `Archived ${out?.name ?? slug}. It takes no more work; its tasks and history stay.`,
 });
 
+export const moveComputer = defineAction({
+  id: 'agents.move',
+  title: 'Move an agent to another computer',
+  kind: 'change',
+  input: s.object({ slug, computer: s.string({ min: 1, max: 100, what: "a computer's id" }) }),
+  run: async ({ queryClient }, { slug, computer }) => {
+    const label = queryClient.getQueryData(computersQuery.queryKey)?.find((c) => c.id === computer)?.label ?? 'the computer';
+    await said("Couldn't move it", () => moveAgent(slug, computer));
+    return { label };
+  },
+  did: (_input, out) => `Moved it to ${out?.label ?? 'the computer'}. It starts there after its turn ends.`,
+  target: ({ slug }) => onPage(slug),
+});
+
+export const worksFor = defineAction({
+  id: 'agents.setWorksFor',
+  title: 'Change who an agent works for',
+  kind: 'change',
+  input: s.object({ slug, people: s.array(person, { max: 100 }) }),
+  run: (_ctx, { slug, people }) => said("Couldn't change it", () => setWorksFor(slug, people)),
+  did: () => 'Changed who it works for',
+  target: ({ slug }) => onPage(slug),
+});
+
+/** Shown once, and the one before stops at once: only a person makes it. */
+export const credential = defineAction({
+  id: 'agents.newCredential',
+  title: 'Make a new credential for an agent that runs elsewhere',
+  kind: 'change',
+  tico: false,
+  input: s.object({ slug }),
+  run: (_ctx, { slug }) => said("Couldn't make a credential", () => newCredential(slug)),
+  did: () => 'Made a new credential',
+  target: ({ slug }) => onPage(slug),
+});
+
 export const add = defineAction({
   id: 'agents.add',
   title: 'Add an agent',
@@ -237,6 +283,53 @@ export const setTitle = defineAction({
   target: ({ person }) => onPage(person),
 });
 
+export const giveATask = defineAction({
+  id: 'people.giveTask',
+  title: 'Give a person a task',
+  kind: 'change',
+  input: s.object({ person, title: s.string({ min: 1, max: 300 }), message: s.optional(s.string({ max: 20000 })) }),
+  run: (_ctx, { person, title, message }) => said("Couldn't make the task", () => giveTask(`human:${person}`, title, message || undefined)),
+  did: ({ title }) => `Gave them "${title}"`,
+  target: ({ person }) => onPage(person),
+});
+
+const audience = s.object({
+  everyone: s.boolean(),
+  people: s.array(s.string({ min: 1, max: 200 }), { max: 500 }),
+  teams: s.array(s.string({ min: 1, max: 200 }), { max: 200 }),
+  bots: s.array(s.string({ min: 1, max: 200 }), { max: 500 }),
+});
+
+/** Who may see, read and write to a person or a team: a permission change, so only a person makes it. */
+export const setAccess = defineAction({
+  id: 'team.setAccess',
+  title: 'Change who can see, read and write to a person or a team',
+  kind: 'change',
+  tico: false,
+  input: s.object({
+    kind: s.oneOf(['person', 'team'] as const),
+    id: s.string({ min: 1, max: 100, what: "a person's id or a team's id" }),
+    see: audience,
+    read: audience,
+    write: audience,
+  }),
+  run: (_ctx, { kind, id, ...levels }) => said("Couldn't change who has access", () => setTeammateAccess(kind, id, levels)),
+  did: () => 'Changed who has access',
+  target: ({ kind, id }) => (kind === 'person' ? onPage(id) : { kind: 'team', id }),
+});
+
+/** A password answered once, kept nowhere: a sign-in secret, so only a person makes it. */
+export const password = defineAction({
+  id: 'people.makePassword',
+  title: 'Make a Tico account with a password for a person',
+  kind: 'change',
+  tico: false,
+  input: s.object({ person }),
+  run: (_ctx, { person }) => said("Couldn't make the account", () => makePassword(person)),
+  did: () => 'Made an account',
+  target: ({ person }) => onPage(person),
+});
+
 /** Their sign-in and API tokens end; their history stays. Only a person does this, and the page asks first. */
 export const remove = defineAction({
   id: 'people.remove',
@@ -266,5 +359,53 @@ export const restart = defineAction({
     return { label };
   },
   did: (_input, out) => `Restarted ${out?.label ?? 'the computer'}. Its agents stopped their turns and start again in about a minute.`,
+  target: () => ({ kind: 'team', id: 'computer' }),
+});
+
+const computer = s.string({ min: 1, max: 100, what: "a computer's id" });
+const runtime = s.string({ min: 1, max: 40, what: "an AI tool's runtime id, as the computer reports it" });
+const login = s.string({ min: 1, max: 100, what: 'a sign-in id' });
+
+/** The provider's page opens in the person's own browser, signed in as them: only a person does this. */
+export const signIn = defineAction({
+  id: 'computers.signIn',
+  title: 'Sign in to an AI tool on a computer',
+  kind: 'change',
+  tico: false,
+  input: s.object({ computer, runtime }),
+  run: (_ctx, { computer, runtime }) => said("Couldn't start the sign-in", () => startLogin(computer, runtime)),
+  did: () => 'Sign-in started',
+  target: () => ({ kind: 'team', id: 'computer' }),
+});
+
+export const signInCode = defineAction({
+  id: 'computers.signInCode',
+  title: 'Send the code from the sign-in page',
+  kind: 'change',
+  tico: false,
+  input: s.object({ computer, login, code: s.string({ min: 1, max: 700, what: 'the code' }) }),
+  run: (_ctx, { computer, login, code }) => said("Couldn't send the code", () => sendLoginCode(computer, login, code)),
+  did: () => 'Code sent',
+  target: () => ({ kind: 'team', id: 'computer' }),
+});
+
+export const stopSignIn = defineAction({
+  id: 'computers.cancelSignIn',
+  title: 'Stop a sign-in on a computer',
+  kind: 'change',
+  input: s.object({ computer, login }),
+  run: (_ctx, { computer, login }) => said("Couldn't stop it", () => cancelLogin(computer, login)),
+  did: () => 'Stopped the sign-in',
+  target: () => ({ kind: 'team', id: 'computer' }),
+});
+
+/** The page names the agents it stops first. They keep the sign-in and start again once someone signs in. */
+export const signOut = defineAction({
+  id: 'computers.signOut',
+  title: 'Sign out of an AI tool on a computer',
+  kind: 'change',
+  input: s.object({ computer, runtime }),
+  run: (_ctx, { computer, runtime }) => said("Couldn't sign out", () => startLogout(computer, runtime)),
+  did: () => 'Signing out. The agents that use it stop until someone signs in again.',
   target: () => ({ kind: 'team', id: 'computer' }),
 });
