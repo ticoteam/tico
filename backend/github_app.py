@@ -39,7 +39,7 @@ from .health import GITHUB_HEALTH, note_github_token
 from .store import Problem, digest, encode
 from . import bot_settings as BS
 from . import brand_icons
-from .api_contract import KEYLESS, api_v2
+from .api_contract import KEYLESS, api_v2, error, ref
 
 
 def _now():
@@ -224,6 +224,8 @@ INSTALL_PATH = "/api/v2/github/app/install"
 # agent finishes the setup (`finish`). The middleware lets it through without a session (backend/app.py request_guard).
 CALLBACK_PATH = "/api/v2/github/app/callback"
 FINISH_PATH = "/api/v2/github/app/finish"
+# The v2 refusal of every connect route but GitHub's own returns: only the Owner connects GitHub (`owner`).
+OWNER_ONLY = {"403": error("forbidden: only the Owner connects GitHub")}
 
 
 def links(row):
@@ -1989,12 +1991,35 @@ def install_github_app(app, settings, store):
             "bot_repositories": made,
         }
 
-    @app.get("/api/v2/github/app")
+    @app.get(
+        "/api/v2/github/app",
+        **api_v2(
+            "Repositories",
+            "getGitHubApp",
+            "The GitHub App connection",
+            "GitHubApp",
+            description="The Owner only. Whether the company's GitHub App is connected and installed, and the GitHub "
+            "pages to fix it from. Not connected answers `connected` and `app_name` only; start with getGitHubAppSetup.",
+            responses=OWNER_ONLY,
+        ),
+    )
     def status(request: Request):
         owner(request)
         return status_view()
 
-    @app.post("/api/v2/github/app/check-permissions")
+    @app.post(
+        "/api/v2/github/app/check-permissions",
+        **api_v2(
+            "Repositories",
+            "checkGitHubAppPermissions",
+            "Read the installation's permissions again",
+            "GitHubApp",
+            description="The Owner only, after accepting a permission on GitHub: asks GitHub again and answers the "
+            "connection as getGitHubApp does.",
+            responses=OWNER_ONLY,
+            idempotency=KEYLESS,
+        ),
+    )
     def check_permissions(request: Request):
         """After the owner accepts Administration on GitHub: read the installation's permissions again."""
         owner(request)
@@ -2003,7 +2028,42 @@ def install_github_app(app, settings, store):
             service.live.pop(raised.refused_key, None)
         return status_view(refresh=True)
 
-    @app.get("/api/v2/github/app/manifest")
+    @app.get(
+        "/api/v2/github/app/manifest",
+        **api_v2(
+            "Repositories",
+            "getGitHubAppSetup",
+            "Start connecting GitHub",
+            {
+                "description": "The setup to post to GitHub, or with html=true the hand-off page",
+                "content": {
+                    "application/json": {"schema": ref("GitHubAppSetup")},
+                    "text/html": {"schema": {"type": "string"}},
+                },
+            },
+            description="The Owner only. Makes a single-use setup state (an hour) and the App's manifest. The browser "
+            "then POSTs a form to `action` with one field, `manifest` (the manifest as JSON text), and GitHub makes the "
+            "App. Or send the browser itself to `/api/v2/github/app/manifest?html=true&org=<login>&administration=true` "
+            "in the owner's Tico session: the hand-off page posts that form by itself. GitHub comes back to "
+            "`/api/v2/github/app/callback` (no call of yours), which saves the App and goes on to GitHub's install page; "
+            "back from that, the browser lands on `/#/tools/github?github=<word>` (getGitHubApp's install_url says "
+            "which words).",
+            parameters={
+                "org": "The GitHub organization's login; none makes the App under the signed-in GitHub user's own account",
+                "name": "The App's name; none proposes \"<team name> Tico\"",
+                "administration": "Let Tico create bot repositories (Administration: write); always on for a personal "
+                "account",
+                "html": "true answers the hand-off page, which posts the form to GitHub by itself, instead of JSON",
+            },
+            responses={
+                **OWNER_ONLY,
+                "409": error(
+                    "github_connected: disconnect first; github_key_missing: the key is lost, replaceGitHubAppLostKey "
+                    "after the owner confirms"
+                ),
+            },
+        ),
+    )
     def manifest_form(request: Request, org: str = "", name: str = "", administration: bool = True, html: bool = False):
         """`org` is the GitHub account or organization the App is made under: GitHub says which it is, and the setup
         page is GitHub's for that kind (a personal account's or an organization's). No `org` is a personal account:
@@ -2050,7 +2110,20 @@ def install_github_app(app, settings, store):
             return HTMLResponse(page, headers={"Cache-Control": "no-store"})
         return {"action": action, "manifest": body, "state": nonce}
 
-    @app.post("/api/v2/github/app/replace-lost-key")
+    @app.post(
+        "/api/v2/github/app/replace-lost-key",
+        **api_v2(
+            "Repositories",
+            "replaceGitHubAppLostKey",
+            "Replace the lost GitHub App key",
+            "GitHubLostKeyReplaced",
+            description="The Owner only, after confirming it themselves: getGitHubAppSetup answered 409 "
+            "github_key_missing (the key that seals the App's secrets is lost with no copy). Drops the saved App and "
+            "every directory sync credential, which are entered again; does nothing while the key is there.",
+            responses=OWNER_ONLY,
+            idempotency=KEYLESS,
+        ),
+    )
     def replace_lost_key(request: Request):
         """The owner confirmed it: github-app.key is lost with no copy, so drop the GitHub App and directory sync
         secrets only it opened. Not proposable: a person clicks it themselves."""
@@ -2150,11 +2223,28 @@ def install_github_app(app, settings, store):
         # The install's return to the authorize callback carries this state back; the callback takes only a state Tico made.
         return RedirectResponse(install_page(who.actor, conversion["slug"]), status_code=302)
 
-    class FinishBody(BaseModel):
+    class GitHubAppFinish(BaseModel):
         state: str = Field("", max_length=200)
 
-    @app.post(FINISH_PATH)
-    def finish(request: Request, body: FinishBody):
+    @app.post(
+        FINISH_PATH,
+        **api_v2(
+            "Repositories",
+            "finishGitHubApp",
+            "Finish a GitHub setup that came back with no session",
+            "GitHubAppFinished",
+            description="The Owner only, with the `state` getGitHubAppSetup answered: GitHub came back to the callback "
+            "with no owner session (`github=finish`), so its code waits here. Saves the App once and answers GitHub's "
+            "install page.",
+            responses={
+                **OWNER_ONLY,
+                "400": error("github_state: not this owner's setup, used, or older than an hour"),
+                "409": error("github_not_returned: GitHub has not come back with this setup yet"),
+            },
+            idempotency=KEYLESS,
+        ),
+    )
+    def finish(request: Request, body: GitHubAppFinish):
         """The owner's agent finishes a setup GitHub returned with no owner session: the parked code is exchanged here,
         once, for the owner. Returns the install page, as the callback's redirect would."""
         who = owner(request)
@@ -2168,7 +2258,19 @@ def install_github_app(app, settings, store):
         conversion = exchange_and_save(who.actor, row, row["code"])
         return {"install_url": install_page(who.actor, conversion["slug"])}
 
-    @app.get("/api/v2/github/app/authorize-link")
+    @app.get(
+        "/api/v2/github/app/authorize-link",
+        **api_v2(
+            "Repositories",
+            "getGitHubAuthorizeLink",
+            "Authorize Tico in a personal account",
+            "GitHubAuthorizeLink",
+            description="The Owner only, for an App under a personal account (account_type User): GitHub's page where "
+            "the owner lets Tico create repositories there. GitHub comes back to `/api/v2/github/app/authorized` in the "
+            "owner's Tico session, which ends on `/#/tools/github?github=authorized` (or `declined`).",
+            responses={**OWNER_ONLY, "409": error("github_not_connected, or github_account: not a personal account")},
+        ),
+    )
     def authorize_link(request: Request):
         """The GitHub page where the owner authorizes Tico to create repositories in the personal account. The single-use state
         is bound to this session; GitHub sends the owner back to /authorized with it."""
@@ -2328,7 +2430,19 @@ def install_github_app(app, settings, store):
         found = installed_now(who.actor)
         return RedirectResponse("/#/tools/github?github=" + ("connected" if found else "pending"), status_code=302)
 
-    @app.post("/api/v2/github/app/disconnect")
+    @app.post(
+        "/api/v2/github/app/disconnect",
+        **api_v2(
+            "Repositories",
+            "disconnectGitHubApp",
+            "Disconnect GitHub",
+            "GitHubAppDisconnected",
+            description="The Owner only. Forgets the App and its secrets here and revokes the owner's personal-account "
+            "authorization on GitHub; the App stays installed on GitHub until it is uninstalled there (uninstall_url).",
+            responses=OWNER_ONLY,
+            idempotency=KEYLESS,
+        ),
+    )
     def disconnect(request: Request):
         who = owner(request)
         service.revoke_user_token()  # GitHub's copy of the owner's authorization, while the App's secrets can still sign

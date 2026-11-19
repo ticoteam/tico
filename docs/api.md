@@ -40,7 +40,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 |---|---|
 | Session | Who is calling, and how a frontend signs in ([guide](custom-frontend.md)). |
 | Team | This installation's names and settings. |
-| Repositories | Team repositories, product-repository creation (the Owner, or a bot with Create product repositories), and bot repository access. |
+| Repositories | Team repositories, the company's GitHub App connection (the Owner), product-repository creation (the Owner, or a bot with Create product repositories), and bot repository access. |
 | Subscriptions | Provider logins on Computers. Every bot runs each AI tool on its Computer's one login for it. |
 | Team chart | Humans and bots, and who reports to whom. |
 | Bots | The bots a person can see, and their live status. |
