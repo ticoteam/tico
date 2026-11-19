@@ -3193,7 +3193,7 @@
     "hub_file": null
   },
   {
-    "fix_pr": null,
+    "fix_pr": 4502,
     "breaking_prs": [
       "#4489 (Growth read: when each source last pushed)"
     ],
