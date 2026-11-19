@@ -78,4 +78,4 @@ it meets the minimum size. The most useful cut is by channel, because it turns "
   tables, or the blended curve looks better than either.
 - **Seasonal cohorts read as a trend.** Compare a cohort with the same month a year earlier before calling a change.
 - **Free users in a paying cohort.** A cohort starts at first payment. Trial and free activity belongs to the funnel
-  (`skills/find-the-leak-in-a-funnel`), not to this table.
+  (`skills/find-the-leak-in-a-funnel` where your repository has it), not to this table.

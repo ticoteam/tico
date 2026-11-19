@@ -73,8 +73,8 @@ step here says enough to do the work.
 3. **Pull the customer and revenue rows.** One row per customer per month: customer key, first paid month, segment,
    channel, which rule named the channel (`utm`, `code`, `asked` or `unknown`), plan, month, net revenue (refunds,
    credits and discounts taken off, taxes out). Use a saved query (`tico db <database> --query <name>`) or the billing
-   Tool. Run the sanity check in
-   `skills/define-a-metric-as-a-query`: the month's revenue from these rows against `tico finance report pnl` for the
+   Tool. Run the sanity check (the one in `skills/define-a-metric-as-a-query` where your repository has it): the
+   month's revenue from these rows against `tico finance report pnl` for the
    same month. Within 2% it ties. Beyond that, name the difference; the page says "not reconciled".
 4. **Pull acquisition cost.** By channel and month, from Finance (`tico finance report campaigns`, `spend_by`) and
    Growth's cost rows. Finance amounts are in minor units: 315000 is 3,150.00. Mark each cost paid (money spent to buy
@@ -98,7 +98,9 @@ step here says enough to do the work.
    divided by what those same customers paid then. GRR is the same with each customer capped at what they paid then,
    so it never passes 100%. New customers are in neither. If the opening set is under 30 customers, show dollars and
    accounts. If one customer is over 10% of the opening revenue, show the figure with and without them. For the
-   monthly movement, use `skills/bridge-recurring-revenue`.
+   monthly movement, split the change into new, expansion, contraction and churn, each tied to a named contract
+   with its date, using the definition in `knowledge/revenue-policy.md`: opening plus movements equals closing. When
+   the Revenue Accountant has published the month's bridge, use its figures and do not keep a second one.
 9. **Compute LTV on gross margin.** Observed LTV at age m = the cohort's cumulative net revenue per starting
    customer through month m, times gross margin. Lead with observed LTV at 6, 12 and 24 months, using only the ages
    a cohort has reached. Projected LTV carries
@@ -115,7 +117,8 @@ step here says enough to do the work.
     customers in the system of record, never in an ad platform. Put platform-claimed and self-reported counts in
     their own columns. Report Unknown's share. Then check the three holdout triggers in
     `references/attribution-and-holdouts.md`; if one fires, plan the test there. Before any sentence says a channel
-    "drove" something, run `skills/check-attribution-before-a-claim`.
+    "drove" something, check it against `references/attribution-and-holdouts.md` (and
+    `skills/check-attribution-before-a-claim` where your repository has it).
 12. **Judge each figure, in this order.** (a) Against the company's own history: this month against the trailing
     three-month average (Growth's `vs_3mo`: within 10% is flat) and against the same cohort age a year ago. (b)
     Against the target on its goal (`tico kpi show <id>`), if one is set. (c) Against the floors that hold for any
@@ -140,7 +143,8 @@ step here says enough to do the work.
     --evidence <query or page> --quality measured`); a correction uses `--supersedes`. Publish the page (Output).
     File one task per gap, for the teammate who owns the source.
 
-For one segment's weekly read between monthly runs, `skills/read-cost-per-customer-for-a-segment` is enough.
+For one segment's weekly read between monthly runs, that segment's direct CAC and payback are enough
+(`skills/read-cost-per-customer-for-a-segment` where your repository has it).
 
 ## Gates
 
@@ -157,7 +161,8 @@ For one segment's weekly read between monthly runs, `skills/read-cost-per-custom
   restated under both rules side by side. Platform counts are never added together and never replace the count from
   the system of record.
 - **Unknown over 25% of new customers:** paid CAC and every channel figure carry "attribution weak", and the next
-  action is `skills/ask-how-they-heard` and a tagging fix, not a budget move.
+  action is asking new customers how they heard (`skills/ask-how-they-heard` where your repository has it) and a
+  tagging fix, not a budget move.
 - **Revenue ties to Finance** within 2%, or the page says "not reconciled" and names the gap.
 - **Benchmarks carry a date and a definition,** and none colours a verdict.
 - **Customer keys only.** No names, emails or phone numbers in a query result, a file or the page.

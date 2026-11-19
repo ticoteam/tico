@@ -12,7 +12,7 @@ One rule for every customer and every month. The default, used until the owner c
    (typed address, bookmark, app open) never takes credit from an earlier tagged touch inside the window.
 2. **Code.** No tagged touch: a referral, partner or promo code on the first order names it.
 3. **Asked.** No code: the customer's answer to "how did you hear about us" names it
-   (`skills/ask-how-they-heard`).
+   (`skills/ask-how-they-heard` where your repository has it).
 4. **Unknown.** None of these. Unknown is a real row. It has customers and no CAC.
 
 Tico Growth records which of these named each customer (`utm`, `code`, `asked`, `unknown`). Keep that column on every
@@ -77,11 +77,11 @@ record. Record the prediction first, as a number, on the test's Go-live page.
 
 Sizing and reading:
 
-- Size it before it starts with `skills/size-a-test-before-it-starts`: the expected new customers in each group and
+- Size it before it starts (`skills/size-a-test-before-it-starts` where your repository has it): the expected new customers in each group and
   the smallest difference worth acting on decide the length. Public guides commonly give two to four weeks for lift
   and regional tests (read November 2026); the company's own buying cycle wins over that.
 - Run whole weeks. Stop on the date written at the start, not when the number looks good
-  (`skills/read-a-test-without-peeking`).
+  (`skills/read-a-test-without-peeking` where your repository has it).
 - Result: incremental customers = customers in the exposed group minus customers the holdout group implies for the
   same size. Incremental CAC = the channel's spend on the exposed group divided by incremental customers. Give the
   range, not one number.

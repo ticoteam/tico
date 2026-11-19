@@ -8,9 +8,9 @@ Use it in step 3. Start from what you need to know, not from the method you like
 | Why they do something, what happened around it | **Interviews** | Motives, workarounds, the order of events, surprises | How many; what they will do in future | 5 per segment |
 | Why they bought, or left | **Switch interviews** (the story from first thought to decision) | What triggered the change, what they compared, what nearly stopped them | Feature wishes | 5 recent buyers or leavers |
 | How many, how often, in what order | **A usage query** | Size, frequency, drop-off points | Why | The whole population, with the date range |
-| Whether people can use a design | **A usability round** (`skills/plan-a-usability-round/SKILL.md`) | Where they get stuck on a specific screen | Whether they want it at all | 5 per round |
+| Whether people can use a design | **A usability round** (`skills/plan-a-usability-round/SKILL.md` where your repository has it) | Where they get stuck on a specific screen | Whether they want it at all | 5 per round |
 | How widespread a known thing is | **A short survey** | Putting a number on something interviews already found | Discovering anything new; "would you" questions | Enough answers per segment to read (see below) |
-| Whether a change works | **A test in the product** (`skills/choose-the-next-test/SKILL.md`) | Behaviour under real conditions | Explaining the result | Set before starting |
+| Whether a change works | **A test in the product** (`skills/choose-the-next-test/SKILL.md` where your repository has it) | Behaviour under real conditions | Explaining the result | Set before starting |
 
 ## Order
 

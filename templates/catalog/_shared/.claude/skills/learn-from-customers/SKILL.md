@@ -54,7 +54,7 @@ Cheapest first. `references/pick-the-method.md` has the full table.
 | What people already told us, and how many | **Synthesis** of existing tickets, calls, reviews, requests (steps 9 to 14) | None |
 | Why they do it, or what happened around it | **Interviews** (steps 4 to 8) | 20 to 30 minutes each |
 | How many do it, how often | A query: ask the Product Analyst, or `tico db <database> --query <id>` | None |
-| Whether they can use a design | A usability round: `skills/plan-a-usability-round/SKILL.md` | A session each |
+| Whether they can use a design | A usability round (`skills/plan-a-usability-round/SKILL.md` where your repository has it) | A session each |
 
 Run synthesis before interviews whenever the team holds more than a handful of records on the topic. Interview to fill the gaps it leaves.
 

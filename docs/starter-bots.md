@@ -395,7 +395,12 @@ gates, what the bot does alone and what needs a person, plus `references/` for t
 functions: customers, engineering, finance, growth, hardware, legal, marketing, operations, people, product and sales. Each
 `SKILL.md` names the roles that use it in `metadata.roles`, and each of those cards lists the skill in
 `shared_files`. A role's own `skills/` keep the narrow steps a library skill calls (a figure check, a deadline count);
-a narrow skill that a library skill fully covers is deleted and its references point at the library skill.
+a narrow skill that a library skill fully covers is deleted and its references point at the library skill. Each deleted
+file or skill folder goes in `RETIRED` in `clients/catalog.py` with what replaced it: when a bot made before is refreshed,
+the old copy goes if the bot never edited it, and the files the bot kept (its own `AGENTS.md`, an edited playbook) are
+rewritten to name the replacement. A library skill that names another `.claude/skills/<name>` as a step needs that skill
+given to every role it goes to; `clients/tests/test_catalog.py` checks it, and a line that says "where your repository
+has it" marks a skill as optional.
 
 Every `SKILL.md` in the catalog carries `metadata.function`, one of `tico`, `legal`, `marketing`, `growth`, `sales`,
 `customers`, `finance`, `product`, `engineering`, `people`, `operations`, `hardware`, `data` or `security`:

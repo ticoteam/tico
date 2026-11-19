@@ -67,8 +67,11 @@ A processor (cards, wallets, bank debits) pays out in batches, net of its fees, 
 2. The processor's balance is its own money account. The payout is a transfer from it to the bank, not revenue.
 3. Fees are payment processing cost (cost of revenue on the management P&L), from the processor's report.
 4. Refunds and chargebacks come out of a later payout. A chargeback reopens the invoice and starts a dispute with a
-   deadline set by the card network. Every chargeback is contested, through the `defend-a-consumer-claim` skill; no
-   refund is made on that charge while the dispute is open.
+   deadline set by the card network. Every chargeback is contested; no refund is made on that charge while the
+   dispute is open. If your role has the `defend-a-consumer-claim` skill, contest it with that skill. If not, hand
+   it off the same day to the teammate who has it (the Accounts Receivable or Billing Specialist), with the charge,
+   the invoice, the reason code and the response deadline:
+   `tico task create --owner <teammate> --title "Contest chargeback <id>"`.
 5. Reconcile the processor balance monthly: payments minus fees minus refunds minus payouts equals the change in its
    balance.
 

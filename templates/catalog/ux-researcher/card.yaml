@@ -58,3 +58,4 @@ recommend_when: [sells_software, uses_docs]
 shared_files:
   - .claude/skills/brainstorm-a-feature
   - .claude/skills/learn-from-customers
+  - .claude/skills/build-the-page

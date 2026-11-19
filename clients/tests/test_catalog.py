@@ -5,6 +5,7 @@ what `TICO_CATALOG_DIR` is for, so these tests say nothing about which bots the 
 """
 
 import functools
+import re
 import subprocess
 import tempfile
 import unittest
@@ -591,6 +592,31 @@ class ShippedLayers(unittest.TestCase):
         for old, new in catalog.RETIRED.items():
             self.assertFalse(catalog._offers(offered, old), f"{old} is retired but a template still ships it")
             self.assertTrue(catalog._offers(offered, new), f"{old} is retired for {new}, which no template ships")
+
+    def test_every_role_with_a_shared_skill_has_the_skills_it_names(self):
+        # A line that says "where your repository has it" (or "if your role has") names an optional skill.
+        named = re.compile(r"(?<![\w/-])\.claude/skills/([a-z0-9]+(?:-[a-z0-9]+)*)(?![\w<-])")
+        optional = re.compile(r"where (?:your|the) repository has|if your role has", re.I)
+        given = {name: catalog.files(name, self.directory) for name in read_catalog(self.directory)}
+        missing = []
+        for folder in sorted((self.directory / catalog.SHARED / ".claude/skills").iterdir()):
+            needs = {
+                found
+                for path in folder.rglob("*")
+                if path.is_file() and path.suffix in (".md", ".py", ".yaml")
+                for line in path.read_text().splitlines()
+                if not optional.search(line)
+                for found in named.findall(line)
+                if found != folder.name
+            }
+            for role, files in given.items():
+                if f".claude/skills/{folder.name}/SKILL.md" in files:
+                    missing += [
+                        f"{role}: {folder.name} needs {need}"
+                        for need in sorted(needs)
+                        if f".claude/skills/{need}/SKILL.md" not in files
+                    ]
+        self.assertEqual(missing, [])
 
     def test_no_template_ships_a_permission_allow_list(self):
         # Claude Code runs every turn with bypassPermissions (runner-rs/src/hosts/claude.rs): only `deny` does anything.

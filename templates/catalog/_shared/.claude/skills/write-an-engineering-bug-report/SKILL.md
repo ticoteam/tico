@@ -15,7 +15,7 @@ Steps:
 2. Write the title as what breaks and where: "Booking time shifts one hour after calendar sync for locations outside the
    account zone". Not "Calendar bug".
 3. Write the steps from a known state, numbered, each with its value (the Technical Support Engineer's
-   `skills/reproduce-from-a-known-state/SKILL.md`). If you cannot reproduce it, say so, and ask the technical support
+   `skills/reproduce-from-a-known-state/SKILL.md`, where your repository has it). If you cannot reproduce it, say so, and ask the technical support
    engineer first with `tico task create --owner technical-support-engineer`.
 4. Write the expected result and the actual result, each in one sentence.
 5. Write the environment: product version, plan, browser or client, region, integration and its version.

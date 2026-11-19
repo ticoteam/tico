@@ -94,7 +94,7 @@ Below the line, in this order. `references/spec-sections.md` says what belongs i
 1. **Done when.** Numbered criteria, one behaviour each, as Given / When / Then, each tagged *before release* or *after launch*. Follow `skills/write-acceptance-criteria/SKILL.md` where your repository has it. A bot must be able to check each one with a test, a call or a screenshot.
 2. **Scope.** **In** and **Out**, copied from the scope table. Every Out is something a reasonable reader would have assumed was included, with its reason. There is no "nice to have": a thing is in, or it is out.
 3. **Real cases.** Add `<section id="scenarios">`. One line per scenario from step 2: the account by id and kind, what happened, and the criteria that now cover it.
-4. **Why now and how we will know.** The evidence, each line with its count, source and date. The appetite. The measure, its baseline, the target, the read date and the guard that must not get worse (`skills/write-how-we-will-know/SKILL.md`).
+4. **Why now and how we will know.** The evidence, each line with its count, source and date. The appetite. The measure, its baseline, the target, the read date and the guard that must not get worse (`skills/write-how-we-will-know/SKILL.md` where your repository has it).
 5. **Plan.** The steps in order, with the files or screens each touches and the test that proves it. Read the code before writing this.
 6. **Release needs.** What ships it; data changes, settings, flags. "None" where none.
 7. **Open questions.** Each with who owes the answer and a date. "None" when agreed.

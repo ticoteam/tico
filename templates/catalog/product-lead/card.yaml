@@ -68,3 +68,4 @@ shared_files:
   - .claude/skills/decide-what-not-to-build
   - .claude/skills/learn-from-customers
   - .claude/skills/write-the-spec
+  - .claude/skills/build-the-page

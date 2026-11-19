@@ -58,3 +58,4 @@ shared_files:
   - .claude/skills/measure-unit-economics
   - .claude/skills/brainstorm-a-feature
   - .claude/skills/learn-from-customers
+  - .claude/skills/build-the-page
