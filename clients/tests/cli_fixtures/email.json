@@ -863,7 +863,7 @@
     }
    ]
   ],
-  "stdout": "{\n  \"ok\": true\n}\n",
+  "stdout": "{\n  \"send\": {\n    \"id\": \"snd_1\",\n    \"state\": \"waiting_approval\",\n    \"decision\": {\n      \"outcome\": \"ask\"\n    }\n  }\n}\n",
   "stderr": "",
   "exit": 0
  },
@@ -1192,6 +1192,111 @@
    ]
   ],
   "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "forward",
+   "ops@acme.test",
+   "18c2f0a1b2c3d4e5",
+   "--to",
+   "books@acme.test",
+   "--body",
+   "For the books."
+  ],
+  "tools": [],
+  "http": [
+   [
+    "POST",
+    "mail/drafts",
+    {
+     "mailbox": "ops@acme.test",
+     "to": [
+      "books@acme.test"
+     ],
+     "forward": "18c2f0a1b2c3d4e5",
+     "body": "For the books."
+    }
+   ],
+   [
+    "POST",
+    "email/sends",
+    {
+     "mailbox": "ops@acme.test",
+     "draft_id": "r-123",
+     "draft_message": "dm-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"draft\": {\n    \"mailbox\": \"ops@acme.test\",\n    \"draft\": \"r-123\",\n    \"message\": \"dm-1\",\n    \"thread\": \"t-1\"\n  },\n  \"send\": {\n    \"id\": \"snd_1\",\n    \"state\": \"waiting_approval\",\n    \"decision\": {\n      \"outcome\": \"ask\"\n    }\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "reply",
+   "ops@acme.test",
+   "--thread",
+   "18c2f0a1b2c3d4e5",
+   "--all",
+   "--body",
+   "Thanks, all."
+  ],
+  "tools": [],
+  "http": [
+   [
+    "POST",
+    "mail/drafts",
+    {
+     "mailbox": "ops@acme.test",
+     "reply_all": true,
+     "reply_to": "18c2f0a1b2c3d4e5",
+     "body": "Thanks, all."
+    }
+   ],
+   [
+    "POST",
+    "email/sends",
+    {
+     "mailbox": "ops@acme.test",
+     "draft_id": "r-123",
+     "draft_message": "dm-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"draft\": {\n    \"mailbox\": \"ops@acme.test\",\n    \"draft\": \"r-123\",\n    \"message\": \"dm-1\",\n    \"thread\": \"t-1\"\n  },\n  \"send\": {\n    \"id\": \"snd_1\",\n    \"state\": \"waiting_approval\",\n    \"decision\": {\n      \"outcome\": \"ask\"\n    }\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "draft",
+   "ops@acme.test",
+   "--forward",
+   "18c2f0a1b2c3d4e5",
+   "--to",
+   "books@acme.test"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "POST",
+    "mail/drafts",
+    {
+     "mailbox": "ops@acme.test",
+     "to": [
+      "books@acme.test"
+     ],
+     "forward": "18c2f0a1b2c3d4e5",
+     "body": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"mailbox\": \"ops@acme.test\",\n  \"draft\": \"r-123\",\n  \"message\": \"dm-1\",\n  \"thread\": \"t-1\"\n}\n",
   "stderr": "",
   "exit": 0
  }

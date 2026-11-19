@@ -430,21 +430,15 @@ def compose(c, who, addr, body, mid, files=(), original=None):
     """(raw, thread id, recipients, subject, the message it answers or None) for a draft or a lint. `files` are the
     attachments' (name, content type, bytes), in order; a forward carries the forwarded message's own files first.
     `original` is the answered message when already read."""
-    forwarded = getattr(body, "forward", "")
-    if forwarded and body.reply_to:
+    forward_id = getattr(body, "forward", "")
+    if forward_id and body.reply_to:
         raise Problem("forward", "A forward is a new email: give forward or reply_to, not both", 422)
     if body.reply_all and not body.reply_to:
         raise Problem("reply_all", "reply_all answers a thread: give reply_to too", 422)
-    if forwarded:
-        source = gmail_live.message(c, addr, forwarded)
+    if forward_id:
+        source, carried = forwarded(c, addr, forward_id)
         raw, thread, to, subject = mail_compose.forward(
-            addr,
-            source,
-            body.body,
-            body.to,
-            mid,
-            cc=body.cc,
-            attachments=[*forwarded_files(c, addr, forwarded), *files],
+            addr, source, body.body, body.to, mid, cc=body.cc, attachments=[*carried, *files]
         )
         return raw, thread, to, subject, None
     if not body.body.strip():
@@ -475,14 +469,18 @@ def message_attachments(c, addr, mid):
     return gm.attachment_refs((gmail_live.payload(c, addr, mid) or {}).get("payload") or {})
 
 
-def forwarded_files(c, addr, mid):
-    """The files of the message being forwarded, as (name, type, bytes), in order: each read from Gmail, at most
-    gmail_live.ATTACHMENT_MAX_BYTES (the email's own limit still applies when it is built)."""
+def forwarded(c, addr, mid):
+    """The message being forwarded, whole: (its headers with its full text, never the read API's shortened one, and its
+    files as (name, type, bytes), in order, each at most gmail_live.ATTACHMENT_MAX_BYTES). A file Gmail cannot give
+    refuses the forward, never drops out of it; a text over the email's limit is refused when the email is built."""
     from .mail_lib import Failure
     from .mail_lib import gmail as gm
 
-    cap, out = gmail_live.ATTACHMENT_MAX_BYTES, []
-    for item in message_attachments(c, addr, mid):
+    raw = gmail_live.payload(c, addr, mid)
+    source = gm.normalize(raw)
+    source["body"] = gm.body_text(raw.get("payload") or {})[0]
+    cap, files = gmail_live.ATTACHMENT_MAX_BYTES, []
+    for item in gm.attachment_refs(raw.get("payload") or {}):
         if item["size"] > cap:
             raise Problem("too_large", f"{item['name']} is over {cap // (1024 * 1024)} MB; forward it from Gmail", 413)
         if item["inline"]:
@@ -491,12 +489,12 @@ def forwarded_files(c, addr, mid):
             fetched = gmail_live.attachment(c, addr, mid, item["attachment_id"])
             encoded, size = fetched["data"], max(item["size"], fetched["size"])
         else:
-            continue
+            raise Problem("attachment", f"Gmail gives no data for {item['name']}; forward this message from Gmail", 502)
         try:
-            out.append((item["name"], item["type"], gm.attachment_bytes(encoded, size, limit=cap)))
+            files.append((item["name"], item["type"], gm.attachment_bytes(encoded, size, limit=cap)))
         except Failure as bad:
             raise Problem("attachment", bad.msg, 502) from bad
-    return out
+    return source, files
 
 
 def attachment_file(c, app, auth, who, ref):

@@ -1022,3 +1022,24 @@ def test_a_reply_to_all_goes_to_everyone_on_the_message_but_the_mailbox(api, box
     plain = post(api, "mail/drafts", {"mailbox": BOX, "reply_to": "t5", "body": "Paid, thanks."})
     assert plain["draft"] != made["draft"] and plain["to"] == [SENDER] and plain["cc"] == []
     post(api, "mail/drafts", {"mailbox": BOX, "reply_all": True, "to": [SENDER], "body": "Hi."}, expected=422)
+
+
+def test_a_forward_carries_the_whole_text_and_refuses_a_file_it_cannot_read(api, box):
+    from backend.mail_lib import TRUNCATED
+
+    long_text = "Statement line.\n" * 2500 + "Footer: reference 4471."  # over the read API's 32,768 characters
+    box.add(BOX, "m7", thread="t7", sender=SENDER, subject="Statement", body=long_text)
+    made = post(api, "mail/drafts", {"mailbox": BOX, "forward": "m7", "to": ["books@vendor.example"]})
+    text = box.drafts(BOX)[made["draft"]].decode()
+    assert "Footer: reference 4471." in text and TRUNCATED.strip() not in text
+    box.box(BOX)["messages"]["m7"]["payload"]["parts"].append(
+        {"filename": "scan.pdf", "mimeType": "application/pdf", "body": {"size": 5}}  # no data, no attachment id
+    )
+    drafts = dict(box.drafts(BOX))
+    refused = api.post(
+        "/api/v2/mail/drafts",
+        json={"mailbox": BOX, "forward": "m7", "to": ["ap@vendor.example"], "body": "FYI."},
+        headers=headers(),
+    )
+    assert refused.status_code == 502 and "scan.pdf" in refused.json()["error"]["detail"]
+    assert box.drafts(BOX) == drafts
