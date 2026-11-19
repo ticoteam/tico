@@ -79,7 +79,7 @@ beforeEach(() => {
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
   queryClient.setQueryData(['directory'], { actors: [], byId: {} });
   queryClient.setQueryData(liveCallsQuery.queryKey, { calls: [] });
-  queryClient.setQueryData(meetingsQuery.queryKey, { meetings: [], count: 0, pending_count: 0 });
+  queryClient.setQueryData(meetingsQuery().queryKey, { meetings: [], count: 0, pending_count: 0 });
   // Anything not seeded answers empty; nothing leaves the test.
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     fetches.push(String(url));
@@ -143,6 +143,24 @@ describe('Calendar', () => {
     const u = new URL(fetches.find((x) => x.includes('/calendar/events')) as string, 'http://x');
     expect(u.searchParams.get('from')).toBe(r.from.toISOString());
     expect(u.searchParams.get('to')).toBe(r.to.toISOString());
+  });
+
+  it('List shows past meetings; its filter and search go to the server through the address', async () => {
+    queryClient.setQueryData(meetingsQuery().queryKey, {
+      meetings: [{ id: 'mt1', title: 'Weekly sync', review_state: 'live', started: at(9) }],
+      count: 1,
+      pending_count: 0,
+    });
+    const router = show('/calendar?view=list');
+    expect(await screen.findByText('Weekly sync')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Filter' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Pending' }));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ review: 'pending' }));
+    await waitFor(() => expect(fetches.some((u) => u.endsWith('/api/v2/meetings?review=pending'))).toBe(true));
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Find a meeting' }), { target: { value: 'sync' } });
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ q: 'sync', review: 'pending' }));
+    await waitFor(() => expect(fetches.some((u) => u.endsWith('/api/v2/meetings?review=pending&q=sync'))).toBe(true));
+    expect(fetches.some((u) => u.endsWith('/api/v2/calendar/search?q=sync'))).toBe(true);
   });
 
   it('a removed event goes at once and comes back when the server refuses', async () => {

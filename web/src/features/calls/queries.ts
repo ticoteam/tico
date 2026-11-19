@@ -1,7 +1,21 @@
 // Every server call the calendar, meetings and calls make, and every query they read.
 import { queryOptions, type QueryKey } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import type { Assistant, CalendarEvents, CalendarOccurrence, Call, CallJoin, CallLive, CallNotes, EventChange, EventCreate, ThreadView } from '@/api/schema';
+import type {
+  Assistant,
+  CalendarEvents,
+  CalendarOccurrence,
+  CalendarSearch as CalendarFound,
+  Call,
+  CallJoin,
+  CallLive,
+  CallNotes,
+  CallRing,
+  CallRinging,
+  EventChange,
+  EventCreate,
+  ThreadView,
+} from '@/api/schema';
 import { queryClient, quietRoot, write } from '@/data';
 
 const enc = encodeURIComponent;
@@ -15,6 +29,7 @@ export const calKeys = {
 };
 export const meetKeys = {
   list: ['meetings', 'list'] as const,
+  shown: (review: Review, q: string) => ['meetings', 'list', review, q] as const,
   one: (id: string) => ['meetings', id] as const,
   items: (id: string) => ['meetings', id, 'items'] as const,
   live: (id: string) => ['meetings', id, 'live'] as const,
@@ -23,11 +38,13 @@ export const callKeys = {
   live: ['calls', 'live'] as const,
   one: (id: string) => ['calls', id] as const,
   notes: (id: string) => ['calls', id, 'notes'] as const,
+  ringing: ['calls', 'ringing'] as const,
 };
 
 // The calendar topic refetches ['calendar'] and a followed meeting refetches ['meetings', id]; the list of past meetings has
-// no topic of its own, so it is read again after the person's own writes and on reconnect. A call has no topic a feature
-// may hear yet, so the call page reads it again on a timer while it is on.
+// no topic of its own, so it is read again after the person's own writes and on reconnect. A call, the live list and the
+// ringing list are read again on a `call.*` change in the threads topic (live/patch.ts) and when the room says someone
+// came or went (session.ts); its transcript comes on the live meeting's own stream (followTranscript).
 quietRoot('meetings');
 
 /* ---------------------------------------------------------------- calendar */
@@ -132,7 +149,11 @@ export interface Meeting {
   started?: string | null;
   created?: string | null;
   duration_ms?: number | null;
+  /** What the meeting's source wrote. */
   notes?: string | null;
+  /** The person's own notes, edited in place. */
+  note?: string | null;
+  version?: number;
   preview?: string | null;
   participants?: { name?: string | null; email?: string | null; person_id?: string | null }[];
   outcome?: { summary?: string | string[] | null; tasks?: { id: string; title: string; status?: string }[] } | null;
@@ -161,15 +182,57 @@ export interface MeetingItems {
   can_push: boolean;
   sections: { doc: MeetingItem[]; task: MeetingItem[]; feature: MeetingItem[] };
 }
-/** A live meeting's transcript so far (GET /api/v2/live-meetings/{id}). */
-export interface LiveTranscript {
-  chunks: { seq: number; revision?: number; speaker?: string | null; text: string; start_ms?: number | null }[];
+/** The person's own notes on a meeting. `version` is the meeting's: a note changed elsewhere since is refused. */
+export function editNote(id: string, note: string): Promise<Meeting> {
+  const version = queryClient.getQueryData<Meeting>(meetKeys.one(id))?.version;
+  return write({
+    key: meetKeys.one(id),
+    optimistic: (d: Meeting | undefined) => d && { ...d, note },
+    send: (idempotencyKey) => api.post<Meeting>(`/api/v2/meetings/${enc(id)}/edit`, { note, version }, { idempotencyKey }),
+    settle: (_d: Meeting | undefined, m: Meeting) => m,
+  });
 }
 
-export const meetingsQuery = queryOptions({
-  queryKey: meetKeys.list,
-  queryFn: ({ signal }) => api.get<MeetingList>('/api/v2/meetings', { signal }),
-});
+/** A live meeting's transcript so far (GET /api/v2/live-meetings/{id}); `event_id` is where its stream goes on from. */
+export interface LiveTranscript {
+  chunks: Chunk[];
+  event_id?: number;
+}
+export interface Chunk {
+  seq: number;
+  revision?: number;
+  speaker?: string | null;
+  text: string;
+  start_ms?: number | null;
+}
+
+/** Which meetings List shows: shared ones (the server's default), the person's own to review, or those they put away. */
+export type Review = 'live' | 'pending' | 'dismissed';
+
+export const meetingsQuery = (review: Review = 'live', q = '') =>
+  queryOptions({
+    queryKey: meetKeys.shown(review, q),
+    queryFn: ({ signal }) => api.get<MeetingList>(`/api/v2/meetings?review=${review}${q ? `&q=${enc(q)}` : ''}`, { signal }),
+  });
+
+/** Calendar events whose title or people match (List's search). */
+export const findEventsQuery = (q: string) =>
+  queryOptions({
+    queryKey: [...calKeys.all, 'search', q],
+    queryFn: ({ signal }) => api.get<CalendarFound>(`/api/v2/calendar/search?q=${enc(q)}`, { signal }),
+  });
+
+/** Share a meeting the person kept back, put it away, or bring it back. */
+export async function reviewMeeting(id: string, action: 'approve' | 'dismiss' | 'restore'): Promise<Meeting> {
+  const m = await write({
+    key: meetKeys.one(id),
+    optimistic: (d: Meeting | undefined) => d && { ...d, review_state: action === 'dismiss' ? 'dismissed' : action === 'approve' ? 'live' : 'pending' },
+    send: (idempotencyKey) => api.post<Meeting>(`/api/v2/meetings/${enc(id)}/review`, { action }, { idempotencyKey }),
+    settle: (_d: Meeting | undefined, m: Meeting) => m,
+  });
+  void queryClient.invalidateQueries({ queryKey: meetKeys.list });
+  return m;
+}
 
 export const meetingQuery = (id: string) =>
   queryOptions({ queryKey: meetKeys.one(id), queryFn: ({ signal }) => api.get<Meeting>(`/api/v2/meetings/${enc(id)}`, { signal }) });
@@ -182,6 +245,54 @@ export const transcriptQuery = (meetingId: string) =>
     queryKey: meetKeys.live(meetingId),
     queryFn: ({ signal }) => api.get<LiveTranscript>(`/api/v2/live-meetings/${enc(meetingId)}`, { signal }),
   });
+
+/**
+ * Follow a live meeting's stream from `after`: each line said, new or corrected, goes into the transcript in place (a
+ * later revision wins); an agent coming or going, or the meeting's state, reads the call again. Returns the close.
+ */
+export function followTranscript(meetingId: string, after: number, callId: string): () => void {
+  if (typeof EventSource === 'undefined') return () => undefined;
+  const source = new EventSource(`/api/v2/live-meetings/${enc(meetingId)}/events?after=${after}`);
+  const put = (ev: Event) => {
+    let c: Partial<Chunk>;
+    try {
+      c = JSON.parse(String((ev as MessageEvent).data || '{}')) as Partial<Chunk>;
+    } catch {
+      return;
+    }
+    if (typeof c.seq !== 'number') return;
+    const chunk: Chunk = {
+      seq: c.seq,
+      revision: Number(c.revision) || 1,
+      speaker: c.speaker ?? null,
+      text: String(c.text ?? ''),
+      start_ms: c.start_ms ?? null,
+    };
+    queryClient.setQueryData<LiveTranscript>(meetKeys.live(meetingId), (d) => {
+      const list = d?.chunks ?? [];
+      const had = list.find((x) => x.seq === chunk.seq);
+      if (had && (had.revision ?? 1) > (chunk.revision ?? 1)) return d;
+      const next = had ? list.map((x) => (x.seq === chunk.seq ? chunk : x)) : [...list, chunk].sort((a, b) => a.seq - b.seq);
+      return { ...d, chunks: next };
+    });
+  };
+  source.addEventListener('meeting.chunk', put);
+  source.addEventListener('meeting.chunk_corrected', put);
+  for (const type of ['meeting.bot_joined', 'meeting.bot_left', 'meeting.state', 'meeting.finalized']) source.addEventListener(type, () => freshCall(callId));
+  source.addEventListener('expired', () => source.close());
+  return () => source.close();
+}
+
+/** A note or agenda line, reworded. */
+export function editItem(meeting: string, item: MeetingItem, text: string): Promise<MeetingItem> {
+  return write({
+    key: meetKeys.items(meeting),
+    optimistic: (d: MeetingItems | undefined) => mapSection(d, item.section, (l) => l.map((x) => (x.id === item.id ? { ...x, text } : x))),
+    send: (idempotencyKey) =>
+      api.post<MeetingItem>(`/api/v2/meetings/${enc(meeting)}/items/${enc(item.id)}`, { text, version: item.version }, { idempotencyKey }),
+    settle: (d: MeetingItems | undefined, it: MeetingItem) => mapSection(d, item.section, (l) => l.map((x) => (x.id === item.id ? { ...x, ...it } : x))),
+  });
+}
 
 const mapSection = (d: MeetingItems | undefined, section: MeetingItem['section'], f: (l: MeetingItem[]) => MeetingItem[]) =>
   d && { ...d, sections: { ...d.sections, [section]: f(d.sections[section]) } };
@@ -224,6 +335,31 @@ export const liveCallsQuery = queryOptions({
 
 export const callQuery = (id: string) =>
   queryOptions({ queryKey: callKeys.one(id), queryFn: ({ signal }) => api.get<Call>(`/api/v2/calls/${enc(id)}`, { signal }) });
+
+/** Calls that ring the person now: rung, not yet in, still on. */
+export const ringingQuery = queryOptions({
+  queryKey: callKeys.ringing,
+  queryFn: ({ signal }) => api.get<CallRinging>('/api/v2/calls/ringing', { signal }),
+});
+
+/** Read a call again (and the lists it shows in): someone came, went, or the room closed. */
+export function freshCall(id: string): void {
+  void queryClient.invalidateQueries({ queryKey: callKeys.one(id), exact: true });
+  void queryClient.invalidateQueries({ queryKey: callKeys.live });
+}
+
+/** Bring someone into a call that is on: a person is rung, an agent joins (the server takes its id or slug). */
+export async function addToCall(id: string, actors: readonly string[]): Promise<void> {
+  const agents = actors.filter((a) => a.startsWith('bot:')).map((a) => a.slice(4));
+  const people = actors.filter((a) => !a.startsWith('bot:'));
+  await Promise.all([
+    ...people.map((actor) => api.post<CallRing>(`/api/v2/calls/${enc(id)}/ring`, { actor })),
+    ...(agents.length
+      ? [api.post<Call>(`/api/v2/calls/${enc(id)}/bots`, { bots: agents }).then((c) => void queryClient.setQueryData(callKeys.one(id), c))]
+      : []),
+  ]);
+  freshCall(id);
+}
 
 export const notesQuery = (id: string) =>
   queryOptions({ queryKey: callKeys.notes(id), queryFn: ({ signal }) => api.get<CallNotes>(`/api/v2/calls/${enc(id)}/notes`, { signal }) });

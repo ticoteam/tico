@@ -21,14 +21,15 @@ export type SegmentedProps<V extends string = string> = {
   value: V;
   onValueChange: (value: V) => void;
   disabled?: boolean;
+  className?: string;
 };
 
 /** A few choices side by side, one always on. Icons when every option has one, words otherwise. */
-export function Segmented<V extends string>({ label, options, value, onValueChange, disabled = false }: SegmentedProps<V>) {
+export function Segmented<V extends string>({ label, options, value, onValueChange, disabled = false, className }: SegmentedProps<V>) {
   const icons = options.every((o) => o.icon);
   return (
     <ToggleGroup
-      className={icons ? 'seg' : 'seg is-words'}
+      className={[icons ? 'seg' : 'seg is-words', className].filter(Boolean).join(' ')}
       aria-label={label}
       value={[value]}
       disabled={disabled}

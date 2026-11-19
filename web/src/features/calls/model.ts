@@ -256,16 +256,46 @@ export function panelOf(value: string | undefined): PanelRef | null {
   return m ? { kind: m[1] as PanelRef['kind'], id: m[2] as string } : null;
 }
 
-/** The calendar's address, checked: a view and a date, the open panel. */
+/** List's filter (cal-merge.js filterMenu): which meetings, what they kept, and more kinds than meetings. */
+export const REVIEWS = ['pending', 'dismissed'] as const;
+export const HAS = ['summary', 'recording', 'tasks'] as const;
+export const ALSO = ['due', 'run'] as const;
+export type Has = (typeof HAS)[number];
+export type Also = (typeof ALSO)[number];
+
+/** The calendar's address, checked: a view and a date, the open panel; in List, words to find and the filter. */
 export interface CalendarSearch {
   view?: CalView;
   date?: string;
   panel?: string;
+  q?: string;
+  review?: (typeof REVIEWS)[number];
+  /** Comma separated: "summary,tasks". */
+  has?: string;
+  also?: string;
 }
+
+const listOf = <T extends string>(all: readonly T[], raw: unknown): T[] => (typeof raw === 'string' ? all.filter((x) => raw.split(',').includes(x)) : []);
+
+/** A comma list in the address with one value turned on or off, or undefined when it is empty. */
+export function toggled<T extends string>(all: readonly T[], raw: string | undefined, v: T): string | undefined {
+  const now = listOf(all, raw);
+  const next = now.includes(v) ? now.filter((x) => x !== v) : [...now, v];
+  return next.length ? all.filter((x) => next.includes(x)).join(',') : undefined;
+}
+export const hasOf = (raw: string | undefined): Has[] => listOf(HAS, raw);
+export const alsoOf = (raw: string | undefined): Also[] => listOf(ALSO, raw);
+
 export function calendarSearch(raw: Record<string, unknown>): CalendarSearch {
   const out: CalendarSearch = {};
   if (typeof raw.view === 'string' && (VIEWS as readonly string[]).includes(raw.view)) out.view = raw.view as CalView;
   if (typeof raw.date === 'string' && parseDay(raw.date)) out.date = raw.date;
   if (typeof raw.panel === 'string' && panelOf(raw.panel)) out.panel = raw.panel;
+  if (typeof raw.q === 'string' && raw.q.trim()) out.q = raw.q.slice(0, 200);
+  if (typeof raw.review === 'string' && (REVIEWS as readonly string[]).includes(raw.review)) out.review = raw.review as CalendarSearch['review'];
+  const has = listOf(HAS, raw.has);
+  if (has.length) out.has = has.join(',');
+  const also = listOf(ALSO, raw.also);
+  if (also.length) out.also = also.join(',');
   return out;
 }

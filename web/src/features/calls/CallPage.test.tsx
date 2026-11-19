@@ -1,15 +1,17 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Call } from '@/api/schema';
 import { ActionsRoot } from '@/actions';
 import { ticoRoomQuery } from '@/conversation';
 import { queryClient } from '@/data';
 import { dot } from '@/tico/dot';
+import { CallBar } from './CallBar';
 import { CallPage } from './CallPage';
-import { callQuery } from './queries';
-import { resetCall } from './session';
+import { callQuery, ringingQuery } from './queries';
+import { RingCard } from './RingCard';
+import { callState, resetCall } from './session';
 
 vi.mock('@/tico/dot', () => ({
   Dot: () => <span className="dot" />,
@@ -24,6 +26,7 @@ const lk = vi.hoisted(() => ({
     remoteParticipants: Map<string, unknown>;
     emit: (e: string, ...a: unknown[]) => void;
     connect: { mock: { calls: unknown[][] } };
+    disconnect: { mock: { calls: unknown[][] } };
     localParticipant: { setMicrophoneEnabled: { mock: { calls: unknown[][] } } };
   }[],
   refuseConnect: false,
@@ -58,6 +61,7 @@ vi.mock('livekit-client', () => {
   return {
     Room,
     RoomEvent: new Proxy({}, { get: (_t, k) => k }),
+    DisconnectReason: { ROOM_DELETED: 'room_deleted' },
     Track: { Source: { Microphone: 'microphone' }, Kind: { Audio: 'audio' } },
   };
 });
@@ -127,22 +131,27 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function show() {
+// The root mounts the bar and the ring card on every page, as __root.tsx does.
+function show(at = `/call/${ROOM}`) {
   const root = createRootRoute({
     component: () => (
       <>
         <ActionsRoot dot={() => null} fold={() => {}} />
+        <CallBar />
+        <RingCard />
         <Outlet />
       </>
     ),
   });
   const page = createRoute({ getParentRoute: () => root, path: '/call/$room', component: () => <CallPage room={page.useParams().room} /> });
-  const router = createRouter({ routeTree: root.addChildren([page]), history: createMemoryHistory({ initialEntries: [`/call/${ROOM}`] }) });
+  const tasks = createRoute({ getParentRoute: () => root, path: '/tasks', component: () => <h1>Tasks</h1> });
+  const router = createRouter({ routeTree: root.addChildren([page, tasks]), history: createMemoryHistory({ initialEntries: [at] }) });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
+  return router;
 }
 
 async function joinNow() {
@@ -228,18 +237,67 @@ describe('Call window', () => {
     await waitFor(() => expect(posted.some((u) => u.endsWith(`/calls/${ROOM}/leave`))).toBe(true));
   });
 
-  it('with Tico, the Dot is the stage and speaks while Tico talks', async () => {
-    queryClient.setQueryData(callQuery(ROOM).queryKey, call({ thread_id: 'th-tico' }));
+  it('with Tico, the Dot is the stage and speaks while the call voice talks', async () => {
+    queryClient.setQueryData(callQuery(ROOM).queryKey, call({ thread_id: 'th-tico', bots: ['b1'] }));
     show();
     await joinNow();
     await screen.findByRole('button', { name: 'Mute' });
     expect(document.querySelector('.tc-orb .dot')).toBeTruthy();
-    const tico = { identity: 'bot:tico', isMicrophoneEnabled: true };
+    const voice = { identity: `tico-recorder-${ROOM}`, isMicrophoneEnabled: true };
     act(() => {
-      room().remoteParticipants.set('bot:tico', tico);
-      room().emit('ParticipantConnected', tico);
-      room().emit('ActiveSpeakersChanged', [tico]);
+      room().remoteParticipants.set(voice.identity, voice);
+      room().emit('ParticipantConnected', voice);
+      room().emit('ActiveSpeakersChanged', [voice]);
     });
     await waitFor(() => expect(dot.set).toHaveBeenCalledWith('speak', expect.any(Function)));
+    // The voice is not a face of its own.
+    expect(callState().others).toEqual([]);
+    expect(callState().voice).toBe(voice.identity);
+  });
+
+  it('the server closing the room ends the call rather than losing it', async () => {
+    show();
+    await joinNow();
+    await screen.findByRole('button', { name: 'Mute' });
+    act(() => room().emit('Disconnected', 'room_deleted'));
+    expect(await screen.findByText('Call ended')).toBeTruthy();
+  });
+
+  it('another page keeps the call: the bar shows it, mutes it, opens it, and Leave hangs up', async () => {
+    const router = show();
+    await joinNow();
+    await screen.findByRole('button', { name: 'Mute' });
+    await act(() => router.navigate({ to: '/tasks' }));
+    await screen.findByRole('heading', { name: 'Tasks' });
+    const bar = await screen.findByRole('banner', { name: 'Call' });
+    expect(callState().phase).toBe('live');
+    expect(posted.some((u) => u.endsWith('/leave'))).toBe(false);
+    expect(room().disconnect).not.toHaveBeenCalled();
+    fireEvent.click(within(bar).getByRole('button', { name: 'Mute' }));
+    await waitFor(() => expect(within(bar).getByRole('button', { name: 'Unmute' })).toBeTruthy());
+    expect(within(bar).getAllByRole('link', { name: 'Open call' })[0]?.getAttribute('href')).toBe(`/call/${ROOM}`);
+    fireEvent.click(within(bar).getByRole('button', { name: 'Leave' }));
+    await waitFor(() => expect(screen.queryByRole('banner', { name: 'Call' })).toBeNull());
+    await waitFor(() => expect(posted.some((u) => u.endsWith(`/calls/${ROOM}/leave`))).toBe(true));
+  });
+
+  it('a call ringing shows its card; Decline hides it, Answer joins', async () => {
+    const other = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+    queryClient.setQueryData(ringingQuery.queryKey, { calls: [call({ id: other, ring: true, connector: 'human:ana', title: 'Seed box pricing' })] });
+    show('/tasks');
+    const card = await screen.findByRole('alertdialog', { name: 'Incoming call' });
+    expect(within(card).getByText('Seed box pricing')).toBeTruthy();
+    fireEvent.click(within(card).getByRole('button', { name: 'Answer' }));
+    await waitFor(() => expect(posted.some((u) => u.endsWith(`/calls/${other}/join`))).toBe(true));
+    await waitFor(() => expect(screen.queryByRole('alertdialog', { name: 'Incoming call' })).toBeNull());
+  });
+
+  it('Decline hides a ring for good on this device', async () => {
+    const other = '9b2f1c55-3d1e-4a8e-9f6d-2b7a4c1e8d03';
+    queryClient.setQueryData(ringingQuery.queryKey, { calls: [call({ id: other, ring: true, connector: 'human:ana' })] });
+    show('/tasks');
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Decline' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(posted).toEqual([]);
   });
 });

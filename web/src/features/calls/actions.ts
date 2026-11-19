@@ -1,14 +1,30 @@
 // What a person (or Tico) can do on the Calendar, in a meeting's panel and on a call.
 import { defineAction, s, type Ctx } from '@/actions';
 import { VIEWS } from './model';
-import { addItem, changeEvent, createEvent, dismissItem, makeTask, meetKeys, removeEvent, startCall, type MeetingItem, type MeetingItems } from './queries';
-import { claim, hear, join, leave, pickDevice, prime, setMuted } from './session';
+import {
+  addItem,
+  addToCall,
+  changeEvent,
+  createEvent,
+  dismissItem,
+  editItem,
+  editNote,
+  makeTask,
+  meetKeys,
+  removeEvent,
+  reviewMeeting,
+  startCall,
+  type MeetingItem,
+  type MeetingItems,
+} from './queries';
+import { decline } from './ring';
+import { claim, hear, join, leave, pickDevice, prime, setMuted, toggleMute } from './session';
 
 const id = (what: string) => s.string({ min: 1, max: 200, what });
 const day = s.string({ pattern: /^\d{4}-\d{2}-\d{2}$/, what: 'a day, 2026-11-18' });
 const when = s.string({ pattern: /^\d{4}-\d{2}-\d{2}T/, what: 'an ISO time, 2026-11-18T10:30:00Z' });
-const person = s.string({ min: 3, max: 200, pattern: /^(human|bot):[^\s]+$/, what: 'human:<id> or bot:<slug>' });
-const guest = s.string({ min: 3, max: 200, pattern: /^((human|bot|team):[^\s]+|[^\s@]+@[^\s@]+)$/, what: 'human:<id>, bot:<slug>, team:<id> or an email' });
+const person = s.string({ min: 3, max: 200, pattern: /^(human|bot):[^\s]+$/, what: 'human:<id> or bot:<id>' });
+const guest = s.string({ min: 3, max: 200, pattern: /^((human|bot|team):[^\s]+|[^\s@]+@[^\s@]+)$/, what: 'human:<id>, bot:<id>, team:<id> or an email' });
 const section = s.oneOf(['doc', 'task', 'feature'] as const);
 
 type Search = Record<string, unknown>;
@@ -18,14 +34,28 @@ const PAGE = { kind: 'page', id: '/calendar' } as const;
 
 /* ---------------------------------------------------------------- the calendar */
 
+const showInput = s.object({
+  view: s.optional(s.oneOf(VIEWS)),
+  date: s.optional(day),
+  q: s.optional(s.string({ max: 200, what: 'words to find in List' })),
+  review: s.optional(s.oneOf(['pending', 'dismissed'] as const)),
+});
+const showRun = (ctx: Ctx, i: { view?: string; date?: string; q?: string; review?: string }) =>
+  toCalendar(ctx, (prev) => {
+    const next: Search = { ...prev, view: i.view ?? (i.q || i.review ? 'list' : prev.view), date: i.date ?? prev.date };
+    if (i.q !== undefined) next.q = i.q || undefined;
+    if (i.review !== undefined) next.review = i.review;
+    return next;
+  });
+
 export const show = defineAction({
   id: 'calls.show',
   title: 'Show the calendar',
   kind: 'view',
-  input: s.object({ view: s.optional(s.oneOf(VIEWS)), date: s.optional(day) }),
-  run: (ctx, { view, date }) => toCalendar(ctx, (prev) => ({ ...prev, view: view ?? prev.view, date: date ?? prev.date })),
-  show: (ctx, { view, date }) => toCalendar(ctx, (prev) => ({ ...prev, view: view ?? prev.view, date: date ?? prev.date })),
-  did: ({ view }) => (view ? `Opened Calendar, ${view}` : 'Opened Calendar'),
+  input: showInput,
+  run: showRun,
+  show: showRun,
+  did: ({ view, q }) => (q ? `Searched meetings for ${q}` : view ? `Opened Calendar, ${view}` : 'Opened Calendar'),
   target: () => PAGE,
 });
 
@@ -139,6 +169,36 @@ export const dismissMeetingItem = defineAction({
   target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
 });
 
+export const editMeetingItem = defineAction({
+  id: 'calls.editItem',
+  title: 'Reword a meeting item',
+  kind: 'change',
+  input: s.object({ meeting: id('a meeting id'), item: id('an item id'), text: s.string({ min: 1, max: 2000 }) }),
+  run: (ctx, { meeting, item, text }) => editItem(meeting, itemOf(ctx, meeting, item), text),
+  did: () => 'Changed it',
+  target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
+});
+
+export const editNotes = defineAction({
+  id: 'calls.editNote',
+  title: 'Write notes on a meeting',
+  kind: 'change',
+  input: s.object({ meeting: id('a meeting id'), note: s.string({ max: 20000 }) }),
+  run: (_ctx, { meeting, note }) => editNote(meeting, note),
+  did: () => 'Saved the notes',
+  target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
+});
+
+export const review = defineAction({
+  id: 'calls.review',
+  title: 'Share or put away a meeting',
+  kind: 'change',
+  input: s.object({ meeting: id('a meeting id'), action: s.oneOf(['approve', 'dismiss', 'restore'] as const) }),
+  run: (_ctx, { meeting, action }) => reviewMeeting(meeting, action),
+  did: ({ action }) => (action === 'approve' ? 'Shared the meeting' : action === 'dismiss' ? 'Put the meeting away' : 'Brought the meeting back'),
+  target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
+});
+
 export const makeMeetingTask = defineAction({
   id: 'calls.makeTask',
   title: 'Make a task from a meeting',
@@ -207,6 +267,35 @@ export const mute = defineAction({
   input: s.object({ on: s.boolean() }),
   run: (_ctx, { on }) => setMuted(on),
   did: ({ on }) => (on ? 'Muted' : 'Unmuted'),
+});
+
+/** The phone's lip and the bar press this: mute if on, unmute if off. */
+export const toggleMuteAction = defineAction({
+  id: 'calls.toggleMute',
+  title: 'Mute or unmute',
+  kind: 'change',
+  tico: false,
+  input: s.object({}),
+  run: () => toggleMute(),
+});
+
+export const addPeople = defineAction({
+  id: 'calls.add',
+  title: 'Add to a call',
+  kind: 'change',
+  input: s.object({ id: id('a call id'), with: s.array(person, { max: 50 }) }),
+  run: (_ctx, i) => addToCall(i.id, i.with),
+  did: ({ with: w }) => (w.length === 1 ? 'Added one to the call' : `Added ${w.length} to the call`),
+  target: ({ id }) => ({ kind: 'page', id: `/call/${id}` }),
+});
+
+export const declineAction = defineAction({
+  id: 'calls.decline',
+  title: 'Decline a call',
+  kind: 'change',
+  input: s.object({ id: id('a call id') }),
+  run: (_ctx, { id }) => decline(id),
+  did: () => 'Declined the call',
 });
 
 export const device = defineAction({

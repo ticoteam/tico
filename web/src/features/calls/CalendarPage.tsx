@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { CalendarOccurrence, Call } from '@/api/schema';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Popover } from '@/kit/Popover';
 import { FoldButton } from '@/kit/SectionHead';
 import { Segmented } from '@/kit/Segmented';
@@ -13,12 +14,16 @@ import { Calendar } from '@/pagekinds';
 import { EventDialog } from './EventDialog';
 import { MeetingPanel, EventPanel } from './EventPanel';
 import {
+  alsoOf,
   calendarSearch,
   clock,
   dayKey,
   dayName,
   dl,
   DOW,
+  HAS,
+  ALSO,
+  hasOf,
   hourWord,
   hoursFor,
   isLive,
@@ -35,6 +40,7 @@ import {
   rangeWords,
   step,
   tip,
+  toggled,
   type Block,
   type CalendarSearch,
   type CalView,
@@ -42,7 +48,7 @@ import {
 } from './model';
 import { PeoplePick } from './PeoplePick';
 import { joinNow, LiveMark, press, refsOf, useNow, Who } from './parts';
-import { eventsQuery, liveCallsQuery, meetingsQuery, type Meeting } from './queries';
+import { eventsQuery, findEventsQuery, liveCallsQuery, meetingsQuery, type Meeting } from './queries';
 import './calls.css';
 
 const HOUR = 56;
@@ -88,7 +94,7 @@ export function CalendarPage() {
     view === 'month' ? (
       <MonthGrid days={range.days} weeks={range.weeks} month={day.getMonth()} list={list} now={now} today={today} at={at} />
     ) : view === 'list' ? (
-      <ListView list={list} now={now} today={today} at={at} />
+      <ListView list={list} now={now} today={today} at={at} search={search} />
     ) : (
       <TimeGrid view={view} days={range.days} list={list} now={now} today={today} at={at} open={open?.kind === 'event' ? open.id : null} />
     );
@@ -128,7 +134,17 @@ export function CalendarPage() {
         }
         actions={
           <>
-            <Segmented label="View" options={VIEW_WORDS} value={view} onValueChange={(v) => void navigate({ to: '/calendar', search: at({ view: v }) })} />
+            {view === 'list' && (
+              <ListFind q={search.q ?? ''} onFind={(q) => void navigate({ to: '/calendar', search: at({ q: q || undefined }), replace: true })} />
+            )}
+            {view === 'list' && <ListFilter search={search} at={at} />}
+            <Segmented
+              label="View"
+              className="cal-seg"
+              options={VIEW_WORDS}
+              value={view}
+              onValueChange={(v) => void navigate({ to: '/calendar', search: at({ view: v }) })}
+            />
             <IconButton icon="plus" label="New event" onClick={() => setAdding(true)} />
             <StartCall />
           </>
@@ -141,6 +157,68 @@ export function CalendarPage() {
       />
       <EventDialog open={adding} onOpenChange={setAdding} />
     </>
+  );
+}
+
+/* ---------------------------------------------------------------- List's search and filter */
+
+/** Find a meeting: the words go in the address a moment after the last key. */
+function ListFind({ q, onFind }: { q: string; onFind: (q: string) => void }) {
+  const [text, setText] = useState(q);
+  const [seen, setSeen] = useState(q);
+  const wait = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // The address changed from elsewhere (Back, Tico): show its words.
+  if (q !== seen) {
+    setSeen(q);
+    if (q !== text.trim()) setText(q);
+  }
+  useEffect(() => () => clearTimeout(wait.current), []);
+  return (
+    <label className="search">
+      <span>
+        <Icon name="search" />
+      </span>
+      <input
+        type="search"
+        placeholder="Find a meeting"
+        aria-label="Find a meeting"
+        value={text}
+        onChange={(e) => {
+          const v = e.target.value;
+          setText(v);
+          clearTimeout(wait.current);
+          wait.current = setTimeout(() => onFind(v.trim()), 300);
+        }}
+      />
+    </label>
+  );
+}
+
+const HAS_WORDS: Record<(typeof HAS)[number], string> = { summary: 'Has summary', recording: 'Has recording', tasks: 'Has tasks' };
+const ALSO_WORDS: Record<(typeof ALSO)[number], string> = { due: 'Due dates', run: 'Routines' };
+
+/** The old Meetings tabs, what a meeting kept, and more kinds than meetings: one filter (cal-merge.js filterMenu). */
+function ListFilter({ search, at }: { search: CalendarSearch; at: At }) {
+  const navigate = useNavigate();
+  const pending = useQuery(meetingsQuery('pending')).data?.count;
+  const go = (patch: CalendarSearch) => void navigate({ to: '/calendar', search: at(patch) });
+  const has = hasOf(search.has);
+  const also = alsoOf(search.also);
+  const set = !!search.review || has.length > 0 || also.length > 0;
+  return (
+    <Menu trigger={<IconButton icon="filter" label="Filter" on={set || undefined} />}>
+      <MenuItem label="All meetings" on={!search.review} onSelect={() => go({ review: undefined })} />
+      <MenuItem label="Pending" meta={pending ? String(pending) : undefined} on={search.review === 'pending'} onSelect={() => go({ review: 'pending' })} />
+      <MenuItem label="Dismissed" on={search.review === 'dismissed'} onSelect={() => go({ review: 'dismissed' })} />
+      <MenuRule />
+      {HAS.map((h) => (
+        <MenuItem key={h} label={HAS_WORDS[h]} on={has.includes(h)} onSelect={() => go({ has: toggled(HAS, search.has, h) })} />
+      ))}
+      <MenuRule />
+      {ALSO.map((k) => (
+        <MenuItem key={k} label={ALSO_WORDS[k]} on={also.includes(k)} onSelect={() => go({ also: toggled(ALSO, search.also, k) })} />
+      ))}
+    </Menu>
   );
 }
 
@@ -414,28 +492,46 @@ function Agenda({ days, list, now, today, at }: GridProps & { days: Date[] }) {
 
 /* ---------------------------------------------------------------- List: what Meetings was */
 
-function ListView({ list, now, today, at }: GridProps) {
+const kept = (m: Meeting, h: (typeof HAS)[number]) =>
+  h === 'summary'
+    ? Array.isArray(m.outcome?.summary)
+      ? m.outcome.summary.length > 0
+      : !!m.outcome?.summary
+    : h === 'recording'
+      ? !!m.media_url
+      : (m.outcome?.tasks?.length ?? 0) > 0;
+
+function ListView({ list, now, today, at, search }: GridProps & { search: CalendarSearch }) {
+  const q = search.q ?? '';
+  const has = hasOf(search.has);
+  // Only past meetings are shared, pending or dismissed, and only they keep a summary: those filters show the Past alone.
+  const pastOnly = !!search.review || has.length > 0;
+  const kinds = new Set<string>(['event', ...alsoOf(search.also)]);
   const live = useQuery(liveCallsQuery);
-  const past = useQuery(meetingsQuery);
+  const past = useQuery(meetingsQuery(search.review ?? 'live', q));
+  const found = useQuery({ ...findEventsQuery(q), enabled: !!q });
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const fold = (k: string) => {
     const next = new Set(folded);
     if (!next.delete(k)) next.add(k);
     setFolded(next);
   };
-  const meetings = list.filter((o) => o.kind === 'event');
+  const meetings = pastOnly ? [] : (q ? (found.data?.occurrences ?? []) : list).filter((o) => kinds.has(o.kind));
   const onNow = meetings.filter((o) => isLive(o, now));
   const coming = meetings.filter((o) => !isLive(o, now) && !isPast(o, now));
   const booked = new Set(onNow.map(callOf));
-  const calls = (live.data?.calls ?? []).filter((c) => c.state === 'live' && !booked.has(c.id));
-  const done = (past.data?.meetings ?? []).filter((m) => m.review_state !== 'live');
+  const words = q.toLowerCase();
+  const calls = pastOnly
+    ? []
+    : (live.data?.calls ?? []).filter((c) => c.state === 'live' && !booked.has(c.id) && (c.title || 'Call').toLowerCase().includes(words));
+  const done = (past.data?.meetings ?? []).filter((m) => has.every((h) => kept(m, h)));
   const comingDays = groupBy(coming, (o) => dayKey(new Date(o.start)));
   const pastDays = groupBy(done, (m) => dayKey(new Date(m.started ?? m.created ?? 0)));
 
   if (!onNow.length && !calls.length && !coming.length && !done.length)
-    return past.isPending ? null : (
+    return past.isPending || (q && found.isPending) ? null : (
       <div className="page-body cl-body is-empty">
-        <Empty title="No meetings or calls yet" icon="calendar" />
+        <Empty title={q || pastOnly || kinds.size > 1 ? 'Nothing found' : 'No meetings or calls yet'} icon="calendar" />
       </div>
     );
 
@@ -464,7 +560,12 @@ function ListView({ list, now, today, at }: GridProps) {
         </ListSec>
       )}
       {done.length > 0 && (
-        <ListSec name="Past" count={past.data?.count ?? done.length} open={!folded.has('past')} onToggle={() => fold('past')}>
+        <ListSec
+          name={search.review === 'pending' ? 'Pending' : search.review === 'dismissed' ? 'Dismissed' : 'Past'}
+          count={done.length}
+          open={!folded.has('past')}
+          onToggle={() => fold('past')}
+        >
           {pastDays.map(([key, ms]) => (
             <div key={key}>
               <DayHead d={parseDay(key) as Date} today={today} />
@@ -523,7 +624,9 @@ function EventRow({ o, now, at }: { o: CalendarOccurrence; now: Date; at: At }) 
   return (
     <div className={cls.filter(Boolean).join(' ')} title={tip(o)}>
       <span className="er-time">{o.all_day ? 'All day' : clock(minutes(s))}</span>
-      <span className="cl-mark">{live ? <LiveMark /> : callOf(o) ? <Icon name="call" /> : null}</span>
+      <span className="cl-mark">
+        {live ? <LiveMark /> : callOf(o) ? <Icon name="call" /> : o.kind !== 'event' ? <i className={`km km-${markOf(o)}`} /> : null}
+      </span>
       <Link to="/calendar" search={at({ panel: `event:${o.occurrence_id}` })} className="row-title" data-target={`event:${o.occurrence_id}`}>
         {o.title}
       </Link>

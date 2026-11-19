@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
-import { useEffect, useSyncExternalStore } from 'react';
+import { Link, useRouter } from '@tanstack/react-router';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import type { Call } from '@/api/schema';
 import { ticoRoomQuery } from '@/conversation';
 import { Button } from '@/kit/Button';
@@ -8,13 +8,15 @@ import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
+import { Popover } from '@/kit/Popover';
 import { toast } from '@/kit/Toast';
 import { CallBars, Dot, dot } from '@/tico/dot';
 import { CallSide } from './CallSide';
 import { running } from './model';
-import { Face, press, useMe, useNameOf, useNow } from './parts';
+import { Face, inCall, press, useCards, useMe, useNameOf, useNow, type InCall } from './parts';
+import { PeoplePick } from './PeoplePick';
 import { callQuery, notesQuery } from './queries';
-import { callState, forget, isActive, leave, levelOf, useCall, type CallState, type Phase } from './session';
+import { callState, forget, isActive, levelOf, useCall, type CallState, type Phase } from './session';
 import './calls.css';
 
 export interface CallPageProps {
@@ -22,73 +24,72 @@ export interface CallPageProps {
   room: string;
 }
 
-// React may unmount and mount a page again at once (Strict Mode, a route reload); the hang-up waits a tick and is
-// called off when the page comes straight back.
-let hangUp: ReturnType<typeof setTimeout> | undefined;
-function useHangUpOnLeave(room: string) {
+// Leaving this page keeps the call: the bar takes over on every other page (CallBar). Only Leave, closing the window
+// or joining another call hangs up. A call that is over, or never joined, is let go when its page goes; that waits a tick
+// so a page that unmounts and mounts again at once (Strict Mode, a route reload) keeps what it showed.
+let letGo: ReturnType<typeof setTimeout> | undefined;
+function useLetGoOnLeave(room: string) {
   useEffect(() => {
-    clearTimeout(hangUp);
+    clearTimeout(letGo);
     return () => {
-      hangUp = setTimeout(() => {
+      letGo = setTimeout(() => {
         const s = callState();
-        if (s.callId !== room) return;
-        if (isActive(s)) void leave();
-        else forget();
+        if (s.callId === room && !isActive(s)) forget();
       }, 0);
     };
   }, [room]);
 }
 
-const subscribeLayout = (f: () => void) => {
-  const o = new MutationObserver(f);
-  o.observe(document.documentElement, { attributes: true, attributeFilter: ['data-layout'] });
-  return () => o.disconnect();
-};
-/** A phone's cards: the call's chat and people sit under the stage, since there is no side sheet. */
-const useCards = () =>
-  useSyncExternalStore(
-    subscribeLayout,
-    () => document.documentElement.dataset.layout === 'cards',
-    () => false,
-  );
+/** Back where the person came from, the call going on in the bar. */
+function useBack(): () => void {
+  const router = useRouter();
+  return () => (router.history.canGoBack() ? router.history.back() : void router.navigate({ to: '/' }));
+}
 
-/** The call window: who is in it and who speaks, what is said, Mute and Leave. Nothing joins until the person presses. */
+/**
+ * The call window. On a desk (the `call` arrangement): the stage, what is said, the controls, with CallSide in the side
+ * sheet. On a phone's call card (calls.js phoneCall): the faces in a row, what is said, chat, transcript and people,
+ * the controls. Nothing joins until the person presses Join.
+ */
 export function CallPage({ room }: CallPageProps) {
   const s = useCall();
   const phase: Phase = s.callId === room ? s.phase : 'idle';
   const on = phase === 'live' || phase === 'reconnecting';
-  const call = useQuery({ ...callQuery(room), refetchInterval: on ? 5000 : false });
+  const call = useQuery(callQuery(room));
   const ticoRoom = useQuery(ticoRoomQuery).data;
   const cards = useCards();
-  useHangUpOnLeave(room);
+  const back = useBack();
+  useLetGoOnLeave(room);
   const c = call.data;
   const ended = phase === 'ended' || (phase === 'idle' && c?.state === 'ended');
   const isTico = !!c && !!ticoRoom && ticoRoom === c.thread_id;
 
   if (call.isError && !c)
     return (
-      <main className="pane cw is-full">
+      <main className={cards ? 'pane pc cw' : 'pane cw is-full'}>
         <Empty title="Call did not load" icon="alert">
           <Button onClick={() => void call.refetch()}>Try again</Button>
         </Empty>
       </main>
     );
 
+  const lead = cards ? <IconButton icon="chevdown" label="Back to the app" onClick={back} /> : null;
   return (
-    <main className="pane cw is-full" aria-label={c?.title || 'Call'} data-target={`page:/call/${room}`}>
-      <Head c={c} live={on} />
-      {ended ? <Ended room={room} /> : <Stage room={room} c={c} s={s} phase={phase} isTico={isTico} />}
-      {!ended && <Controls room={room} s={s} phase={phase} />}
-      {cards && c && <CallSide room={room} />}
+    <main className={cards ? 'pane pc cw' : 'pane cw is-full'} aria-label={c?.title || 'Call'} data-target={`page:/call/${room}`}>
+      <Head c={c} live={on} lead={lead} />
+      {ended ? <Ended room={room} /> : <Stage room={room} c={c} s={s} phase={phase} isTico={isTico} row={cards && !isTico} />}
+      {cards && c && !ended && <CallSide room={room} />}
+      {!ended && <Controls room={room} s={s} phase={phase} onBack={cards ? undefined : back} />}
     </main>
   );
 }
 
-function Head({ c, live }: { c: Call | undefined; live: boolean }) {
+function Head({ c, live, lead }: { c: Call | undefined; live: boolean; lead: ReactNode }) {
   const now = useNow(1000);
   const since = c ? (now.getTime() - new Date(c.started_at).getTime()) / 1000 : 0;
   return (
     <header className="cw-head">
+      {lead}
       <div className="cw-t">
         <h1>{c?.title || 'Call'}</h1>
         {live && c && (
@@ -122,22 +123,23 @@ const TROUBLE: Partial<Record<Phase, { title: string; text?: string; icon: 'mico
   lost: { title: 'Call disconnected', icon: 'offline', act: 'Join again' },
 };
 
-function Stage({ room, c, s, phase, isTico }: { room: string; c: Call | undefined; s: CallState; phase: Phase; isTico: boolean }) {
+function Stage({ room, c, s, phase, isTico, row }: { room: string; c: Call | undefined; s: CallState; phase: Phase; isTico: boolean; row: boolean }) {
   const live = phase === 'live';
   const nameOf = useNameOf();
   const me = useMe();
-  // Tico's voice in the room is its agent's; the call names which.
-  const ticoId = isTico ? (s.others.find((i) => i.startsWith('bot:')) ?? null) : null;
-  const ticoTalks = live && !!ticoId && s.speaking.includes(ticoId);
+  const who = inCall(s, c, me);
+  // Tico speaks through the call's one voice (session.ts `voice`).
+  const ticoTalks = isTico && live && !!s.voice && s.speaking.includes(s.voice);
   const meTalks = live && !!s.me && !s.muted && s.speaking.includes(s.me);
   const voice = c?.voice?.bots[0]?.state;
+  const add = live && !isTico && c ? <AddPeople room={room} row={row} /> : null;
 
   useEffect(() => {
     if (!isTico || !live) return undefined;
-    if (ticoTalks && ticoId) return dot.set('speak', levelOf(ticoId));
+    if (ticoTalks && s.voice) return dot.set('speak', levelOf(s.voice));
     if (voice === 'thinking' || voice === 'making_voice') return dot.set('think');
     return undefined;
-  }, [isTico, live, ticoTalks, ticoId, voice]);
+  }, [isTico, live, ticoTalks, s.voice, voice]);
 
   const trouble = TROUBLE[phase];
   if (trouble)
@@ -150,50 +152,118 @@ function Stage({ room, c, s, phase, isTico }: { room: string; c: Call | undefine
     );
 
   const said = s.caption ?? captionOf(c);
-  return (
-    <>
-      {isTico ? (
+  const saidBy = said && said.who === s.voice ? (who.find((x) => x.talks && x.id.startsWith('bot:'))?.id ?? '') : (said?.who ?? '');
+  const say = (
+    <div className="say" aria-live="polite">
+      {live && said && (
+        <p>
+          {saidBy && <b>{nameOf(saidBy)}</b>}
+          {said.text}
+        </p>
+      )}
+    </div>
+  );
+  const isMe = (id: string) => id === s.me || (!live && id === me);
+
+  if (isTico)
+    return (
+      <>
         <div className="win-stage is-tico">
           <div className="tc-big">
             <span className="tc-orb is-big">
               <Dot size={148} />
             </span>
             <span className="spk-lvl">
-              <CallBars signal={ticoTalks && ticoId ? levelOf(ticoId) : null} gone={meTalks} />
+              <CallBars signal={ticoTalks && s.voice ? levelOf(s.voice) : null} gone={meTalks} />
             </span>
           </div>
         </div>
-      ) : (
-        <div className="win-stage">
-          <div className="tiles">
-            {(live ? [s.me ?? me ?? '', ...s.others] : (c?.participants ?? []).filter((p) => p.in_call).map((p) => p.actor)).filter(Boolean).map((id) => {
-              const talks = live && s.speaking.includes(id) && !(id === s.me && s.muted);
-              const muted = id === s.me ? s.muted : s.mutedIds.includes(id);
-              return (
-                <div key={id} className={talks ? 'tile is-speaking' : 'tile'}>
-                  <Face actor={id} size={96} speaking={talks} />
-                  <span className="tile-foot">
-                    <span className="tile-name">{nameOf(id)}</span>
-                    {talks && <CallBars signal={levelOf(id)} />}
-                    {live && muted && <Icon name="micoff" className="tile-off" label="Muted" />}
-                    <span className="grow" />
-                    {(id === s.me || (!live && id === me)) && <span className="tile-word">You</span>}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+        {say}
+      </>
+    );
+
+  if (row)
+    return (
+      <>
+        <div className="cw-faces" role="list" aria-label="In the call">
+          {who.map((x) => (
+            <span key={x.id} className={x.talks ? 'pf is-speaking' : 'pf'} role="listitem">
+              <Face actor={x.id} size={44} speaking={x.talks} muted={x.muted} />
+              <span className="pf-lvl">{x.talks && <CallBars signal={x.level} />}</span>
+              <span className="pf-name">{isMe(x.id) ? 'You' : nameOf(x.id)}</span>
+            </span>
+          ))}
+          {add}
         </div>
-      )}
-      <div className="say" aria-live="polite">
-        {live && said && (
-          <p>
-            <b>{said.who ? nameOf(said.who) : ''}</b>
-            {said.text}
-          </p>
-        )}
+        {say}
+      </>
+    );
+
+  return (
+    <>
+      <div className="win-stage">
+        <div className="tiles">
+          {who.map((x: InCall) => (
+            <div key={x.id} className={x.talks ? 'tile is-speaking' : 'tile'}>
+              <Face actor={x.id} size={96} speaking={x.talks} />
+              <span className="tile-foot">
+                <span className="tile-name">{nameOf(x.id)}</span>
+                {x.talks && <CallBars signal={x.level} />}
+                {x.muted && <Icon name="micoff" className="tile-off" label="Muted" />}
+                <span className="grow" />
+                {isMe(x.id) && <span className="tile-word">You</span>}
+              </span>
+            </div>
+          ))}
+          {add}
+        </div>
       </div>
+      {say}
     </>
+  );
+}
+
+/** The dashed face at the end (calls.js pfAdd, addTile): ring a person in, or bring an agent. */
+function AddPeople({ room, row }: { room: string; row: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [who, setWho] = useState<string[]>([]);
+  const trigger = row ? (
+    <button type="button" className="pf pf-add" role="listitem" aria-label="Add people or agents" title="Add people or agents">
+      <span className="face-add" style={{ '--f': '44px' } as CSSProperties}>
+        <Icon name="plus" />
+      </span>
+    </button>
+  ) : (
+    <button type="button" className="tile tile-add" aria-label="Add people or agents" title="Add people or agents">
+      <span className="face-add" style={{ '--f': '64px' } as CSSProperties}>
+        <Icon name="plus" />
+      </span>
+    </button>
+  );
+  return (
+    <Popover
+      className="pop call-pick"
+      label="Add people or agents"
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) setWho([]);
+      }}
+      trigger={trigger}
+    >
+      <PeoplePick value={who} onChange={setWho} autoFocus />
+      <Button
+        variant="primary"
+        className="pop-go"
+        disabled={!who.length}
+        onClick={() => {
+          setOpen(false);
+          void press('calls.add', { id: room, with: who });
+        }}
+      >
+        Add
+      </Button>
+    </Popover>
   );
 }
 
@@ -203,7 +273,7 @@ function captionOf(c: Call | undefined): { who: string; text: string } | null {
   return b?.caption ? { who: `bot:${b.slug}`, text: b.caption } : null;
 }
 
-function Controls({ room, s, phase }: { room: string; s: CallState; phase: Phase }) {
+function Controls({ room, s, phase, onBack }: { room: string; s: CallState; phase: Phase; onBack?: () => void }) {
   const on = phase === 'live' || phase === 'reconnecting';
   const meTalks = phase === 'live' && !!s.me && !s.muted && s.speaking.includes(s.me);
   if (!on)
@@ -226,7 +296,7 @@ function Controls({ room, s, phase }: { room: string; s: CallState; phase: Phase
         aria-pressed={s.muted}
         aria-label={word}
         title={word}
-        onClick={() => void press('calls.mute', { on: !s.muted })}
+        onClick={() => void press('calls.toggleMute', {})}
       >
         <Icon name={s.muted ? 'micoff' : 'mic'} />
         {meTalks && s.me && <CallBars signal={levelOf(s.me)} />}
@@ -255,6 +325,11 @@ function Controls({ room, s, phase }: { room: string; s: CallState; phase: Phase
         </button>
       )}
       <span className="grow" />
+      {onBack && (
+        <Button className="cw-back" icon="tobar" onClick={onBack}>
+          Minimize
+        </Button>
+      )}
       <Button variant="primary" className="cc-leave" onClick={() => void press('calls.leave', {})}>
         Leave
       </Button>
@@ -263,8 +338,13 @@ function Controls({ room, s, phase }: { room: string; s: CallState; phase: Phase
 }
 
 /** After the call: what it was about and what came of it, once the notes are written. */
+// The summary is written after the call; it is read again while pending, for a few minutes at most.
+const NOTES_EVERY = 4000;
+const NOTES_FOR = 3 * 60_000;
+
 function Ended({ room }: { room: string }) {
-  const notes = useQuery({ ...notesQuery(room), refetchInterval: (q) => (q.state.data?.pending ? 4000 : false) });
+  const [since] = useState(() => Date.now());
+  const notes = useQuery({ ...notesQuery(room), refetchInterval: (q) => (q.state.data?.pending && Date.now() - since < NOTES_FOR ? NOTES_EVERY : false) });
   const nameOf = useNameOf();
   const n = notes.data;
   return (

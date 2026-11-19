@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CalendarOccurrence } from '@/api/schema';
 import { useActor } from '@/data';
 import { useFollow } from '@/live/follow';
@@ -16,7 +16,7 @@ import { SidePanel } from '@/pagekinds';
 import { EventDialog } from './EventDialog';
 import { clock, dl, isLive, joinOf, kindWords, lengthWords, minutes, parseDay } from './model';
 import { joinNow, LiveMark, press, refsOf } from './parts';
-import { itemsQuery, meetingQuery, type MeetingItem } from './queries';
+import { itemsQuery, meetingQuery, type Meeting, type MeetingItem } from './queries';
 
 /* ---------------------------------------------------------------- an event */
 
@@ -194,13 +194,37 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
         </Empty>
       </SidePanel>
     );
+  const state = m.data?.review_state;
   return (
     <SidePanel title={m.data?.title ?? ''} target={`meeting:${id}`} onClose={onClose}>
+      {(state === 'pending' || state === 'dismissed') && (
+        <section className="rail-sec">
+          <p className="mv-notes">{state === 'pending' ? 'Only you see this' : 'Dismissed'}</p>
+          <div className="mv-review">
+            {state === 'pending' ? (
+              <>
+                <Button onClick={() => void press('calls.review', { meeting: id, action: 'dismiss' })}>Dismiss</Button>
+                <Button variant="primary" onClick={() => void press('calls.review', { meeting: id, action: 'approve' })}>
+                  Share
+                </Button>
+              </>
+            ) : (
+              <Button onClick={() => void press('calls.review', { meeting: id, action: 'restore' })}>Restore</Button>
+            )}
+          </div>
+        </section>
+      )}
       {m.data?.started && (
         <section className="rail-sec">
           <Fact k="Day" v={dl(new Date(m.data.started))} />
           <Fact k="Time" v={clock(minutes(new Date(m.data.started)))} />
           {m.data.duration_ms ? <Fact k="Length" v={lengthWords(m.data.duration_ms / 60_000)} /> : null}
+        </section>
+      )}
+      {m.data?.media_url?.startsWith('https:') && (
+        <section className="rail-sec">
+          <h3>Recording</h3>
+          <Recording src={m.data.media_url} />
         </section>
       )}
       {lines.length > 0 && (
@@ -218,7 +242,7 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
         {doc.length > 0 && (
           <ul className="acts">
             {doc.map((it) => (
-              <Item key={it.id} meeting={id} it={it} />
+              <Item key={it.id} meeting={id} it={it} canEdit={!!m.data?.can_edit} />
             ))}
           </ul>
         )}
@@ -237,7 +261,7 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
           <h3>Action items</h3>
           <ul className="acts">
             {todo.map((it) => (
-              <Item key={it.id} meeting={id} it={it} task canPush={!!items.data?.can_push} />
+              <Item key={it.id} meeting={id} it={it} task canPush={!!items.data?.can_push} canEdit={!!m.data?.can_edit} />
             ))}
           </ul>
         </section>
@@ -253,32 +277,145 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
           ))}
         </section>
       )}
-      {m.data?.notes && (
+      {m.data && (m.data.can_edit || m.data.note || m.data.notes) && (
         <section className="rail-sec">
           <h3>Notes</h3>
-          <div className="mv-notes">
-            {m.data.notes
-              .split('\n')
-              .filter((l) => l.trim())
-              .map((l, i) => (
-                <p key={i}>{l}</p>
-              ))}
-          </div>
+          {m.data.can_edit ? <Notes m={m.data} /> : m.data.note && <p className="mv-notes">{m.data.note}</p>}
+          {m.data.notes && (
+            <div className="mv-notes">
+              {m.data.notes
+                .split('\n')
+                .filter((l) => l.trim())
+                .map((l, i) => (
+                  <p key={i}>{l}</p>
+                ))}
+            </div>
+          )}
         </section>
       )}
     </SidePanel>
   );
 }
 
+/** The person's own notes: saved a moment after typing stops, and when the panel closes. */
+function Notes({ m }: { m: Meeting }) {
+  const [text, setText] = useState(m.note ?? '');
+  const latest = useRef(m.note ?? '');
+  const saved = useRef(m.note ?? '');
+  const wait = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => {
+    const id = m.id;
+    const timer = wait;
+    return () => {
+      clearTimeout(timer.current);
+      saveNote(id, latest, saved);
+    };
+  }, [m.id]);
+  return (
+    <Field
+      label="Notes"
+      labelHidden
+      area
+      wide
+      placeholder="Write notes"
+      value={text}
+      onValueChange={(v) => {
+        setText(v);
+        latest.current = v;
+        clearTimeout(wait.current);
+        wait.current = setTimeout(() => saveNote(m.id, latest, saved), 900);
+      }}
+    />
+  );
+}
+
+function saveNote(meeting: string, latest: { current: string }, saved: { current: string }) {
+  const v = latest.current.trim();
+  if (v === saved.current.trim()) return;
+  saved.current = v;
+  void press('calls.editNote', { meeting, note: v });
+}
+
+/** The meeting's recording (calls.css .rec): play, how far, the time, download. */
+function Recording({ src }: { src: string }) {
+  const audio = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [at, setAt] = useState(0);
+  const [length, setLength] = useState(0);
+  const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  return (
+    <div className="rec">
+      <button
+        type="button"
+        className="rec-play"
+        aria-label={playing ? 'Pause' : 'Play'}
+        title={playing ? 'Pause' : 'Play'}
+        onClick={() => {
+          const a = audio.current;
+          if (!a) return;
+          if (a.paused) void a.play().catch(() => undefined);
+          else a.pause();
+        }}
+      >
+        <Icon name={playing ? 'pause' : 'play'} />
+      </button>
+      <span className="rec-track">
+        <i style={{ width: `${length ? (at / length) * 100 : 0}%` }} />
+      </span>
+      <time>{mmss(length ? length - at : 0)}</time>
+      <a className="ib" href={src} download target="_blank" rel="noopener noreferrer" aria-label="Download" title="Download">
+        <Icon name="download" />
+      </a>
+      <audio
+        ref={audio}
+        src={src}
+        preload="metadata"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+        onTimeUpdate={(e) => setAt(e.currentTarget.currentTime)}
+        onLoadedMetadata={(e) => setLength(Number.isFinite(e.currentTarget.duration) ? e.currentTarget.duration : 0)}
+      />
+    </div>
+  );
+}
+
 const taskOf = (it: MeetingItem) => (it.result_ref?.startsWith('task:') ? it.result_ref.slice(5) : (it.proposed_task_id ?? null));
 
-function Item({ meeting, it, task, canPush }: { meeting: string; it: MeetingItem; task?: boolean; canPush?: boolean }) {
+function Item({ meeting, it, task, canPush, canEdit }: { meeting: string; it: MeetingItem; task?: boolean; canPush?: boolean; canEdit?: boolean }) {
   const made = task && it.status === 'pushed' ? taskOf(it) : null;
   const tmp = it.id.startsWith('tmp:');
+  const [editing, setEditing] = useState(false);
+  const done = (text: string | null) => {
+    setEditing(false);
+    const t = text?.trim();
+    if (t && t !== it.text) void press('calls.editItem', { meeting, item: it.id, text: t });
+  };
   return (
     <li className="act">
       <span />
-      <span className="act-text">{it.text}</span>
+      {editing ? (
+        <input
+          className="act-in"
+          aria-label="Change it"
+          defaultValue={it.text}
+          autoFocus
+          onBlur={(e) => done(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') done(e.currentTarget.value);
+            if (e.key === 'Escape') {
+              e.stopPropagation();
+              done(null);
+            }
+          }}
+        />
+      ) : canEdit && !tmp && !made ? (
+        <button type="button" className="act-text" title="Change it" onClick={() => setEditing(true)}>
+          {it.text}
+        </button>
+      ) : (
+        <span className="act-text">{it.text}</span>
+      )}
       {made ? (
         <Link to="/task/$task" params={{ task: made }} className="btn btn-sm btn-quiet">
           <Icon name="tasks" />

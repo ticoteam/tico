@@ -2,8 +2,8 @@
 // microphone and unlock sound inside the press itself (platforms.md: Safari allows both only there). Nothing here
 // joins or opens the microphone by itself: prime() runs from a person's press, and join() follows it.
 import { useSyncExternalStore } from 'react';
-import { Room, RoomEvent, Track, type Participant, type RemoteTrack, type TranscriptionSegment } from 'livekit-client';
-import { joinCall, leaveCall } from './queries';
+import { DisconnectReason, Room, RoomEvent, Track, type Participant, type RemoteTrack, type TranscriptionSegment } from 'livekit-client';
+import { freshCall, joinCall, leaveCall } from './queries';
 
 export type Phase = 'idle' | 'joining' | 'live' | 'reconnecting' | 'lost' | 'ended' | 'mic-refused' | 'no-mic';
 
@@ -13,11 +13,13 @@ export interface CallState {
   muted: boolean;
   /** My identity in the room (the actor id). */
   me: string | null;
-  /** Everyone else in the room, in the order they came. */
+  /** Everyone else in the room, in the order they came: people (their actor ids). */
   others: string[];
+  /** The call's agents speak through one participant of their own (backend/call_media.py RECORDER_PREFIX); its level is theirs. */
+  voice: string | null;
   speaking: string[];
   mutedIds: string[];
-  /** The browser held sound back until a press: "Tap to hear". */
+  /** The browser held sound back until a press: "Play audio". */
   audioBlocked: boolean;
   devices: { id: string; label: string }[];
   deviceId: string | null;
@@ -32,6 +34,7 @@ const IDLE: CallState = {
   muted: false,
   me: null,
   others: [],
+  voice: null,
   speaking: [],
   mutedIds: [],
   audioBlocked: false,
@@ -41,6 +44,7 @@ const IDLE: CallState = {
   startedAt: null,
 };
 const MIC_KEY = 'tico-next:call-mic';
+const VOICE_PREFIX = 'tico-recorder-';
 
 let state: CallState = IDLE;
 const subs = new Set<() => void>();
@@ -152,6 +156,9 @@ export function forget(): void {
   set(IDLE);
 }
 
+/** The phone's lip and the bar: the other of what it is now. */
+export const toggleMute = (): Promise<void> => setMuted(!state.muted);
+
 export async function setMuted(on: boolean): Promise<void> {
   if (!room) return;
   set({ muted: on });
@@ -205,9 +212,11 @@ async function devices(): Promise<void> {
 }
 
 function people(r: Room): void {
-  const others = [...r.remoteParticipants.values()];
+  const all = [...r.remoteParticipants.values()];
+  const others = all.filter((p) => !p.identity.startsWith(VOICE_PREFIX));
   set({
     others: others.map((p) => p.identity),
+    voice: all.find((p) => p.identity.startsWith(VOICE_PREFIX))?.identity ?? null,
     mutedIds: others.filter((p) => !p.isMicrophoneEnabled).map((p) => p.identity),
   });
 }
@@ -215,17 +224,26 @@ function people(r: Room): void {
 function wire(r: Room): void {
   const mine = () => room === r;
   const onPeople = () => mine() && people(r);
-  r.on(RoomEvent.ParticipantConnected, onPeople)
-    .on(RoomEvent.ParticipantDisconnected, onPeople)
+  // Someone came or went: the call's own view (who is in it, its agents) is read again; the room says so first.
+  const onCome = () => {
+    if (!mine()) return;
+    people(r);
+    if (state.callId) freshCall(state.callId);
+  };
+  r.on(RoomEvent.ParticipantConnected, onCome)
+    .on(RoomEvent.ParticipantDisconnected, onCome)
     .on(RoomEvent.TrackMuted, onPeople)
     .on(RoomEvent.TrackUnmuted, onPeople)
     .on(RoomEvent.ActiveSpeakersChanged, (ps: Participant[]) => mine() && set({ speaking: ps.map((p) => p.identity) }))
     .on(RoomEvent.Reconnecting, () => mine() && set({ phase: 'reconnecting' }))
     .on(RoomEvent.Reconnected, () => mine() && set({ phase: 'live' }))
-    .on(RoomEvent.Disconnected, () => {
+    .on(RoomEvent.Disconnected, (why?: DisconnectReason) => {
       if (!mine()) return;
-      set({ phase: 'lost', speaking: [] });
+      // The server closed the room: the call is over for everyone, not lost.
+      const over = why === DisconnectReason.ROOM_DELETED;
+      set({ phase: over ? 'ended' : 'lost', speaking: [], caption: null });
       teardown();
+      if (over && state.callId) freshCall(state.callId);
     })
     .on(RoomEvent.AudioPlaybackStatusChanged, () => mine() && set({ audioBlocked: !r.canPlaybackAudio }))
     .on(RoomEvent.MediaDevicesChanged, () => mine() && void devices())
@@ -258,7 +276,7 @@ function teardown(): void {
   if (r) void r.disconnect();
 }
 
-// Closing or leaving the page hangs up; nothing asks first.
+// Closing the window hangs up; nothing asks first. Moving between pages does not (CallBar keeps the call).
 if (typeof window !== 'undefined')
   window.addEventListener('pagehide', () => {
     if (room) void leave();

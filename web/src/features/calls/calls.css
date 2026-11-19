@@ -49,7 +49,7 @@
 .cv-range{margin-left:var(--s-2h);position:relative;top:3px;font-family:var(--font-text);font-size:var(--t-md);font-weight:var(--w-strong);line-height:1;font-feature-settings:"ss09";color:var(--ink-2);white-space:nowrap}
 .cv-step{display:flex;margin-left:var(--s-1);position:relative;top:1px}
 .cv-step .ib{display:grid;place-items:center}
-.cal-page .page-head .seg{margin-right:var(--s-1)}
+.cal-seg{margin-right:var(--s-1)}
 .cal-page .page-head .btn-fill .ico{width:16px;height:16px;margin-left:calc(var(--s-0) * -1)}
 
 /* the mark of each kind, wherever a thing is one line: a meeting solid, a due date outlined, a routine a ring */
@@ -214,6 +214,17 @@
 .act .btn-quiet .ico{width:14px;height:14px}
 .mv-notes{display:grid;gap:var(--s-2);font-family:var(--font-text);font-size:var(--t-base);font-weight:var(--w-text);line-height:var(--lh-read);font-feature-settings:"ss09";color:var(--ink-2)}
 .mv-add{margin-top:var(--s-2)}
+.mv-review{display:flex;justify-content:flex-end;gap:var(--s-2);margin-top:var(--s-2)}
+button.act-text{padding:0;border:0;background:none;color:inherit;font-family:inherit;font-size:inherit;line-height:inherit;text-align:left;cursor:text}
+.act-in{min-width:0;height:var(--ctl-sm);padding:0 var(--s-2);border:0;outline:0;border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);font-family:inherit;font-size:inherit;line-height:inherit;box-shadow:inset 0 0 0 1.5px var(--focus)}
+
+/* a meeting's recording */
+.rec{display:flex;align-items:center;gap:var(--s-3);height:48px;padding:0 var(--s-2);border-radius:var(--r-card);background:var(--well)}
+.rec-play{width:var(--ctl);height:var(--ctl);border:0;border-radius:50%;background:var(--raised);color:var(--ink);display:grid;place-items:center;flex:none;box-shadow:var(--lift-ctl)}
+.rec-play .ico{width:14px;height:14px}
+.rec-track{flex:1;height:4px;border-radius:var(--r-pill);background:var(--well-2);position:relative}
+.rec-track i{position:absolute;left:0;top:0;bottom:0;border-radius:var(--r-pill);background:var(--ink-2)}
+.rec time{font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums}
 
 /* ---------- the call window: what it is, the stage, what is said, the controls ---------- */
 .pane.cw{--surface:var(--sheet);min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
@@ -286,6 +297,51 @@
 .ts .msg-meta time{font-size:var(--t-xs);color:var(--muted);font-variant-numeric:tabular-nums}
 .ts p{color:var(--ink-2)}
 
+/* ---------- the call bar: on every page while a call is on (calls.js callBar) ---------- */
+.cb{--surface:var(--raised);flex:none;height:44px;margin:var(--gap-pane) var(--gap-pane) 0;padding:0 var(--s-1h) 0 var(--s-3h);border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-2);
+  display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr) auto;align-items:center;column-gap:var(--s-5);position:relative;z-index:var(--z-stick)}
+.cb-what{display:flex;align-items:center;gap:var(--s-2h);min-width:0;height:32px;padding:0 var(--s-2) 0 var(--s-1h);margin-left:calc(var(--s-1h) * -1);border-radius:var(--r-ctl);color:inherit;text-decoration:none}
+.cb-what:hover{background:var(--hover)}
+.cb-what>.ico{width:16px;height:16px;color:var(--muted);flex:none}
+.cb-what b{font-weight:var(--w-strong);min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cb time{color:var(--muted);font-size:var(--t-sm);font-variant-numeric:tabular-nums}
+.cb-who{display:flex;align-items:center;gap:var(--s-3h);min-width:0}
+.cb-faces{display:flex;align-items:center;gap:var(--s-2);flex:none}
+.cb-say{display:inline-flex;align-items:center;gap:var(--s-2);flex:none;font-size:var(--t-sm);color:var(--ink-2)}
+.cb-say b{font-weight:var(--w-strong);color:var(--ink)}
+.cb-cap{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:var(--t-sm);color:var(--ink-2)}
+.cb-cap b{margin-right:var(--s-2);font-weight:var(--w-strong);color:var(--ink)}
+.cb-ctl{display:flex;align-items:center;gap:var(--s-0)}
+.cb-leave{margin-left:var(--s-2);background:var(--well-2)}
+.cb-leave .ico{color:var(--ink-2)}
+
+/* ---------- a call ringing (calls.js ring) ---------- */
+.ring{--surface:var(--raised);position:fixed;z-index:var(--z-toast);top:20px;right:20px;width:296px;padding:var(--s-3h);border-radius:var(--r-pane);background:var(--raised);box-shadow:var(--lift-3);display:grid;gap:var(--s-3h)}
+.ring-who{display:flex;align-items:center;gap:var(--s-3);padding:var(--s-0) var(--s-0) 0}
+.ring-t{display:grid;gap:calc(var(--s-0) / 2);min-width:0}
+.ring-t b{font-weight:var(--w-strong)}
+.ring-t span{font-size:var(--t-sm);color:var(--muted);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.ring-row{display:grid;grid-template-columns:1fr 1fr;gap:var(--s-2)}
+.ring-row .btn:not(.btn-fill){background:var(--btn-raised)}
+
+/* ---------- the call card's faces, and adding someone (calls.js pf, pfAdd, addTile) ---------- */
+.cw-faces{flex:none;display:flex;gap:var(--s-0);padding:var(--s-2h) var(--s-2h) var(--s-0);overflow:hidden}
+.pf{width:58px;display:flex;flex-direction:column;align-items:center;gap:calc(var(--s-1) + 1px);padding:var(--s-1) 0;border:0;border-radius:var(--r-ctl);background:none;color:inherit;font-family:inherit;font-size:inherit;line-height:inherit;flex:none}
+.pf-name{max-width:100%;min-height:30px;font-size:var(--t-xs);line-height:15px;color:var(--ink-2);text-align:center;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.pf-lvl{height:10px;display:flex;align-items:center}
+.pf-lvl .lvl{height:10px}
+.pf.is-speaking .pf-name{color:var(--ink);font-weight:var(--w-strong)}
+.pf .face.is-speaking>.av-x{box-shadow:0 0 0 2px var(--surface),0 0 0 3.5px var(--ink)}
+.pf .face-muted{width:16px;height:16px;right:-3px;bottom:-3px}
+.pf .face-muted .ico{width:10px;height:10px}
+.face-add{width:var(--f,36px);height:var(--f,36px);border-radius:50%;display:grid;place-items:center;color:var(--muted);border:1.5px dashed var(--line-strong)}
+.face-add .ico{width:16px;height:16px}
+.pf-add:hover .face-add,.tile-add:hover .face-add{color:var(--ink);border-color:var(--muted)}
+.tile-add{background:none;border:1.5px dashed var(--line-strong)}
+.cw-back{height:40px;background:none;color:var(--ink-2);box-shadow:inset 0 0 0 1px var(--line-strong)}
+.cw-back:hover{background:var(--hover);color:var(--ink)}
+.cw-back .ico{width:16px;height:16px}
+
 /* ---------- a phone ---------- */
 @media (max-width:760px){
   .cl-body{padding:var(--s-1h) var(--s-2) calc(var(--s-12) * 2 + var(--s-2))}
@@ -307,4 +363,10 @@
   .cw .cc-leave{height:48px;padding:0 calc(var(--s-6) + var(--s-0))}
   .cw .win-ctl{gap:var(--s-2h);padding:var(--s-3) var(--s-3h) calc(var(--s-4) + var(--s-0))}
   .cw>.win-side{flex:1;min-height:240px}
+  .pc{--surface:var(--sheet);background:var(--sheet)}
+  .pc .cw-faces{padding:var(--s-2h) var(--s-2) var(--s-0);overflow-x:auto;scrollbar-width:none}
+  .cb{grid-template-columns:minmax(0,1fr) auto auto;column-gap:var(--s-1);height:52px;padding:0 var(--s-2) 0 var(--s-2h)}
+  .cb-t{display:grid;min-width:0}
+  .cb-t b{font-weight:var(--w-strong);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .cb-hang{color:var(--ink)}
 }
