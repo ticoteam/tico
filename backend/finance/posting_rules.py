@@ -93,8 +93,9 @@ def lines_for(
 
 def card_lines(
     ctx: Ctx, row: Any, money: Any, account_id: str, tags: Mapping[str, str]
-) -> tuple[list[dict[str, object]], bool]:
-    """The spend lines of a charge or refund on a card Tico issued, and whether a person should look. The first
+) -> tuple[list[dict[str, object]], bool, bool]:
+    """The spend lines of a charge or refund on a card Tico issued, whether a person should look, and whether a
+    posting rule set them. The first
     matching posting rule sets the account, tags and vendor; the holder's teammate tag stays, and the money line (the
     card liability, which card use is read from) is the caller's, so a rule never moves the charge off the card.
     No rule, or an `ask`, keeps the card's budget line; an `ask` also asks."""
@@ -103,8 +104,8 @@ def card_lines(
     rule = first_for(ctx, feed_facts(row, money))
     if rule is not None and rule.then.outcome == "post" and usable(ctx, rule.then):
         keep = {"teammate": tags["teammate"]} if tags.get("teammate") else {}
-        return lines_for(ctx, row, rule, tags, keep), False
-    return [feed_line(account_id, -int(row["amount"]), tags, str(row["counterparty"] or ""))], rule is not None
+        return lines_for(ctx, row, rule, tags, keep), False, True
+    return [feed_line(account_id, -int(row["amount"]), tags, str(row["counterparty"] or ""))], rule is not None, False
 
 
 def post_feed(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gl_id: str) -> bool:

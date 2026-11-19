@@ -157,6 +157,18 @@ def bot_id(c: sqlite3.Connection, ref: str) -> str:
     return str(row[0]) if row is not None else ""
 
 
+def teammate(c: sqlite3.Connection, ref: str) -> str:
+    """The teammate a person or client named, as the org chart keys it: `bot:<slug>` becomes `bot:<id>` (a custom or
+    renamed bot's slug is not its id); a bot id, a person, or a name no bot has stays as given. Every Finance input
+    that names a teammate goes through this before it is checked against the org chart."""
+    ref = str(ref or "").strip()
+    if ref.startswith("bot:"):
+        found = bot_id(c, ref[4:])
+        if found:
+            return "bot:" + found
+    return ref
+
+
 def audit(c: sqlite3.Connection, actor: str, action: str, target: str, detail: Mapping[str, object]) -> None:
     """The `events` row every Finance write leaves, in the same transaction."""
     _H.event(c, actor, action, target, dict(detail))

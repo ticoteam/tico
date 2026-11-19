@@ -265,9 +265,11 @@ def feed_page(
     q: str = "",
     card_ids: Sequence[str] | None = None,
     entry_ids: Sequence[str] | None = None,
+    line_account_ids: Sequence[str] | None = None,
 ) -> list[Any]:
     """Feed rows newest first, keyset-paged on (txn_date, id), on these money accounts (or cards, or entries). Rows the
-    bank failed, canceled or returned show only as status "failed"; "ignored" is a person's ignore."""
+    bank failed, canceled or returned show only as status "failed"; "ignored" is a person's ignore. With
+    `line_account_ids`, only rows whose entry has a line on one of those accounts."""
     where: list[str] = ["1=1"]
     args: list[object] = []
     scopes: list[str] = []
@@ -301,6 +303,14 @@ def feed_page(
     if end:
         where.append("txn_date<=?")
         args.append(end)
+    if line_account_ids:
+        # EXISTS keeps the cost flat (a probe per row read) where an IN list grows with the line: ~20 ms at 50k rows
+        # for a line on 2 rows or on all of them, against 0-70 ms for IN.
+        where.append(
+            "EXISTS (SELECT 1 FROM fin_lines l WHERE l.entry_id=fin_feed_txns.entry_id"
+            f" AND l.account_id IN ({_marks(line_account_ids)}))"
+        )
+        args += list(line_account_ids)
     if q:
         where.append("(counterparty LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')")
         args += [like(q)] * 2

@@ -1330,6 +1330,25 @@ def test_connect_transfers_and_stripe_capital_post_in_the_day_summary_with_no_as
         assert _every_entry_balances(c)
 
 
+def test_a_capital_loan_paid_out_and_the_last_one_paid_down_the_same_day_net_on_the_loan_line(books):
+    """A new Stripe Capital loan arrives (financing_payout) the day the last one is paid down: both post to the loan
+    line, which is left owing the difference, and nothing goes to suspense or asks a person."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    stripe.add("financing_payout", 50_000)
+    stripe.add("financing_paydown", -30_000)
+    stripe_pass(books, stripe)
+    with books.read() as c:
+        assert _named_sum(c, "Stripe Capital loan") == -20_000  # a credit: the loan still owed
+        assert _line_of(c, "Stripe suspense") is None
+        assert _sum(c, "1050") == stripe.total()
+        assert (
+            int(c.execute("SELECT COUNT(*) FROM fin_events WHERE name='finance.feed.needs_category'").fetchone()[0])
+            == 0
+        )
+        assert _every_entry_balances(c)
+
+
 def test_a_line_the_company_made_is_reused_by_name_in_any_case(books):
     stripe = FakeStripe()
     connect_stripe(books, stripe)

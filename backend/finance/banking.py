@@ -36,6 +36,7 @@ from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
 from .core.org import SYSTEM
 from .handlers import Plan, Result, may_write
 from .store import ap as SAP
+from .store import attribution as ATT
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
@@ -846,7 +847,7 @@ def refresh_covered(ctx: Ctx, before: Mapping[str, int]) -> None:
 
 def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> str | None:
     """Post what a settled (or pending, voided, reversed) row means, the way a new row is taken in. RULE when a posting
-    rule posted it (posting_rules.post_feed), else None."""
+    rule posted it (posting_rules.post_feed, or card_lines for a card Tico issued), else None."""
     fid = str(row["id"])
     if ctx.book.mode == "mirror":
         from .mirror import settle_row
@@ -954,9 +955,9 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> str | No
                     str(found[1][f"{documents.CONTACT_OF['bill']}_id"]),
                 )
             ]
-            ask = False
+            ask = ruled = False
         else:
-            lines, ask = posting_rules.card_lines(ctx, row, money, account, tags)
+            lines, ask, ruled = posting_rules.card_lines(ctx, row, money, account, tags)
         holds = [str(row["hold_id"])] if row["hold_id"] and t.amount < 0 else []
         entry = post_row(ctx, fid, t, lines, gl.id, holds)
         mark_posted(ctx, [fid], entry)
@@ -965,7 +966,7 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> str | No
             documents.feed_paid(ctx, row, found[0], found[1], entry)
         if ask:
             event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
-        return
+        return RULE if ruled else None
     # Anything else: a payment marked paid from this account, else the one open bill or invoice it pays, else the
     # first posting rule (or the counterparty's default line), else a debit posts to Other expenses and a credit
     # waits, and a person is asked (needs_category).
@@ -1628,14 +1629,14 @@ def _waiting_card_sides(ctx: Ctx, debit: Any) -> list[Any]:
     return [r for r in _payment_sides(ctx, debit, cards, CARD_PAY_DAYS) if not r["entry_id"]]
 
 
-def _only_other(ctx: Ctx, row: Any, other_id: str) -> bool:
-    """Whether a posted row's live entry is the Other expenses line alone (beside its own money line): no category yet."""
+def _only_line(ctx: Ctx, row: Any, account_id: str) -> bool:
+    """Whether a posted row's live entry, shared with no other row, has that line alone beside its own money line."""
     entry = SL.entry_row(ctx.c, str(row["entry_id"]))
     if entry is None or str(entry["status"]) != "posted" or len(SK.rows_of_entry(ctx.c, str(row["entry_id"]))) > 1:
         return False
     money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
     rest = {line.account_id for _, line in SL.entry_lines(ctx.c, str(row["entry_id"]))} - {str(money["account_id"])}
-    return rest == {other_id}
+    return rest == {account_id}
 
 
 def transfer(ctx: Ctx, row: Any, money: Any, other: Any) -> None:
@@ -1798,7 +1799,7 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def by_rule_again(ctx: Ctx, row: Any, money: Any) -> str:
     """Settle a past row again as a new row would be (_settle), when it still waits for a category: new with no entry,
-    or posted to the automatic Other expenses default (default_debit). It settles in a savepoint and is kept only when
+    or posted to the automatic default (default_debit; for a card Tico issued, its budget line: default_card). It settles in a savepoint and is kept only when
     a posting rule posted it; anything else that takes it there (a payment, a document, a Stripe payout, a refund, a
     top-up, a canceled payment, an ask) is undone, so the row and its asks stay as they were. The default's entry is
     reversed first, as categorize does, and the row's unsent ask is withdrawn. A row in a closed period is not changed.
@@ -1807,18 +1808,21 @@ def by_rule_again(ctx: Ctx, row: Any, money: Any) -> str:
     fid = str(row["id"])
     if (
         row["request_id"]
-        or row["card_id"]
         or row["refund_of"]
         or int(row["amount"]) == 0
         or str(row["provider_status"] or "") in (*F.VOID, F.REVERSED, "returned")
-        or str(row["kind"]) in (*F.TRANSFER_KINDS, *F.CARD_KINDS, *F.BREX_CARD_PAYMENTS)
+        or str(row["kind"]) in (*F.TRANSFER_KINDS, *F.BREX_CARD_PAYMENTS)
     ):
         return ""
     if str(money["kind"]) not in ("bank", "card_program") or ctx.book.mode == "mirror":
         return ""
     if covered_day(ctx, str(row["txn_date"])) or _awaiting_sign(ctx, money):
         return ""
-    if row["entry_id"] and not default_debit(ctx, row):
+    # A charge on a card Tico issued settles as one (posting_rules.card_lines: its use, hold and holder tag stay);
+    # any other card row (a Mercury debit card, a card Tico did not issue) as a bank row does.
+    card = SK.get(ctx.c, "fin_cards", str(row["card_id"])) if row["card_id"] else None
+    issued = card is not None and str(money["kind"]) == "card_program"
+    if row["entry_id"] and not (default_card(ctx, row, card) if issued else default_debit(ctx, row)):
         return ""
     rule = posting_rules.first_for(ctx, posting_rules.feed_facts(row, money))
     if rule is None or rule.then.outcome != "post" or not posting_rules.usable(ctx, rule.then):
@@ -1829,7 +1833,7 @@ def by_rule_again(ctx: Ctx, row: Any, money: Any) -> str:
     try:
         if row["entry_id"]:
             unpost_row(ctx, row, "a posting rule took it")
-        done = _settle(ctx, SK.get(ctx.c, "fin_feed_txns", fid), money, None, _txn_of(row))
+        done = _settle(ctx, SK.get(ctx.c, "fin_feed_txns", fid), money, card, _txn_of(row))
     except Exception:
         _undo_alone(ctx.c, mark)
         log.exception("Finance: feed row %s did not settle again by the posting rules", fid)
@@ -1865,14 +1869,36 @@ def default_debit(ctx: Ctx, row: Any) -> bool:
     """Whether a posted row sits on the automatic Other expenses default _settle gives a debit nothing else took: its
     live entry is the Other expenses line alone, shared with no other row, with no refund posted against it and no
     document settled from it; the default's needs_category ask was raised for it (a payment, a contact default or a
-    rule that posts to Other expenses on purpose raises none); and no categorize put it there."""
+    rule that posts to Other expenses on purpose raises none); and no categorize or split by hand put it there."""
     other = by_code(ctx, OTHER)
     fid = str(row["id"])
     return (
         other is not None
-        and _only_other(ctx, row, other.id)
+        and _only_line(ctx, row, other.id)
         and SK.asked(ctx.c, CATEGORY_EVENT, fid)
         and not SAP.categorized_into(ctx.c, str(row["entry_id"]))
+        and not _split_by_hand(ctx, row)
+        and not SK.refunds_of(ctx.c, fid)
+        and not SAP.settled_from(ctx.c, "feed", fid)
+    )
+
+
+def _split_by_hand(ctx: Ctx, row: Any) -> bool:
+    """Whether a person or a bot split a line of the row's entry between teammates (an attribution override): a re-post
+    would drop it, as it would a categorize."""
+    lines = [str(r["id"]) for r, _ in SL.entry_lines(ctx.c, str(row["entry_id"]))]
+    return bool(ATT.lines_owned_by_people(ctx.c, lines))
+
+
+def default_card(ctx: Ctx, row: Any, card: Any) -> bool:
+    """Whether a posted charge on a card Tico issued sits on the card's default (card_line: its budget's line, else
+    Other expenses) that _settle gives it when no posting rule matched: that line alone, shared with no other row, no
+    refund posted against it, no document settled from it, and no categorize or split by hand put it there."""
+    fid = str(row["id"])
+    return (
+        _only_line(ctx, row, card_line(ctx, card)[0])
+        and not SAP.categorized_into(ctx.c, str(row["entry_id"]))
+        and not _split_by_hand(ctx, row)
         and not SK.refunds_of(ctx.c, fid)
         and not SAP.settled_from(ctx.c, "feed", fid)
     )
