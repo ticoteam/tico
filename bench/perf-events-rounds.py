@@ -8,7 +8,7 @@ SQL statements that took.
     nice -n 10 .venv/bin/python bench/perf-events-rounds.py
 
 Env as bench/perf-events-setup.py (OPEN, CLOSED, THREADS, DB, SEED_ONLY, FRAMES, COMPARE), plus STEPS (default 200)
-and BACK (default 100). FRAMES holds every stream's text, to compare two checkouts' on one DB. Only fictional data.
+and BACK (default 100), PROFILE=1 (profile the rounds). FRAMES holds every stream's text, to compare two checkouts' on one DB. Only fictional data.
 Never point it at a real hub.
 """
 
@@ -72,11 +72,19 @@ def report(api):
     spent = []
     real_round = E.Rounds._round
 
+    import cProfile
+
+    profile = cProfile.Profile() if os.environ.get("PROFILE") else None
+
     def timed(self, jobs):
         t = time.perf_counter()
+        if profile is not None:
+            profile.enable()
         try:
             return real_round(self, jobs)
         finally:
+            if profile is not None:
+                profile.disable()
             spent.append(time.perf_counter() - t)
 
     E.Rounds._round = timed
@@ -117,6 +125,11 @@ def report(api):
     for token, _ in PEOPLE:
         mine = {text for key, text in frames.items() if key.startswith(token)}
         print(f"{token}: its {len([k for k in frames if k.startswith(token)])} streams sent {len(mine)} distinct texts")
+    if profile is not None:  # PROFILE=1: where the rounds spent their time, every wave together
+        import pstats
+
+        pstats.Stats(profile).sort_stats("tottime").print_stats(30)
+        pstats.Stats(profile).sort_stats("cumulative").print_stats(40)
     if os.environ.get("FRAMES"):
         Path(os.environ["FRAMES"]).write_text(json.dumps(frames, indent=1, sort_keys=True))
 
