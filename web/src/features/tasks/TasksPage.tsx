@@ -520,13 +520,13 @@ function Sections({ p, rows, me, folds, fold, more, cut, countOf, picking, toggl
             </Section>
           );
         })}
-      <StageLine stages={none} />
+      <StageLine stages={none} countOf={countOf} />
     </>
   );
 }
 
-/** Stages with nothing in them: their names folded on one line under the list. */
-function StageLine({ stages }: { stages: readonly Stage[] }) {
+/** Stages with no loaded rows: their names folded on one line under the list. */
+function StageLine({ stages, countOf }: { stages: readonly Stage[]; countOf?: BodyProps['countOf'] }) {
   if (!stages.length) return null;
   return (
     <div className="stage-line">
@@ -534,7 +534,7 @@ function StageLine({ stages }: { stages: readonly Stage[] }) {
         <h2 key={s.id} className="sec-name" data-target={`stage:${s.id}`}>
           <span className="sec-fold">
             <span>{s.name}</span>
-            <span className="stage-n">0</span>
+            <span className="stage-n">{countOf ? countOf(s.id, 0) : 0}</span>
           </span>
         </h2>
       ))}
