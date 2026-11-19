@@ -246,7 +246,7 @@ describe('Budgets @s404 @s462 @s463', () => {
     expect(await within(soft).findByRole('button', { name: 'Line budget' })).toBeTruthy();
   });
 
-  it('Tico may lower or stop a budget but not raise one @s462', async () => {
+  it('Tico may lower a budget but not raise or stop one @s462', async () => {
     serve((url) => access(url) ?? ok({}));
     show('/company/finance?tab=pnl');
     queryClient.setQueryData(budgetsKey(budgetDay()), { budgets: [BUDGET('b1', 'Tools')] });
@@ -254,8 +254,9 @@ describe('Budgets @s404 @s462 @s463', () => {
     expect(posted).toEqual([]);
     expect(await run('budget.updateRow', { budget: 'b1', amount: 100 }, { via: 'tico' })).toMatchObject({ ok: true });
     expect(posted[0]).toMatchObject({ kind: 'budget_update', payload: { budget_id: 'b1', amount: 10000 } });
-    expect(await run('budget.removeRow', { budget: 'b1' }, { via: 'tico' })).toMatchObject({ ok: true });
-    expect(posted[1]).toMatchObject({ kind: 'budget_update', payload: { budget_id: 'b1', active: false } });
+    // Stopping a budget lifts its cap: the person's own press.
+    expect(await run('budget.removeRow', { budget: 'b1' }, { via: 'tico' })).toMatchObject({ ok: false });
+    expect(posted).toHaveLength(1);
   });
 });
 

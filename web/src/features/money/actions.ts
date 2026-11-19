@@ -461,11 +461,12 @@ export const updateRow = defineAction({
   target: ({ budget }) => ({ kind: 'budget', id: budget }),
 });
 
-/** Stopping a budget spends nothing and keeps its history, so Tico may do it too. */
+/** Stopping a budget keeps its history but lifts its cap (a card it froze can spend again): the person's own press. */
 export const removeRow = defineAction({
   id: 'budget.removeRow',
   title: 'Stop a budget from a month on (this one when left out)',
   kind: 'change',
+  tico: false,
   input: s.object({ budget: id, month: s.optional(ym) }),
   run: async ({ router }, { budget, month }) => {
     const done = removeBudget(budgetAt(month), budget);
