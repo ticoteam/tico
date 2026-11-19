@@ -6703,6 +6703,24 @@ def prime_conversations(conn, ids):
         prime(conn, CONVERSATION_SQL, {(cid,): found.get(cid) for cid in part})
 
 
+def conversation_rows(conn, ids):
+    """{id: stored row} for these conversations (a missing one left out), sharing the snapshot's one-conversation reads:
+    only those not read yet are read, one query per 500 (prime_conversations). Outside a snapshot, one query per 500."""
+    from .read_cache import cache
+
+    ids = list(dict.fromkeys(cid for cid in ids if cid))
+    if cache(conn) is None:
+        out = {}
+        for part in chunks(ids):
+            for row in conn.execute("SELECT * FROM conversations WHERE id IN (%s)" % ",".join("?" * len(part)), part):
+                out[row["id"]] = row
+        return out
+    prime_conversations(conn, ids)
+    values = cache(conn)
+    found = {cid: values.get(("one", CONVERSATION_SQL, (cid,))) for cid in ids}
+    return {cid: row for cid, row in found.items() if row is not None}
+
+
 def conversations_for(conn, actor, limit=100):
     """Every conversation this actor is a participant in, newest first."""
     # Filtered in SQL: a window of the newest conversations company-wide lost an older chat behind many newer ones.
