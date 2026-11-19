@@ -11,7 +11,8 @@ anchor selects (scripts/pr_checks.py selection, the merge queue's rules, never t
 the product part (the upgrade journey and the Docker smoke checks) when its previous release differs from the anchor's, the image builds (every candidate: the Dockerfile copies the whole tree), and
 the failures carried: a red anchor's, and the newest red validation's since it. A red validation is not run again until
 a commit since it selects one of its failures; until then the train waits. A green validation after it (full or
-incremental, of a commit main still contains) supersedes it.
+incremental, of a commit main still contains) supersedes it. A red that only its infrastructure failed (a Spot VM taken, a registry pull refused or rate limited, a
+runner lost: infrastructure_red) has its failed jobs run again once instead, whatever its diff selects.
 
 The decisions here are pure. The GitHub reads (runs, job logs) come from scripts/release_train.py, and the checkout's
 diff and selection from Checkout below, so the unit tests and the replay run the same code.
@@ -75,6 +76,71 @@ def failed_tokens(jobs):
         else:
             return None
     return tokens
+
+
+# What GitHub and RunsOn say when a validation's machine or registry failed it, not its code (in a failed job's
+# annotations): a red whose every failed part says one of these, or failed only because an image build did, has its
+# failed jobs run again once (release_train.plan_step). The causes are what the train's log and issue count.
+INFRASTRUCTURE = (
+    ("Spot interrupted", re.compile(r"AWS interrupted the EC2 Spot instance", re.I)),
+    ("registry rate limited", re.compile(r"toomanyrequests|reached your (?:unauthenticated )?pull rate limit", re.I)),
+    ("registry pull denied", re.compile(r"pull access denied for \S+", re.I)),
+    (
+        "runner lost",
+        re.compile(
+            r"runner: .{1,80} lost communication with the server|The runner has received a shutdown signal", re.I
+        ),
+    ),
+)
+# A product part that failed only because an image build did: it waits for the images before its gate starts (ci.yml).
+CONSEQUENCE = re.compile(r"An image build did not succeed")
+GATE_JOB = re.compile(r"(python|browser)-\d+|conformance|contracts(-\d+)?|product|desktop")
+
+
+def infrastructure_cause(messages):
+    """(cause, the message that says it) for the first of a job's annotation messages that names an infrastructure
+    failure, or None."""
+    for message in messages:
+        for cause, pattern in INFRASTRUCTURE:
+            if pattern.search(message or ""):
+                return cause, " ".join((message or "").split())[:200]
+    return None
+
+
+def gate_answered(receipt):
+    """Whether a gate part's receipt (hosted_release_check.py's run.json) shows its gate ran to a failing answer, or
+    crashed: a real failure, whatever went wrong with the machine afterwards. {} is a report without a receipt (the gate
+    never started); None, a report that could not be read."""
+    if not receipt:
+        return False
+    return "error" in receipt or (receipt.get("gate_state") == "finished" and receipt.get("gate_exit") != 0)
+
+
+def infrastructure_red(parts):
+    """Whether a red validation failed on its infrastructure alone, from (job name, annotation messages, receipt) for
+    its failed parts (fail fast's cancellations left out, as failed_tokens reads them). The receipt is a gate part's
+    run.json from its report: {} when the report has none (the gate never started), None when the report cannot be read.
+    Returns [(job, cause, message)] for the parts infrastructure failed, or None when any part failed some other way,
+    or none on infrastructure: a test failure is never run again (CLAUDE.md). A gate part counts only when its receipt
+    shows the gate did not run to a failing answer, because a runner lost after a test failed says "lost" too; with
+    no readable receipt it does not count. Product failing because an image build did comes back with it."""
+    found, consequences = [], 0
+    for name, messages, receipt in parts:
+        if name in IGNORED_JOBS:
+            continue
+        gate = GATE_JOB.fullmatch(name) is not None
+        if gate and gate_answered(receipt):
+            return None
+        cause = infrastructure_cause(messages)
+        if cause and (not gate or receipt is not None):
+            found.append((name, *cause))
+        elif name == PRODUCT and receipt is not None and any(CONSEQUENCE.search(m or "") for m in messages):
+            consequences += 1
+        else:
+            return None
+    if not found or (consequences and not any(name.startswith("images") for name, _, _ in found)):
+        return None
+    return found
 
 
 def anchor_of(records, now, contained, named, complete=lambda record: True):

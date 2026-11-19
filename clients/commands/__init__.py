@@ -25,6 +25,7 @@ from clients.commands import (
     market,
     contacts,
     products,
+    page_history,
     listening,
     tools,
     tools_admin,
@@ -44,6 +45,7 @@ from clients.commands import (
     pipelines,
     browser,
     logins,
+    screen,
     _access,
     _mcp,
 )
@@ -65,6 +67,7 @@ MODULES = (
     market,
     contacts,
     products,
+    page_history,
     listening,
     tools,
     tools_admin,
@@ -84,6 +87,7 @@ MODULES = (
     pipelines,
     browser,
     logins,
+    screen,
     _access,
     _mcp,
 )

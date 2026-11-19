@@ -71,6 +71,9 @@ TAGS = {
     "due dates and sources.",
     'Risk': "Risks: tags of kind risk that any task can carry, the matter facts of each tagged task, and the rules and "
     "documents linked to a risk.",
+    # Page history (backend/page_history.py): a person's own, kept 30 days; Tico reads it as the person.
+    'Page history': "The pages the signed-in person opened in the app in the last 30 days, newest first, kept so Tico "
+    "knows where they have been. Nobody else reads them; clearing removes the list.",
     # Company › Products (backend/products.py): Contacts Product records our company owns.
     'Products': "Our products: kind, status, tax kind, owner, code, the agreement each is sold under and the vendors it "
     "depends on. Each is a Contacts Product record company/self owns.",

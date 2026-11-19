@@ -88,6 +88,7 @@ from . import (
     bot_seats_routes,
     fleet_runner_routes,
     ui_bundle_routes,
+    web_routes,
 )
 from .api_contract import api_v2
 from . import timing
@@ -1548,11 +1549,11 @@ def _install_request_guard(
             if route_keeps or file_bytes:
                 pass  # the route's own "private, max-age=…" stands
             elif (
-                request.url.path.startswith(ui_build.BUNDLE_PREFIX)
+                request.url.path.startswith((ui_build.BUNDLE_PREFIX, web_routes.ASSETS_PREFIX))
                 and response.status_code in (200, 304)
                 and response.headers.get("cache-control") == ui_build.IMMUTABLE
             ):
-                pass  # a bundle file is named by its content (scripts/build-ui.cjs): kept for a year
+                pass  # a bundle file is named by its content (scripts/build-ui.cjs, the web app's build): kept for a year
             elif (
                 request.query_params.get("v")
                 and response.status_code in (200, 304)
@@ -2308,6 +2309,9 @@ def _install_features(
     from . import presence
 
     presence.install(app, store, mutate, auth)
+    from . import screen_actions
+
+    screen_actions.install(app, store)
     from .meeting_task_links import install as install_meeting_task_links
 
     install_meeting_task_links(app, store, auth, mutate)
@@ -2439,6 +2443,9 @@ def _install_features(
     stage_rules_api.install(app, store, auth, mutate)  # stage rules: the Rules button, the Rules page's groups
     why_here.install(app, store, auth)  # GET /api/v2/origins/{ref}: why an item is on the list
     assistant_changes.install(app, store, auth, mutate, settings_admin)  # the Assistant's changes, and undoing one
+    from . import page_history
+
+    page_history.install(app, store, mutate)  # the pages a person opened, kept for Tico (backend/page_history.py)
     reach.install(app, store, auth, mutate)  # Rules › Internal: who reaches whom (docs/reach.md)
     from . import feedback
 
@@ -2685,6 +2692,7 @@ def _install_features(
 
     install_browser_exit(app, store, auth, mutate, execution, screen_sessions)
 
+    web_routes.register(app, settings)  # before the UI's mount at /, which would answer /next (backend/web_routes.py)
     ui_bundle_routes.register(app, auth, settings)
     from . import cors
 

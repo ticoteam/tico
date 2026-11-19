@@ -28,8 +28,10 @@ EMAIL = "ap@acme-retail.example"
 NEW_EMAIL = "ap@acme-new.example"
 BOX = "books@acme.example"
 OTHER_BOX = "billing@acme.example"
-ISSUED = "2026-08-01"  # AT is 2026-10-15: due 2026-08-31 is 45 days late, so the stages 1, 7 and 30 are reached
-DUE = "2026-08-31"
+ISSUED = "2026-07-01"  # AT is 2026-10-15: due 2026-08-01 is 75 days late, so the stages 1, 7, 30 and 60 are reached
+DUE = "2026-08-01"
+FINAL = 60  # a stage at the final notice: a bot's reminder asks a finance admin, and its email a person's OK
+EARLY_DUE = "2026-09-01"  # 44 days late on AT: the early stages are reached, the final notice is not
 LATER = "2026-10-16T13:00:00.000000Z"
 
 
@@ -46,22 +48,22 @@ def _customer(c, emails=(EMAIL,)) -> str:
     return str(made.result["contact_id"])
 
 
-def _draft(c, customer: str, amount: int = 30_000) -> str:
-    """A draft invoice to the customer, issued 2026-08-01 and due 2026-08-31."""
+def _draft(c, customer: str, amount: int = 30_000, due: str = DUE) -> str:
+    """A draft invoice to the customer, issued 2026-07-01 and due 2026-08-01 (or `due`)."""
     payload = {
         "customer_id": customer,
         "invoice_date": ISSUED,
-        "due_date": DUE,
+        "due_date": due,
         "lines": [{"account_id": account(c, "4000"), "amount": amount}],
     }
     return str(act(c, OWNER, "invoice_create", payload).result["invoice_id"])
 
 
-def _sent_invoice(c, emails=(EMAIL,)) -> str:
+def _sent_invoice(c, emails=(EMAIL,), due=DUE) -> str:
     """A sent invoice of 300.00 to a customer with these emails, made as a person (no bot mailbox yet)."""
     FA.grant_defaults(c, BOT, at=AT)  # the rights a hired Bookkeeper comes with
     act(c, OWNER, "view_grant", {"subject": BOT, "what": "everything"})
-    iid = _draft(c, _customer(c, emails))
+    iid = _draft(c, _customer(c, emails), due=due)
     assert act(c, OWNER, "invoice_send", {"invoice_id": iid}).status == "committed"
     return iid
 
@@ -82,7 +84,7 @@ def _send_approvals(c) -> list[dict]:
     return [_send_ok(c, str(row[0])) for row in rows]
 
 
-def _approved_reminder(c, stage=7) -> tuple[str, str, str]:
+def _approved_reminder(c, stage=FINAL) -> tuple[str, str, str]:
     """A bot's reminder for the stage, asked, then approved by the person it was sent to: (invoice id, send approval id,
     the exact text)."""
     iid = _sent_invoice(c)
@@ -95,11 +97,11 @@ def _approved_reminder(c, stage=7) -> tuple[str, str, str]:
     return iid, str(done.result["send_approval_id"]), str(done.result["text"])
 
 
-def test_a_bots_reminder_asks_a_person_and_records_nothing_until_they_say_yes(books):
+def test_a_bots_final_stage_reminder_asks_a_person_and_records_nothing_until_they_say_yes(books):
     with books.transaction() as c:
         iid = _sent_invoice(c)
         _mailbox(c)
-        asked = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": 7})
+        asked = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": FINAL})
         assert asked.status == "needs_approval" and asked.approver == OWNER, asked
         assert c.execute("SELECT COUNT(*) FROM fin_invoice_reminders").fetchone()[0] == 0
 
@@ -132,6 +134,211 @@ def test_a_bot_cannot_issue_or_decide_a_send_approval(books):
             give(c, BOT, send_id)
 
 
+def _company_sends_on_its_own(c, **asks) -> None:
+    """A company sending policy that lets senders send new emails to new addresses with no OK (Settings → Mail), with
+    no ask about money emails and no second review unless `asks` turns one on."""
+    settings = {
+        "mode": "on_their_own",
+        "what": "replies_and_new",
+        "ask_new_address": False,
+        "ask_legal_money": False,
+        "second_review": False,
+        **asks,
+    }
+    c.execute(
+        "INSERT OR REPLACE INTO email_sending_policies VALUES('company',?,?,?)",
+        (json.dumps(settings), AT, OWNER.split(":")[1]),
+    )
+
+
+@pytest.mark.parametrize("stage", [1, 7, 30])
+def test_a_bots_early_reminder_needs_no_finance_ok_and_waits_only_where_the_sending_policy_asks(books, stage):
+    """Out of the box (Ask first) the email still waits for the policy's OK of its preview, but Finance asks nobody. The
+    reminder is a payment demand: it is classified as money, for the policy's ask about money emails."""
+    with books.transaction() as c:
+        iid = _sent_invoice(c, due=EARLY_DUE)
+        _mailbox(c)
+        made = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": stage})
+        assert made.status == "committed", made
+        assert made.result["delivery"] == "send_approval" and made.result["send_approval_id"], made.result
+        queued = c.execute(
+            "SELECT state, classification FROM email_sends WHERE operation_key=?", (f"invoice:{iid}:{stage}",)
+        )
+        row = queued.fetchone()
+        assert row["state"] == "waiting_approval" and json.loads(row["classification"])["legal_or_money"] is True
+
+
+def test_a_bots_early_reminder_goes_on_its_own_where_the_sending_policy_allows_and_is_recorded_delivered(books):
+    from backend import email_sending as S
+    from backend.auth import Auth
+
+    with books.transaction() as c:
+        iid = _sent_invoice(c, due=EARLY_DUE)
+        _mailbox(c)
+        _company_sends_on_its_own(c)
+        made = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": 7})
+        assert made.status == "committed", made
+        assert made.result["delivery"] == "sending_policy" and made.result["send_approval_id"] is None, made.result
+        send_id = made.result["send_id"]
+        row = c.execute("SELECT * FROM email_sends WHERE id=?", (send_id,)).fetchone()
+        assert row["state"] == "pending" and row["approval_id"] == "" and row["via"] == "finance", dict(row)
+        assert _send_approvals(c) == []
+        follow = c.execute("SELECT send_approval_id FROM fin_invoice_reminders WHERE invoice_id=?", (iid,)).fetchone()
+        assert follow[0] == delivery.SENT_PREFIX + send_id and not delivery.asked(follow[0])
+        ((waiting,),) = [[(e["approval_id"], e["send_id"])] for e in delivery.pending(c)]
+        assert waiting == (None, send_id)  # never a send id where an OK's id goes
+        found = S.decision(c, Auth(books), row, dispatch=True)
+        assert found["outcome"] == "allow", found
+        S._permit(c, row, found)
+        S._finish(c, row, "sent", "msg-1")
+        assert c.execute(
+            "SELECT delivered_at IS NOT NULL FROM fin_invoice_reminders WHERE invoice_id=?", (iid,)
+        ).fetchone()[0]
+        assert delivery.pending(c) == []
+
+
+def test_a_bots_final_stage_reminder_still_waits_for_a_finance_admin_and_its_email_for_an_ok(books):
+    """Even where the sending policy lets mail go on its own, the 60 and 90 day stages (the final notice) keep both asks."""
+    with books.transaction() as c:
+        iid = _sent_invoice(c)
+        _mailbox(c)
+        _company_sends_on_its_own(c)
+        asked = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": FINAL})
+        assert asked.status == "needs_approval" and asked.rule == "default:bot-invoice-email", asked
+        give(c, OWNER, asked.approval_id)
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done.status == "committed" and done.result["delivery"] == "send_approval", done
+        row = c.execute("SELECT state FROM email_sends WHERE operation_key=?", (f"invoice:{iid}:{FINAL}",)).fetchone()
+        assert row["state"] == "waiting_approval"
+
+
+@pytest.mark.parametrize(
+    ("ask", "reason"), [("ask_legal_money", "legal_or_money_or_unclassified"), ("second_review", "second_review")]
+)
+def test_a_bots_early_reminder_waits_where_the_company_asks_about_money_or_wants_a_second_review(books, ask, reason):
+    """The reminder is Tico's fixed text, but a bot asked for it: the policy's ask about money emails and its second
+    review apply as they do to any of the bot's email."""
+    with books.transaction() as c:
+        iid = _sent_invoice(c, due=EARLY_DUE)
+        _mailbox(c)
+        _company_sends_on_its_own(c, **{ask: True})
+        made = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": 7})
+        assert made.status == "committed" and made.result["delivery"] == "send_approval", made
+        row = c.execute("SELECT state, decision FROM email_sends WHERE id=?", (_sent_ids(c)[0],)).fetchone()
+        assert row["state"] == "waiting_approval" and reason in json.loads(row["decision"])["reasons"], dict(row)
+
+
+def _sent_ids(c) -> list[str]:
+    return [str(r[0]) for r in c.execute("SELECT id FROM email_sends ORDER BY created_at, rowid")]
+
+
+def _sends(books, c, send_id: str) -> None:
+    """The queue lets a send the policy allowed go, and the provider takes it."""
+    from backend import email_sending as S
+    from backend.auth import Auth
+
+    long_ago = "2000-01-01T00:00:00.000000Z"  # earlier sends went out well before: no pacing wait
+    c.execute("UPDATE email_sends SET provider_attempted_at=?, claimed_at=? WHERE state='sent'", (long_ago, long_ago))
+    row = c.execute("SELECT * FROM email_sends WHERE id=?", (send_id,)).fetchone()
+    found = S.decision(c, Auth(books), row, dispatch=True)
+    assert found["outcome"] == "allow", found
+    S._permit(c, row, found)
+    S._finish(c, row, "sent", "msg-" + send_id)
+
+
+def test_each_stage_is_its_own_email_day_1_then_7_then_60(books):
+    """The same balance and addresses at every stage: each stage still queues and sends its own email. Day 1 and day 7
+    go on their own under the policy; day 60 waits for a finance admin and its own send approval."""
+    due = "2026-10-14"  # AT (2026-10-15) is day 1
+    with books.transaction() as c:
+        iid = _sent_invoice(c, due=due)
+        _mailbox(c)
+        _company_sends_on_its_own(c)
+        first = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": 1})
+        assert first.status == "committed" and first.result["delivery"] == "sending_policy", first
+        _sends(books, c, first.result["send_id"])
+        week = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": 7}, at="2026-10-21T12:00:00.000000Z")
+        assert week.status == "committed" and week.result["delivery"] == "sending_policy", week
+        assert week.result["send_id"] != first.result["send_id"]
+        assert week.result["subject"] != first.result["subject"]
+        _sends(books, c, week.result["send_id"])
+        final_at = "2026-12-13T12:00:00.000000Z"  # day 60
+        asked = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": FINAL}, at=final_at)
+        assert asked.status == "needs_approval" and asked.rule == "default:bot-invoice-email", asked
+        give(c, OWNER, asked.approval_id)
+        done = FA.approval_decided(c, asked.approval_id, final_at)
+        assert done.status == "committed" and done.result["delivery"] == "send_approval", done
+        states = [r[0] for r in c.execute("SELECT state FROM email_sends ORDER BY created_at, rowid")]
+        assert states == ["sent", "sent", "waiting_approval"], states
+        delivered = c.execute("SELECT stage FROM fin_invoice_reminders WHERE delivered_at IS NOT NULL ORDER BY stage")
+        assert [r[0] for r in delivered] == [1, 7]
+
+
+def test_an_early_stage_first_run_once_the_invoice_is_60_days_late_waits_like_the_final_notice(books):
+    """A day-30 task first run on day 75: the invoice is at the final notice, so whatever stage was asked, the bot asks
+    a finance admin and the email waits for a person's OK, even where the policy lets mail go on its own."""
+    with books.transaction() as c:
+        iid = _sent_invoice(c)  # 75 days late on AT
+        _mailbox(c)
+        _company_sends_on_its_own(c)
+        asked = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": 30})
+        assert asked.status == "needs_approval" and asked.rule == "default:bot-invoice-email", asked
+        give(c, OWNER, asked.approval_id)
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done.status == "committed" and done.result["delivery"] == "send_approval", done
+        assert c.execute("SELECT state FROM email_sends").fetchone()[0] == "waiting_approval"
+
+
+def test_an_early_reminder_asked_before_day_60_and_decided_after_it_asks_a_finance_admin_again(books):
+    """Days late are judged again when an approval is decided: a day-30 reminder an owner's rule held on day 55 and
+    approved on day 65 now needs the final notice's ask of a finance admin, which that approval did not cover, so it is
+    asked again and nothing is queued."""
+    with books.transaction() as c:
+        iid = _sent_invoice(c, due=EARLY_DUE)
+        _mailbox(c)
+        _company_sends_on_its_own(c)
+        rule = act(
+            c,
+            OWNER,
+            "rule_create",
+            {
+                "kind": "gate",
+                "name": "Reminders ask the owner",
+                "when": {"kind": "invoice_remind"},
+                "outcome": {"outcome": "needs_approval", "who": "owner"},
+                "examples": [{"input": {"kind": "invoice_remind"}, "expect": "needs_approval"}],
+            },
+        )
+        assert rule.status == "committed", rule
+        day_55 = "2026-10-26T12:00:00.000000Z"
+        asked = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": 30}, at=day_55)
+        assert asked.status == "needs_approval" and asked.rule == rule.result["rule_id"], asked
+        give(c, OWNER, asked.approval_id)
+        again = FA.approval_decided(c, asked.approval_id, "2026-11-05T12:00:00.000000Z")  # day 65
+        assert again.status == "needs_approval" and again.approval_id != asked.approval_id, again
+        assert c.execute("SELECT count(*) FROM email_sends").fetchone()[0] == 0
+
+
+def test_a_policy_sent_reminder_that_the_queue_later_asks_about_shows_that_ok(books):
+    """delivery.pending never puts a send id where an OK's id goes: a reminder the policy let go has no approval_id,
+    and when the policy tightens before it goes, the queue's new OK is the one shown."""
+    from backend import email_sending as S
+    from backend.auth import Auth
+
+    with books.transaction() as c:
+        iid = _sent_invoice(c, due=EARLY_DUE)
+        _mailbox(c)
+        _company_sends_on_its_own(c)
+        made = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": 7})
+        send_id = made.result["send_id"]
+        assert [(e["approval_id"], e["send_id"]) for e in delivery.pending(c)] == [(None, send_id)]
+        _company_sends_on_its_own(c, mode="ask_first")
+        c.execute("UPDATE email_sends SET send_after=? WHERE id=?", ("2000-01-01T00:00:00.000000Z", send_id))
+        S._lease(c, Auth(books), BOX, "r1")
+        approval = c.execute("SELECT approval_id FROM email_sends WHERE id=?", (send_id,)).fetchone()[0]
+        assert approval and [(e["approval_id"], e["send_id"]) for e in delivery.pending(c)] == [(approval, send_id)]
+
+
 def test_no_bookkeeper_mailbox_refuses_the_reminder_at_planning_and_uses_no_stage(books):
     with books.transaction() as c:
         iid = _sent_invoice(c)
@@ -162,13 +369,16 @@ def test_a_failed_send_raises_one_needs_you_and_a_retry_that_delivers_clears_it(
         assert [item["approval_id"] for item in delivery.pending(c)] == [send_id]
         for reason in ("mail send failed: 550 no such user", "mail send failed: 550 again"):
             report = act(
-                c, BOT, "invoice_delivery", {"invoice_id": iid, "stage": 7, "delivered": False, "reason": reason}
+                c, BOT, "invoice_delivery", {"invoice_id": iid, "stage": FINAL, "delivered": False, "reason": reason}
             )
             assert report.status == "committed", report
         titles = [r[0] for r in c.execute("SELECT title FROM tasks WHERE title LIKE '%not sent%'")]
         assert len(titles) == 1, titles
         assert [item["approval_id"] for item in delivery.pending(c)] == [send_id]  # the same approval; nothing remade
-        assert act(c, BOT, "invoice_delivery", {"invoice_id": iid, "stage": 7, "delivered": True}).status == "committed"
+        assert (
+            act(c, BOT, "invoice_delivery", {"invoice_id": iid, "stage": FINAL, "delivered": True}).status
+            == "committed"
+        )
         assert tuple(
             c.execute(
                 "SELECT delivered_at IS NOT NULL, delivery_reason FROM fin_invoice_reminders WHERE invoice_id=?", (iid,)
@@ -326,7 +536,7 @@ def test_a_reminder_asked_for_asks_again_when_a_partial_payment_changes_its_text
     with books.transaction() as c:
         iid = _sent_invoice(c)
         _mailbox(c)
-        asked = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": 7})
+        asked = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": FINAL})
         assert asked.status == "needs_approval", asked
         assert act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "amount": 10_000}).status == "committed"
         give(c, OWNER, asked.approval_id)
@@ -341,7 +551,7 @@ def test_a_reminder_asked_for_asks_again_when_the_sending_mailbox_changes(books)
     with books.transaction() as c:
         iid = _sent_invoice(c)
         _mailbox(c)
-        asked = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": 7})
+        asked = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": FINAL})
         assert asked.status == "needs_approval", asked
         _mailbox(c, box=OTHER_BOX)
         give(c, OWNER, asked.approval_id)
@@ -359,7 +569,7 @@ def test_a_reminder_is_checked_against_its_due_date_again_when_it_is_approved(bo
     with books.transaction() as c:
         iid = _sent_invoice(c)
         _mailbox(c)
-        asked = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": 7})
+        asked = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": FINAL})
         assert asked.status == "needs_approval", asked
         c.execute("UPDATE fin_invoices SET due_date=? WHERE id=?", (due, iid))
         give(c, OWNER, asked.approval_id)

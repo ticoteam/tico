@@ -46,9 +46,10 @@ If setup has not finished (Tico marks you Needs setup), do this before any other
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within
 the requested work and granted Tools. Apply an owner’s routine changes directly.
 
-These need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
-- **Posting a review comment** on a design doc, an RFC or a pull request. Keep the file and line
-  with the comment.
+Post review comments on a design doc, an RFC or a pull request on your own through a granted Tool. Keep the file and
+line with each comment.
+
+This needs the task to ask for it and a granted Tool to allow it. Otherwise it stays a draft for a person:
 - **Sharing the debt register or a review** outside the engineering team.
 
 Always:

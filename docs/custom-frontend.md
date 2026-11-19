@@ -283,6 +283,7 @@ data: {"seq": 4121, "run_id": "a1", "conversation_id": "c1", "bot_id": "ops", "o
 | `bots` | `bot` and `status`, as `GET /api/v2/status` lists it |
 | `needs` | your own Needs-you `count` and `items`, as `GET /api/v2/needs-you`, whenever anything on it may have moved |
 | `letters` | `id` and `letter`, as `GET /api/v2/letters/{id}` shows it; replace that row. `{id, gone:true}` removes a row after access is lost. Source access changes above `FAN_CAP` coalesce to `{invalidate:true}`: clear held rows and re-read the paged list once. Other letter events never re-read the list. |
+| `screen` | `id`, `action`, `input` and `done`: an action from `contracts/screen-actions.json` your Assistant asks your open app to do (`done: true`: the change is already made, only show it). Sent to your own streams only, and only while the Assistant waits, up to 3 seconds. One tab does it and reports `POST /api/v2/screen-actions/{id}/result` with `{"ok": true, "did": "<what it did>"}` or `{"ok": false, "error": "<why>"}`; another person's report, a second one or a late one is a `404`. |
 
 - **Only what you may read is sent.** A private task, a thread you are not in, or a bot whose activity you may
   not read never shows up, not even as a number. Bots cannot open the stream (`403`).

@@ -1778,6 +1778,35 @@ def test_a_persons_plans_list_in_use_first_across_tools(api):
     assert by[chatgpt]["order"] == by[claude]["order"] == 1
 
 
+def test_each_subscription_lists_the_bots_it_serves_and_marks_those_that_only_fall_back_to_it(api):
+    """The Agents screen's faces on a subscription row: the bots on the computers given it whose turns run its runtime,
+    one that reaches it only through its named fallback marked as such. One that needs reconnecting still lists the
+    bots it stopped; one given nowhere lists none."""
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    on(api, "cpo", "codex", "gpt-6.2-sol")
+    m = machine(api)
+    assign(api, m, "cpo")
+    plan, spare = add(api, name="Plan A")["id"], add(api, secret=OTHER, name="Plan B")["id"]
+    chatgpt = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    give(api, m, "claude", plan)
+    give(api, m, "codex", chatgpt)
+    with api.app.state.store.read() as c:
+        ops, cpo = H.resolve_bot(c, "ops")["id"], H.resolve_bot(c, "cpo")["id"]
+
+    def agents():  # the company's other bots share the computer; these two stand for them
+        return {s["id"]: {a["id"]: a["fallback"] for a in s["agents"] if a["id"] in (ops, cpo)} for s in listed(api)}
+
+    assert agents() == {plan: {ops: False}, spare: {}, chatgpt: {cpo: False}}
+    with api.app.state.store.transaction() as c:
+        config = BS.read(c, "cpo")
+        config["fallback"] = {"harness": "claude", "model": "claude-sonnet-5-5"}
+        BS.write(c, "cpo", config)
+        MS._status(c, plan, "needs_reconnect", "expired")
+    assert agents()[plan] == {ops: False, cpo: True}
+
+
 def test_a_chatgpt_plan_added_with_no_name_takes_its_login_email(api):
     """A plan added with no name is named for its account where Tico knows it: a ChatGPT login's email. A Claude token
     names none, so it is named for its plan."""

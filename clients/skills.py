@@ -39,8 +39,28 @@ MAX_PATH = 200
 MAX_DESCRIPTION = 1024
 SKIP_FILES = {".DS_Store"}  # Finder's noise, never part of a skill
 SKIP_DIRS = {"__pycache__"}
+# A skill's job function, its main tag (`metadata.function` in SKILL.md). `tico` is working inside Tico itself rather
+# than a business function. Any other value is kept as written and filed under OTHER, as is a skill with none.
+FUNCTIONS = (
+    "tico",
+    "legal",
+    "marketing",
+    "growth",
+    "sales",
+    "customers",
+    "finance",
+    "product",
+    "engineering",
+    "people",
+    "operations",
+    "hardware",
+    "data",
+    "security",
+)
+OTHER = "other"
 
 _BLOCK = re.compile(r"^([A-Za-z_][\w-]*):\s*(.*)$")
+_NESTED = re.compile(r"^\s+([A-Za-z_][\w-]*):\s*(.*)$")
 
 
 class SkillError(Exception):
@@ -89,6 +109,58 @@ def frontmatter(text):
             value = value[1:-1]
         out[key] = value
     return out if closed else {}
+
+
+def _plain(value):
+    value = value.strip()
+    if len(value) >= 2 and value[0] in "'\"" and value[-1] == value[0]:
+        return value[1:-1]
+    return value
+
+
+def metadata(text):
+    """The `metadata:` map of a SKILL.md frontmatter ({} when it has none): each `key: value` directly under a top-level
+    `metadata:` (indented as its first key is; a deeper line belongs to a nested map and is not one), a `[a, b]` value as
+    the list of its items."""
+    lines = (text or "").splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    out, inside, depth = {}, False, None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return out
+        if not line.strip():
+            continue
+        if line[:1] in (" ", "\t"):
+            indent = len(line) - len(line.lstrip())
+            depth = indent if inside and depth is None else depth
+            match = _NESTED.match(line) if inside and indent == depth else None
+            if match:
+                value = match.group(2).strip()
+                if value.startswith("[") and value.endswith("]"):
+                    out[match.group(1)] = [_plain(item) for item in value[1:-1].split(",") if item.strip()]
+                else:
+                    out[match.group(1)] = _plain(value)
+            continue
+        inside, depth = line.rstrip() == "metadata:", None
+    return {}
+
+
+def function_of(files):
+    """The job function SKILL.md's frontmatter names (`metadata.function`), as written, or None when it names none."""
+    for item in files:
+        if item["path"] == "SKILL.md":
+            value = metadata(item["content"]).get("function")
+            if isinstance(value, list):
+                value = value[0] if value else ""
+            return str(value or "").strip()[:80] or None
+    return None
+
+
+def function_group(value):
+    """The function a skill is listed under: one of FUNCTIONS, else OTHER (an unknown value, or none)."""
+    word = str(value or "").strip().lower()
+    return word if word in FUNCTIONS else OTHER
 
 
 def description_of(files):

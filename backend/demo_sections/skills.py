@@ -13,8 +13,20 @@ from ..store import H
 CARA, BEN = "demo-cara", "demo-ben"
 
 
+# Each skill's job function, its main tag on Library › Skills (`metadata.function` in SKILL.md).
+FUNCTIONS = {
+    "refund-check": "customers",
+    "calibration-redo": "customers",
+    "release-notes-writer": "product",
+    "weekly-spend": "marketing",
+    "invoice-match": "finance",
+    "lead-enrich": "sales",
+}
+
+
 def _md(name, description, body):
-    return f"---\nname: {name}\ndescription: {description}\n---\n\n{body}\n"
+    meta = f"metadata:\n  function: {FUNCTIONS[name]}\n" if name in FUNCTIONS else ""
+    return f"---\nname: {name}\ndescription: {description}\n{meta}---\n\n{body}\n"
 
 
 SKILLS = [

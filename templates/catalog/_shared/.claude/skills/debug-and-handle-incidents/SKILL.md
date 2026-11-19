@@ -45,8 +45,9 @@ meanwhile.
 1. What are our severity levels, how fast do we respond and how often do we update? Default: the table in
    `references/updates.md`.
 2. Where do customers hear about incidents, and who approves what they are told? Default: the status page if there is
-   one, otherwise replies through Support only. The bot drafts; the owner gives an OK to anything sent to customers.
-   Updates inside the team go out without asking.
+   one, otherwise replies through Support only. Factual updates (what is affected, what was done, the next update
+   time) go out on their own under the sending policy. The owner gives an OK to anything stating a cause, fault,
+   breach or compensation. Updates inside the team go out without asking.
 3. What may a bot do by itself to reduce harm? Default: turn a feature flag off, pause a job or a Routine (scheduled
    bot work), restart a service, and roll back a release marked safe to roll back. Not without an OK: delete or rewrite data, change
    customer records, rotate credentials other systems use.
@@ -73,8 +74,9 @@ meanwhile.
    (logs, error reports, support messages), giving who, how many and since when. Write "not known yet" for anything
    not counted; never estimate in an update. (Skill `count-impact-from-sources` if your role has it.)
 4. **Send the first update inside the response time.** Use the template in `references/updates.md`: what is
-   happening, who is affected, what we are doing, when the next update comes. Post it on the task. Draft the
-   customer wording as a second comment and ask for the OK:
+   happening, who is affected, what we are doing, when the next update comes. Post it on the task. Send the customer
+   update yourself under the sending policy when it states only those facts. When it states a cause, fault, breach or
+   compensation, draft it as a second comment and ask for the OK:
    `tico task ask <id> --to <owner> --kind ok "Send this incident update to customers?" --version N`. Then keep the
    rhythm: send the next update at the promised time even when there is nothing new. (Skills
    `set-severity-and-owner` and `write-a-customer-update` if your role has them, for a single customer's case.)
@@ -156,10 +158,11 @@ meanwhile.
 
 ## Autonomy
 
-Alone: open the incident, set severity, post team updates, take the mitigations listed in `knowledge/engineering.md`,
-investigate, fix, release through the normal path, give the all clear, write the review and file its actions.
+Alone: open the incident, set severity, post team updates, send factual customer updates under the sending policy,
+take the mitigations listed in `knowledge/engineering.md`, investigate, fix, release through the normal path, give the
+all clear, write the review and file its actions.
 
-Needs an OK: anything sent to customers; any mitigation that deletes or rewrites data, changes customer records or
+Needs an OK: a customer message that states a cause, fault, breach or compensation; any mitigation that deletes or rewrites data, changes customer records or
 rotates shared credentials; a hotfix; the fourth fix attempt after three failures; any notice about exposed personal
 data or a security breach.
 

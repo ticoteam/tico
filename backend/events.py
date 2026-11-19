@@ -25,6 +25,8 @@ signed-in person as they commit, filtered to what that person may read:
   (`GET /api/v2/needs-you?ids=`). The stream keeps the marks of the list it last described, from its start; a page
   whose held version is not `base` reads the list whole.
   Without `needs=changes` a page gets the whole list, as before, so an older page keeps working.
+- `screen`: an action the person's Assistant asks their open app to do (backend/screen_actions.py), to that person's own
+  streams only, and only while the Assistant still waits on the app's answer.
 
 `after` (or the browser's `Last-Event-ID`) resumes from the last change number seen, so a
 reconnect misses nothing; a client further behind than the log keeps (24 h), or more than BACKLOG_MAX changes behind
@@ -83,6 +85,7 @@ TOPICS = (
     "letters",
     "calendar",
     "setup",
+    "screen",
 )
 AGENT_TOPICS = ("messages", "threads")  # what an external agent's standing token may follow (outside a turn)
 KEEP_HOURS = 24  # a client away longer than this reads in full
@@ -3087,7 +3090,7 @@ class _Snapshot:
                 or places
                 and topic == "presence"
                 and row["ref"] not in places
-                or topic == "needs"
+                or topic in ("needs", "screen")
                 and row["subject_id"] != who.actor
             ):
                 continue
@@ -3125,9 +3128,10 @@ class _Snapshot:
             if values:
                 clauses.append("(topic<>? OR ref IN (%s))" % ",".join("?" * len(values)))
                 args += [topic, *values]
-        if "needs" in topics:
-            clauses.append("(topic!='needs' OR subject_id=?)")
-            args.append(who.actor)
+        for own in ("needs", "screen"):
+            if own in topics:
+                clauses.append(f"(topic!='{own}' OR subject_id=?)")
+                args.append(who.actor)
         return _change_rows(self.c, clauses, args, limit)
 
 
@@ -3205,6 +3209,7 @@ def read(
     places=(),
     watch=None,
     compact_runs=False,
+    screens=None,
 ):
     """What `who` may be sent after change `after`: (events, cursor, reset, more). Each event is
     (seq, topic, data). `cursor` moves past every row read, sent or not, so a resume starts after
@@ -3235,6 +3240,7 @@ def read(
             places=places,
             watch=watch,
             compact_runs=compact_runs,
+            screens=screens,
         )
     finally:
         if c.in_transaction:
@@ -3264,8 +3270,10 @@ def read_in(
     places=(),
     watch=None,
     compact_runs=False,
+    screens=None,
 ):
-    """`read` inside a transaction its caller holds, with that transaction's _Snapshot."""
+    """`read` inside a transaction its caller holds, with that transaction's _Snapshot. `screens`
+    (backend/screen_actions.py) holds what a `screen` change asks; without it none is sent."""
     newest, first = snapshot.newest, snapshot.first
     floor = (first - 1) if first is not None else newest
     if after > newest or after < floor or newest - after > BACKLOG_MAX:
@@ -3353,6 +3361,11 @@ def read_in(
     for row in by_topic.get("setup", []):
         # Which setup area may have moved, never what is in it: the page reads GET /api/v2/setup/gaps again.
         picked.append(("setup", row, {"area": row["subject_id"]}))
+    for row in by_topic.get("screen", []):
+        # Only while the Assistant still waits on it: a stream that comes back later never replays an old move.
+        asked = screens.event(row["ref"], who.actor) if screens is not None else None
+        if asked is not None:
+            picked.append(("screen", row, asked))
     for topic in ('meeting_items', 'presence'):
         for row in by_topic.get(topic, []):
             picked.append(
@@ -3530,6 +3543,10 @@ EVENTS_DESCRIPTION = (
     "- `setup`: `area` (market, strategy, goals, org, tools or budget) when a write may have opened or closed that "
     "setup gap; read `GET /api/v2/setup/gaps` again.\n"
     "- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\n"
+    "- `screen`: `id`, `action`, `input` and `done`, an action from contracts/screen-actions.json the person's "
+    "Assistant asks this person's open app to do (`done`: the change is made, only show it); to that person's own "
+    "streams only, and only while the Assistant waits. One tab does it and reports on "
+    "`POST /api/v2/screen-actions/{id}/result`.\n"
     "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
     "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), "
     "`event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. "
@@ -3544,9 +3561,12 @@ EVENTS_ANSWER = {
 
 
 def install(app, store, auth, task_views, task_view):
+    from . import screen_actions
+
     doorbell = bell(store)
     shared = hydrated(store)
     served = rounds(store)
+    on_screen = screen_actions.screens(store)
 
     @app.get("/api/v2/runs/{run_id}/steps/{seq}")
     def run_output_step(request: Request, run_id: str, seq: int):
@@ -3657,6 +3677,7 @@ def install(app, store, auth, task_views, task_view):
                 places=places,
                 watch=watch,
                 compact_runs=output == "compact",
+                screens=on_screen,
             )
 
         def newest():
@@ -3670,6 +3691,8 @@ def install(app, store, auth, task_views, task_view):
         async def generate():
             nonlocal cursor
             leave = doorbell.reader(store)
+            # The person's app is open while a stream of theirs follows `screen` (backend/screen_actions.py).
+            unfollow = on_screen.follow(who.actor) if "screen" in wanted and not agent else None
             every, beat = keepalive_seconds(store), Beat(check)
             try:
                 yield "retry: 1000\n\n"
@@ -3764,6 +3787,8 @@ def install(app, store, auth, task_views, task_view):
                         quiet_since = time.monotonic()
             finally:
                 leave()
+                if unfollow:
+                    unfollow()
 
         return StreamingResponse(
             generate(), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"}

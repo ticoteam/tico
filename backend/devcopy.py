@@ -311,6 +311,9 @@ EMPTY = (
     "heartbeat_steps",
     "heartbeat_beats",
     "heartbeat_states",
+    # Litestream's own bookkeeping, present in a database restored from its replica: the copy is not replicated.
+    "_litestream_lock",
+    "_litestream_seq",
 )
 # Finance's own tables are classified in finance/actions.py (DEV_COPY_KEPT, and DEV_COPY_EMPTIED which Finance empties
 # in its scrub), so no Finance table name is written here.
@@ -352,6 +355,8 @@ HISTORY = {
     "entity_lookups": "created_at",
     # CI build time (backend/ci_runs.py): the repository's workflow runs and builder permits, priced into Finance.
     "ci_runs": "created_at",
+    # The pages each person opened (backend/page_history.py): kept 30 days anyway.
+    "page_visits": "created_at",
 }
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = (
@@ -722,7 +727,7 @@ def quote(name):
 
 
 def emptied(c, keep_automations=False):
-    """The tables this module empties that exist in `c`: EMPTY and every unclassified one (Litestream's included);
+    """The tables this module empties that exist in `c`: EMPTY and every unclassified one;
     with `keep_automations`, not the definitions in AUTOMATIONS."""
     present, kept = tables(c), AUTOMATIONS if keep_automations else ()
     return [t for t in EMPTY if t in present and t not in kept] + unclassified(c, keep_automations)
@@ -909,6 +914,10 @@ def prune(c, days, keep_automations=False):
         c.execute(
             "UPDATE attempts SET token_hash='devcopy-revoked:'||id, lease_until=coalesce(finished_at,created_at) "
             "WHERE job_id IS NOT NULL"
+        )
+        # A run with no job can still hold a token (a chat run's, or one older rows kept): it goes too.
+        c.execute(
+            "UPDATE attempts SET token_hash='devcopy-revoked:'||id WHERE job_id IS NULL AND token_hash IS NOT NULL"
         )
     # A row that points at one just removed goes too (attempt_events of an attempt, oauth_grants of a token):
     # repeated until no foreign key is broken by what this run removed.

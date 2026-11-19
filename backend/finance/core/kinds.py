@@ -295,10 +295,29 @@ def default_gate(org: Org, actor: str, kind: str) -> Gate:
     if actor in org.bots and kind in ("card_save", "card_unsave"):
         return Gate("needs_approval", "finance_admin", "default:bot-card-vendor")
     if actor in org.bots and kind in ("invoice_remind", "invoice_send"):
-        # An invoice email goes out under a Tico send approval a person gives (finance/delivery.py). A rule can make a
-        # gate stricter but never looser (gating.stricter), so this ask stands: a bot's email waits for a finance admin.
+        # An invoice email, or a reminder at a late stage (remind_gate), goes out under a Tico send approval a person
+        # gives (finance/delivery.py). A rule can make a gate stricter but never looser (gating.stricter), so this ask
+        # stands: a bot's email waits for a finance admin.
         return Gate("needs_approval", "finance_admin", "default:bot-invoice-email")
     return ALLOW
+
+
+# Tico's fixed reminder at these stages (days late) needs no Finance OK, from a bot or a person: it states the invoice's
+# own facts and no consequence, and goes out under the company's sending policy (delivery.issue). From FINAL_DAYS_LATE
+# on, an invoice is at the final notice: any reminder then, whatever stage was asked (a day-30 task first run on day
+# 65), keeps a bot's ask of a finance admin and its email waits for a person's OK.
+EARLY_REMIND_STAGES = (1, 7, 30)
+FINAL_DAYS_LATE = 60
+
+
+def remind_held(stage: int, days_late: int) -> bool:
+    """Whether a reminder's email waits for a person's OK: a late stage, or an invoice already at the final notice."""
+    return stage not in EARLY_REMIND_STAGES or days_late >= FINAL_DAYS_LATE
+
+
+def remind_gate(org: Org, actor: str, stage: int, days_late: int) -> Gate:
+    """invoice_remind's default gate: none for an early reminder, else default_gate's (a bot asks a finance admin)."""
+    return default_gate(org, actor, "invoice_remind") if remind_held(stage, days_late) else ALLOW
 
 
 # ------------------------------------------------------------------------------------------------ payload shapes
@@ -958,7 +977,10 @@ WORDS: dict[str, str] = {
     "vendor_unmerge": "Undo a vendor merge: each name goes back where it was, and archived contacts come back.",
     "invoice_create": "Draft an invoice.",
     "invoice_send": "Send an invoice: it posts to receivables, and returns its email (text, recipients, send approval).",
-    "invoice_remind": "Remind the customer an unpaid invoice is late (once per stage), by email under a send approval.",
+    "invoice_remind": (
+        "Remind the customer an unpaid invoice is late (once per stage), by email: the 1, 7 and 30 day stages under the "
+        "sending policy, the 60 and 90 day ones under a send approval."
+    ),
     "invoice_delivery": "Report whether the Finance Owner's invoice email went out: delivered, or why it did not.",
     "invoice_record_payment": "Record money received on an invoice (part or all).",
     "invoice_write_off": "Write off what a customer will not pay.",

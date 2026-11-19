@@ -171,7 +171,7 @@ Ask for an OK, once, with the page attached:
 - a new bot you would not manage, one over the weekly limit, or one above the cost ceiling;
 - opening any contractor or human search, and publishing a job post (it leaves the team and is public);
 - each decision about a person: advance, reject, offer. You then send the message the person approved;
-- any spend above your budget, and any paid Tool the team does not have;
+- any spend above your budget, including a new paid Tool;
 - anything signed.
 
 ## Output

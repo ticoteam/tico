@@ -2,7 +2,7 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
-from clients.commands import computer_upkeep, connections, pipelines, tools_admin
+from clients.commands import computer_upkeep, connections, page_history, pipelines, tools_admin
 from clients.commands import org as hubtools_org
 
 from clients.commands._registry import TOOLS, tool
@@ -252,6 +252,7 @@ AUDIENCE = {
     "tico_assistant_read": PEOPLE,
     "tico_assistant_send": PEOPLE,
     "tico_needs_you_show": HUMANS_AND_ASSISTANT,  # views.human_only: a person's own list
+    "tico_screen_show": HUMANS_AND_ASSISTANT,  # views.human_only: the person's own open app
     "tico_assistant_change_list": HUMANS_AND_ASSISTANT,  # what the person's Assistant did for them
     "tico_assistant_change_restore": HUMANS_AND_ASSISTANT,  # taking one back, as the person
     # A person's own layers (backend/learned.py): the person, or their own chat's turn; never a bot of its own.
@@ -311,7 +312,7 @@ AUDIENCE = {
 
 
 # Modules that keep their own AUDIENCE (and SHELL_ONLY) lines next to their tools.
-for _module in (hubtools_org, connections, computer_upkeep, pipelines, tools_admin):
+for _module in (hubtools_org, connections, computer_upkeep, page_history, pipelines, tools_admin):
     AUDIENCE.update(_module.AUDIENCE)
 SHELL_ONLY |= pipelines.SHELL_ONLY
 

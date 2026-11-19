@@ -392,6 +392,26 @@ def bot_suggest_to_original(api, args):
 
 
 @tool(
+    "tico_skill_list",
+    "Every skill on Library › Skills: the company's directory and the skills Tico ships with its roles (`source`: "
+    "directory or tico), each with its job function (`metadata.function` in SKILL.md). `function` keeps one function "
+    "(tico, legal, marketing, growth, sales, customers, finance, product, engineering, people, operations, hardware, data, "
+    "security, or other for any other value or none); `q` keeps the skills whose name, description or function has every "
+    "word. Answers {skills, functions: [{function, count}]}, the counts after `q`. Read-only.",
+    {
+        "q": _s("Words to match in the name, description or function"),
+        "function": _s("One job function, or other"),
+    },
+)
+def skill_list(api, args):
+    words = args.get("q")
+    if isinstance(words, list):  # `tico skill list legal review`: the words as typed
+        words = " ".join(str(word) for word in words)
+    query = {"q": str(words).strip() if words else None, "function": args.get("function") or None}
+    return api.get("skills", **{k: v for k, v in query.items() if v})
+
+
+@tool(
     "tico_skill_copy",
     "Copy one skill (skills/<skill>/) from a bot's repository into other bots' repositories, a commit in each, as the person "
     "who asked you (read on the source; they manage each target). A target that already has a different skill of that name is left "

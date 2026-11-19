@@ -460,6 +460,7 @@ def parser():
     from clients.commands import calls, webhooks
     from clients.commands import contacts as contacts_commands
     from clients.commands import products as products_commands
+    from clients.commands import page_history as page_history_commands
     from clients.commands import computer_upkeep, computers, org as org_commands, pipelines as pipeline_commands
     from clients.commands import gateway as gateway_commands, goals as goal_commands
     from clients.commands import admin as admin_commands, content as content_commands, task_work as task_work_commands
@@ -1252,8 +1253,12 @@ def parser():
     s.add_argument("--confirm", metavar="ORG/NAME", help="the exact preview target, instead of typing it at a terminal")
     s.set_defaults(fn="repo product-create")
     skill = sub.add_parser(
-        "skill", help="a bot's skills: copy one to other bots, or propose one to the company's Skills directory"
+        "skill", help="skills: list and search them, copy one to other bots, or propose one to the company's directory"
     ).add_subparsers(dest="sub")
+    s = skill.add_parser("list", help="every skill on Library › Skills, by job function and search words")
+    s.add_argument("q", nargs="*", metavar="WORD", help="words to match in the name, description or function")
+    s.add_argument("--function", metavar="F", help="one job function, like legal or finance; other for the rest")
+    s.set_defaults(fn="skill list")
     s = skill.add_parser("copy", help="copy skills/<skill>/ from one bot into others, a commit in each (BotOps)")
     s.add_argument("skill", help="the skill's folder name under skills/")
     s.add_argument("--from", dest="bot", required=True, metavar="BOT", help="the bot that has the skill")
@@ -1310,6 +1315,7 @@ def parser():
     cli_spec.add(sub, finance.CLI)  # tico finance: clients/commands/finance.py
     # Contacts (backend/entities/routes.py): every reader sees what the read rule lets it see; writes name their actor.
     cli_spec.add(sub, products_commands.PRODUCTS)  # tico products: clients/commands/products.py (backend/products.py)
+    cli_spec.add(sub, page_history_commands.PAGE_HISTORY)  # tico page-history: clients/commands/page_history.py
     cli_spec.add(sub, contacts_commands.CONTACTS)  # tico contacts: clients/commands/contacts.py (not attribute add)
     attribute = (
         _group_subparsers(sub, "contacts")
