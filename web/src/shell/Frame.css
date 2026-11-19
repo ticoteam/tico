@@ -25,3 +25,11 @@
 .shell-handle:focus-visible{outline:var(--focus-ring);outline-offset:-5px}
 body.is-dragging{cursor:col-resize;user-select:none;-webkit-user-select:none}
 body.is-dragging .shell-place{pointer-events:none}
+
+/* one quiet line over every screen while Tico support is signed in (SupportLine): greys only */
+.shell-note{flex:none;display:flex;align-items:center;justify-content:center;gap:var(--s-2);min-height:var(--s-6);margin:0;padding:0 var(--s-4);font-size:var(--t-sm);color:var(--muted);background:var(--ground)}
+.shell-note>a{color:var(--ink-2);text-decoration:underline}
+.shell-note>a:hover{color:var(--ink)}
+/* on a phone the cards fill the screen: the line stands over their top, and the page's head starts under it */
+html:has(.ph) .shell-note{position:fixed;left:0;right:0;top:env(safe-area-inset-top,0px);z-index:var(--z-dock)}
+.shell-col:has(>.shell-note) .ph{--sat:calc(env(safe-area-inset-top,0px) + var(--s-6))}

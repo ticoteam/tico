@@ -3,6 +3,7 @@ import { queryClient } from '@/data/query-client';
 import { takeHelperCode } from '@/features/library/exports';
 import { newAddressFor } from '@/oldAddress/map';
 import { routeTree } from '@/routeTree.gen';
+import { PageFault } from '@/shell/PageFault';
 
 const BASE = '/next';
 
@@ -30,6 +31,8 @@ export const router = createRouter({
   // the cache already holds what a hover preloaded; the router need not keep its own copy
   defaultPreloadStaleTime: 0,
   scrollRestoration: true,
+  // a page that breaks while drawing shows its fault in its own place; the menu and Tico stay
+  defaultErrorComponent: PageFault,
 });
 
 declare module '@tanstack/react-router' {

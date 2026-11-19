@@ -37,6 +37,9 @@ export interface PhoneCardsProps {
   handle?: boolean;
   /** Names for the chat and call cards, read by screen readers ("Finance Owner", "Seed box pricing"). */
   labels?: { chat?: string; call?: string };
+  /** The chat belongs to the page (a task's, an agent's own): it rests as a lip, so the page's head can be used, and
+      comes up only when the address names a chat (`chat=`) or the person raises it. */
+  tucked?: boolean;
   onCardChange?: (card: PhoneCard) => void;
 }
 
@@ -78,18 +81,22 @@ type Drag = {
   samples: Sample[];
 };
 
-export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = {}, peek, handle = false, labels = {}, onCardChange }: PhoneCardsProps) {
+export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = {}, peek, handle = false, labels = {}, tucked = false, onCardChange }: PhoneCardsProps) {
+  const router = useRouter({ warn: false });
   // a chat that opens comes up; a call that starts takes over; either one ending tucks its card. An address that
-  // already names one (a shared link, a reload) opens on it.
+  // already names one (a shared link, a reload) opens on it. A page's own chat (`tucked`) waits as a lip unless the
+  // address names a chat.
   const second = call ? 'call' : chat ? 'chat' : null;
-  const [card, setCard] = useState<PhoneCard>(second ? 'chat' : 'none');
+  const named = () => /[?&]chat=/.test(router ? router.state.location.searchStr : window.location.search);
+  const comesUp = (s: typeof second) => s === 'call' || (s === 'chat' && (!tucked || named()));
+  const [card, setCard] = useState<PhoneCard>(() => (comesUp(second) ? 'chat' : 'none'));
   const root = useRef<HTMLDivElement>(null);
   const id = useId();
 
   const [seen, setSeen] = useState(second);
   if (seen !== second) {
     setSeen(second);
-    if (second === 'call' || (second === 'chat' && !seen)) setCard('chat');
+    if (second === 'call' || (second === 'chat' && !seen && comesUp(second))) setCard('chat');
     else if (card === 'chat') setCard('none');
   }
 
@@ -100,7 +107,6 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
   const label = { tico: 'Tico', menu: 'Menu', chat: second === 'call' ? (labels.call ?? 'Call') : (labels.chat ?? 'Chat') };
 
   // ---------- history, focus and the callback: everything that follows a change of card ----------
-  const router = useRouter({ warn: false });
   const was = useRef<PhoneCard>('none');
   const fromHistory = useRef(false);
   const navigating = useRef(false);
@@ -394,7 +400,10 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
 
   const cls = ['ph', second && 'has-chat', peeking && 'is-peek', handleMode && 'is-handle', back && 'is-back', second === 'call' && 'is-call'].filter(Boolean).join(' ');
   const nubOn = handleMode && slotOf(card) !== 'tico';
-  const away = (s: Slot) => (handleMode && !isUp(s)) || (slotOf(card) === 'tico' && s !== 'tico');
+  // a card that cannot be seen takes no focus: focusing it would scroll the stack and strand the cards mid-screen.
+  // Out of view: below the screen (no chat open, or the page holds the bottom), or under a raised card in front.
+  const away = (s: Slot) =>
+    (s === 'chat' && (!second || slotOf(card) === 'menu')) || (handleMode && !isUp(s)) || (slotOf(card) === 'tico' && s !== 'tico');
 
   const cardOf = (s: Slot, full: ReactNode, lip: ReactNode, act: ReactNode, extra?: ReactNode) => {
     const up = isUp(s);

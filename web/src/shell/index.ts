@@ -1,6 +1,9 @@
 export { Frame, foldSheet } from './Frame';
 export type { FrameProps } from './Frame';
 export { Sheet, SheetHead, useSheet } from './Sheet';
+export { PageFault } from './PageFault';
+export { SupportLine, type SupportSignIn } from './SupportLine';
+export { tabTitle } from './title';
 export type { SheetProps, SheetHeadProps, SheetControls } from './Sheet';
 export { Menu } from './Menu';
 export type { MenuProps, MenuTeam, MenuMate, MenuCompany, MenuCounts, MenuRowId } from './Menu';

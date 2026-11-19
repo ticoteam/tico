@@ -8,6 +8,7 @@ import { configQuery, directoryQuery, meQuery, recordVisit, useHeldCount, type A
 import { CallBar, CallSide, RingCard, TOGGLE_MUTE, isCallActive, useCall } from '@/features/calls/exports';
 import { FileViewerHost } from '@/features/library/exports';
 import { AssetRecovery, PlanLock } from '@/features/notices/exports';
+import { supportAccessQuery } from '@/features/settings/exports';
 import { FirstRun, StartScreen, useStartGate } from '@/features/start/exports';
 import { SUPPORT_CHAT, SupportChat, supportUnreadQuery } from '@/features/support/exports';
 import { flowQuery, pipelinesQuery, roadmapPipeline } from '@/features/tasks/exports';
@@ -30,6 +31,7 @@ import {
   Menu,
   Sheet,
   SheetHead,
+  SupportLine,
   arrangementFor,
   desktop,
   foldSheet,
@@ -147,6 +149,8 @@ function App() {
   // One stream, once the person is known and Tico's room is drawn (its follow then rides the first connection).
   const room = useQuery(ticoRoomQuery);
   const ready = signedIn && !room.isPending;
+  // Tico support signed in to the company: a quiet line on every screen (only those who may read it see it).
+  const letIn = useQuery({ ...supportAccessQuery, enabled: signedIn, retry: false });
   useEffect(() => {
     if (ready) startLive();
   }, [ready]);
@@ -209,6 +213,7 @@ function App() {
     <>
       {/* a call on another page shows its bar over the frame; the frame takes the rest of the window */}
       <div className="shell-col">
+        <SupportLine session={letIn.data?.active} />
         <CallBar />
         <Frame
           arrangement={callChat ? 'chat' : arrangement}

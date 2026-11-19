@@ -9,6 +9,7 @@ import { IconButton } from '@/kit/IconButton';
 import { C, layout, modeFor, press, specOf, type Arrangement, type ArrangementSpec, type Saved, type SheetId, type SheetLayout } from './layout';
 import { keepOne, useSheetMemory, withFold, withWidth, withoutWidth } from './memory';
 import { SheetContext, type SheetControls } from './Sheet';
+import { useTabTitle } from './title';
 import './Frame.css';
 import './desktop.css';
 
@@ -101,6 +102,7 @@ interface Placed {
 }
 
 function Sheets(p: FrameProps & { arr: Arrangement }) {
+  useTabTitle();
   const { width, mode } = useWindowMode();
   const lights = useDesktopInset();
   const [saved, update] = useSheetMemory();
@@ -298,9 +300,11 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
   if (mode === 'cards' || L.mode === 'cards' || !stretch) {
     // a call takes the screen in the chat's place (phone/notes.md)
     const call = p.arr === 'call';
-    // a teammate's own page: their page at the back, their chat the card that comes up over it
-    if (p.arr === 'agent' && p.widgets) return <PhoneCards page={p.widgets} tico={p.tico} menu={p.menu} chat={p.page} lips={p.lips} lipActs={p.lipActs} />;
-    return <PhoneCards page={call ? null : p.page} tico={p.tico} menu={p.menu} chat={call ? undefined : p.chat} call={call ? p.page : undefined} lips={p.lips} lipActs={p.lipActs} />;
+    // a teammate's own page: their page at the back, their chat the card over it. Theirs and a task's chat belong to
+    // the page: they wait as a lip, so the page's head is free, unless the address asks for the chat.
+    const tucked = p.arr === 'agent' || p.arr === 'task';
+    if (p.arr === 'agent' && p.widgets) return <PhoneCards page={p.widgets} tico={p.tico} menu={p.menu} chat={p.page} tucked lips={p.lips} lipActs={p.lipActs} />;
+    return <PhoneCards page={call ? null : p.page} tico={p.tico} menu={p.menu} chat={call ? undefined : p.chat} call={call ? p.page : undefined} tucked={tucked} lips={p.lips} lipActs={p.lipActs} />;
   }
 
   const st = find(stretch.id);

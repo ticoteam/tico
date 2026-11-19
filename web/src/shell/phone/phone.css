@@ -8,10 +8,11 @@
    State on .ph (set by hand, never by React):  data-drag="tico|menu|chat"  data-scrolling  data-typing="tico|menu|chat|page"
      style --c (0..1, lips drawn down)  --p (page set back)  --f (full content shown)  --kb  --vv-top  --dock-h */
 
-/* the document never scrolls (platforms.md 2.1) */
+/* the document never scrolls (platforms.md 2.1). The stack and its cards clip rather than hide: a hidden box still
+   scrolls when something in it takes focus, which strands every card mid-screen. */
 html:has(.ph),html:has(.ph) body{height:100%;overflow:hidden;overscroll-behavior:none}
 
-.ph{position:fixed;left:0;right:0;top:0;height:100dvh;overflow:hidden;background:var(--ground);isolation:isolate;color:var(--ink);overscroll-behavior:none;
+.ph{position:fixed;left:0;right:0;top:0;height:100dvh;overflow:clip;background:var(--ground);isolation:isolate;color:var(--ink);overscroll-behavior:none;
   --sat:env(safe-area-inset-top,0px);
   --sab:max(env(safe-area-inset-bottom,0px),8px);
   --lipT:58px;                /* Tico's lip */
@@ -85,7 +86,7 @@ html:has(.ph),html:has(.ph) body{height:100%;overflow:hidden;overscroll-behavior
 
 /* ---------- the cards in front of the page ---------- */
 .ph>.ly{position:absolute;left:env(safe-area-inset-left,0px);right:env(safe-area-inset-right,0px);top:var(--top);height:calc(100% - var(--top));
-  border-radius:var(--r-layer) var(--r-layer) 0 0;overflow:hidden;transform-origin:50% 0;
+  border-radius:var(--r-layer) var(--r-layer) 0 0;overflow:clip;transform-origin:50% 0;
   transform:translateY(var(--ty));transition:transform var(--card-dur) var(--card-ease);will-change:transform;
   box-shadow:var(--lift-2),0 -10px 26px -10px var(--up)}
 .ph>.ly:focus{outline:none}
