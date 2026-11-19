@@ -520,13 +520,27 @@ export const doneTasksQuery = (actor: string, since: string) => {
   });
 };
 
-/** Every open task, or every task done since `since`: a team page counts them by owner. */
-export const allTasksQuery = (since?: string) => {
-  const params: Record<string, string | number> = since ? { status: 'done', brief: 'true', updated_since: since, limit: 500 } : { status: 'open', brief: 'true', limit: 500 };
+/** An open-task page: a team page counts its rows by owner. */
+export const allTasksQuery = () => {
+  const params = { status: 'open', brief: 'true', limit: 500 };
   return queryOptions({
     queryKey: keys.tasks.list(params),
     queryFn: ({ signal }) => api.get<OwnTasks>(`/api/v2/tasks?${q(params)}`, { signal }),
   });
+};
+
+/** The server counts across all pages. Bound the owner filter so large teams fit within the API's value limit. */
+export const teamDoneCountQueries = (owners: ReadonlySet<string>, since: string) => {
+  const ids = [...owners].sort();
+  const batches = [];
+  for (let start = 0; start < ids.length; start += 100) {
+    const params = { status: 'done', brief: 'true', updated_since: since, limit: 1, counts: 'stage', owners: ids.slice(start, start + 100).join(',') };
+    batches.push(queryOptions({
+      queryKey: keys.tasks.list(params),
+      queryFn: ({ signal }) => api.get<OwnTasks & { counts: { total: number } }>(`/api/v2/tasks?${q(params)}`, { signal }),
+    }));
+  }
+  return batches;
 };
 
 /* ---------------------------------------------------------------- its own lists (task tabs) */
@@ -727,13 +741,19 @@ export function setAgentModel(slug: string, pick: ModelPick) {
 /** Where its conversation compacts, in tokens (POST /api/v2/bots/{bot}/compact-at); null is its model's default. */
 export const COMPACT_AT = [100000, 150000, 200000, 250000, 300000, 400000, 500000, 600000, 700000, 800000, 900000, 1000000] as const;
 
-export function setCompactAt(slug: string, compactAt: number | null) {
-  return write({
+export async function setCompactAt(slug: string, compactAt: number | null) {
+  const expected = revisionOf(slug);
+  const result = await write({
     key: agentQuery(slug).queryKey,
     optimistic: (d: AgentDetail | undefined) => d && { ...d, compact_at: compactAt },
     send: (idempotencyKey) =>
-      api.post(`/api/v2/bots/${at(slug)}/compact-at`, { compact_at: compactAt, expected_revision: revisionOf(slug) }, { idempotencyKey }),
+      api.post<{ revision: number }>(`/api/v2/bots/${at(slug)}/compact-at`, { compact_at: compactAt, expected_revision: expected }, { idempotencyKey }),
+    settle: (d: AgentDetail | undefined, { revision }) => d && { ...d, revision: Math.max(d.revision ?? 0, revision) },
   });
+  queryClient.setQueryData(agentsQuery.queryKey, (rows) =>
+    rows?.map((row) => row.slug === slug && (row.revision ?? 0) < result.revision ? { ...row, revision: result.revision } : row),
+  );
+  return result;
 }
 
 /** Pause or resume: against the pause state's revision. */

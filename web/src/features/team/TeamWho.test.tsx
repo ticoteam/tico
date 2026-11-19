@@ -82,6 +82,23 @@ describe('Team pages', () => {
     expect(screen.getByText('Brand')).toBeTruthy();
   });
 
+  it('counts completed work across every page for the team and its subteams', async () => {
+    const reads: URLSearchParams[] = [];
+    serve((url) => {
+      if (!url.startsWith('/api/v2/tasks?')) return;
+      const params = new URLSearchParams(url.split('?')[1]);
+      if (params.get('status') !== 'done') return;
+      reads.push(params);
+      return { status: 200, body: { tasks: [{ id: 't1', owner_id: ana.id }], counts: { total: 612 } } };
+    });
+    show(<TeamWho who="design" />, '/team/design');
+    expect(await screen.findByText('612')).toBeTruthy();
+    expect(reads[0]?.get('owners')?.split(',')).toEqual([ana.id, bo.id, pat.id]);
+    expect(reads[0]?.get('counts')).toBe('stage');
+    expect(reads[0]?.get('limit')).toBe('1');
+    expect(reads[0]?.get('updated_since')).toBeTruthy();
+  });
+
   it('moves a teammate out at once and puts them back when the server refuses', async () => {
     let refuse!: () => void;
     serve((_url, method) => (method === 'PATCH' ? new Promise<Reply>((r) => (refuse = () => r({ status: 403, body: { detail: 'no' } }))) : undefined));
@@ -160,6 +177,15 @@ describe('Team pages', () => {
     serve(() => undefined);
     show(<TeamWho who="sales" />, '/team/sales');
     expect(await screen.findByRole('heading', { name: 'No teammates yet' })).toBeTruthy();
+  });
+
+  it('shows open seats even when a team has no teammates yet', async () => {
+    serve((url) =>
+      url === '/api/humans' ? { status: 200, body: { seats: [{ id: 's1', title: 'Account manager', team: 'g3' }] } } : undefined,
+    );
+    show(<TeamWho who="sales" />, '/team/sales');
+    expect(await screen.findByText('Account manager')).toBeTruthy();
+    expect(screen.getByText('Open seat')).toBeTruthy();
   });
 
   it('says so for an address that names no one', async () => {
