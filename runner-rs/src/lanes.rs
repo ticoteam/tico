@@ -477,6 +477,9 @@ mod tests {
                 &[crate::claude_login::CAPABILITY, PLAN_SWITCH_RESUME][..],
             ),
             ("0.6.71", &[VOICE_SESSIONS][..]),
+            ("0.6.76", &[crate::fetch_fresh::PUSH_HINTS][..]),
+            // Merged after 0.6.79 and before voice_inputs_v1, which only today's hub (current) knows.
+            ("0.6.79+", &[VOICE_SESSION_RESUME][..]),
         ] {
             known.extend(added.iter().map(|c| c.to_string()));
             found.push((release.to_string(), known.clone()));
