@@ -43,6 +43,7 @@ export function PersonPage({ actor, settings }: PersonPageProps) {
         on={!!settings}
         aria-pressed={!!settings}
         onClick={() => void open.run({ who: id, ...(settings ? {} : { tab: 'settings' }) })}
+        data-phone
       />
     ),
   };
@@ -128,7 +129,11 @@ function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: He
             {rest.map((t) => (
               <OwnRow key={t.id} task={t} me={me?.id} />
             ))}
-            {doneN > 0 && <Fold label="Done" text={`${doneN} this month`} />}
+            {doneN > 0 && (
+              <Fold label="Done" text={`${doneN} this month`}>
+                {done.data?.tasks.map((t) => <OwnRow key={t.id} task={t} me={me?.id} />)}
+              </Fold>
+            )}
             <GiveTaskDialog open={giving} onOpenChange={setGiving} person={id} name={actor.name} />
           </Section>
           {manages.length > 0 && (
@@ -153,13 +158,14 @@ function PersonSettings({ actor, id, head }: { actor: Actor; id: string; head: H
   const actors = useActors();
   const remove = useAction('people.remove');
   const reach = useQuery(teammateAccessQuery('person', id)).data;
-  const [editing, setEditing] = useState<'' | 'title' | 'team' | 'role' | 'remove' | 'access' | 'password'>('');
+  const [editing, setEditing] = useState<'' | 'title' | 'team' | 'boss' | 'github' | 'role' | 'remove' | 'access' | 'password'>('');
   const close = (o: boolean) => !o && setEditing('');
 
   const p = people.data?.find((x) => x.id === id);
   const role = access?.people.find((x) => x.id === id);
   const admin = access?.you === 'owner' || access?.you === 'admin';
   const self = me?.id === actor.id;
+  const manage = !!reach?.you?.manage;
   const team = teamOf(groups.data ?? [], 'person', id);
   const boss = p?.reports_to ? actors.find((a) => bareId(a.id) === p.reports_to) : undefined;
   const company = config?.company_name || config?.app_name || 'the company';
@@ -180,7 +186,9 @@ function PersonSettings({ actor, id, head }: { actor: Actor; id: string; head: H
             <LabelValue label="Team" onEdit={admin ? () => setEditing('team') : undefined}>
               {team?.name ?? 'None'}
             </LabelValue>
-            <LabelValue label="Reports to">{boss?.name ?? 'Nobody'}</LabelValue>
+            <LabelValue label="Reports to" onEdit={manage ? () => setEditing('boss') : undefined}>
+              {boss?.name ?? 'Nobody'}
+            </LabelValue>
             {role && (
               <LabelValue label="Permissions" onEdit={admin && role.role !== 'owner' && !self ? () => setEditing('role') : undefined}>
                 {role.role === 'owner' ? 'Owner' : role.role === 'admin' ? 'Admin' : 'Member'}
@@ -192,7 +200,11 @@ function PersonSettings({ actor, id, head }: { actor: Actor; id: string; head: H
               </LabelValue>
             )}
             {p?.slack && <LabelValue label="Slack">{p.slack}</LabelValue>}
-            {p?.github && <LabelValue label="GitHub">{p.github}</LabelValue>}
+            {(p?.github || manage) && (
+              <LabelValue label="GitHub" onEdit={manage ? () => setEditing('github') : undefined}>
+                {p?.github || 'None'}
+              </LabelValue>
+            )}
           </Facts>
           {admin && !self && (
             <Foot>
@@ -216,6 +228,24 @@ function PersonSettings({ actor, id, head }: { actor: Actor; id: string; head: H
             value={title}
             action="people.setTitle"
             input={(t) => ({ person: id, title: t })}
+          />
+          <PickDialog
+            open={editing === 'boss'}
+            onOpenChange={close}
+            title="Reports to"
+            options={(people.data ?? []).filter((x) => x.id !== id).map((x) => ({ value: x.id, label: x.name }))}
+            value={p?.reports_to ?? ''}
+            action="people.setReportsTo"
+            input={(b) => ({ person: id, boss: b })}
+          />
+          <EditDialog
+            open={editing === 'github'}
+            onOpenChange={close}
+            title="GitHub"
+            label="GitHub login"
+            value={p?.github ?? ''}
+            action="people.setGithub"
+            input={(t) => ({ person: id, login: t })}
           />
           <PickDialog
             open={editing === 'team'}

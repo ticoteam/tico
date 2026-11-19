@@ -5,6 +5,8 @@
 .rec .foot{display:flex;gap:calc(var(--s-6) + var(--s-0));margin:var(--s-1h) 0 var(--s-3h);padding:var(--s-2h) var(--s-2) 0 var(--s-8);border-top:1px solid var(--line)}
 .rec .foot .verb{height:var(--ctl-sm);padding:0 var(--s-2);margin:0 calc(-1 * var(--s-2));flex:none;border:0;border-radius:var(--r-chip);background:none;color:var(--ink-2);font:inherit;font-size:var(--t-sm);font-weight:var(--w-text);white-space:nowrap;transition:background var(--dur-fast) var(--ease)}
 .rec .foot .verb:hover{background:var(--well-2);color:var(--ink)}
+.stage-fold button{padding:0;border:0;background:none;font:inherit;color:inherit;cursor:pointer}
+.stage-fold button:hover{color:var(--ink)}
 
 /* ---------- teammate row ---------- */
 .mate{grid-template-columns:24px var(--av-sm) 216px minmax(0,1fr) auto 28px}

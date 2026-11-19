@@ -224,7 +224,7 @@ describe('A sign-in on a computer', () => {
   const CODE = 'WDJB-MJHT';
   const PAGE = `https://auth.example/device?user_code=${CODE}`;
 
-  it('shows the provider’s code and page in its dialog only, never in the query cache', async () => {
+  it('shows the provider’s code and page in its dialog only, never in the query cache @s731', async () => {
     serve((url, method) => {
       if (method === 'POST' && url.endsWith('/api/v2/computers/r1/logins')) return json({ id: 'l1', runner_id: 'r1', state: 'starting' });
       if (url.endsWith('/api/v2/computers/r1/logins/l1')) return json({ id: 'l1', runner_id: 'r1', state: 'waiting', url: PAGE, code: CODE, lines: [`Enter ${CODE}`] });

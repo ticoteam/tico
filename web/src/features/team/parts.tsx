@@ -59,13 +59,23 @@ export function MateRow({ actor, needs, pill, count }: { actor: Actor; needs?: b
   );
 }
 
-/** The fold under a section: "Done", then how many. */
-export function Fold({ label, text }: { label: string; text: string }) {
+/** The fold under a section: "Done", then how many. With `children`, how many opens them under it (the old Done recently). */
+export function Fold({ label, text, children }: { label: string; text: string; children?: ReactNode }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="stage-fold">
-      <span className="fold-label">{label}</span>
-      <span>{text}</span>
-    </div>
+    <>
+      <div className="stage-fold">
+        <span className="fold-label">{label}</span>
+        {children ? (
+          <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>
+            {text}
+          </button>
+        ) : (
+          <span>{text}</span>
+        )}
+      </div>
+      {open && children}
+    </>
   );
 }
 

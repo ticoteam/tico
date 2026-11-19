@@ -80,7 +80,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Team parity', () => {
-  it('lists what an agent waits on from someone else, naming who', async () => {
+  it('lists what an agent waits on from someone else, naming who @s609', async () => {
     const task = { id: 't1', number: null, title: 'Approve the banner', status: 'open', owner_id: ana.id, turn: { state: 'person', who: kim.id }, updated_at: '2026-11-01T00:00:00Z' };
     serve((url, method) => (method === 'GET' && url.includes('/api/v2/tasks') && url.includes('status=open') ? { status: 200, body: { tasks: [task] } } : undefined));
     show(<TeamWho who="ana" />, '/team/ana');
@@ -89,7 +89,7 @@ describe('Team parity', () => {
     expect(screen.getByText('On Kim Roe')).toBeTruthy();
   });
 
-  it('gives a person a task: shown at once, sent with them as owner', async () => {
+  it('gives a person a task: shown at once, sent with them as owner @s654', async () => {
     serve(() => undefined);
     show(<TeamWho who="p2" />, '/team/p2');
     fireEvent.click(await screen.findByRole('button', { name: 'Give Kim Roe a task' }));
@@ -99,7 +99,7 @@ describe('Team parity', () => {
     await waitFor(() => expect(sent.find((s) => s.url.includes('/api/v2/tasks'))?.body).toEqual({ title: 'Draft the brief', owner: 'human:p2' }));
   });
 
-  it('changes who an agent works for', async () => {
+  it('changes who an agent works for @s717', async () => {
     serve(() => undefined);
     show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');
     fireEvent.click(await screen.findByRole('button', { name: /Works for/ }));
@@ -128,7 +128,7 @@ describe('Team parity', () => {
     expect(put?.body).toMatchObject({ read: narrow, revision: 7 });
   });
 
-  it('names the agents a sign-out stops before it signs out', async () => {
+  it('names the agents a sign-out stops before it signs out @s732', async () => {
     serve((url) => (url.includes('/logouts/bots') ? { status: 200, body: { bots: [{ bot: '0190-ana', name: 'Ana' }] } } : undefined));
     show(<TeamWho who="ana" tab="computer" />, '/team/ana?tab=computer');
     expect(await screen.findByText('40% this week')).toBeTruthy();

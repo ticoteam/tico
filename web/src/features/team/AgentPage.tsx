@@ -273,7 +273,11 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
             {rest.map((t) => (
               <OwnRow key={t.id} task={t} me={me?.id} />
             ))}
-            {doneN > 0 && <Fold label="Done" text={`${doneN} this week`} />}
+            {doneN > 0 && (
+              <Fold label="Done" text={`${doneN} this week`}>
+                {done.data?.tasks.map((t) => <OwnRow key={t.id} task={t} me={me?.id} />)}
+              </Fold>
+            )}
           </Section>
           <ListSections slug={slug} me={me?.id} />
           <FilesSection slug={slug} />

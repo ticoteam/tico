@@ -4,6 +4,7 @@ import { directoryQuery } from '@/data';
 import { toast } from '@/kit/Toast';
 import {
   addAgent,
+  agentsQuery,
   archiveAgent,
   cancelLogin,
   changeAgent,
@@ -28,6 +29,7 @@ import {
   setAgentStatus,
   setProfile,
   setScreenMode,
+  setPersonFields,
   setPersonRole,
   setPersonTitle,
   setTeammateAccess,
@@ -249,6 +251,12 @@ export const worksFor = defineAction({
   title: 'Change who an agent works for',
   kind: 'change',
   input: s.object({ slug, people: s.array(person, { max: 100 }) }),
+  // Someone new can read the agent's room: only a person widens that. Tico may still take people off.
+  can: ({ via, queryClient }, { slug, people }) => {
+    if (via !== 'tico') return true;
+    const now = new Set(queryClient.getQueryData(agentsQuery.queryKey)?.find((r) => r.slug === slug)?.users?.map((u) => u.id));
+    return people.every((p) => now.has(p));
+  },
   run: (_ctx, { slug, people }) => said("Couldn't change it", () => setWorksFor(slug, people)),
   did: () => 'Changed who it works for',
   target: ({ slug }) => onPage(slug),
@@ -479,6 +487,28 @@ export const setTitle = defineAction({
   input: s.object({ person, title: s.string({ max: 200 }) }),
   run: (_ctx, { person, title }) => said("Couldn't change the role", () => setPersonTitle(person, title)),
   did: () => 'Changed the role',
+  target: ({ person }) => onPage(person),
+});
+
+/** A new boss manages them from then on: only a person gives that. */
+export const setPersonReportsTo = defineAction({
+  id: 'people.setReportsTo',
+  title: 'Change who a person reports to',
+  kind: 'change',
+  tico: false,
+  input: s.object({ person, boss: person }),
+  run: (_ctx, { person, boss }) => said("Couldn't change it", () => setPersonFields(person, { reports_to: boss })),
+  did: () => 'Changed who they report to',
+  target: ({ person }) => onPage(person),
+});
+
+export const setGithub = defineAction({
+  id: 'people.setGithub',
+  title: "Change a person's GitHub login",
+  kind: 'change',
+  input: s.object({ person, login: s.string({ max: 100 }) }),
+  run: (_ctx, { person, login }) => said("Couldn't change it", () => setPersonFields(person, { github: login })),
+  did: () => 'Changed the GitHub login',
   target: ({ person }) => onPage(person),
 });
 

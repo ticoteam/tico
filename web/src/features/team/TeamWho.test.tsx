@@ -71,7 +71,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Team pages', () => {
-  it('lists a team, the teams inside it, and each row opens that teammate’s page', async () => {
+  it('lists a team, the teams inside it, and each row opens that teammate’s page @s249', async () => {
     serve(() => undefined);
     show(<TeamWho who="design" />, '/team/design');
     await screen.findByRole('heading', { name: 'Design' });
@@ -99,7 +99,7 @@ describe('Team pages', () => {
     await waitFor(() => expect(link('Ana')?.getAttribute('href')).toBe('/team/ana'));
   });
 
-  it('shows an agent’s new role at once and takes it back when the server refuses', async () => {
+  it('shows an agent’s new role at once and takes it back when the server refuses @s615', async () => {
     let refuse!: () => void;
     serve((url, method) =>
       method === 'POST' && url.includes('/definition') ? new Promise<Reply>((r) => (refuse = () => r({ status: 409, body: { detail: 'changed' } }))) : undefined,

@@ -58,7 +58,7 @@ describe('TeammateChat', () => {
     expect(screen.queryByText('The chat did not load')).toBeNull();
   });
 
-  it('opens the direct thread with a teammate once it knows who I am', async () => {
+  it('opens the direct thread with a teammate once it knows who I am @s604', async () => {
     show('ana');
     expect(asked.some((u) => u.includes('/threads/dm'))).toBe(false);
     await act(async () => {

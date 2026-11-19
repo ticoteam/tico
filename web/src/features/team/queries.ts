@@ -800,6 +800,17 @@ export async function setPersonTitle(person: string, title: string) {
   return out;
 }
 
+/** Who a person reports to (a person's id) or their GitHub login: whoever manages them (POST /api/v2/humans/{id}). */
+export async function setPersonFields(person: string, fields: Pick<PersonRow, 'reports_to' | 'github'>) {
+  const out = await write({
+    key: peopleQuery.queryKey,
+    optimistic: (rows: PersonRow[] | undefined) => rows?.map((p) => (p.id === person ? { ...p, ...fields } : p)),
+    send: (idempotencyKey) => api.post(`/api/v2/humans/${at(person)}`, fields, { idempotencyKey }),
+  });
+  directoryAgain();
+  return out;
+}
+
 /** A person's name: an owner's or admin's edit (POST /api/v2/access/humans/{id}). */
 export async function renamePerson(person: string, name: string) {
   const out = await write({
