@@ -97,7 +97,7 @@ const PGC_ROUTES: readonly (readonly [string, string])[] = [
   // stay beneath it, as they were), so the chat is never the task's.
   ['#/tasks', 'tasks'], ['#/task', 'tasks'], ['#/calendar', 'calendar'], ['#/updates', 'updates'],
   ['#/home', 'company'], ['#/overview', 'company'], ['#/team', 'company'], ['#/company-page', 'company'],
-  ['#/strategy/goals', 'goals'], ['#/strategy', 'strategy'],
+  ['#/strategy/goals', 'goals'], ['#/strategy', 'strategy'], ['#/products', 'products'],
   ['#/finance', 'finance'], ['#/growth', 'growth'], ['#/automations', 'automations'], ['#/listening', 'listening'],
   ['#/rules', 'rules'], ['#/docs', 'docs'], ['#/library/files', 'docs'], ['#/page', 'docs'],
   ['#/library/skills', 'skills'], ['#/library/contacts', 'contacts'], ['#/tools', 'tools'], ['#/meetings', 'meetings'],
