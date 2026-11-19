@@ -1,0 +1,17 @@
+/* The one label and value part (aaa-audit-a: one KeyValue). From pages/8-settings/settings.css .facts, with the audit's
+   fix: the label column is minmax(120px, 34%) and muted, the value ink and left-aligned, a picker's chevron 6px after
+   its words, and only numbers right-aligned. parts.css's older .fact (a flex row) is overridden inside .facts. */
+.facts{display:grid;grid-template-columns:minmax(0,1fr)}
+.facts .fact{display:grid;grid-template-columns:minmax(120px,34%) minmax(0,1fr);justify-content:start;align-items:center;gap:0;height:auto;
+  min-height:30px;padding:0 var(--s-2);border-radius:var(--r-row);color:var(--ink)}
+.facts .fact>span:first-child{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding-right:var(--s-3);color:var(--muted)}
+.facts .fact-v{min-width:0;gap:var(--s-1h)}
+.fact-t{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.fact-pick{display:grid;flex:none;color:var(--faint)}
+.fact-pick .ico{width:var(--ico-sm);height:var(--ico-sm);stroke-width:1.8}
+button.fact{width:100%;border:0;background:none;font-family:inherit;font-size:inherit;font-weight:inherit;line-height:inherit;text-align:left}
+.fact.is-edit{cursor:pointer;transition:background var(--dur-fast) var(--ease)}
+.fact.is-edit:hover{--surface:var(--hover);background:var(--hover)}
+.fact.is-edit:hover .fact-pick{color:var(--muted)}
+.fact.is-edit:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
+.fact-num{justify-self:end;font-variant-numeric:tabular-nums;font-feature-settings:var(--feat-text)}

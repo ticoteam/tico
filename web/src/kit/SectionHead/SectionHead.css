@@ -1,0 +1,16 @@
+/* Section names that fold, from pages/1-tasks/list.css (the version the audits keep: the chevron after the count) and
+   pages/6-calendar/cal-merge.css (.is-2, a group one step down). The font shorthand became longhands so the open zero
+   stays (R13). parts.css has none of this. */
+.sec-name{min-width:0;display:flex;font-family:var(--font-text);font-size:var(--t-sec);font-weight:var(--w-title);line-height:var(--lh-tight);
+  font-feature-settings:var(--feat-text);color:var(--ink)}
+.sec-name.is-2{font-size:var(--t-base)}
+.sec-fold{min-width:0;height:28px;display:inline-flex;align-items:center;gap:var(--s-2);margin:0 calc(var(--s-1h) * -1);padding:0 var(--s-1h);border:0;border-radius:var(--r-row);
+  background:none;color:inherit;font-family:inherit;font-size:inherit;font-weight:inherit;line-height:inherit;text-align:left;transition:background var(--dur-fast) var(--ease)}
+.sec-fold:hover{background:var(--hover)}
+.sec-fold:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
+.sec-fold>span:first-child{min-width:0;display:inline-flex;align-items:center;white-space:nowrap}
+.sec-fold .stage-n{font-weight:var(--w-text)}
+.sec-fold>.ico{width:12px;height:12px;stroke-width:2;color:var(--muted);transition:transform var(--dur) var(--ease)}
+.sec-fold[aria-expanded="false"]>.ico{transform:rotate(-90deg)}
+.sec-name.is-2 .sec-fold{gap:var(--s-1h)}
+.stage.is-folded .stage-head{position:static}

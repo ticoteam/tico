@@ -1,0 +1,26 @@
+/* Charts in greys (R26), from pages/8-settings/more.css and pages/3-company/finance.css. SVG text gets the open zero and
+   tabular figures from type.css; its size and weight are longhands here, never the font shorthand (R13). */
+.chart{display:block;width:100%;height:auto;overflow:visible}
+.chart text{font-size:var(--t-xs);font-weight:var(--w-text);fill:var(--muted)}
+.chart .lbl{fill:var(--ink);font-weight:var(--w-strong)}
+.chart .grid{stroke:var(--line);stroke-width:1}
+.chart .base{stroke:var(--line-strong);stroke-width:1}
+.chart .cbar{fill:var(--stack)}
+.chart .cbar.is-now{fill:var(--ink-2)}
+/* R26: a sparkline is 1.25px --muted with its last point in ink-2 */
+.spark{width:72px;height:26px;flex:none;margin-bottom:calc(var(--s-1) - 1px)}
+.spark path{fill:none;stroke:var(--muted);stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}
+.spark circle{fill:var(--ink-2)}
+td .spark{display:block;margin:0 0 0 auto;width:64px;height:22px}
+.row-fig{text-align:right;font-variant-numeric:tabular-nums;font-feature-settings:var(--feat-text);white-space:nowrap}
+.hbars{display:grid;gap:var(--s-0);padding:var(--s-0) var(--s-3) var(--s-2h)}
+.hbar{height:30px;display:grid;grid-template-columns:112px minmax(0,1fr) 72px 64px;align-items:center;column-gap:var(--s-3)}
+.hbars.is-funnel .hbar{grid-template-columns:104px minmax(0,1fr) 60px 36px;column-gap:var(--s-2h)}
+.hbar-name{white-space:nowrap}
+.hbar-track{display:block;height:10px}
+.hbar-track i{display:block;width:var(--w);height:100%;min-width:2px;border-radius:var(--r-pill);background:var(--stack-top)}
+.hbar:first-child .hbar-track i{background:var(--ink-2)}
+.hbar .count{text-align:right;font-size:var(--t-sm)}
+@media (max-width:760px){
+  .hbars{padding-left:var(--s-2);padding-right:var(--s-2)}
+}

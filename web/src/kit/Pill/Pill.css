@@ -1,0 +1,5 @@
+/* A pill with a mark before its words (pages/15-start/start.css .pill-held; pages/14-acts/acts.css: a 12px fault mark
+   in a pill). parts.css has no rule for it. */
+.pill:has(>.ico,>.fmark){display:inline-flex;align-items:center;gap:var(--s-1)}
+.pill>.ico{width:var(--ico-xs);height:var(--ico-xs);stroke-width:var(--ico-xs-stroke)}
+.pill>.fmark{--f:var(--ico-xs)}
