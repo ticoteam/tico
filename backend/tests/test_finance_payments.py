@@ -1663,6 +1663,25 @@ def test_a_payment_past_an_ask_or_hold_payment_limit_asks_and_its_approval_pays_
         assert c.execute("SELECT status FROM fin_payments").fetchone()[0].startswith("awaiting_bank_approval")
 
 
+def test_a_bots_payment_past_a_warn_budget_asks_a_finance_admin_at_any_amount(books):
+    """A bot pays on its own only inside budget: a 150.00 payment, well under the bots' $1,000 limit, past a budget that
+    only warns asks a finance admin under that budget, and the approval pays it. The owner's same payment only warns."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        bot = _finance_owner_pays(c)
+        bid = _over_budget(c, "warn")
+        body = {"recipient_id": rid, "account_id": account(c, "6100"), "money_account_id": _checking(c)}
+        asked = act(c, bot, "payment_create", {**body, "amount": 15_000})
+        assert (asked.status, asked.rule) == ("needs_approval", f"budget:{bid}") and asked.approval_id, asked
+        assert c.execute("SELECT count(*) FROM fin_payments WHERE created_by=?", (bot,)).fetchone()[0] == 0
+        give(c, OWNER, asked.approval_id)
+        assert FA.approval_decided(c, asked.approval_id, AT).status == "committed"
+        person = act(c, OWNER, "payment_create", {**body, "amount": 15_000})
+        assert person.status == "committed", person
+
+
 def test_a_payment_past_a_decline_limit_is_refused_by_a_dry_run_and_never_asked(books):
     """A decline limit refuses a payment past it outright, before anyone is asked (a dry run shows the refusal too)."""
     fake = FakeMercury()
@@ -2749,6 +2768,34 @@ def test_the_finance_owner_pays_a_known_vendor_up_to_the_limit_on_its_own_and_as
     sync_once(books, fake, HOURS[1])
     sync_once(books, fake, HOURS[2])
     assert [b["amount"] for b in fake.sent("request_send_money")] == [50]
+
+
+def test_the_owner_changes_only_the_bots_payment_limit_and_it_saves(books):
+    """The seeded examples ($20 allows, $50,000 asks) sit far from any sensible limit: lowering it to $500 or raising it
+    to $5,000 is one change to the amount, and the bots' payments follow it."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        bot = _finance_owner_pays(c)
+        body = {"recipient_id": rid, "account_id": account(c, "6100"), "money_account_id": _checking(c)}
+        first = act(c, OWNER, "payment_create", {**body, "amount": 1_000})
+        c.execute("UPDATE fin_payments SET status='settled' WHERE id=?", (first.result["payment_id"],))
+        # The company-wide "Payments over $1,000" rule is off, so only the bots' limit is judged.
+        assert act(c, OWNER, "rule_disable", {"rule_id": "rule:payment-over-1000"}).status == "committed"
+        when = {"kind": "payment_create", "actor.kind": "bot"}
+        for limit in (50_000, 500_000):
+            done = act(
+                c, OWNER, "rule_update", {"rule_id": "rule:bot-payment", "when": {**when, "amount": {"gt": limit}}}
+            )
+            assert done.status == "committed", (limit, done)
+            under = act(c, bot, "payment_create", {**body, "amount": limit}, dry_run=True)
+            over = act(c, bot, "payment_create", {**body, "amount": limit + 1}, dry_run=True)
+            assert (under.status, over.status, over.rule) == ("committed", "needs_approval", "rule:bot-payment"), (
+                limit,
+                under,
+                over,
+            )
 
 
 def test_a_bots_payment_to_a_new_recipient_still_asks_a_finance_admin(books):

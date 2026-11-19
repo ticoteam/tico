@@ -228,8 +228,9 @@ def queue_email(
 ) -> str:
     """Freeze Finance's email through the same gate as a connector, on this install's transaction. Held: it always
     waits for a person's OK of this exact send (the classification leaves it unclassified, which the policy asks
-    about), and the OK's id is returned. Not held: Tico's own fixed text with no commitment in it, decided by the
-    sending policy alone; the OK's id when the policy asks, else "send:" and the queued send's id."""
+    about), and the OK's id is returned. Not held: Tico's fixed reminder text, decided by the sending policy as a money
+    email (its lint and second review apply to a bot's request as to any of its email); the OK's id when the policy
+    asks, else "send:" and the queued send's id."""
     from pathlib import Path
     from ...auth import Auth
     from ... import email_sending
@@ -256,9 +257,11 @@ def queue_email(
                 auth,
                 requester,
                 sending.Enqueue(mailbox=metadata["mailbox"], raw=raw, operation_id=ref),
+                # A held email stays unclassified, which the policy always asks about. An early reminder is a payment
+                # demand: classified as money, so a company that asks about money emails is asked about it.
                 {"legal_or_money": None, "status": "finance_preview_required"}
                 if held
-                else {"legal_or_money": False, "status": "finance_fixed_text"},
+                else {"legal_or_money": True, "status": "finance_fixed_text"},
                 via="finance",
             ),
         )

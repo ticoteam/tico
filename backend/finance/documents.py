@@ -1064,10 +1064,10 @@ def invoice_remind(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Remind the customer that a sent invoice is unpaid, once for each stage (1, 7, 30, 60 or 90 days late). The text
     is fixed: the number, what is left, the due date and the payment link when there is one; no free text and no
     consequence. The reminder is recorded on commit and its email queued (delivery.issue). An early stage (1, 7 or 30,
-    K.EARLY_REMIND_STAGES) needs no Finance OK, even from a bot, and its email is decided by the sending policy: it goes
-    on its own where the policy allows, else it waits for the policy's OK. The 60 and 90 day stages, at the final
-    notice, keep a bot's ask of a finance admin and a send approval a person gives for that text and the customer's
-    addresses. The shared queue dispatches it and the delivery is reported back (`invoice_delivery`). A paid or draft invoice, an invoice with no due date, one
+    K.EARLY_REMIND_STAGES) on an invoice under 60 days late needs no Finance OK, even from a bot, and its email is
+    decided by the sending policy as a money email: it goes on its own where the policy allows, else it waits for the
+    policy's OK. The 60 and 90 day stages, and any stage once the invoice is 60 days late, keep a bot's ask of a finance
+    admin and a send approval a person gives for that text and the customer's addresses. The shared queue dispatches it and the delivery is reported back (`invoice_delivery`). A paid or draft invoice, an invoice with no due date, one
     not yet past due or not yet at the stage's days late, a stage already reminded, a customer with no email and no
     Finance Owner mailbox are refused with the reason, before any stage is used. The days late are the action's own day's
     (ctx.today), checked again when the approval is decided (actions.approval_decided)."""
@@ -1100,7 +1100,10 @@ def invoice_remind(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     )
     subject = delivery.subject_of(stage, str(inv["number"]))
     mail = _mail(ctx, inv, emails, box, subject, text)
-    held = stage not in K.EARLY_REMIND_STAGES  # the 60 and 90 day stages wait for a person's OK of the email
+    # On the day it is planned, and again when an approval for it is decided (the plan is made again then): a late
+    # stage, or an invoice already 60 days late whatever stage was asked, waits for a person's OK of the email.
+    late = AP.days_late(str(inv["due_date"]), dates.day(ctx.today))
+    held = K.remind_held(stage, late)
 
     def apply(aid: str) -> Result:
         if _reminded(ctx, sid, stage):  # again when an approved reminder commits
@@ -1150,7 +1153,7 @@ def invoice_remind(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     lines = doc_lines_of(ctx, "invoice", sid)
     return Plan(
-        K.remind_gate(ctx.org, who, stage),
+        K.remind_gate(ctx.org, who, stage, late),
         f"Remind {customer['name']} that invoice {inv['number']} is {stage} days late{_mail_words(mail)}",
         apply,
         facts=doc_facts("invoice", customer, lines, ctx),

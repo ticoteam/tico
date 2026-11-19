@@ -74,8 +74,9 @@ meanwhile.
    (logs, error reports, support messages), giving who, how many and since when. Write "not known yet" for anything
    not counted; never estimate in an update. (Skill `count-impact-from-sources` if your role has it.)
 4. **Send the first update inside the response time.** Use the template in `references/updates.md`: what is
-   happening, who is affected, what we are doing, when the next update comes. Post it on the task. Draft the
-   customer wording as a second comment and ask for the OK:
+   happening, who is affected, what we are doing, when the next update comes. Post it on the task. Send the customer
+   update yourself under the sending policy when it states only those facts. When it states a cause, fault, breach or
+   compensation, draft it as a second comment and ask for the OK:
    `tico task ask <id> --to <owner> --kind ok "Send this incident update to customers?" --version N`. Then keep the
    rhythm: send the next update at the promised time even when there is nothing new. (Skills
    `set-severity-and-owner` and `write-a-customer-update` if your role has them, for a single customer's case.)

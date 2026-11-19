@@ -80,8 +80,9 @@ HINTS = {
     "unreconciled": "a money account not reconciled for over a month: match rows and reconcile its statement",
     "budget_near_limit": "a budget near its limit: tell its owner once",
     "invoice_email": (
-        "an invoice email waits to send: read its exact text from the invoice search, mail draft it "
-        "exactly, then mail send with --approval set to its send approval, and report invoice_delivery"
+        "an invoice email waits to send: read its exact text from the invoice search; one with an approval_id "
+        "waits for that OK (mail draft it exactly, then mail send with --approval set to it); one with only a send_id "
+        "is already in the send queue. Report invoice_delivery once it goes"
     ),
 }
 
@@ -156,12 +157,10 @@ BOT_PAYMENT = (
     {"kind": "payment_create", "actor.kind": "bot", "amount": {"gt": BOT_PAYMENT_LIMIT}},
     {"outcome": "needs_approval", "who": "finance_admin"},
     [
-        {
-            "input": {"kind": "payment_create", "actor.kind": "bot", "amount": BOT_PAYMENT_LIMIT + 1},
-            "expect": "needs_approval",
-        },
-        {"input": {"kind": "payment_create", "actor.kind": "bot", "amount": BOT_PAYMENT_LIMIT}, "expect": "allow"},
-        {"input": {"kind": "payment_create", "actor.kind": "human", "amount": 500_000}, "expect": "allow"},
+        # Far from any sensible limit ($20 and $50,000), so changing only the amount still passes the examples.
+        {"input": {"kind": "payment_create", "actor.kind": "bot", "amount": 5_000_000}, "expect": "needs_approval"},
+        {"input": {"kind": "payment_create", "actor.kind": "bot", "amount": 2_000}, "expect": "allow"},
+        {"input": {"kind": "payment_create", "actor.kind": "human", "amount": 5_000_000}, "expect": "allow"},
     ],
 )
 # The rule as installs before the limit got it: every bot payment, any amount, asked a finance admin. A row still
@@ -218,10 +217,13 @@ def seed_bot_payment_rule(c, at: str | None = None) -> bool:
 
 def _move_to_limit(c, at: str) -> bool:
     """Once per install: the old "a bot's payment asks a finance admin" row, still exactly as seeded (same name,
-    condition and outcome, on, never edited: updated_at NULL), becomes BOT_PAYMENT. Recorded by one
-    `bookkeeper.bot_payment_limit` event whether or not it moved, so a rule the owner later sets back is never touched
-    again. The owner gets one notice when it moved. Whether it moved."""
+    condition and outcome, on, never edited: updated_at NULL), becomes BOT_PAYMENT, but only while the new-recipient
+    rule (a first payment or changed bank details asks) is there and on: without it the old rule is the only check on a
+    bot paying a new payee, so it stays. Recorded by one `bookkeeper.bot_payment_limit` event whether or not it moved,
+    so a rule the owner later sets back is never touched again. The owner gets one notice when it moved. Whether it
+    moved."""
     from .finance.context import owner as finance_owner
+    from .finance.payments import NEW_RECIPIENT_RULE
     from .finance.store import banking as SK
 
     if _has_event(c, BOT_PAYMENT_LIMIT_EVENT):
@@ -238,6 +240,10 @@ def _move_to_limit(c, at: str) -> bool:
         and str(row["name"]) == old_name
         and SK.loads(row["condition"]) == old_when
         and SK.loads(row["outcome"]) == old_outcome
+        and c.execute(
+            "SELECT 1 FROM fin_rules WHERE id=? AND kind='gate' AND active=1", (NEW_RECIPIENT_RULE,)
+        ).fetchone()
+        is not None
     )
     if moved:
         name, words, when, outcome, examples = BOT_PAYMENT

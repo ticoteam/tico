@@ -303,14 +303,21 @@ def default_gate(org: Org, actor: str, kind: str) -> Gate:
 
 
 # Tico's fixed reminder at these stages (days late) needs no Finance OK, from a bot or a person: it states the invoice's
-# own facts and no consequence, and goes out under the company's sending policy (delivery.issue). The 60 and 90 day
-# stages sit at the final notice, so a bot's reminder there still asks a finance admin and its email a person's OK.
+# own facts and no consequence, and goes out under the company's sending policy (delivery.issue). From FINAL_DAYS_LATE
+# on, an invoice is at the final notice: any reminder then, whatever stage was asked (a day-30 task first run on day
+# 65), keeps a bot's ask of a finance admin and its email waits for a person's OK.
 EARLY_REMIND_STAGES = (1, 7, 30)
+FINAL_DAYS_LATE = 60
 
 
-def remind_gate(org: Org, actor: str, stage: int) -> Gate:
-    """invoice_remind's default gate: none for an early stage, else default_gate's (a bot asks a finance admin)."""
-    return ALLOW if stage in EARLY_REMIND_STAGES else default_gate(org, actor, "invoice_remind")
+def remind_held(stage: int, days_late: int) -> bool:
+    """Whether a reminder's email waits for a person's OK: a late stage, or an invoice already at the final notice."""
+    return stage not in EARLY_REMIND_STAGES or days_late >= FINAL_DAYS_LATE
+
+
+def remind_gate(org: Org, actor: str, stage: int, days_late: int) -> Gate:
+    """invoice_remind's default gate: none for an early reminder, else default_gate's (a bot asks a finance admin)."""
+    return default_gate(org, actor, "invoice_remind") if remind_held(stage, days_late) else ALLOW
 
 
 # ------------------------------------------------------------------------------------------------ payload shapes

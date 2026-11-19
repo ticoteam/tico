@@ -434,14 +434,8 @@ def warm(c, row):
 
 
 def own_writing(row):
-    """A bot's own email, not one Tico composed for an automation, the calendar or Finance (an invoice email's fixed
-    text, finance/delivery.py): the lint and the reviewer read it."""
-    return (
-        bool(row["bot"])
-        and not row["automation_action_id"]
-        and not row["calendar_action_id"]
-        and row["via"] != "finance"
-    )
+    """A bot's own email, not one Tico composed for an automation or the calendar: the lint and the reviewer read it."""
+    return bool(row["bot"]) and not row["automation_action_id"] and not row["calendar_action_id"]
 
 
 def why(found):

@@ -632,3 +632,21 @@ def test_an_owners_edited_or_disabled_rule_from_before_is_never_moved(environmen
     ensure(api)
     with store.read() as c:
         assert _bot_payment_rules(c) == [] and _limit_notices(c) == 0
+
+
+def test_without_the_new_recipient_rule_on_the_old_rule_stays_and_the_move_is_recorded_without_a_notice(environment):
+    """The old any-amount rule is the only check on a bot paying a new payee while rule:new-recipient is off, so it is
+    not moved; the move is still recorded (never tried again) and the owner is told nothing."""
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        _as_before_the_limit(c)
+        c.execute("UPDATE fin_rules SET active=0 WHERE id='rule:new-recipient'")
+    ensure(api)
+    with store.read() as c:
+        ((_, on, condition),) = _bot_payment_rules(c)
+        assert on == 1 and json.loads(condition) == {"actor.kind": "bot", "kind": "payment_create"}
+        assert _limit_notices(c) == 0
+        (moved,) = c.execute("SELECT detail FROM events WHERE action=?", (BK.BOT_PAYMENT_LIMIT_EVENT,)).fetchall()
+        assert json.loads(moved[0])["moved"] is False
