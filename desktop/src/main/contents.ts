@@ -1,7 +1,21 @@
 // What every page the app opens from a company shares: its web preferences, its session's rules (user agent,
 // permissions, screen share) and the navigation guard (platforms.md 4.3).
 import * as path from 'node:path';
-import { shell, systemPreferences, type Session, type WebContents, type WebPreferences } from 'electron';
+import {
+  BaseWindow,
+  clipboard,
+  desktopCapturer,
+  dialog,
+  Menu,
+  shell,
+  systemPreferences,
+  type DesktopCapturerSource,
+  type DisplayMediaRequestHandlerHandlerRequest,
+  type Session,
+  type WebContents,
+  type WebPreferences,
+} from 'electron';
+import { contextMenuItems, type ContextAction } from './contextMenu';
 import { decideNavigation, decideNewWindow, signInOver, type NavContext, type NavDecision } from './navigation';
 import { permissionAllowed } from './permissions';
 import { log } from './log';
@@ -68,15 +82,54 @@ export function hardenSession(ses: Session, origin: string, userAgent: string): 
     ),
   );
   ses.setDevicePermissionHandler(() => false);
-  // Screen share: the system picker (macOS 15 and later). Where it is not available this handler runs; our own
-  // picker is not built yet, so it refuses rather than sharing a screen nobody chose.
+  // Screen share: the system picker (macOS 15 and later). Where it is not available (macOS 14, Windows, Linux) this
+  // handler runs and the person picks a screen in a small dialog; nothing is shared unless they pick one.
   ses.setDisplayMediaRequestHandler(
-    (_request, callback) => {
-      log('info', `screen share refused (no picker on this system) for ${origin}`);
-      callback(null);
+    (request, callback) => {
+      pickScreen(request, origin).then(
+        (video) => callback(video ? { video } : null),
+        () => callback(null),
+      );
     },
     { useSystemPicker: true },
   );
+}
+
+/** Our own small picker (platforms.md 4.3): whole screens from desktopCapturer, for the company's own top frame only. */
+async function pickScreen(request: DisplayMediaRequestHandlerHandlerRequest, origin: string): Promise<DesktopCapturerSource | null> {
+  const top = request.frame !== null && request.frame.parent === null;
+  if (!request.videoRequested || !permissionAllowed('media', { requestingUrl: request.securityOrigin, isMainFrame: top, mediaTypes: ['video'] }, origin)) {
+    log('info', `screen share refused for a page of ${origin}`);
+    return null;
+  }
+  const screens = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
+  if (!screens.length) return null;
+  const choices = screens.length === 1 ? ['Share screen'] : screens.map((s, i) => s.name || `Screen ${i + 1}`);
+  const options = { type: 'question' as const, message: 'Share your screen?', buttons: [...choices, 'Cancel'], defaultId: 0, cancelId: choices.length };
+  const parent = BaseWindow.getFocusedWindow();
+  const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
+  return screens[response] ?? null;
+}
+
+/** The right-click menu (contextMenu.ts) on any page the app opens. */
+export function attachContextMenu(wc: WebContents): void {
+  wc.on('context-menu', (_e, params) => {
+    const items = contextMenuItems(params);
+    if (!items.length) return;
+    const run = (action: ContextAction, arg = ''): void => {
+      if (wc.isDestroyed()) return;
+      if (action === 'cut') wc.cut();
+      else if (action === 'copy') wc.copy();
+      else if (action === 'paste') wc.paste();
+      else if (action === 'selectAll') wc.selectAll();
+      else if (action === 'replace') wc.replaceMisspelling(arg);
+      else if (action === 'learn') wc.session.addWordToSpellCheckerDictionary(arg);
+      else clipboard.writeText(arg);
+    };
+    Menu.buildFromTemplate(
+      items.map((i) => (i === 'separator' ? { type: 'separator' as const } : { label: i.label, enabled: i.enabled, click: () => run(i.action, i.arg) })),
+    ).popup();
+  });
 }
 
 /** Hands the system browser only what navigation.ts allowed: https and mailto. */

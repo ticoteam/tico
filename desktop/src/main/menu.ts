@@ -25,6 +25,8 @@ export function buildMenus(shell: Shell, updater: Updater): void {
     click: () => shell.switchTo(c.id),
   }));
   const active = shell.companies.find((c) => c.id === shell.activeId);
+  // Only a build with an update feed offers to check (updater.ts).
+  const updates: MenuItemConstructorOptions[] = updater.enabled ? [{ label: 'Check for updates…', click: () => void updater.check() }] : [];
 
   const template: MenuItemConstructorOptions[] = [
     ...(mac
@@ -33,7 +35,7 @@ export function buildMenus(shell: Shell, updater: Updater): void {
             label: app.getName(),
             submenu: [
               { role: 'about' },
-              { label: 'Check for updates…', click: () => void updater.check() },
+              ...updates,
               { type: 'separator' },
               { role: 'services' },
               { type: 'separator' },
@@ -45,7 +47,7 @@ export function buildMenus(shell: Shell, updater: Updater): void {
             ],
           } satisfies MenuItemConstructorOptions,
         ]
-      : [{ label: 'File', submenu: [{ label: 'Check for updates…', click: () => void updater.check() }, { role: 'quit' }] } satisfies MenuItemConstructorOptions]),
+      : [{ label: 'File', submenu: [...updates, { role: 'quit' }] } satisfies MenuItemConstructorOptions]),
     { role: 'editMenu' },
     {
       label: 'View',
@@ -80,9 +82,17 @@ export function buildMenus(shell: Shell, updater: Updater): void {
     {
       label: 'Window',
       submenu: [
-        { label: 'Minimize', accelerator: 'CmdOrCtrl+M', click: () => shell.win.minimize() },
-        { label: 'Zoom', click: () => (shell.win.isMaximized() ? shell.win.unmaximize() : shell.win.maximize()) },
-        { label: 'Close', accelerator: 'CmdOrCtrl+W', click: () => shell.win.close() },
+        // Each acts on the window in front: the main window or the small call window.
+        { label: 'Minimize', accelerator: 'CmdOrCtrl+M', click: (_i, w) => (w ?? shell.win).minimize() },
+        {
+          label: 'Zoom',
+          click: (_i, w) => {
+            const win = w ?? shell.win;
+            if (win.isMaximized()) win.unmaximize();
+            else win.maximize();
+          },
+        },
+        { label: 'Close', accelerator: 'CmdOrCtrl+W', click: (_i, w) => (w ?? shell.win).close() },
         ...(mac ? [{ type: 'separator' as const }, { role: 'front' as const }] : []),
       ],
     },

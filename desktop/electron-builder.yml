@@ -39,7 +39,9 @@ mac:
     NSAppTransportSecurity:
       NSAllowsLocalNetworking: true
 win:
-  target: [nsis]
+  target:
+    - target: nsis
+      arch: [x64, arm64]
   icon: ../app/icons/icon.ico
 linux:
   target: [AppImage, deb]
