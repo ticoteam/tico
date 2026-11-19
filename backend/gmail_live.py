@@ -8,7 +8,7 @@ the connector's pure normalizer supplies the same message fields without loading
 Drafts are found again by the Message-ID Tico gave them (`draft_find`, Gmail's `rfc822msgid:` search over drafts), so a
 retried draft or automation action finds the draft it made instead of making a second one. A draft is named by its own
 id (r-...) or by its message's id, whoever made it (`draft_resolve`), and is changed in place, keeping its id
-(`draft_update`).
+(`draft_update`). `trash` and `spam` move messages out of the inbox and back; nothing here deletes a message for good.
 """
 
 import base64
@@ -370,7 +370,7 @@ def resolve_label(c, mailbox, name, *, create=False):
 
 
 def organize(c, mailbox, ids, add=(), remove=()):
-    """Change only safe system labels or verified user-label IDs. There is no delete or trash operation."""
+    """Change only safe system labels or verified user-label IDs. Trash and spam are `trash` and `spam`."""
     changes = set(add) | set(remove)
     if changes & PROTECTED_LABELS:
         raise Problem("gmail_label", "Tico may not change this Gmail system label", 422)
@@ -391,6 +391,127 @@ def organize(c, mailbox, ids, add=(), remove=()):
                 "removeLabelIds": builtins.list(remove),
             },
         )
+
+
+def spam(c, mailbox, ids, restore=False):
+    """Report these messages as spam (out of the inbox), or with `restore` bring them back to the inbox. Gmail keeps
+    spam 30 days; nothing here deletes."""
+    for start in range(0, len(ids), 1000):
+        _call(
+            mailbox,
+            "messages/batchModify",
+            _token(c, mailbox, write=True),
+            data={
+                "ids": ids[start : start + 1000],
+                "addLabelIds": ["INBOX"] if restore else ["SPAM"],
+                "removeLabelIds": ["SPAM"] if restore else ["INBOX"],
+            },
+        )
+
+
+def trash(c, mailbox, ids, restore=False):
+    """Move these messages to Gmail's Trash, or with `restore` back out of it. Gmail has no batch call for either and
+    keeps a trashed message 30 days; nothing here deletes one for good."""
+    if not ids:
+        return
+    token, verb = _token(c, mailbox, write=True), "/untrash" if restore else "/trash"
+
+    def one(mid):
+        _call(mailbox, "messages/" + urllib.parse.quote(mid, safe="") + verb, token, data={})
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        builtins.list(pool.map(one, ids))
+
+
+def thread_message_ids(c, mailbox, thread_ids, limit=500):
+    """The message ids of these threads, in order and at most `limit`: what an action on whole threads changes."""
+    token, ids = _token(c, mailbox), []
+    for tid in thread_ids:
+        rows = _get(
+            mailbox, "threads/" + urllib.parse.quote(tid, safe=""), token, format="minimal", fields="messages(id)"
+        ).get("messages")
+        if not isinstance(rows, builtins.list) or any(not isinstance(r, dict) or not r.get("id") for r in rows):
+            raise Problem("gmail_unavailable", "Gmail returned an incomplete thread; try again", 502, retryable=True)
+        ids.extend(str(r["id"]) for r in rows if str(r["id"]) not in ids)
+    return ids[:limit]
+
+
+LABEL_COUNTS = ("messagesTotal", "messagesUnread", "threadsTotal", "threadsUnread")
+
+
+def labels_counted(c, mailbox):
+    """Every label with Gmail's own counts: [{id, name, type, messages_total, messages_unread, threads_total,
+    threads_unread}], system labels first."""
+    rows, token = labels(c, mailbox), _token(c, mailbox)
+
+    def one(row):
+        found = _get(mailbox, "labels/" + urllib.parse.quote(row["id"], safe=""), token, fields=",".join(LABEL_COUNTS))
+        counts = {
+            "messages_total": found.get("messagesTotal"),
+            "messages_unread": found.get("messagesUnread"),
+            "threads_total": found.get("threadsTotal"),
+            "threads_unread": found.get("threadsUnread"),
+        }
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "type": row["type"],
+            **{k: v if isinstance(v, int) and v >= 0 else 0 for k, v in counts.items()},
+        }
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        out = builtins.list(pool.map(one, rows))
+    return sorted(out, key=lambda row: (row["type"] != "system", row["name"].lower()))
+
+
+def user_label(c, mailbox, name_or_id):
+    """The user label named or numbered so, as {id, name, type}; a system label is refused, a missing one not_found."""
+    for row in labels(c, mailbox):
+        if name_or_id in (row["name"], row["id"]):
+            if row["type"] != "user":
+                raise Problem("gmail_label", "Tico changes only your own labels, never Gmail's system labels", 422)
+            return row
+    raise Problem("not_found", "Gmail could not find this label", 404)
+
+
+def label_create(c, mailbox, name):
+    """The user label of this name, made when missing: {id, name, type, created}. Asked again, it is found."""
+    for row in labels(c, mailbox):
+        if row["name"] == name or (row["type"] == "system" and name.upper() == row["id"]):
+            if row["type"] != "user":
+                raise Problem("gmail_label", "This is a Gmail system label; choose another name", 422)
+            return {"id": row["id"], "name": row["name"], "type": "user", "created": False}
+    row = _call(mailbox, "labels", _token(c, mailbox, write=True), data={"name": name})
+    if not row.get("id") or row.get("type") != "user":
+        raise Problem("gmail_unavailable", "Gmail returned an incomplete label; try again", 502)
+    return {"id": str(row["id"]), "name": str(row["name"]), "type": "user", "created": True}
+
+
+def label_rename(c, mailbox, label_id, name):
+    row = _call(
+        mailbox,
+        "labels/" + urllib.parse.quote(label_id, safe=""),
+        _token(c, mailbox, write=True),
+        data={"name": name},
+        method="PATCH",
+    )
+    if not row.get("id"):
+        raise Problem("gmail_unavailable", "Gmail returned an incomplete label; try again", 502)
+    return {"id": str(row["id"]), "name": str(row.get("name") or name), "type": "user"}
+
+
+def label_delete(c, mailbox, label_id):
+    """Delete a user label: Gmail takes it off its messages and keeps the messages. True when deleted, False when it
+    was already gone."""
+    url = BASE + urllib.parse.quote(mailbox, safe="") + "/labels/" + urllib.parse.quote(label_id, safe="")
+    status = gmail_delete_call(url, token=_token(c, mailbox, write=True))
+    if status in (200, 204):
+        return True
+    if status == 404:
+        return False
+    if status in (401, 403):
+        raise Problem("gmail_refused", "Gmail refused this change; check the connection and Gmail access", 403)
+    raise Problem("gmail_unavailable", "Gmail did not answer; try again", 502, retryable=True)
 
 
 def send_call(url, *, token, body, content_type, method=None):

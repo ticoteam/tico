@@ -132,6 +132,7 @@ class FakeGmail:
     def _term(self, mailbox, raw, term):
         box = self.box(mailbox)
         names = {row["id"]: row["name"] for row in box["labels"]}
+        term = term.strip("()")  # the read API wraps the caller's query in parentheses
         key, _, value = term.partition(":")
         value = value.strip('"').lower()
         epoch = int(raw["internalDate"]) // 1000
@@ -234,6 +235,13 @@ class FakeGmail:
         if mailbox.lower() in self.down:
             return 503
         box = self.box(mailbox)
+        if tail.startswith("labels/"):
+            lid = tail.split("/", 1)[1]
+            found = [row for row in box["labels"] if row["id"] == lid]
+            box["labels"] = [row for row in box["labels"] if row["id"] != lid]
+            for raw in box["messages"].values():
+                raw["labelIds"] = [x for x in raw["labelIds"] if x != lid]
+            return 204 if found else 404
         gone = box["drafts"].pop(tail.split("/", 1)[1], None)
         if gone:
             box["messages"].pop(gone["message"]["id"], None)
@@ -305,9 +313,29 @@ class FakeGmail:
             return 200, {}
         if tail == "labels":
             return 200, {"labels": copy.deepcopy(box["labels"])}
+        if tail.startswith("labels/") and method == "PATCH":
+            row = next((row for row in box["labels"] if row["id"] == tail.split("/", 1)[1]), None)
+            if row is None:
+                return 404, {}
+            row["name"] = data["name"]
+            return 200, dict(row)
         if tail.startswith("labels/"):
             lid = tail.split("/", 1)[1]
-            return 200, {"messagesTotal": sum(lid in raw["labelIds"] for raw in box["messages"].values())}
+            carrying = [raw for raw in box["messages"].values() if lid in raw["labelIds"]]
+            unread = [raw for raw in carrying if "UNREAD" in raw["labelIds"]]
+            return 200, {
+                "messagesTotal": len(carrying),
+                "messagesUnread": len(unread),
+                "threadsTotal": len({raw["threadId"] for raw in carrying}),
+                "threadsUnread": len({raw["threadId"] for raw in unread}),
+            }
+        if tail.startswith("messages/") and tail.endswith(("/trash", "/untrash")):
+            _, mid, verb = tail.split("/")
+            raw = box["messages"].get(mid)
+            if raw is None:
+                return 404, {}
+            raw["labelIds"] = [x for x in raw["labelIds"] if x != "TRASH"] + (["TRASH"] if verb == "trash" else [])
+            return 200, {"id": mid, "threadId": raw["threadId"], "labelIds": raw["labelIds"]}
         if tail == "messages":
             q = query.get("q", [""])[0]
             found = sorted(

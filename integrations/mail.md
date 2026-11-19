@@ -63,7 +63,12 @@ tico email message owner@example.com 18f2c9a3b4d5e6f7
 tico email attachments owner@example.com 18f2...                 # references a1, a2, ...
 tico email attachment owner@example.com 18f2... a1 --out /private/dir/file.pdf
 tico email label owner@example.com hub/needs-owner 18f2...       # unlabel, archive, unarchive, mark-read, mark-unread
-tico email label owner@example.com STARRED 18f2...               # stars it
+tico email star owner@example.com 18f2...                        # unstar, important, not-important, spam, not-spam
+tico email trash owner@example.com --thread 18f2...              # a whole thread; untrash brings it back
+tico email search owner@example.com 'in:trash'                   # in:sent and in:spam too
+tico email labels owner@example.com                              # every label with its counts
+tico email label-create owner@example.com Clients/Acme           # label-rename, label-delete (your own labels only)
+tico email original owner@example.com 18f2... [--out /tmp/message.eml]   # every header as received
 tico email draft owner@example.com --to person@example.org --subject "..." --body-file out/draft.txt
 tico email draft owner@example.com --reply-to 18f2... --body-file out/reply.txt
 tico email drafts owner@example.com [--q 'to:person@example.org'] [--thread 18f2...]   # draft ids, whoever made them
@@ -85,7 +90,9 @@ tico automation list --owner person:<id>                         # the inbox's M
 tico automation recent-runs --trigger message --range 24h        # what it did to new mail
 ```
 
-Each filing command prints an undo line. Add `--json` for the API response.
+Each filing command prints an undo line. Add `--json` for the API response. Every filing command takes message ids,
+`--thread <id>` (repeatable: every message in the thread) or `--query`. Nothing deletes a message for good: trash and
+spam are kept by Gmail for 30 days, and `untrash` and `not-spam` bring them back.
 
 ## Rules
 

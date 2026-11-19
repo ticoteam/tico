@@ -31,28 +31,43 @@ LIMIT_DEFAULT, LIMIT_MAX = 50, 100
 ATTACHMENTS_MAX = 20
 DRAFT_ID = re.compile(r"r-?\d+")  # Gmail's draft ids; a message id is hex
 DURATION = {"d": 86400, "h": 3600, "m": 60}
+# action: (labels added, labels removed, its undo). Trash and spam are Gmail's own moves (`gmail_live.trash`, `spam`).
 ORGANIZE_ACTIONS = {
     "archive": ((), ("INBOX",), "unarchive"),
     "unarchive": (("INBOX",), (), "archive"),
     "mark_read": ((), ("UNREAD",), "mark_unread"),
     "mark_unread": (("UNREAD",), (), "mark_read"),
+    "star": (("STARRED",), (), "unstar"),
+    "unstar": ((), ("STARRED",), "star"),
+    "important": (("IMPORTANT",), (), "not_important"),
+    "not_important": ((), ("IMPORTANT",), "important"),
     "label": ((), (), "unlabel"),
     "unlabel": ((), (), "label"),
+    "trash": ((), (), "untrash"),
+    "untrash": ((), (), "trash"),
+    "spam": ((), (), "not_spam"),
+    "not_spam": ((), (), "spam"),
 }
 
 
-def organize_selection(body):
-    action, ids, query = body.get("action"), body.get("ids"), body.get("query")
-    if not isinstance(action, str) or action not in ORGANIZE_ACTIONS:
-        raise Problem("action", "Choose archive, unarchive, mark_read, mark_unread, label or unlabel", 422)
-    if (ids is not None) == (query is not None):
-        raise Problem("selection", "Choose either message ids or a Gmail query", 422)
-    if ids is not None and (
-        not isinstance(ids, list)
-        or not 1 <= len(ids) <= 500
-        or any(not isinstance(mid, str) or not mid.strip() or not mid.isascii() or len(mid) > 128 for mid in ids)
+def _ids(value, name, what):
+    if value is not None and (
+        not isinstance(value, list)
+        or not 1 <= len(value) <= 500
+        or any(not isinstance(i, str) or not i.strip() or not i.isascii() or len(i) > 128 for i in value)
     ):
-        raise Problem("ids", "Choose 1 to 500 message ids (up to 128 characters each)", 422)
+        raise Problem(name, f"Choose 1 to 500 {what} ids (up to 128 characters each)", 422)
+
+
+def organize_selection(body):
+    """(action, message ids, query, thread ids, limit, label): exactly one of ids, threads and query is given."""
+    action, ids, query, threads = body.get("action"), body.get("ids"), body.get("query"), body.get("threads")
+    if not isinstance(action, str) or action not in ORGANIZE_ACTIONS:
+        raise Problem("action", "Choose one of " + ", ".join(ORGANIZE_ACTIONS), 422)
+    if sum(x is not None for x in (ids, query, threads)) != 1:
+        raise Problem("selection", "Choose either message ids, thread ids (threads) or a Gmail query", 422)
+    _ids(ids, "ids", "message")
+    _ids(threads, "threads", "thread")
     if query is not None and (not isinstance(query, str) or not query.strip() or len(query) > 4096):
         raise Problem("query", "A Gmail query is required (up to 4096 characters)", 422)
     limit = body.get("limit", 100)
@@ -65,7 +80,8 @@ def organize_selection(body):
         label = label.strip()
     elif label is not None:
         raise Problem("label", "label is only used with label or unlabel", 422)
-    return action, list(dict.fromkeys(ids)) if ids is not None else None, query, limit, label
+    unique = list(dict.fromkeys(ids)) if ids is not None else None
+    return action, unique, query, list(dict.fromkeys(threads)) if threads is not None else None, limit, label
 
 
 def visible_addresses(c, who):
@@ -276,6 +292,11 @@ def stale(addr, did, expected, current):
 
 class MailboxBody(Contract):
     mailbox: str = Field(min_length=3, max_length=320)
+
+
+class LabelBody(Contract):
+    mailbox: str = Field(min_length=3, max_length=320)
+    name: str = Field(min_length=1, max_length=225)
 
 
 def no_draft(addr, ident):
@@ -525,7 +546,8 @@ def install_mail(app, store, auth):
         **api_v2(
             "Email",
             "organizeMailMessages",
-            "Organize up to 500 messages live in Whole Workspace Gmail; requires organize access; never deletes",
+            "Organize up to 500 messages (by id, thread or query) live in Whole Workspace Gmail: archive, read, star, "
+            "important, labels, spam and trash, each with its undo; requires organize access; never deletes for good",
             "MailOrganizeResult",
             request_body={"required": True, "content": {"application/json": {"schema": ref("MailOrganizeBody")}}},
             responses={"403": error("Organize access or the company organize switch is off")},
@@ -553,10 +575,13 @@ def install_mail(app, store, auth):
         key, selection_operation = request.headers.get("idempotency-key"), request.url.path + ":selection"
         with store.read() as c:
             access(c)
-            action, ids, query, limit, label = organize_selection(body)
+            action, ids, query, threads, limit, label = organize_selection(body)
             completed = store.saved(c, who, request.url.path, key)
             if ids is None and not completed and not store.saved(c, who, selection_operation, key):
-                ids = gmail_live.message_ids(c, addr, query, limit)
+                if threads is not None:
+                    ids = gmail_live.thread_message_ids(c, addr, threads)
+                else:
+                    ids = gmail_live.message_ids(c, addr, query, limit)
         if completed:
 
             def expired(c):
@@ -571,7 +596,12 @@ def install_mail(app, store, auth):
             if label is not None and ids:
                 label_id = gmail_live.resolve_label(c, addr, label, create=action == "label")
                 add, remove = ((label_id,), ()) if action == "label" else ((), (label_id,))
-            gmail_live.organize(c, addr, ids, add=add, remove=remove)
+            if action in ("trash", "untrash"):
+                gmail_live.trash(c, addr, ids, restore=action == "untrash")
+            elif action in ("spam", "not_spam"):
+                gmail_live.spam(c, addr, ids, restore=action == "not_spam")
+            else:
+                gmail_live.organize(c, addr, ids, add=add, remove=remove)
         detail = {"mailbox": addr, "action": action, "label": label, "count": len(ids), "ids": ids}
         label_fields = {"label": label} if label is not None else {}
         result = {
@@ -1055,3 +1085,98 @@ def install_mail(app, store, auth):
             addr, _ = require_mailbox(c, who, body.mailbox)
             _refused(c, who, addr, "organize")
         return {"mailbox": addr, "message_id": mid, **mail_unsubscribe.unsubscribe(store, addr, mid, who.actor)}
+
+    @app.get("/api/v2/mail/messages/{msg_id}/original")
+    def original(request: Request, msg_id: str, mailbox: str = "", raw: bool = False):
+        """The message as it was received: every header in order (Received, Authentication-Results, DKIM...) and its
+        size; with `raw`, its whole MIME (base64), at most gmail_live.ATTACHMENT_MAX_BYTES. Audited as a read."""
+        from email.parser import BytesHeaderParser
+
+        who = request.state.identity
+        reader(who)
+        mid = str(msg_id or "").strip()
+        with store.read() as c:
+            addr, _ = require_mailbox(c, who, mailbox)
+            data = gmail_live.raw_message(c, addr, mid)
+        if raw and len(data) > gmail_live.ATTACHMENT_MAX_BYTES:
+            raise Problem("too_large", "This message is over 6 MB; open its original in Gmail", 413)
+        parsed = BytesHeaderParser().parsebytes(data)
+        out = {
+            "mailbox": addr,
+            "message_id": mid,
+            "size": len(data),
+            "headers": [{"name": k, "value": str(v)} for k, v in parsed.items()],
+            **({"raw": base64.b64encode(data).decode()} if raw else {}),
+        }
+        with store.transaction() as c:
+            H.event(c, who.actor, "mail.read", mid, {"mailbox": addr, "kind": "original", "raw": raw})
+        return out
+
+    def label_change(c, who, addr):
+        """A label change needs organize access, a live connection and an install that changes live email."""
+        _refused(c, who, addr, "organize")
+        if not google_tokens.covered(c, addr):
+            raise Problem("mailbox", "Live organizing needs Whole Workspace or Connect Google", 422)
+        _no_live_changes(store, "change")
+
+    @app.get("/api/v2/mail/labels")
+    def mail_labels(request: Request, mailbox: str = ""):
+        """Every Gmail label of the mailbox, system first, with Gmail's message and thread counts (total, unread)."""
+        who = request.state.identity
+        reader(who)
+        with store.read() as c:
+            addr, _ = require_mailbox(c, who, mailbox)
+            return {"mailbox": addr, "labels": gmail_live.labels_counted(c, addr)}
+
+    @app.post("/api/v2/mail/labels")
+    def label_create(request: Request, body: LabelBody):
+        """A user label, made when missing (asked again, it is found: `created` false)."""
+        who = request.state.identity
+        reader(who)
+        name = body.name.strip()
+        with store.read() as c:
+            addr, _ = require_mailbox(c, who, body.mailbox)
+            label_change(c, who, addr)
+            made = gmail_live.label_create(c, addr, name)
+        if made["created"]:
+            with store.transaction() as c:
+                H.event(c, who.actor, "mail.label_created", addr, {"mailbox": addr, "label": made["id"], "name": name})
+        return {"mailbox": addr, **made}
+
+    @app.patch("/api/v2/mail/labels/{label:path}")
+    def label_rename(request: Request, label: str, body: LabelBody):
+        """Rename a user label (by its name or id); its messages keep it. Gmail's system labels are refused."""
+        who = request.state.identity
+        reader(who)
+        name = body.name.strip()
+        with store.read() as c:
+            addr, _ = require_mailbox(c, who, body.mailbox)
+            label_change(c, who, addr)
+            row = gmail_live.user_label(c, addr, label)
+            renamed = gmail_live.label_rename(c, addr, row["id"], name)
+        with store.transaction() as c:
+            H.event(
+                c,
+                who.actor,
+                "mail.label_renamed",
+                addr,
+                {"mailbox": addr, "label": row["id"], "from": row["name"], "to": name},
+            )
+        return {"mailbox": addr, **renamed, "previous_name": row["name"]}
+
+    @app.delete("/api/v2/mail/labels/{label:path}")
+    def label_delete(request: Request, label: str, mailbox: str = ""):
+        """Delete a user label (by its name or id): Gmail takes it off its messages and keeps every message. Gmail's
+        system labels are refused."""
+        who = request.state.identity
+        reader(who)
+        with store.read() as c:
+            addr, _ = require_mailbox(c, who, mailbox)
+            label_change(c, who, addr)
+            row = gmail_live.user_label(c, addr, label)
+            deleted = gmail_live.label_delete(c, addr, row["id"])
+        with store.transaction() as c:
+            H.event(
+                c, who.actor, "mail.label_deleted", addr, {"mailbox": addr, "label": row["id"], "name": row["name"]}
+            )
+        return {"mailbox": addr, "id": row["id"], "name": row["name"], "deleted": deleted}

@@ -19,6 +19,7 @@ from backend.tests.helpers.automation_api import as_bot
 from backend.tests.helpers.automation_mail_actions import BOX, automate, later, owned_by_ana
 from backend.tests.helpers.email_sending import autonomous
 from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
+from backend.tests.helpers.google_workspace_authz import workspace_key  # noqa: F401
 
 REAL_CLASSIFY = S.classify  # before the autouse fixture below swaps it
 SENDER = "billing@vendor.example"
@@ -864,3 +865,97 @@ def test_a_draft_past_many_pages_is_found_by_its_message_and_a_thread_list_pages
     nxt = get(api, f"mail/drafts?mailbox={BOX}&thread=t1&limit=1&cursor={page['next_cursor']}")
     assert [page["drafts"][0]["draft_id"], nxt["drafts"][0]["draft_id"]] == ["r-801", "r-800"]
     assert nxt["next_cursor"] is None
+
+
+# ------------------------------------------------------------------------------------------------- organize, labels
+@pytest.fixture
+def organized(box, workspace_key):
+    box.add(BOX, "m2", thread="t1", sender=SENDER, subject="Re: Invoice 4471", body="Reminder.")
+    box.add(BOX, "m3", thread="t3", sender="news@list.example", subject="Deals", body="Big deals.")
+    return box
+
+
+def organize(api, token="ana-test", expected=200, **body):
+    answer = api.post("/api/v2/mail/messages/organize", json={"mailbox": BOX, **body}, headers=headers(token))
+    assert answer.status_code == expected, answer.text
+    return answer.json()
+
+
+def labels_of(box, mid):
+    return set(box.box(BOX)["messages"][mid]["labelIds"])
+
+
+@pytest.mark.parametrize(
+    ("action", "label", "undo"),
+    [
+        ("star", "STARRED", "unstar"),
+        ("important", "IMPORTANT", "not_important"),
+        ("trash", "TRASH", "untrash"),
+        ("spam", "SPAM", "not_spam"),
+    ],
+)
+def test_a_whole_thread_is_organized_and_undone_and_nothing_is_deleted(api, organized, action, label, undo):
+    done = organize(api, action=action, threads=["t1"])
+    assert done["ids"] == ["m1", "m2"] and done["undo"] == {"action": undo, "ids": ["m1", "m2"]}
+    assert all(label in labels_of(organized, mid) for mid in ("m1", "m2")) and label not in labels_of(organized, "m3")
+    if action in ("trash", "spam"):  # out of the inbox, found again where Gmail keeps it
+        assert [m["msg_id"] for m in get(api, f"mail/messages?mailbox={BOX}&q=in:{action}")["messages"]] == [
+            "m2",
+            "m1",
+        ]
+    organize(api, **done["undo"])
+    assert not any(label in labels_of(organized, mid) for mid in ("m1", "m2"))
+    assert set(organized.box(BOX)["messages"]) == {"m1", "m2", "m3"}  # nothing deleted
+    assert all(not call[0].endswith("/delete") for call in organized.calls)
+
+
+def test_trash_needs_organize_access_and_a_reader_is_refused(api, organized):
+    token = as_bot(api, "ops")
+    grant(api, "ops", "read")
+    assert "may not organize" in organize(api, token, 403, action="trash", ids=["m3"])["error"]["detail"]
+    assert "TRASH" not in labels_of(organized, "m3")
+    organize(api, action="trash", ids=["m3"], threads=["t3"], expected=422)  # one selection only
+
+
+def test_labels_are_listed_with_counts_made_renamed_and_deleted_and_system_labels_are_refused(api, organized):
+    organize(api, action="label", label="Clients/Vendor", threads=["t1"])
+    listed = {row["name"]: row for row in get(api, f"mail/labels?mailbox={BOX}")["labels"]}
+    assert (listed["Clients/Vendor"]["messages_total"], listed["Clients/Vendor"]["threads_total"]) == (2, 1)
+    assert listed["INBOX"]["messages_unread"] == 3 and listed["INBOX"]["type"] == "system"
+    made = post(api, "mail/labels", {"mailbox": BOX, "name": "Receipts"})
+    assert made["created"] and not post(api, "mail/labels", {"mailbox": BOX, "name": "Receipts"})["created"]
+    renamed = api.patch(
+        "/api/v2/mail/labels/Clients%2FVendor", json={"mailbox": BOX, "name": "Clients/Billing"}, headers=headers()
+    )
+    assert renamed.status_code == 200 and renamed.json()["previous_name"] == "Clients/Vendor"
+    gone = api.delete(f"/api/v2/mail/labels/Clients%2FBilling?mailbox={BOX}", headers=headers())
+    assert gone.status_code == 200 and gone.json()["deleted"]
+    assert set(organized.box(BOX)["messages"]) == {"m1", "m2", "m3"}  # its messages are kept
+    for path in ("INBOX", "TRASH"):
+        refused = api.delete(f"/api/v2/mail/labels/{path}?mailbox={BOX}", headers=headers())
+        assert refused.status_code == 422, refused.text
+    assert {row["id"] for row in organized.box(BOX)["labels"]} >= {"INBOX", "TRASH"}
+    with api.app.state.store.read() as c:
+        actions = [r[0] for r in c.execute("SELECT action FROM events WHERE action LIKE 'mail.label_%' ORDER BY rowid")]
+    assert actions == ["mail.label_created", "mail.label_renamed", "mail.label_deleted"]
+
+
+def test_the_original_message_has_every_header_and_saves_as_an_eml(api, box, monkeypatch, tmp_path, capsys):
+    from backend.tests.helpers.automation_cli import Client
+    from clients import hubcli, remotecli
+
+    mime = b"Received: from mx.vendor.example\r\nDKIM-Signature: v=1; d=vendor.example\r\nFrom: " + SENDER.encode()
+    box.box(BOX)["raws"]["m1"] = mime + b"\r\nSubject: Invoice 4471\r\n\r\nPlease pay invoice 4471."
+    read = get(api, f"mail/messages/m1/original?mailbox={BOX}")
+    assert [h["name"] for h in read["headers"]] == ["Received", "DKIM-Signature", "From", "Subject"]
+    assert "raw" not in read and read["size"] == len(box.box(BOX)["raws"]["m1"])
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    monkeypatch.setenv("HUB_TOKEN", "ana-test")
+    monkeypatch.setattr(remotecli, "Client", lambda url, token, **kwargs: Client(api, token))
+    monkeypatch.chdir(tmp_path)
+    assert hubcli.main(["email", "original", BOX, "m1", "--out", "invoice.eml"]) == 0
+    assert (tmp_path / "invoice.eml").read_bytes() == box.box(BOX)["raws"]["m1"]
+    assert json.loads(capsys.readouterr().out)["path"].endswith("invoice.eml")
+    with api.app.state.store.read() as c:
+        kinds = [json.loads(r[0])["kind"] for r in c.execute("SELECT detail FROM events WHERE action='mail.read'")]
+    assert kinds == ["original", "original"]
