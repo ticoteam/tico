@@ -6,6 +6,7 @@ from backend.store import H, encode
 from backend.tests.helpers.api import as_member, assign, get, post, runner  # noqa: F401
 from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.mail_api import put_mail, seed_org
+from backend.tests.helpers.openapi_v2 import conforms
 from backend import bot_settings as BS
 from backend import slack_channels as SC
 from backend.auth import Identity
@@ -111,6 +112,20 @@ def test_a_bots_slack_source_is_the_channel_it_reads_and_an_old_pass_stays_reada
     assert "slack_interval_minutes" not in bots["doc-updater"]
     assert "slack_digests" not in get(api, "messaging/bots/doc-updater", "ana-test")
     assert get(api, "messaging/bots/doc-updater/slack-digests/digest-1", "ana-test")["id"] == "digest-1"
+
+
+def test_the_slack_thread_and_pass_answer_as_the_v2_contract_declares(api, tmp_path, fake_gmail):
+    setup_sources(api, tmp_path)
+    document = get(api, "openapi.json", "ana-test")
+    ops = {op["operationId"]: op for methods in document["paths"].values() for op in methods.values()}
+    for path, operation in (
+        ("messaging/bots/doc-updater/slack-thread?channel=CCHANNEL1&thread_ts=1789800000.000001", "getBotSlackThread"),
+        ("messaging/bots/doc-updater/slack-digests/digest-1", "getBotSlackPass"),
+    ):
+        answer = get(api, path, "ana-test")
+        assert [m["event_id"] for m in answer["messages"]] == ["E1"]
+        schema = ops[operation]["responses"]["200"]["content"]["application/json"]["schema"]
+        assert conforms(answer, schema, document) is None, conforms(answer, schema, document)
 
 
 def test_a_bots_mail_and_review_count_are_read_from_gmail_with_rule_hits_from_runs(api, tmp_path, fake_gmail):

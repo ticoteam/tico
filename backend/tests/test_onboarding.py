@@ -513,6 +513,43 @@ def test_a_restored_bot_keeps_the_model_its_config_names(environment):
     assert config["model"] == "claude-opus-5-5"
 
 
+def test_the_assistant_turned_on_or_off_reaches_each_persons_live_stream(environment):
+    """A page learns the Assistant went on or off from the stream, not by reading `GET /api/v2/assistant` again: the
+    Assistant's state change is a `bots` event that names it, sent to the owner and to a teammate."""
+    from backend import events as E
+    from backend.auth import Identity
+
+    api = environment(seed={**SEED, "assistant": {**SEED["assistant"], "template": "assistant"}})
+    machine(api)
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.read() as c:
+        owner = auth.owner_identity(c)
+        after = E.latest(c)
+    riley = Identity("human:riley", "human", "riley@acme.example")
+
+    def sent(who, since):
+        with store.read() as c:
+            events, cursor, _, _ = E.read(
+                c, auth, who, since, topics=("bots",), task_views=lambda *a, **k: [], task_view=None
+            )
+        return [data for _, _, data in events if data["bot"] == "assistant"], cursor
+
+    turned = api.post("/api/v2/assistant/turn-on", json={}, headers=signed_in())
+    assert turned.status_code == 200 and turned.json()["state"] == "active", turned.text
+    assert api.get("/api/v2/assistant", headers=signed_in()).json()["available"] is True
+    assert sent(owner, after)[0] and sent(riley, after)[0]
+    after = sent(owner, after)[1]
+    revision = api.get("/api/v2/bots/assistant", headers=signed_in()).json()["revision"]
+    off = api.post(  # built in, so paused rather than archived
+        "/api/v2/bots/assistant/definition",
+        json={"status": "paused", "expected_revision": revision},
+        headers=signed_in(),
+    )
+    assert off.status_code == 200, off.text
+    assert api.get("/api/v2/assistant", headers=signed_in()).json()["available"] is False
+    assert sent(owner, after)[0] and sent(riley, after)[0]
+
+
 def test_a_save_that_names_no_places_keeps_the_saved_ones_and_an_empty_list_clears_them(environment):
     api = environment()
     machine(api)
