@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { directoryQuery, useActor } from '@/data';
 import { fmtMoney } from '@/lib';
+import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Lines, Sparkline } from '@/kit/Chart';
@@ -574,7 +575,9 @@ function HealthFoot({ health: h, quietOnly }: { health: GrowthHealth; quietOnly:
   const checks = h.checks ?? [];
   const unknown =
     !quietOnly && h.unknown_share ? `${pct(h.unknown_share)} of ${h.basis === 'signups' ? 'sign-ups' : 'new customers'} have no known channel` : '';
-  if (!checks.some((c) => c.agrees !== false) && !unknown) return null;
+  // When each source last pushed: one quiet line; a stale one is already said out loud above.
+  const pushed = (h.sources ?? []).filter((s) => !s.stale);
+  if (!checks.some((c) => c.agrees !== false) && !unknown && !pushed.length) return null;
   return (
     <div className="gr-health" data-target="growth:health">
       {checks.map((c) =>
@@ -593,6 +596,17 @@ function HealthFoot({ health: h, quietOnly }: { health: GrowthHealth; quietOnly:
         ) : null,
       )}
       {unknown && <p>{unknown}</p>}
+      {pushed.length > 0 && (
+        <p>
+          Last pushed:{' '}
+          {pushed.map((s, i) => (
+            <span key={s.source}>
+              {i > 0 && ', '}
+              {s.name} <Ago at={s.pushed_at ?? s.as_of} />
+            </span>
+          ))}
+        </p>
+      )}
     </div>
   );
 }

@@ -708,6 +708,8 @@ export interface GrowthHealth {
   no_segment?: number;
   mismatch?: number;
   stale_sources: string[];
+  /** When each source last pushed (typed-by-hand rows have none), newest data date `as_of` and push time `pushed_at`. */
+  sources?: { source: string; name: string; as_of: string; pushed_at?: string | null; stale: boolean }[];
   reconciled: 'reconciled' | 'off' | 'not_reconciled';
   /** Only when a check KPI is set up. */
   checks?: GrowthCheck[];

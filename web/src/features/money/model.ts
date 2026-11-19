@@ -311,7 +311,10 @@ export function loudHealth(h: GrowthRead['health'] | undefined): string[] {
     if (c.agrees !== false) continue;
     out.push(`${FIGURE_WORD[c.figure]} is off from ${c.kpi}: ${count(c.growth)} here, ${count(c.outside)} there`);
   }
-  if (h.stale_sources.length) out.push(`Stale: ${h.stale_sources.join(', ')}`);
+  if (h.stale_sources.length) {
+    const name = (s: string) => h.sources?.find((x) => x.source === s)?.name ?? s;
+    out.push(`Stale: ${h.stale_sources.map(name).join(', ')}`);
+  }
   return out;
 }
 
