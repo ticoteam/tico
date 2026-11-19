@@ -5695,7 +5695,9 @@ class Execution:
             row = read()
         origin = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0])
         principal = privacy.make_page_actor(c, "bot:" + row["bot_id"], origin)
-        if not privacy.attempt_readable(c, principal, aid):
+        # A fenced turn's completion (backend/residents.py) stays accepted after it lost the task, so its usage is
+        # counted; `complete` keeps nothing else of it.
+        if not privacy.attempt_readable(c, principal, aid) and not (final and residents.fenced(c, aid)):
             raise Problem("stale_lease", "Task access expired; stop this attempt", 409)
         if (
             row["state"] in ("leased", "running")
@@ -6094,6 +6096,8 @@ class Execution:
             **(
                 {"stop": True}
                 if row["stop_requested_at"]
+                # A turn a revocation fenced (backend/residents.py) stops whichever path fenced it, a trigger's too.
+                or residents.fenced(c, aid)
                 or row["state"] == "leased"
                 and start_refused(c, aid)
                 or start_places.is_waiting(c, aid)
@@ -6365,6 +6369,7 @@ class Execution:
     def thread(self, c, who, aid, body):
         """A confirmed running provider session, persisted before work can need a lease continuation."""
         row = self.attempt(c, who, aid)
+        residents.refuse_fenced(c, aid)  # a fenced turn's session is not saved for its next turn
         if row["state"] != "running":
             raise Problem("not_running", "This attempt is not running", 409)
         if body.source_pending or body.source_continuation:
@@ -6931,10 +6936,20 @@ class Execution:
         # finished turn: nothing to run again.
         if benched and body.outcome == "completed" and not quarantine_stops.restarted(c, row):
             body = body.model_copy(update={"outcome": "interrupted"})
-        # A turn a revocation fenced (backend/residents.py) never posts its answer, whoever stopped it; its usage
-        # below is still counted.
-        if body.outcome == "completed" and residents.fenced(c, aid):
-            body = body.model_copy(update={"outcome": "interrupted"})
+        # A turn a revocation fenced (backend/residents.py) settles content-free, whoever stopped it: its usage, pushes
+        # and undelivered inputs are kept, and nothing it wrote is posted or stored. Its output after the fence was
+        # acknowledged and dropped, so its last sequence is the stored one.
+        if not voice_closed and residents.fenced(c, aid):
+            from .models import Completion
+
+            body = Completion(
+                outcome="interrupted" if body.outcome == "completed" else body.outcome,
+                last_seq=row["last_seq"],
+                usage=body.usage,
+                undelivered=body.undelivered,
+                pushes=body.pushes,
+            )
+            rule_check = None
         # `attempt` has already given `restore` its chance. What is left is a finished turn whose
         # lease lapsed under it: settle the job with it when the job is still waiting, and file it
         # against the attempt when it is not. Refusing it was how a run that opened three pull

@@ -31,6 +31,8 @@ CAPABILITY = "resident_threads_v1"
 # A resident renews about every minute; one unheard from for this long is closed the next time anything reads it.
 LEASE_SECONDS = 300
 RENEW_SECONDS = 60
+# The most residents one computer keeps open: reconcile names every one it holds in a single request.
+MAX_OPEN = 500
 
 # What a stopped turn's notice says stopped it, by revocation reason (quarantine_stops.resident).
 WHY = {
@@ -45,6 +47,12 @@ WHY = {
 }
 
 OPEN = "state <> 'closed'"
+# Residents whose bound turn is still leased or running, open or not: a revocation fences such a turn even after its
+# resident was replaced, released or lapsed, since the turn keeps its own lease. Starts from the few live attempts.
+SERVING = (
+    "id IN (SELECT rt.resident_session_id FROM attempts a JOIN resident_turns rt ON rt.attempt_id=a.id "
+    "WHERE a.state IN ('leased','running') AND rt.fenced_at IS NULL)"
+)
 
 
 def enabled(runner):
@@ -97,11 +105,9 @@ def admissible(c, row):
     the default the server records when the runner names none."""
     from .execution import thread_payload, work_task_id
 
-    job = c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone() if row["job_id"] else None
-    msg = H.message(c, job[0], include_deleted=True) if job else None
+    msg, conv = _origin(c, row)
     if not msg:
         return []
-    conv = H.conversation(c, msg["conversation_id"])
     task_id = work_task_id(msg, conv)
     task = H.task(c, task_id) if task_id else None
     payload = thread_payload(c, conv, msg) or {}
@@ -121,8 +127,46 @@ def admissible(c, row):
     return list(dict.fromkeys(keys))
 
 
+def _origin(c, row):
+    """The message and conversation the turn answers, or (None, None)."""
+    job = c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone() if row["job_id"] else None
+    msg = H.message(c, job[0], include_deleted=True) if job else None
+    return (msg, H.conversation(c, msg["conversation_id"])) if msg else (None, None)
+
+
+def _reusable(c, row):
+    """Refuse a turn whose session is deliberately its own: a Make page request (an attempt-specific session that keeps
+    the person's private history apart) or a job the release policy let go to start fresh or fork the bot's latest
+    session. Such a turn runs the ordinary way and never registers or joins a resident."""
+    from .wake_presets import POLICY_CLASSES
+
+    msg, _ = _origin(c, row)
+    refs = H._json(dict(msg or {}).get("refs"), {}) or {}
+    job = c.execute("SELECT wake_class, released FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
+    if (isinstance(refs, dict) and refs.get("make_page")) or (job and job[1] and job[0] in POLICY_CLASSES):
+        raise Problem("resident_refused", "This turn runs in a session of its own", 409)
+
+
+def _subscription(c, row):
+    """The company subscription this turn signs in with for its runtime, or '' for the computer's own login."""
+    found = c.execute(
+        "SELECT subscription_id FROM attempt_subscriptions WHERE attempt_id=? AND runtime=?",
+        (row["id"], row["handed_runtime"] or ""),
+    ).fetchone()
+    return found[0] if found else ""
+
+
+def _mark(c):
+    """Record that access narrowed now: a turn claimed before this cannot register a resident (`register`)."""
+    c.execute(
+        "INSERT INTO resident_access_changes(id,changed_at) VALUES(1,?) "
+        "ON CONFLICT(id) DO UPDATE SET changed_at=excluded.changed_at",
+        (H.now(),),
+    )
+
+
 def _close(c, ids, reason, *, revoked, fence):
-    """End these open residents; a revocation (`fence`) also fences their live turns and stops them."""
+    """End these residents (those still open); a revocation (`fence`) also fences their live turns and stops them."""
     if not ids:
         return []
     now = H.now()
@@ -137,15 +181,15 @@ def _close(c, ids, reason, *, revoked, fence):
             f"WHERE rt.resident_session_id IN ({marks}) AND rt.fenced_at IS NULL AND a.state IN ('leased','running')",
             ids,
         ).fetchall()
-        c.execute(
-            f"UPDATE resident_turns SET fenced_at=?, fence_reason=? WHERE resident_session_id IN ({marks}) "
-            "AND fenced_at IS NULL",
-            (now, reason, *ids),
-        )
         line = "Stopped: " + WHY.get(reason, "its access changed")
         for row in live:
-            # The renew answer carries the stop at once; the turn's job goes back in the queue to start fresh
-            # (quarantine_stops.then), unless it may already have done something outside Tico.
+            # Only turns that can still act are fenced; finished ones keep their history as it was. The renew answer
+            # carries the stop at once, and the turn's job goes back in the queue (quarantine_stops.then), unless it
+            # may already have done something outside Tico.
+            c.execute(
+                "UPDATE resident_turns SET fenced_at=?, fence_reason=? WHERE attempt_id=? AND fenced_at IS NULL",
+                (now, reason, row["id"]),
+            )
             quarantine_stops.resident(c, row, line)
             stopped.append(row["id"])
     c.execute(
@@ -184,9 +228,19 @@ def revoke(
     """End the residents a change of access touches, in the change's own write: one bot's (`bot`), one computer's
     (`runner`), the sessions of these thread trees or tasks (`roots`, `tasks`), or every one (`everyone`). A thread
     or task scope also ends the bots' shared public sessions, which may have read it. `fence=False` (a cleared
-    session) ends the processes without stopping their turns. Returns the turns stopped. Free when none is open, as
-    on every server whose runners have not turned resident sessions on."""
-    if not c.execute(f"SELECT 1 FROM resident_sessions WHERE {OPEN} LIMIT 1").fetchone():
+    session) ends the processes without stopping their turns. A revocation also fences a live turn whose resident
+    already closed (replaced, released or lapsed under it), and is recorded so a turn claimed before it never registers
+    a resident (`register`). Returns the turns stopped. Two indexed probes when none is open, as on every server whose
+    runners have not turned resident sessions on."""
+    if fence:
+        _mark(c)
+    if (
+        not c.execute(f"SELECT 1 FROM resident_sessions WHERE {OPEN} LIMIT 1").fetchone()
+        and not c.execute(
+            "SELECT 1 FROM attempts a JOIN resident_turns rt ON rt.attempt_id=a.id "
+            "WHERE a.state IN ('leased','running') AND rt.fenced_at IS NULL LIMIT 1"
+        ).fetchone()
+    ):
         return []
     where, args = [], []
     if bot:
@@ -199,17 +253,15 @@ def revoke(
     for root in roots:
         # Any resident that served a turn in the thread tree ends too: a task's session reads its thread.
         scope.append(
-            "session_key LIKE ? ESCAPE '\\' OR session_key=? OR EXISTS (SELECT 1 FROM resident_turns rt "
-            "JOIN attempts a ON a.id=rt.attempt_id JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
-            "JOIN conversations t ON t.id=m.conversation_id "
-            "WHERE rt.resident_session_id=resident_sessions.id AND (t.id=? OR t.root_id=?))"
+            "session_key LIKE ? ESCAPE '\\' OR session_key=? OR id IN (SELECT resident_session_id FROM resident_turns "
+            "WHERE conversation_id IN (SELECT id FROM conversations WHERE id=? OR root_id=?))"
         )
         args += [_like(f"root:{root}:") + "%", "conversation:" + root, root, root]
     for task in tasks:
         # A subtask's turns run in its session root's session, so a resident that served any turn on the task ends too.
         scope.append(
-            "session_key=? OR EXISTS (SELECT 1 FROM resident_turns rt JOIN attempts a ON a.id=rt.attempt_id "
-            "WHERE rt.resident_session_id=resident_sessions.id AND a.task_id=?)"
+            "session_key=? OR id IN (SELECT rt.resident_session_id FROM attempts a "
+            "JOIN resident_turns rt ON rt.attempt_id=a.id WHERE a.task_id=?)"
         )
         args += ["task:" + task, task]
     if scope:
@@ -217,10 +269,11 @@ def revoke(
         where.append("(" + " OR ".join(scope) + ")")
     if not where and not everyone:
         return []
+    within = f"({OPEN} OR {SERVING})" if fence else OPEN
     ids = [
         r[0]
         for r in c.execute(
-            f"SELECT id FROM resident_sessions WHERE {OPEN}" + "".join(" AND " + w for w in where), args
+            f"SELECT id FROM resident_sessions WHERE {within}" + "".join(" AND " + w for w in where), args
         ).fetchall()
     ]
     return _close(c, ids, reason, revoked=fence, fence=fence)
@@ -277,6 +330,12 @@ def register(execution, c, who, aid, body):
     refuse_fenced(c, aid)
     if row["stop_requested_at"]:
         raise Problem("resident_refused", "This turn is stopping", 409)
+    _reusable(c, row)
+    changed = c.execute("SELECT changed_at FROM resident_access_changes WHERE id=1").fetchone()
+    if changed and changed[0] >= row["created_at"]:
+        # Access narrowed after this turn was claimed: its process may hold what the bot no longer may. The turn
+        # finishes the ordinary way; the session's next turn may register.
+        raise Problem("resident_refused", "Access changed during this turn; its process is not kept", 409)
     key, _ = _key(c, row, body.session_key)
     bound = c.execute("SELECT resident_session_id FROM resident_turns WHERE attempt_id=?", (aid,)).fetchone()
     _lapse(c, "bot_id=?", (row["bot_id"],))
@@ -293,12 +352,16 @@ def register(execution, c, who, aid, body):
             raise Problem("resident_taken", "Another process already keeps this session", 409)
         # The runner lost the process behind its old incarnation; the old one's turns end with their own leases.
         _close(c, [held["id"]], "replaced", revoked=False, fence=False)
+    count = c.execute(f"SELECT count(*) FROM resident_sessions WHERE runner_id=? AND {OPEN}", (runner["id"],))
+    if count.fetchone()[0] >= MAX_OPEN:
+        raise Problem("resident_refused", "This computer keeps as many resident sessions as it may", 409)
+    msg, _ = _origin(c, row)
     now = H.now()
     rid = H.new_id()
     c.execute(
         "INSERT INTO resident_sessions(id,bot_id,runner_id,generation,session_key,binding,provider_session_id,runtime,"
-        "source_attempt_id,state,created_at,updated_at,renewed_at,expires_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?,'live',?,?,?,?)",
+        "subscription_id,source_attempt_id,state,created_at,updated_at,renewed_at,expires_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,'live',?,?,?,?)",
         (
             rid,
             row["bot_id"],
@@ -308,6 +371,7 @@ def register(execution, c, who, aid, body):
             body.binding,
             body.provider_session_id,
             row["handed_runtime"] or "",
+            _subscription(c, row),
             aid,
             now,
             now,
@@ -315,7 +379,10 @@ def register(execution, c, who, aid, body):
             H.shift(now, seconds=LEASE_SECONDS),
         ),
     )
-    c.execute("INSERT INTO resident_turns(attempt_id,resident_session_id,created_at) VALUES(?,?,?)", (aid, rid, now))
+    c.execute(
+        "INSERT INTO resident_turns(attempt_id,resident_session_id,conversation_id,created_at) VALUES(?,?,?,?)",
+        (aid, rid, msg["conversation_id"] if msg else "", now),
+    )
     H.event(c, who.actor, "resident.register", rid, {"bot": row["bot_id"], "attempt_id": aid, "key": key})
     return view(_read(c, rid))
 
@@ -373,14 +440,22 @@ def bind(execution, c, who, aid, body):
             409,
             extra={"stop_reason": resident["stop_reason"]},
         )
-    if resident["bot_id"] != row["bot_id"] or resident["generation"] != row["generation"]:
+    if (
+        resident["bot_id"] != row["bot_id"]
+        or resident["generation"] != row["generation"]
+        or resident["runtime"] != (row["handed_runtime"] or "")
+        or resident["subscription_id"] != _subscription(c, row)
+    ):
+        # Another bot, generation, runtime or sign-in: the process was started for other work.
         raise Problem("resident_mismatch", "This resident session belongs to other work", 409)
+    _reusable(c, row)
     if resident["session_key"] not in admissible(c, row):
         raise Problem("session_key_mismatch", "This resident session is outside this turn's audience", 409)
+    msg, _ = _origin(c, row)
     now = H.now()
     c.execute(
-        "INSERT INTO resident_turns(attempt_id,resident_session_id,created_at) VALUES(?,?,?)",
-        (aid, resident["id"], now),
+        "INSERT INTO resident_turns(attempt_id,resident_session_id,conversation_id,created_at) VALUES(?,?,?,?)",
+        (aid, resident["id"], msg["conversation_id"] if msg else "", now),
     )
     c.execute(
         "UPDATE resident_sessions SET state='live', renewed_at=?, expires_at=?, updated_at=? WHERE id=?",
@@ -397,9 +472,14 @@ def reconcile(execution, c, who, body):
     runner = _runner(execution, c, who)
     _lapse(c, "runner_id=?", (runner["id"],))
     held = {r.id: r.state for r in body.residents}
+    # Only residents registered before a renew interval ago count as missing: one registered while this request was on
+    # its way is not in the runner's list yet, and must not be closed by it.
+    settled = H.shift(H.now(), seconds=-RENEW_SECONDS)
     open_ids = [
         r[0]
-        for r in c.execute(f"SELECT id FROM resident_sessions WHERE runner_id=? AND {OPEN}", (runner["id"],)).fetchall()
+        for r in c.execute(
+            f"SELECT id FROM resident_sessions WHERE runner_id=? AND {OPEN} AND created_at<?", (runner["id"], settled)
+        ).fetchall()
     ]
     _close(c, [rid for rid in open_ids if rid not in held], "not_held", revoked=False, fence=False)
     keep, stops = [], []

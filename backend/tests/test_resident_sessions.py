@@ -21,11 +21,11 @@ def turn(api, r, text):
     return claim(api, r)
 
 
-def complete(api, r, aid, text="Done.", outcome="completed"):
+def complete(api, r, aid, text="Done.", outcome="completed", last_seq=0):
     return post(
         api,
         f"attempts/{aid}/complete",
-        {"outcome": outcome, "last_seq": 0, "text": text, "usage": {"input_tokens": 120, "output_tokens": 30}},
+        {"outcome": outcome, "last_seq": last_seq, "text": text, "usage": {"input_tokens": 120, "output_tokens": 30}},
         r["token"],
     )
 
@@ -121,13 +121,54 @@ def test_a_running_turn_fenced_mid_run_counts_its_usage_but_posts_nothing(api):
     revoke_ops(api)
     event = {"seq": 1, "kind": "delta", "payload": {"text": "Invoice sent to Acme."}}
     acked = post(api, f"attempts/{a2['id']}/events", {"events": [event]}, r["token"])
-    assert acked["historical"] is True
+    assert acked["historical"] is True and acked["ack_seq"] == 1
     assert row(api, "SELECT count(*) FROM attempt_events WHERE attempt_id=?", a2["id"])[0] == 0
     assert post(api, f"attempts/{a2['id']}/inputs", {}, r["token"])["messages"] == []
-    complete(api, r, a2["id"], "Invoice sent to Acme.")
+    # The runner completes with the sequence it was acknowledged, as a real one does.
+    complete(api, r, a2["id"], "Invoice sent to Acme.", last_seq=acked["ack_seq"])
     assert row(api, "SELECT count(*) FROM messages WHERE body=?", "Invoice sent to Acme.")[0] == 0
-    done = row(api, "SELECT input_tokens, outcome FROM attempts WHERE id=?", a2["id"])
+    done = row(api, "SELECT input_tokens, final_text, result FROM attempts WHERE id=?", a2["id"])
     assert done["input_tokens"] == 120
+    assert "Invoice sent" not in (done["final_text"] or "") + (done["result"] or "")
+
+
+def test_a_revocation_reaches_a_turn_whose_resident_already_closed(api):
+    r = machine(api)
+    _, held = first_turn(api, r)
+    a2 = turn(api, r, "Send Acme the invoice")
+    post(api, f"attempts/{a2['id']}/resident-bind", {"resident_id": held["id"]}, r["token"])
+    post(api, f"attempts/{a2['id']}/started", {"thread_id": "acme-thread"}, r["token"])
+    post(api, f"residents/{held['id']}/release", {"reason": "exited"}, r["token"])
+    assert revoke_ops(api) == [a2["id"]]  # the turn keeps its own lease, so it is still fenced
+    assert post(api, f"attempts/{a2['id']}/renew", {}, r["token"])["stop"] is True
+
+
+def test_a_turn_claimed_before_an_access_change_keeps_no_process(api):
+    r = machine(api)
+    a1 = turn(api, r, "What did Acme order last week?")
+    post(api, f"attempts/{a1['id']}/started", {"thread_id": "acme-thread"}, r["token"])
+    assert revoke_ops(api) == []  # nothing open yet, but the change is recorded
+    late = runner_call(api, r, f"attempts/{a1['id']}/resident", {"provider_session_id": "acme-thread"})
+    assert late.status_code == 409 and late.json()["error"]["code"] == "resident_refused"
+    complete(api, r, a1["id"], "Acme ordered 12 crates.")  # the turn itself finishes as before
+    assert row(api, "SELECT count(*) FROM messages WHERE body=?", "Acme ordered 12 crates.")[0] == 1
+
+
+def test_a_retried_start_after_a_revocation_is_stopped_not_replayed(api):
+    r = machine(api)
+    _, held = first_turn(api, r)
+    a2 = turn(api, r, "Send Acme the invoice")
+    post(api, f"attempts/{a2['id']}/resident-bind", {"resident_id": held["id"]}, r["token"])
+    post(api, f"attempts/{a2['id']}/started", {"thread_id": "acme-thread"}, r["token"], key="acme-start")
+    revoke_ops(api)
+    again = api.post(
+        f"/api/v2/attempts/{a2['id']}/started",
+        json={"thread_id": "acme-thread"},
+        headers=headers(r["token"], "acme-start"),
+    )
+    assert again.status_code == 409 and again.json()["error"]["code"] == "stale_lease"
+    renewed = api.post(f"/api/v2/residents/{held['id']}/renew", json={"state": "live"}, headers=headers(r["token"]))
+    assert renewed.json()["stop"] is True
 
 
 def test_a_paused_bot_ends_its_residents_in_the_same_write(api):
@@ -142,6 +183,10 @@ def test_a_paused_bot_ends_its_residents_in_the_same_write(api):
     out = post(api, "runners/me/residents/reconcile", {"residents": [{"id": held["id"], "state": "live"}]}, r["token"])
     assert out["stops"] == [{"id": held["id"], "stop_reason": "bot_paused", "revoked": True}]
     assert out["fenced_attempts"] == [a2["id"]] and out["residents"] == []
+    # Resumed, the bot's fenced turn still hears stop: the fence itself answers, not only a recorded Stop.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE id=?", (H.resolve_bot(c, "ops")["id"],))
+    assert post(api, f"attempts/{a2['id']}/renew", {}, r["token"])["stop"] is True
 
 
 def test_a_late_release_from_a_replaced_process_leaves_its_replacement(api):
@@ -166,10 +211,14 @@ def test_a_late_release_from_a_replaced_process_leaves_its_replacement(api):
 def test_reconcile_closes_what_the_runner_no_longer_holds(api):
     r = machine(api)
     _, held = first_turn(api, r)
-    out = post(
-        api, "runners/me/residents/reconcile", {"residents": [{"id": "acme-unknown", "state": "live"}]}, r["token"]
-    )
+    # Registered a moment ago, it may not be in the runner's list yet: a reconcile on its way leaves it open.
+    reconcile = {"residents": [{"id": "acme-unknown", "state": "live"}]}
+    out = post(api, "runners/me/residents/reconcile", reconcile, r["token"])
     assert out["stops"] == [{"id": "acme-unknown", "stop_reason": "unknown", "revoked": False}]
+    assert row(api, "SELECT state FROM resident_sessions WHERE id=?", held["id"])[0] == "live"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE resident_sessions SET created_at=? WHERE id=?", (H.shift(H.now(), seconds=-120), held["id"]))
+    post(api, "runners/me/residents/reconcile", reconcile, r["token"])
     assert row(api, "SELECT stop_reason FROM resident_sessions WHERE id=?", held["id"])[0] == "not_held"
 
 

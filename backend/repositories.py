@@ -1496,6 +1496,11 @@ def install(app, store, service):
                 raise Problem('not_found', 'No such repository; refresh the list', 404)
             if body.enabled is not None:
                 c.execute('UPDATE repositories SET enabled=? WHERE full_name=?', (int(body.enabled), name))
+                if not body.enabled and before['enabled']:
+                    from . import residents
+
+                    # A process may hold a token that reached it (backend/residents.py).
+                    residents.revoke(c, 'credential_revoked', everyone=True)
             if 'setup_command' in body.model_fields_set:
                 # A cleared command hands the row back to the repository's tico.json / conductor.json on the next sync.
                 command = (body.setup_command or '').strip() or None

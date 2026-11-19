@@ -12,8 +12,8 @@ run (backend/model_subscriptions.py), so its work goes back in the queue to star
 the same way.
 
 A resident stop (`resident`) is the same Tico Stop for a revocation: a change of access ended the resident session
-(backend/residents.py) the run was bound to. Its answer is never posted, and its work goes back in the queue to start
-fresh under the access the bot has now.
+(backend/residents.py) the run was bound to. Its answer is never posted, and its work goes back in the queue to run
+again under the access the bot has now.
 """
 
 import json
@@ -78,7 +78,7 @@ def restart(c, row, line):
 
 def resident(c, row, line):
     """Record a Tico Stop on a live attempt a revocation fenced (backend/residents.py): its renewal answers stop, its
-    answer is not posted, and its work goes back in the queue (`requeues`) to start fresh. A Stop already recorded
+    answer is not posted, and its work goes back in the queue (`requeues`) to run again. A Stop already recorded
     stands. Returns whether it was new."""
     if row["stop_requested_at"]:
         return False
@@ -181,4 +181,4 @@ HELD = (
 )
 RESTARTED = "This run goes back in the queue and starts fresh on the new sign-in."
 RESTART_HELD = HELD
-RESIDENT_REQUEUED = "This run goes back in the queue and starts fresh."
+RESIDENT_REQUEUED = "This run goes back in the queue to run again."

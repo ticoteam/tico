@@ -3637,13 +3637,12 @@ def remove_member(c, principal, thread_id, actor):
         (_now(), actor, root["id"]),
     )
     c.execute("UPDATE conversations SET updated_at=? WHERE id=?", (_now(), root["id"]))
-    if str(actor).startswith(("bot:", "group:")):
-        # A bot (or a group of bots) that loses the thread loses the processes that read it, in this write
-        # (backend/residents.py). A person leaving only narrows who reads it.
-        from . import residents
+    from . import residents
 
-        bot = actor[4:] if actor.startswith("bot:") else None
-        residents.revoke(c, "thread_member_removed", bot=bot, roots=[str((root or {}).get("id"))])
+    # A bot (or a group of bots) that loses the thread loses the processes that read it, in this write
+    # (backend/residents.py). A person who leaves may be whom an Assistant read it for, so every process on it ends.
+    bot = actor[4:] if str(actor).startswith("bot:") else None
+    residents.revoke(c, "thread_member_removed", bot=bot, roots=[str((root or {}).get("id"))])
     _event(c, me, "thread.member_removed", root["id"], {"actor": actor})
     _audit(c, me, "thread:" + root["id"], {"member": actor}, None)
     return {"thread_id": root["id"], "actor": actor, "removed": bool(gone)}

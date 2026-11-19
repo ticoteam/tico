@@ -63,7 +63,11 @@ def resolved_installs(c, target_type, target_id):
 def attempt_bot(c, execution, who, aid):
     """The attempt's row, for its runner or for the bot's own run of it; anyone else is refused (403)."""
     if who.role == "runner":
-        return execution.attempt(c, who, aid, active=False)
+        from . import residents
+
+        row = execution.attempt(c, who, aid, active=False)
+        residents.refuse_fenced(c, aid)  # a fenced turn is staged nothing more (backend/residents.py)
+        return row
     if who.role == "bot" and who.attempt_id and who.attempt_id == aid:
         row = c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
         if row and "bot:" + row["bot_id"] == who.actor:

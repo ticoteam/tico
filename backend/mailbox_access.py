@@ -471,6 +471,11 @@ def grant(c, actor, mailbox_id, grantee_type, grantee_id, level):
             "UPDATE mailbox_accesses SET level=?, granted_by=?, updated_at=? WHERE id=?", (level, by, now, found["id"])
         )
         access_id, before = found["id"], found["level"]
+        if before != level:
+            from . import residents
+
+            # A process may still act with the level it had (backend/residents.py), as `revoke` says.
+            residents.revoke_for(c, "credential_revoked", ("bot:" if grantee_type == "bot" else "human:") + ident)
     else:
         access_id, before = H.new_id(), None
         c.execute(
@@ -679,6 +684,9 @@ def message_bot_changed(c, person, old_bot, old_address, bot):
                 "DELETE FROM mailbox_accesses WHERE mailbox_id=? AND grantee_type='bot' AND grantee_id=?",
                 (old["id"], old_bot),
             )
+            from . import residents
+
+            residents.revoke(c, "credential_revoked", bot=old_bot)  # its process read the mailbox it lost
     if not bot:
         return None
     from . import routines

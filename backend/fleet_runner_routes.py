@@ -653,11 +653,13 @@ def register(
         from . import stream_capture
 
         body = scrub_attempt(aid, body)  # a secret set in this run never reaches the record
-        return mutate(
-            request,
-            body,
-            lambda c: stream_capture.keep(c, execution.attempt(c, request.state.identity, aid, active=False), body),
-        )
+
+        def keep(c):
+            row = execution.attempt(c, request.state.identity, aid, active=False)
+            residents.refuse_fenced(c, aid)  # a fenced turn's stream is not kept (backend/residents.py)
+            return stream_capture.keep(c, row, body)
+
+        return mutate(request, body, keep)
 
     @app.post("/api/v2/attempts/{aid}/diagnostics")
     def attempt_diagnostics(request: Request, aid: str, body: M.AttemptStderr):
@@ -1165,6 +1167,8 @@ def register_completion(
         with store.read() as c:
             if not org_rule_check.R.any_active(c):
                 return None  # no rule in force: the completion reads nothing more for its check
+            if residents.fenced(c, aid):
+                return None  # a fenced turn's reply is never posted (backend/residents.py), so it is not checked
             if store.saved(c, request.state.identity, request.url.path, request.headers.get("idempotency-key")):
                 return None  # a retry answers from its saved result; nothing is checked again
             row = c.execute(

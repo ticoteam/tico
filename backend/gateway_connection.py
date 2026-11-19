@@ -399,6 +399,10 @@ def clear(c, who, now, settings=None):
     if before.get("origin") == AUTOMATIC:
         after["auto"] = {"off": True, "at": now}  # cleared on purpose: not enrolled again behind the owner's back
     _write(c, after)
+    from . import residents
+
+    # A run's relay holds the key for the turn (execution.run_usage): processes that ran on it end (backend/residents.py).
+    residents.revoke(c, "credential_revoked", everyone=True)
     H.event(c, who.actor, "gateway.connection.cleared", PROVIDER, {"revision": after["revision"]})
     return _public(before), _public(after)
 

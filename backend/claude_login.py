@@ -555,8 +555,10 @@ def _tokens(c: Any, runner_id: str, live: "list[LiveToken]") -> list[Row]:
         if not sub or sub["kind"] != KIND or sub["status"] == "needs_reconnect" or sub["revision"] <= item.revision:
             continue
         if not c.execute(
+            # A turn a revocation fenced (backend/residents.py) is no reason to hand the computer a fresh token.
             "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id WHERE s.subscription_id=? "
-            "AND a.runner_id=? AND a.state IN ('leased','running') LIMIT 1",
+            "AND a.runner_id=? AND a.state IN ('leased','running') AND NOT EXISTS (SELECT 1 FROM resident_turns rt "
+            "WHERE rt.attempt_id=a.id AND rt.fenced_at IS NOT NULL) LIMIT 1",
             (sub["id"], runner_id),
         ).fetchone():
             continue
