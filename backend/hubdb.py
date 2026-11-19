@@ -6716,11 +6716,15 @@ def conversation_rows(conn, ids):
             for row in conn.execute("SELECT * FROM conversations WHERE id IN (%s)" % ",".join("?" * len(part)), part):
                 found[row["id"]] = row
     else:
-        prime_conversations(conn, ids)
-        values = cache(conn)
+        prime_conversations(conn, ids)  # reads nothing it writes: `values` is still the snapshot's
         found = {cid: values.get(("one", CONVERSATION_SQL, (cid,))) for cid in ids}
     # In the order asked, either way.
-    return {cid: found[cid] for cid in ids if found.get(cid) is not None}
+    out = {}
+    for cid in ids:
+        row = found.get(cid)
+        if row is not None:
+            out[cid] = row
+    return out
 
 
 def conversations_for(conn, actor, limit=100):
