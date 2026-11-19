@@ -127,6 +127,14 @@ The train validates a head in one of two ways. A **full** validation is the whol
   says `the train waits` and why. A red run that names no failure, or whose diff cannot be read, is run again on the
   next commit, incrementally from the anchor (a full validation waits for a person, see above). A red run at main's
   head waits for a push.
+- **A red only its infrastructure failed runs again once.** When a red validation's every failed part says, in its
+  annotations, that its machine or a registry failed it (AWS took its Spot VM; a registry refused a pull or rate
+  limited it; GitHub lost its runner), or failed only because such an image build did (product's "An image build did
+  not succeed"), the train runs its failed jobs again, once: at its first attempt, on its own finish, whatever its diff
+  selects. A part that failed any other way, a test above all, keeps the run out of this rule: a test is never run
+  again until it passes. Each case is a line on the release-train issue starting `Infrastructure rerun:`, with the run,
+  the part and the message, so the issue counts how often it happens. A second attempt that is red waits like any red
+  run. The causes are `release_increment.INFRASTRUCTURE`.
 - **An incremental run stops at its first failure.** Its gate parts fail fast: the first part that fails cancels the
   others, so a red incremental run ends minutes sooner and the train moves on. Such a run names the tests that did
   fail (they are carried and waited for, as above), but its cancelled parts ran nothing, so it is no anchor: the next

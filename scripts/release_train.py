@@ -439,6 +439,27 @@ class GitHub:
             entry.get("conclusion") != "cancelled" for entry in failed
         )
 
+    def annotations(self, job_id):
+        """A job's annotation messages (its check run's): where GitHub and RunsOn say a machine was lost or a pull refused,
+        which the job's log often lacks (a Spot VM's log ends when AWS takes it)."""
+        return [item.get("message") or "" for item in self.pages("check-runs/%d/annotations?per_page=50" % job_id)]
+
+    def infrastructure_red(self, run_id):
+        """release_increment.infrastructure_red for a red validation: its failed parts, fail fast's cancellations left
+        out as failed_tokens leaves them, with their annotations."""
+        failed = self.failed_parts(run_id)
+        if any(entry.get("conclusion") != "cancelled" for entry in failed):
+            failed = [entry for entry in failed if not fail_fast_cancelled(entry)]
+        return increment.infrastructure_red(
+            [(entry.get("name") or "", self.annotations(entry["id"])) for entry in failed]
+        )
+
+    def rerun_failed(self, run_id):
+        """Run a finished run's failed jobs again, and the jobs that need them, as a new attempt of the same run."""
+        code, data, _ = self.call("POST", "actions/runs/%d/rerun-failed-jobs" % int(run_id), {})
+        if code not in (200, 201, 204):
+            raise Fail("running the failed jobs of %s again: %s %s" % (run_id, code, data.get("message", "")))
+
     def failed_parts(self, run_id):
         """A validation run's jobs that did not pass, other than its consequences (IGNORED_JOBS); read once per run."""
         cache = self.__dict__.setdefault("_failed_parts", {})
@@ -833,7 +854,7 @@ def unpublished(gh, now, tag, plan):
     return plan
 
 
-def plan_step(gh, now, finished=None, manual=False, checkout=None):
+def plan_step(gh, now, finished=None, manual=False, checkout=None, rerun_infrastructure=False):
     """What the train does next, worked out from GitHub alone (and, for an incremental validation, the checkout's diff).
     There are no windows: whenever the newest release is published and main has moved past it, the first green candidate
     ships, or main's head is validated when no validation is running. Returns {"action": "none" | "wait" | "ship" |
@@ -842,7 +863,8 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
     report. A manual run validates main's head again even after a red or
     cancelled run. A dispatch is a full validation (mode "full") or an incremental one on the anchor (mode "incremental",
     with its plan): docs/releasing.md#incremental-validation. At most one full validation is dispatched automatically in
-    24 hours, whatever its outcome."""
+    24 hours, whatever its outcome. With rerun_infrastructure (the train job's step: the guard cannot read annotations),
+    a finished red candidate that only its infrastructure failed is "rerun": its failed jobs run again, once."""
     tags = gh.tags()
     newest = newest_stable(tags)
     if not newest:
@@ -869,10 +891,12 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
     # A run the ceiling stopped ran no suite: it is no red candidate, no anchor and no full run.
     stopped = ceiling_stops(gh, runs, now)
     stopped_urls = {run.get("html_url") for run in stopped}
+    finished_red = None  # the finished red candidate, as the runs list has it (its id and run_attempt)
     if finished and finished["conclusion"] in FAILED and finished["url"] not in stopped_urls:
         parsed = parse_title(finished["title"])
         if parsed and parsed[1:] == (version, newest):
             plan["red"] = {"sha": parsed[0], "conclusion": finished["conclusion"], "url": finished["url"]}
+            finished_red = next((run for run in runs if run.get("html_url") == finished["url"]), None)
     head = gh.head("main")
     plan["sha"] = head
     if gh.compare(newest, head) != "ahead":
@@ -902,6 +926,20 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
             head_failed = run
     if head_failed and not manual and not plan["red"]:
         plan["red"] = {"sha": head, "conclusion": head_failed.get("conclusion"), "url": head_failed.get("html_url")}
+    if finished_red is not None and rerun_infrastructure:
+        # A red that only its infrastructure failed (a Spot VM taken back, a registry that refused a pull, a runner
+        # lost) runs its failed jobs again, once: on its own finish, at attempt 1, whatever its diff selects. Waiting
+        # for a commit that selects the part a Spot VM took would wait for nothing that could fix it.
+        if finished_red.get("run_attempt", 1) == 1:
+            causes = gh.infrastructure_red(finished_red["id"])
+            if causes:
+                plan.update(
+                    action="rerun",
+                    rerun={"id": finished_red["id"], "url": finished_red.get("html_url"), "causes": causes},
+                    why="%s at %s failed on its infrastructure, not its code: running its failed jobs again once"
+                    % (version, plan["red"]["sha"][:12]),
+                )
+                return plan
     if stopped:
         # The ceiling holds full validations until 00:00 UTC; a real red above is still reported, a stop is only a hold.
         plan.update(action="wait", why=CEILING_HOLD)
@@ -998,6 +1036,17 @@ def problems(plan):
     if red:
         lines.append(
             "Candidate %s at %s ended %s: %s" % (plan["version"], red["sha"][:12], red["conclusion"], red["url"])
+        )
+    rerun = plan.get("rerun")
+    if rerun:
+        # One line per case, with a fixed start, so the release-train issue shows how often it happens.
+        lines.append(
+            "Infrastructure rerun: %s (%s) failed on %s; its failed jobs run again once"
+            % (
+                rerun["url"],
+                plan["version"],
+                "; ".join('%s: %s ("%s")' % (job, cause, message) for job, cause, message in rerun["causes"]),
+            )
         )
     if plan.get("held"):
         lines.append(plan["held"])
@@ -1549,7 +1598,16 @@ def cmd_step(gh, env, now=None):
 
     step(
         "plan",
-        lambda: plan.update(plan_step(gh, now, event_run(env, gh), manual=manual, checkout=increment.Checkout(ROOT))),
+        lambda: plan.update(
+            plan_step(
+                gh,
+                now,
+                event_run(env, gh),
+                manual=manual,
+                checkout=increment.Checkout(ROOT),
+                rerun_infrastructure=True,
+            )
+        ),
     )
     if plan:
         note("Train: " + plan["why"])
@@ -1607,6 +1665,8 @@ def cmd_step(gh, env, now=None):
                 step("promote", lambda: promote(gh, env))
         elif plan["action"] == "dispatch":
             step("validate", lambda: validate(plan))
+        elif plan["action"] == "rerun":
+            step("rerun", lambda: gh.rerun_failed(plan["rerun"]["id"]))
     if failures:
         report(gh, False, list(LOG), key=failures)
     elif shipment:
