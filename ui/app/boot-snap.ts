@@ -18,11 +18,11 @@
 // whatever boot is still waiting on (the page's loading rows then take its place, never a blank page).
 // The entry goes, and a copy on screen with it, when this browser signs out (a sign-out link, or a lapsed session;
 // nothing is kept again in that page),
-// when /me answers as anyone else or no one, and when the bundle or SNAP_SCHEMA changes; a screen over
+// when /me answers as anyone else or no one, and when the bundle, the look or SNAP_SCHEMA changes; a screen over
 // SNAP_MAX_BYTES is not kept.
 // Under automation (navigator.webdriver) it is off unless the page sets window.ticoBootSnap = true first, so a browser
 // test that loads a page twice never meets a copy it did not ask for.
-const SNAP_DB = 'tico-boot', SNAP_STORE = 'screens', SNAP_SCHEMA = 2;
+const SNAP_DB = 'tico-boot', SNAP_STORE = 'screens', SNAP_SCHEMA = 3;
 const SNAP_MAX_BYTES = 256 * 1024;
 // A new page settles this long after the last address change before it is kept; one still loading is tried again.
 const SNAP_SETTLE_MS = 1500, SNAP_SAVE_TRIES = 8;
@@ -60,8 +60,10 @@ function snapRouteOk(hash?: string): boolean {
   const team = page.startsWith(TEAM_PAGE) ? page.slice(TEAM_PAGE.length) : '';
   return !!team && !team.includes('/');
 }
-// The build that draws the page (scripts/build-ui.cjs; ui/app/parts.ts reads it from the page).
-const SNAP_VERSION = SNAP_SCHEMA + ':' + UI_PARTS.build;
+// The build that draws the page (scripts/build-ui.cjs; ui/app/parts.ts reads it from the page), and the look it is drawn
+// in (html.sheets, ui/theme.ts): a screen kept in one look is never shown in the other. Read when used, because the
+// look can change while the page is open.
+const snapVersion = (): string => SNAP_SCHEMA + ':' + UI_PARTS.build + (document.documentElement.classList.contains('sheets') ? ':sheets' : '');
 const snapWho = (me: SelfPerson | null | undefined): string => JSON.stringify([location.origin, String(me?.owner_id || ''), String(me?.id || ''), String(me?.email || '')]);
 
 function snapDb(): Promise<IDBDatabase> {
@@ -169,7 +171,7 @@ function bootSnapShow(meRead: Promise<SelfPerson | null | undefined>): void {
   void Promise.all([SNAP_LOADED, meRead.catch(() => null)]).then(([kept, me]) => {
     // No answer (offline): shown later, or not at all. Signed out since this page loaded: never.
     if (!kept || !me || SNAP.done || SESSION.out || SNAP.epoch === null || snapSignedOut()) return;
-    if (!authenticatedConfigPerson(me) || kept.who !== snapWho(me) || kept.version !== SNAP_VERSION) { void snapForget(); return; }
+    if (!authenticatedConfigPerson(me) || kept.who !== snapWho(me) || kept.version !== snapVersion()) { void snapForget(); return; }
     const main = document.getElementById('main');
     if (kept.route !== location.hash || !snapRouteOk(kept.route) || !main || main.childElementCount || typeof kept.html !== 'string') return;
     snapPaint(main, kept);
@@ -269,7 +271,7 @@ function bootSnapSave(tries = 0) {
   const who = SNAP.who;
   // A screen too big to keep takes the older one with it: the next open must not show a page from before it.
   if (screen.html === null) { void snapForget(); return; }
-  const entry = {who, version: SNAP_VERSION, route: location.hash, cls: screen.cls, html: screen.html, at: Date.now()};
+  const entry = {who, version: snapVersion(), route: location.hash, cls: screen.cls, html: screen.html, at: Date.now()};
   void snapGuarded(s => s.put(entry, location.origin));
 }
 function bootSnapSaveSoon() {

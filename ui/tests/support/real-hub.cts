@@ -37,10 +37,13 @@ export interface Hub {
   stop: () => Promise<void>;
 }
 
-// Options for pageAs(): a phone viewport, and the viewer's time zone as the browser reports it.
+// Options for pageAs(): a phone viewport, the viewer's time zone as the browser reports it, the Sheets look (the
+// class `sheets` on <html>, ui/theme.ts) and reduced motion; both are off unless asked.
 export interface PageAsOptions {
   phone?: boolean;
   timezone?: string;
+  sheets?: boolean;
+  reducedMotion?: boolean;
 }
 
 // Starts a hub with these seeds (default ['org']). Resolves to the hub; `stop` is idempotent.
@@ -74,16 +77,19 @@ function startHub({seeds = ['org'], env = {}}: HubOptions = {}): Promise<Hub> {
 
 // A page signed in as `teammate` (a key of hub.tokens), opened at the app's root. The teammate's token goes on every
 // request the page makes, as the API takes it. The caller closes it with page.context().close().
-async function pageAs(browser: Browser, hub: Hub, teammate: string, {phone = false, timezone = ''}: PageAsOptions = {}): Promise<Page> {
+async function pageAs(browser: Browser, hub: Hub, teammate: string, {phone = false, timezone = '', sheets = false, reducedMotion = false}: PageAsOptions = {}): Promise<Page> {
   const token = hub.tokens[teammate];
   if (!token) throw new Error(`no teammate "${teammate}" on this hub; it has ${Object.keys(hub.tokens).join(', ')}`);
   const context = await browser.newContext({
     ...(phone ? PHONE : DESKTOP),
     ...(timezone ? {timezoneId: timezone} : {}),   // the viewer's zone, as the browser reports it
+    ...(reducedMotion ? {reducedMotion: 'reduce' as const} : {}),
     serviceWorkers: 'block',
     extraHTTPHeaders: {Authorization: 'Bearer ' + token},
   });
   const page = await context.newPage();
+  // saved the way theme.ts reads it, before the app boots
+  if (sheets) await page.addInitScript(() => localStorage.setItem('tico.sheets', '1'));
   await page.goto(hub.url + '/');
   return page;
 }

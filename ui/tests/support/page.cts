@@ -1,5 +1,6 @@
 // The page the browser tests serve: the server's own, build/ui/index.html (scripts/build-ui.cjs, which
 // scripts/ui-tests.cts runs first), and uiFile() for the files a test serves from disk.
+import type {Page} from 'playwright';
 require('./browser.cts');
 const {execFileSync} = require('node:child_process') as typeof import('node:child_process');
 const fs: typeof import('node:fs') = require('node:fs');
@@ -34,7 +35,22 @@ const TYPES: Record<string, string> = {'.js': 'application/javascript', '.ts': '
 export interface FulfilRoute {
   fulfill(options: {status?: number; contentType?: string; body?: string | Buffer; path?: string}): Promise<void>;
 }
+// The look a page boots in. `sheets` is the Sheets look (the class `sheets` on <html>, ui/theme.ts), on or off.
+// `reducedMotion` asks the browser for reduced motion: off unless asked, because scripts that watch an animation run
+// (ask-panel.cts, account-status.cts, onboarding.cts, pipeline-rail.cts, stage-column-menu.cts) boot the same way.
+export interface LookOptions {
+  sheets?: boolean;
+  reducedMotion?: boolean;
+}
 const api = {
+  // Sets the look before the app boots: call it before page.goto. The choice is saved the way theme.ts reads it, on
+  // every load of the page, so the class is on <html> before the first paint.
+  look: async (page: Page, {sheets = false, reducedMotion = false}: LookOptions = {}): Promise<void> => {
+    await page.addInitScript((on: boolean) => {
+      try { if (on) localStorage.setItem('tico.sheets', '1'); else localStorage.removeItem('tico.sheets'); } catch { /* no storage on this page (about:blank) */ }
+    }, sheets);
+    if (reducedMotion) await page.emulateMedia({reducedMotion: 'reduce'});
+  },
   // The shell's bundle scripts, in the order the page runs them (names under /tico/ui/).
   shell: [...pageHtml.matchAll(/<script src="\/tico\/ui\/(app\.bundle\.[0-9a-f]{16}\.js)"/g)].map(m => m[1]!),
   get harnesses(): Harness[] {

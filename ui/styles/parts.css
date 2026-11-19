@@ -1,0 +1,682 @@
+/* ui/styles/parts.css — The shared parts of the Sheets look (html.sheets, styles/tokens.css): the shell's sheets, marks,
+   controls, rows, the conversation, the task view, the answer, tabs, menus, dialogs and toasts, each in every state.
+   ui/app/parts-kit.ts writes their markup.
+   Every part class starts with s-, so none meets an older class; a state is a second class (is-on, is-busy...). Roles
+   only: every colour, type size, radius, shadow and duration is a token, and so is every measure parts share; a
+   measure only one part has (the search field's width, the phone bar's height) is written where it is used.
+   Nothing here is !important.
+   Motion: a part moves only by transform or opacity, and only its own loops and slides are here. Entering, leaving
+   and the press are the m- classes of styles/motion.css (m-enter, m-leave, m-pop, m-press), which the kit puts on
+   the parts that need them. A loop is held by --loop when motion is reduced.
+   States, on every part you can press: hover, pressed, :focus-visible, chosen (is-on, is-active or is-selected),
+   disabled and is-busy; is-hover, is-pressed and is-focus hold one still for a board or a test. */
+
+/* ---------- what every part shares ---------- */
+.s-grow{flex:1}
+.s-only-phone{display:none}
+.s-flip{transform:rotate(180deg)}
+/* An icon: a ligature name in the Material Symbols font (ui/vendor/fonts/icons.txt lists the names the font has).
+   Hidden until the font is in, as every icon is (ui/theme.ts html.icons-ready), so a name never shows as a word. */
+.s-ico{font-family:"Material Symbols Outlined";font-weight:300;font-style:normal;font-size:var(--ico);line-height:var(--lh-none);width:1em;height:1em;flex:none;display:inline-block;
+  overflow:hidden;letter-spacing:normal;text-transform:none;white-space:nowrap;direction:ltr;user-select:none;-webkit-font-smoothing:antialiased;
+  font-variation-settings:"FILL" 0,"wght" 300,"GRAD" 0,"opsz" 20;font-feature-settings:"liga"}
+html:not(.icons-ready) .s-ico{visibility:hidden}
+/* A part that is a link keeps its own colour and takes no underline; one that is a button has no chrome of its own. */
+:is(.s-ib,.s-btn,.s-nav-item,.s-nav-kid,.s-tree-row,.s-tree-team,.s-assistant,.s-me,.s-row,.s-rail-row,.s-li,.s-tab,.s-menu-item,.s-file,.s-slot,.s-sr,.s-cal-day,.s-stage-fold a):is(:hover,:focus){text-decoration:none}
+/* Two rules, not one list: :is() weighs as its heaviest name, and a part's own size and weight, set further down, must
+   still win over this. */
+:is(.s-ib,.s-btn,.s-scope-pick,.s-li-pick,.s-li-flow,.s-an-pill,.s-switch,.s-send,.s-starter,.s-tab,.s-menu-item,.s-tree-team){font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
+:is(.s-seg,.s-scope,.s-toast,.s-msg-fail,.s-table th) button{font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
+/* Focus has three shapes. Something you press: a ring just off its edge. A row in a list: the ring inside its edge.
+   Something you type in: the edge itself turns to ink (the field, below). --rad is the part's own corner, said again
+   here because the older button rule rounds every focused button the same. */
+:is(.s-ib,.s-btn,.s-scope-pick,.s-li-pick,.s-li-flow,.s-an-pill,.s-switch,.s-send,.s-file,.s-starter,.s-me,.s-seg button,.s-scope button,.s-toast button,.s-msg-fail button,.s-table th button):is(:focus-visible,.is-focus){outline:var(--focus-ring);outline-offset:var(--focus-gap);border-radius:var(--rad)}
+:is(.s-nav-item,.s-nav-kid,.s-tree-row,.s-tree-team,.s-assistant,.s-row,.s-rail-row,.s-li,.s-tab,.s-menu-item,.s-sr,.s-slot,.s-cal-day):is(:focus-visible,.is-focus){outline:var(--focus-ring);outline-offset:var(--focus-gap-in);border-radius:var(--rad)}
+:is(.s-check,.s-radio):is(:focus-visible,.is-focus){outline:0}
+:is(.s-check,.s-radio):is(:focus-visible,.is-focus) i{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
+/* Disabled is a colour, never an opacity: the words stay readable as words. */
+:is(.s-ib,.s-btn,.s-scope-pick,.s-li-pick,.s-li-flow,.s-an-pill,.s-send,.s-starter,.s-tab,.s-menu-item):is(:disabled,.is-disabled),
+:is(.s-nav-item,.s-row,.s-li,.s-check,.s-radio,.s-opt).is-disabled{opacity:1;color:var(--text-disabled);box-shadow:none;pointer-events:none;cursor:default}
+:is(.s-ib,.s-btn,.s-menu-item):is(:disabled,.is-disabled) .s-ico{color:inherit}
+/* Busy: the part keeps its size and its place. A button's label gives way to a turning ring; a row keeps its words
+   and shows the ring at its far edge. */
+:is(.s-ib,.s-btn,.s-send,.s-starter,.s-nav-item,.s-row,.s-li,.s-tab,.s-menu-item,.s-field).is-busy{position:relative;pointer-events:none}
+:is(.s-ib,.s-btn,.s-send).is-busy{color:transparent}
+:is(.s-ib,.s-btn,.s-send).is-busy>*{visibility:hidden}
+:is(.s-ib,.s-btn,.s-send,.s-starter,.s-nav-item,.s-row,.s-li,.s-tab,.s-menu-item,.s-field).is-busy::after{content:"";box-sizing:border-box;position:absolute;right:var(--s-2);top:50%;width:var(--ico-sm);height:var(--ico-sm);margin-top:calc(var(--ico-sm)/-2);
+  border-radius:50%;border:2px solid color-mix(in srgb,var(--ink) 22%,transparent);border-top-color:var(--ink);animation:s-turn calc(var(--spin)/2) linear infinite;animation-play-state:var(--loop)}
+:is(.s-ib,.s-btn,.s-send).is-busy::after{right:auto;left:50%;margin-left:calc(var(--ico-sm)/-2)}
+:is(.s-btn-fill,.s-send.is-ready).is-busy::after{border-color:color-mix(in srgb,var(--on-fill) 28%,transparent);border-top-color:var(--on-fill)}
+:is(.s-switch,.s-check,.s-radio).is-busy{pointer-events:none}
+:is(.s-switch,.s-check,.s-radio).is-busy i{animation:s-rest var(--breathe) ease-in-out infinite;animation-play-state:var(--loop)}
+@keyframes s-turn{to{transform:rotate(360deg)}}
+@keyframes s-rest{0%,100%{opacity:1}50%{opacity:var(--rest)}}
+
+/* ---------- the shell: three sheets on a ground ---------- */
+.s-app{display:grid;grid-template-columns:var(--nav-w) minmax(0,1fr) var(--chat-w);gap:var(--gap-pane);padding:var(--gap-pane);height:100vh;background:var(--ground)}
+.s-app-thread{grid-template-columns:var(--nav-w) minmax(0,1fr) var(--rail-w)}
+.s-app-task{grid-template-columns:var(--tlist-w) minmax(0,1fr) var(--ask-w)}
+.s-pane{--under:var(--sheet);border-radius:var(--r-pane);min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;position:relative;background:var(--under)}
+.s-nav{--under:var(--sheet-low);box-shadow:var(--lift-nav)}
+.s-side{--under:var(--sheet-mid);box-shadow:var(--lift-chat)}
+.s-page{box-shadow:var(--lift-page);z-index:var(--z-page)}
+.s-page-wide{grid-column:2/-1}
+.s-page-thread{flex-direction:row}
+
+/* ---------- marks: the Dot, avatars, working, stopped, writing ---------- */
+/* The Dot is the app's own (styles/liquid-dot.css, ui/app/liquid-dot.ts). Small and named, it says "waits on you". */
+.s-flow{display:inline-grid;place-items:center;flex:none}
+.s-av-dot{width:var(--a);height:var(--a);display:inline-grid;place-items:center;flex:none}
+/* A person is a circle and a bot a rounded square, at 16, 22, 28 or 36px. Each keeps a faint hue (--h), so teammates
+   can be told apart at 16px, where there are no initials. */
+.s-av{display:inline-grid;place-items:center;flex:none;position:relative;background:oklch(var(--av-bg) var(--h,0));color:oklch(var(--av-fg) var(--h,0));
+  font-weight:var(--w-title);line-height:var(--lh-none);letter-spacing:var(--track-initials);user-select:none}
+.s-av.is-person{border-radius:50%}
+.s-av.is-bot{border-radius:var(--r-bot)}
+.s-av>img{width:100%;height:100%;border-radius:inherit;object-fit:cover;display:block}
+.s-av-16{width:var(--av-xs);height:var(--av-xs);font-size:0}
+.s-av-22{width:var(--av-sm);height:var(--av-sm);font-size:var(--av-sm-t)}
+.s-av-28{width:var(--av-md);height:var(--av-md);font-size:var(--av-md-t)}
+.s-av-36{width:var(--av-lg);height:var(--av-lg);font-size:var(--av-lg-t)}
+.s-av-gap{display:block;flex:none;height:1px}
+.s-av-gap.s-av-22{width:var(--av-sm);height:1px}
+/* Working now: a quiet ring in ink travels round the avatar. The ring is a frame the avatar's own shape cuts, and the
+   sweep inside it turns, so only a transform moves. */
+.s-ring{position:absolute;inset:calc((var(--ring-w) + var(--ring-gap))*-1);border-radius:inherit;padding:var(--ring-w);overflow:hidden;pointer-events:none;
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0)}
+.s-ring>i{position:absolute;inset:-50%;background:conic-gradient(var(--work-rest) 0 40%,var(--work));animation:s-turn var(--spin) linear infinite;animation-play-state:var(--loop)}
+/* Several teammates. Spaced, each keeps its initials and nothing is cut; past the last one a count. Tight (is-tight),
+   they are 16px chips with no initials, each ringed in the surface under them, so they may overlap. Faces with
+   initials never overlap. */
+.s-avs{display:inline-flex;align-items:center;gap:var(--s-1);flex:none}
+.s-avs-more{margin-left:var(--s-0);font-size:var(--fs-meta);line-height:var(--lh-meta);color:var(--muted);font-variant-numeric:tabular-nums}
+.s-avs.is-tight{gap:0;padding-left:var(--s-1)}
+.s-avs.is-tight>.s-av{margin-left:calc(var(--s-1)*-1);box-shadow:0 0 0 2px var(--under)}
+/* Stopped or paused: the pause glyph, drawn here because the icon font has none. Alone in a list of tasks; with its
+   word (s-state) elsewhere. Never amber. */
+.s-stuck{display:inline-grid;place-items:center;width:var(--ico-lg);height:var(--ico-lg);flex:none;color:var(--muted)}
+.s-stuck::before{content:"";box-sizing:border-box;width:8px;height:10px;border:solid currentColor;border-width:0 3px;border-radius:1px}
+.s-state{display:inline-flex;align-items:center;gap:var(--s-1);color:var(--ink-2);white-space:nowrap}
+.s-typing{display:inline-flex;gap:var(--s-0);margin-left:var(--s-2);vertical-align:middle}
+.s-typing i{width:4px;height:4px;border-radius:50%;background:var(--ink-2);animation:s-typing var(--typing) ease-in-out infinite;animation-play-state:var(--loop)}
+.s-typing i:nth-child(2){animation-delay:calc(var(--typing)/8)}.s-typing i:nth-child(3){animation-delay:calc(var(--typing)/4)}
+@keyframes s-typing{0%,60%,100%{opacity:.3;transform:translateY(0)}30%{opacity:1;transform:translateY(-2px)}}
+
+/* ---------- controls ---------- */
+/* An icon button. is-on: a filter that is set, a panel that is open. */
+.s-ib{--rad:var(--r-ctl);width:var(--ctl);height:var(--ctl);padding:0;border:0;background:none;border-radius:var(--rad);color:var(--muted);display:inline-grid;place-items:center;flex:none}
+.s-ib .s-ico{font-size:var(--ico-lg)}
+.s-ib:hover,.s-ib.is-hover{background:var(--hover);color:var(--ink)}
+.s-ib:active,.s-ib.is-pressed{background:var(--well-2);color:var(--ink)}
+.s-ib.is-on{background:var(--selected);color:var(--ink)}
+.s-ib-sm{width:var(--ctl-sm);height:var(--ctl-sm)}
+.s-ib-sm .s-ico{font-size:var(--ico)}
+.s-ib-quiet{color:var(--faint)}
+.s-ib-ghost{opacity:0}
+.s-stage-head:hover .s-ib-ghost,.s-ib-ghost:focus-visible{opacity:1}
+/* A button: plain (raised), filled (the one per bar, the last word before ⋯), quiet. A label is a verb, two words at
+   most. is-on: a toggle that is down. */
+.s-btn{--rad:var(--r-ctl);height:var(--ctl);padding:0 var(--ctl-pad);border:0;border-radius:var(--rad);background:var(--raised);color:var(--ink);font-weight:var(--w-strong);line-height:var(--lh-none);white-space:nowrap;
+  display:inline-flex;align-items:center;justify-content:center;gap:var(--s-1h);flex:none;box-shadow:var(--lift-ctl)}
+.s-btn .s-ico{margin-left:calc(var(--s-0)*-1);color:var(--muted)}
+.s-btn:hover,.s-btn.is-hover{background:var(--raised-hover)}
+.s-btn:active,.s-btn.is-pressed,.s-btn.is-on{background:var(--raised-pressed)}
+.s-btn-fill{background:var(--fill);color:var(--on-fill);box-shadow:var(--lift-fill)}
+.s-btn-fill .s-ico{color:inherit}
+.s-btn-fill:hover,.s-btn-fill.is-hover,.s-btn-fill:active,.s-btn-fill.is-pressed{background:var(--fill-hover)}
+.s-btn-quiet{background:none;box-shadow:none;color:var(--ink-2)}
+.s-btn-quiet:hover,.s-btn-quiet.is-hover{background:var(--hover);color:var(--ink)}
+.s-btn-quiet:active,.s-btn-quiet.is-pressed,.s-btn-quiet.is-on{background:var(--well-2);color:var(--ink)}
+.s-btn:is(:disabled,.is-disabled){background:var(--fill-disabled)}
+.s-btn-quiet:is(:disabled,.is-disabled){background:none}
+/* the Flow button: the Dot, the word and its count */
+.s-btn-flow{padding:0 var(--s-2h) 0 var(--s-3);gap:var(--s-2)}
+.s-btn-flow>b{min-width:var(--ico-lg);height:var(--ico-lg);line-height:var(--ico-lg);border-radius:var(--r-pill);padding:0 var(--s-1);background:color-mix(in srgb,var(--on-fill) 13%,transparent);
+  font-size:var(--fs-meta);font-weight:var(--w-strong);font-variant-numeric:tabular-nums;text-align:center}
+
+/* Search: one well in the top bar; what it finds opens under it. */
+.s-search{--rad:var(--r-ctl);position:relative;height:var(--ctl);width:208px;display:flex;align-items:center;gap:var(--s-2);padding:0 var(--s-2h);border-radius:var(--rad);background:var(--well);color:var(--muted)}
+.s-search input{flex:1;min-width:0;width:auto;height:auto;border:0;border-radius:0;outline:0;background:none;color:var(--ink);padding:0;font:inherit}
+.s-search input::placeholder{color:var(--muted)}
+.s-search:hover{background:var(--well-2)}
+.s-search:focus-within,.s-search.is-focus,.s-search.is-open{background:var(--under);box-shadow:inset 0 0 0 var(--ring-w) var(--focus)}
+.s-search-wide{width:auto;margin:0 var(--s-3) var(--s-2);flex:none}
+.s-search .s-ib{width:var(--pill-h);height:var(--pill-h);margin-right:calc(var(--s-1)*-1);--rad:var(--r-key)}
+.s-search .s-ib .s-ico{font-size:var(--ico-xs)}
+.s-search-pop{--under:var(--raised);position:absolute;z-index:var(--z-overlay);top:calc(100% + var(--s-1h));right:0;width:384px;padding:var(--s-1h);border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-overlay);color:var(--ink)}
+.s-sr{--rad:var(--r-row);height:var(--row);display:grid;grid-template-columns:var(--av-sm) minmax(0,1fr) auto;column-gap:var(--s-2h);align-items:center;padding:0 var(--s-2);border-radius:var(--rad);color:var(--ink-2)}
+.s-sr:hover,.s-sr.is-hover,.s-sr.is-on{background:var(--raised-hover)}
+.s-sr>span:nth-child(2){min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.s-sr mark{background:none;color:var(--ink);font-weight:var(--w-strong)}
+.s-sr-none{padding:var(--s-5) var(--s-2);text-align:center;color:var(--muted)}
+.s-sr-none b{color:var(--ink);font-weight:var(--w-strong)}
+
+/* A field: a label over a control. Its edge is --border-field, firmer under the pointer and ink while you type. An
+   error is the edge in amber, a mark, and at most four words under it. */
+.s-f{display:grid;gap:var(--s-2);min-width:0;justify-items:start}
+.s-f-label{font-size:var(--fs-small);font-weight:var(--w-strong);color:var(--ink-2)}
+.s-f-err{display:flex;align-items:center;gap:var(--s-1);margin-top:calc(var(--s-0)*-1);font-size:var(--fs-meta);color:var(--warn-ink)}
+.s-f-err .s-ico{font-size:var(--ico-sm)}
+.s-field{--rad:var(--r-ctl);height:var(--ctl);width:208px;display:inline-flex;align-items:center;gap:var(--s-2);padding:0 var(--s-2h);border:0;border-radius:var(--rad);background:var(--under);color:var(--ink);
+  font:inherit;text-align:left;box-shadow:inset 0 0 0 1px var(--border-field)}
+.s-field>.s-ico{color:var(--muted)}
+.s-field :is(input,textarea){flex:1;min-width:0;width:100%;height:auto;border:0;border-radius:0;outline:0;background:none;padding:0;font:inherit;line-height:inherit;color:inherit;resize:none}
+.s-field :is(input,textarea)::placeholder,.s-field .s-ph{color:var(--muted)}
+.s-field:hover,.s-field.is-hover{box-shadow:inset 0 0 0 1px var(--muted)}
+.s-field:focus-within,.s-field.is-focus{outline:0;box-shadow:inset 0 0 0 var(--ring-w) var(--focus)}
+.s-field.is-error{box-shadow:inset 0 0 0 var(--ring-w) var(--warn-ink)}
+.s-field.is-error>.s-ico:last-child{color:var(--warn-ink)}
+.s-field.is-disabled{background:var(--well);box-shadow:none;color:var(--text-disabled);pointer-events:none}
+.s-field.is-disabled :is(input,textarea)::placeholder{color:var(--text-disabled)}
+.s-field.is-wide{width:100%}
+.s-field.is-area{height:auto;min-height:84px;align-items:flex-start;padding:var(--s-2) var(--s-2h);line-height:var(--lh)}
+.s-field.is-area textarea{min-height:68px;field-sizing:content}
+.s-field.is-select{justify-content:space-between;cursor:pointer}
+.s-field.is-select>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;display:inline-flex;align-items:center;gap:var(--s-2)}
+.s-field.is-date{width:232px}
+
+/* A choice of a few: one track, the chosen segment raised. */
+.s-seg{display:inline-flex;gap:var(--s-0);padding:var(--s-0);border-radius:var(--r-ctl);background:var(--well);flex:none}
+.s-seg button{--rad:var(--r-chip);min-width:30px;height:calc(var(--ctl) - var(--s-1));padding:0 var(--s-1h);border:0;border-radius:var(--rad);background:none;color:var(--muted);display:grid;place-items:center}
+.s-seg button:hover,.s-seg button.is-hover{color:var(--ink)}
+.s-seg button:active,.s-seg button.is-pressed{background:var(--well-2);color:var(--ink)}
+.s-seg button.is-on{background:var(--seg-on);color:var(--ink);box-shadow:var(--lift-ctl)}
+.s-seg button:is(:disabled,.is-disabled){opacity:1;color:var(--text-disabled);pointer-events:none}
+/* Hollow is off, filled ink is on. A switch, a checkbox or a radio is pressed by its whole row (s-opt). */
+.s-switch{--rad:var(--r-pill);width:36px;height:var(--pill-h);padding:0;border:0;border-radius:var(--rad);background:none;box-shadow:inset 0 0 0 var(--ring-w) var(--border-field);position:relative;display:inline-block;flex:none}
+.s-switch i{position:absolute;left:var(--s-1);top:var(--s-1);width:var(--s-3);height:var(--s-3);border-radius:50%;background:var(--muted);transition:transform var(--dur) var(--ease)}
+.s-switch:hover,.s-switch.is-hover{box-shadow:inset 0 0 0 var(--ring-w) var(--muted)}
+.s-switch:active i,.s-switch.is-pressed i{background:var(--ink)}
+.s-switch.is-on{background:var(--fill);box-shadow:none}
+.s-switch.is-on i{background:var(--on-fill);transform:translateX(var(--s-4))}
+.s-switch.is-error{box-shadow:inset 0 0 0 var(--ring-w) var(--warn-ink)}
+.s-switch:is(:disabled,.is-disabled){opacity:1;box-shadow:inset 0 0 0 var(--ring-w) var(--text-disabled);pointer-events:none}
+.s-switch:is(:disabled,.is-disabled) i{background:var(--text-disabled)}
+.s-switch.is-on:is(:disabled,.is-disabled){background:var(--fill-disabled);box-shadow:none}
+.s-opt{display:flex;align-items:center;gap:var(--s-2h);min-height:var(--ctl);cursor:pointer}
+.s-opt>.s-switch{margin-left:auto}
+.s-check,.s-radio{display:inline-flex;align-items:center;gap:var(--s-2);min-height:var(--ctl);cursor:pointer}
+.s-check i,.s-radio i{width:var(--ico);height:var(--ico);flex:none;display:grid;place-items:center;border-radius:var(--r-key);background:var(--under);color:var(--on-fill);box-shadow:inset 0 0 0 var(--ring-w) var(--border-field)}
+.s-radio i{border-radius:50%}
+:is(.s-check,.s-radio):is(:hover,.is-hover) i{box-shadow:inset 0 0 0 var(--ring-w) var(--muted)}
+:is(.s-check,.s-radio):is(:active,.is-pressed) i{background:var(--well-2)}
+.s-check i .s-ico{font-size:var(--ico-xs);font-weight:600;opacity:0}
+.s-check.is-on i{background:var(--fill);box-shadow:none}
+.s-check.is-on i .s-ico{opacity:1}
+.s-radio.is-on i{background:var(--under);box-shadow:inset 0 0 0 5px var(--fill)}
+:is(.s-check,.s-radio).is-error i{box-shadow:inset 0 0 0 var(--ring-w) var(--warn-ink)}
+:is(.s-check,.s-radio).is-disabled i{box-shadow:inset 0 0 0 var(--ring-w) var(--text-disabled)}
+.s-check.is-on.is-disabled i{background:var(--fill-disabled);box-shadow:none;color:var(--text-disabled)}
+
+/* State marks. A pill only when something is wrong (amber, s-pill-warn) or of interest (grey). Never bare amber
+   text, and a pill is never a target on its own. */
+.s-pill{display:inline-block;height:var(--pill-h);line-height:var(--pill-h);padding:0 var(--s-1h);border-radius:var(--r-chip);font-size:var(--fs-meta);color:var(--muted);white-space:nowrap;box-shadow:inset 0 0 0 1px var(--line-strong)}
+.s-pill-warn{color:var(--warn-ink);box-shadow:inset 0 0 0 1px var(--warn-line)}
+.s-count{font-size:var(--fs-meta);color:var(--muted);font-variant-numeric:tabular-nums}
+.s-count-pill{min-width:var(--ico-lg);height:var(--ico-lg);line-height:var(--ico-lg);padding:0 var(--s-1);border-radius:var(--r-pill);background:var(--well-2);color:var(--ink);font-weight:var(--w-strong);text-align:center;display:inline-block}
+.s-tip{display:inline-flex;align-items:center;gap:var(--s-1h);height:var(--s-6);padding:0 var(--s-2);border-radius:var(--r-chip);background:var(--fill);color:var(--on-fill);font-size:var(--fs-meta);white-space:nowrap;box-shadow:var(--lift-tip);z-index:var(--z-tip)}
+.s-tip b{font-weight:var(--w-strong)}
+.s-key{display:inline-grid;place-items:center;min-width:var(--ico-lg);height:var(--ico-lg);padding:0 var(--s-1);border-radius:var(--r-key);font-size:var(--fs-micro);font-weight:var(--w-strong);line-height:var(--lh-none);color:var(--muted);box-shadow:inset 0 0 0 1px var(--line-strong)}
+
+/* A date: the field, and under it a month and a time. */
+.s-cal{--under:var(--raised);width:248px;padding:var(--s-3);border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-overlay)}
+.s-cal-head{display:flex;align-items:center;height:var(--ctl-sm);padding-left:var(--s-2);font-weight:var(--w-strong)}
+.s-cal-grid{display:grid;grid-template-columns:repeat(7,1fr);margin-top:var(--s-1);font-variant-numeric:tabular-nums;text-align:center}
+.s-cal-grid span{height:var(--s-6);line-height:var(--s-6);font-size:var(--fs-meta);color:var(--muted)}
+.s-cal-day{--rad:var(--r-chip);height:var(--ctl);line-height:var(--ctl);border-radius:var(--rad);font-size:var(--fs-small);color:var(--ink-2);cursor:pointer}
+.s-cal-day:hover,.s-cal-day.is-hover{background:var(--raised-hover)}
+.s-cal-day.is-out{color:var(--faint)}
+.s-cal-day.is-today{box-shadow:inset 0 0 0 var(--ring-w) var(--faint);color:var(--ink)}
+.s-cal-day.is-on{background:var(--fill);color:var(--on-fill);font-weight:var(--w-strong);box-shadow:none}
+.s-cal-day.is-disabled{color:var(--text-disabled);pointer-events:none}
+.s-cal-foot{display:flex;align-items:center;gap:var(--s-2);margin-top:var(--s-2);padding-top:var(--s-3);border-top:1px solid var(--line)}
+.s-cal-foot .s-field{width:auto;flex:1}
+
+/* ---------- sidebar ---------- */
+.s-nav-head{height:var(--bar);display:flex;align-items:center;gap:var(--s-2h);padding:0 var(--s-2h) 0 var(--s-4);flex:none}
+.s-co-mark{width:var(--s-6);height:var(--s-6);border-radius:var(--r-chip);background:var(--ink);color:var(--under);display:grid;place-items:center;font-weight:var(--w-title);font-size:var(--fs-small);line-height:var(--lh-none)}
+.s-co-name{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-weight:var(--w-title);font-size:var(--fs-head)}
+.s-nav-scroll{flex:1;min-height:0;overflow:auto;scrollbar-width:none}
+.s-nav-items{padding:0 var(--s-2);display:grid;grid-template-columns:minmax(0,1fr);gap:1px}
+.s-nav-item{--rad:var(--r-ctl);height:var(--ctl);display:flex;align-items:center;gap:var(--s-2h);padding:0 var(--s-2h) 0 var(--s-2);border-radius:var(--rad);color:var(--ink-2)}
+.s-nav-item>.s-ico{font-size:var(--ico-lg);color:var(--muted)}
+.s-nav-label{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+:is(.s-nav-item,.s-nav-kid,.s-tree-row,.s-tree-team,.s-assistant):is(:hover,.is-hover){background:var(--well-2);color:var(--ink)}
+:is(.s-nav-item,.s-nav-kid,.s-tree-row,.s-tree-team,.s-assistant):is(:active,.is-pressed){background:var(--selected)}
+:is(.s-nav-item,.s-nav-kid,.s-tree-row).is-active{background:var(--selected);color:var(--ink);font-weight:var(--w-strong)}
+.s-nav-item.is-active>.s-ico{color:var(--ink)}
+.s-nav-flow{display:inline-flex;align-items:center;gap:var(--s-1h);color:var(--ink);font-size:var(--fs-meta);font-weight:var(--w-strong);font-variant-numeric:tabular-nums}
+.s-nav-next{font-size:var(--fs-meta);color:var(--muted)}
+.s-nav-chev{display:grid;color:var(--faint)}
+:is(.s-nav-chev,.s-tree-chev) .s-ico{font-size:var(--ico-sm);transition:transform var(--dur) var(--ease)}
+.s-nav-chev.is-open .s-ico,.s-tree-team.is-open .s-tree-chev .s-ico{transform:var(--chev-open)}
+.s-nav-kids{display:grid;gap:1px;padding:1px 0 var(--s-1)}
+.s-nav-kid{--rad:var(--r-row);height:var(--ctl-sm);display:flex;align-items:center;padding:0 var(--s-2h) 0 36px;border-radius:var(--rad);color:var(--muted);font-size:var(--fs-small)}
+.s-tree{margin:var(--s-2) var(--s-2) 0;padding:var(--s-2) 0 var(--s-3);border-top:1px solid var(--line);display:grid;grid-template-columns:minmax(0,1fr);gap:1px}
+.s-tree-head{height:var(--ctl-sm);display:flex;align-items:center;justify-content:space-between;padding:0 var(--s-0) 0 var(--s-2);font-size:var(--fs-small);color:var(--muted)}
+.s-tree-row,.s-tree-team{--rad:var(--r-row);height:var(--row-sm);display:flex;align-items:center;gap:var(--s-2);padding:0 var(--s-2h) 0 var(--s-2);border-radius:var(--rad);color:var(--ink)}
+.s-tree-team{width:100%;border:0;background:none;text-align:left;color:var(--ink-2);font-size:var(--fs-small);font-weight:var(--w-strong)}
+.s-tree-chev{width:var(--av-sm);display:grid;place-items:center;color:var(--faint)}
+.s-tree-name{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.s-tree-n{min-width:var(--s-3h);text-align:right;font-size:var(--fs-meta);color:var(--muted);font-variant-numeric:tabular-nums}
+.s-nav-foot{height:52px;flex:none;display:flex;align-items:center;gap:var(--s-0);padding:0 var(--s-2h) 0 var(--s-2);border-top:1px solid var(--line)}
+.s-assistant{--rad:var(--r-ctl);flex:1;min-width:0;height:36px;display:flex;align-items:center;gap:var(--s-2h);padding:0 var(--s-2);border-radius:var(--rad);color:var(--ink);font-weight:var(--w-strong)}
+.s-me{--rad:50%;margin-left:var(--s-1h);padding:0;border:0;background:none;display:grid;border-radius:50%;cursor:pointer}
+/* closed to icons: a 56px strip. The Dot keeps its count. */
+.s-nav.is-rail{width:56px}
+.s-nav.is-rail .s-nav-head{padding:0;justify-content:center}
+.s-nav.is-rail .s-nav-items{padding:0;justify-items:center}
+.s-nav.is-rail .s-nav-item{width:var(--ctl-lg);padding:0;justify-content:center}
+.s-nav.is-rail .s-tree{margin:var(--s-2) var(--s-2) 0;padding:var(--s-3) 0;justify-items:center;gap:var(--s-2)}
+.s-nav.is-rail .s-tree-row{width:var(--ctl-lg);height:var(--ctl);padding:0;justify-content:center;position:relative}
+.s-nav.is-rail .s-tree-row>.s-flow{position:absolute;right:3px;top:1px;box-shadow:0 0 0 2px var(--under);border-radius:50%}
+.s-nav.is-rail .s-nav-foot{height:auto;flex-direction:column;gap:var(--s-1);padding:var(--s-2) 0 var(--s-3)}
+.s-nav.is-rail .s-assistant{flex:none;width:var(--ctl-lg);padding:0;justify-content:center}
+.s-nav.is-rail .s-me{margin:var(--s-1) 0 0}
+/* a count on an icon: the phone's bar and the closed sidebar use the same one */
+.s-slot-ico{position:relative;display:grid}
+.s-slot-n{position:absolute;left:var(--s-3h);top:-5px;min-width:var(--ico);height:var(--ico);line-height:var(--ico);padding:0 var(--s-1);border-radius:var(--r-pill);background:var(--well-2);color:var(--ink-2);
+  font-style:normal;font-size:var(--fs-micro);font-weight:var(--w-strong);font-variant-numeric:tabular-nums;text-align:center;box-shadow:0 0 0 2px var(--under)}
+.s-slot-n.is-flow{background:var(--dot);color:var(--on-dot)}
+.s-nav.is-rail .s-nav-item .s-slot-ico .s-ico{font-size:var(--ico-lg);color:var(--muted)}
+.s-nav.is-rail .s-nav-item.is-active .s-slot-ico .s-ico{color:var(--ink)}
+
+/* ---------- top bar and rows ---------- */
+/* The title at left, on the one inset every page shares; at far right ⋯ is last, and the one filled button sits just
+   before it. */
+.s-page-head{height:var(--bar);display:flex;align-items:center;gap:var(--s-2);padding:0 var(--s-3) 0 var(--head-inset);flex:none}
+.s-title{margin:0;font-size:var(--fs-title);font-weight:var(--w-title);line-height:var(--lh-display);letter-spacing:var(--track-title);white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.s-scope-pick{--rad:var(--r-ctl);height:var(--ctl);border:0;background:none;border-radius:var(--rad);padding:0 var(--s-1h) 0 var(--s-2h);display:inline-flex;align-items:center;gap:var(--s-1);color:var(--muted)}
+.s-scope-pick:hover,.s-scope-pick.is-hover{background:var(--hover);color:var(--ink)}
+.s-scope-pick:active,.s-scope-pick.is-pressed,.s-scope-pick.is-on{background:var(--well-2);color:var(--ink)}
+.s-page-body{flex:1;min-height:0;overflow:auto;scrollbar-width:none}
+/* a list that runs past its sheet fades out, it is not cut */
+.s-fade,.s-tasks-body,.s-tl-list,.s-nav-scroll{-webkit-mask-image:linear-gradient(#000 calc(100% - var(--fade-edge)),transparent);mask-image:linear-gradient(#000 calc(100% - var(--fade-edge)),transparent)}
+/* A row: a title, an avatar, an age. State is a mark in the margin, not a phrase. No rule between rows. */
+.s-row{--rad:var(--r-row);height:var(--row);display:grid;align-items:center;border-radius:var(--rad);padding:0 var(--s-2);position:relative;color:var(--ink)}
+.s-row:hover,.s-row.is-hover{--under:var(--hover);background:var(--hover)}
+.s-row:active,.s-row.is-pressed,.s-row.is-selected{--under:var(--selected);background:var(--selected)}
+.s-row-title{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.s-row-age{text-align:right;color:var(--muted);font-size:var(--fs-small);font-variant-numeric:tabular-nums;white-space:nowrap}
+.s-who{grid-template-columns:var(--av-sm) minmax(0,1fr) var(--s-5) var(--av-md);column-gap:var(--s-2h)}
+.s-who .s-count{text-align:right}
+
+/* ---------- task rows, empty, skeleton ---------- */
+.s-tasks-body{padding:0 var(--s-3) var(--s-5)}
+.s-stage+.s-stage{margin-top:var(--s-1h);padding-top:var(--s-1h);border-top:1px solid var(--line)}
+.s-stage-head{height:36px;display:flex;align-items:center;gap:var(--s-2);padding:0 var(--s-1) 0 var(--s-8);position:sticky;top:0;z-index:var(--z-stick);background:var(--under)}
+.s-stage-head.is-stuck{box-shadow:0 1px 0 var(--line)}
+.s-stage-name{margin:0;font-size:var(--fs-small);font-weight:var(--w-strong);line-height:var(--lh-none);color:var(--ink-2)}
+.s-stage-n{font-size:var(--fs-meta);color:var(--muted);font-variant-numeric:tabular-nums}
+.s-task{grid-template-columns:var(--s-6) minmax(0,1fr) auto var(--av-sm) 38px}
+.s-row-mark{display:flex;align-items:center}
+.s-row-pills{display:flex;gap:var(--s-1h);padding:0 var(--s-3h) 0 var(--s-4)}
+.s-stage-fold{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-1) var(--s-4);min-height:var(--row);margin-top:var(--s-1h);padding:var(--s-2) 0 0 var(--s-8);border-top:1px solid var(--line);font-size:var(--fs-small);color:var(--muted)}
+.s-fold-label{color:var(--ink-2);font-weight:var(--w-strong)}
+.s-stage-fold a{color:inherit}
+.s-stage-fold a:hover{color:var(--ink)}
+/* The one empty state: one line and one plain button. No picture, no second line; the top bar stays as it is. */
+.s-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s-4);padding:var(--s-12) var(--s-4) var(--s-18);text-align:center}
+.s-empty-line{margin:0;font-size:var(--fs-head);font-weight:var(--w-strong);line-height:var(--lh-meta);text-wrap:balance}
+/* Loading: bars where the words will be, breathing. */
+.s-sk{display:block;height:var(--s-2h);border-radius:var(--r-chip);background:var(--well-2);animation:s-rest var(--breathe) ease-in-out infinite;animation-play-state:var(--loop)}
+.s-sk-av{width:var(--av-sm);height:var(--av-sm);border-radius:var(--r-bot)}
+.s-sk-age{width:var(--s-5);justify-self:end}
+.s-sk-title{width:96px;height:var(--ico-lg)}
+.s-row.is-skeleton{pointer-events:none}
+
+/* ---------- conversation ---------- */
+.s-side-head{height:var(--bar);display:flex;align-items:center;gap:var(--s-2h);padding:0 var(--s-2h) 0 var(--s-4);border-bottom:1px solid var(--line);flex:none}
+.s-side-head b{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-weight:var(--w-strong)}
+.s-chat-body{flex:1;min-height:0;overflow:auto;scrollbar-width:none;padding:var(--s-3) var(--s-4);display:flex;flex-direction:column}
+.s-chat-body>:first-child{margin-top:auto}
+/* A message shows in full: never cut, no "Show more". */
+.s-msg{display:flex;gap:var(--s-2h);padding-top:var(--s-3h)}
+.s-msg.is-cont{padding-top:var(--s-1h)}
+.s-msg-main{flex:1;min-width:0}
+.s-msg-meta{display:flex;align-items:baseline;gap:var(--s-2);margin-bottom:1px}
+.s-msg-meta b{font-weight:var(--w-strong);min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.s-time{font-size:var(--fs-meta);color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.s-msg p{margin:0;line-height:var(--lh-read);overflow-wrap:anywhere}
+.s-msg ul{margin:var(--s-1) 0 0;padding-left:var(--ico-lg);display:grid;gap:var(--s-0);line-height:var(--lh-read)}
+.s-msg li::marker{color:var(--faint)}
+.s-msg.is-live p{color:var(--muted)}
+.s-msg.is-mine{justify-content:flex-end;align-items:flex-start}
+.s-mine-col{display:flex;flex-direction:column;align-items:flex-end;max-width:86%}
+.s-bubble{background:var(--bubble);border-radius:var(--r-bubble);padding:var(--s-1h) var(--s-3)}
+.s-msg pre{margin:var(--s-2) 0 0;padding:var(--s-2h) var(--s-3);border-radius:var(--r-ctl);background:var(--well);color:var(--ink-2);font-family:var(--font-code);font-size:var(--fs-meta);line-height:var(--lh-read);font-feature-settings:normal;overflow:auto;scrollbar-width:none}
+.s-msg code{font:inherit}
+.s-msg.is-failed .s-bubble{background:none;box-shadow:inset 0 0 0 1px var(--warn-line)}
+.s-msg-fail{display:flex;align-items:center;gap:var(--s-1);margin-top:var(--s-1);font-size:var(--fs-meta);color:var(--warn-ink)}
+.s-msg-fail .s-ico{font-size:var(--ico-sm)}
+.s-msg-fail button{--rad:var(--r-chip);height:var(--pill-h);margin-left:var(--s-1);padding:0 var(--s-1);border:0;border-radius:var(--rad);background:none;color:var(--ink);font-weight:var(--w-strong);position:relative}
+.s-msg-fail button::before{content:"";position:absolute;inset:calc(var(--s-3)*-1) calc(var(--s-2)*-1)}
+.s-msg-fail button:hover{background:var(--hover)}
+.s-file{--rad:var(--r-ctl);display:inline-flex;align-items:center;gap:var(--s-2);height:36px;margin-top:var(--s-2);padding:0 var(--s-3) 0 var(--s-2h);border-radius:var(--rad);background:var(--well);color:var(--ink)}
+.s-file:hover,.s-file.is-hover{background:var(--well-2)}
+.s-file .s-ico{color:var(--muted)}
+.s-file em{font-style:normal;font-size:var(--fs-meta);color:var(--muted)}
+.s-reacts{display:flex;gap:var(--s-1);margin-top:var(--s-1h)}
+.s-react{display:inline-flex;align-items:center;gap:var(--s-1);height:var(--s-6);padding:0 var(--s-2);border-radius:var(--r-pill);background:var(--well);font-size:var(--fs-small);line-height:var(--lh-none)}
+.s-react b{font-weight:var(--w-text);font-size:var(--fs-meta);color:var(--muted)}
+.s-chat-foot{flex:none;padding:var(--s-1) var(--s-3) var(--s-3);display:flex;flex-direction:column;align-items:flex-start;gap:var(--s-2)}
+.s-scope{display:inline-flex;align-items:center;gap:var(--s-0);height:var(--s-6);padding:0 var(--s-0) 0 var(--s-2);border-radius:var(--r-chip);background:var(--well);color:var(--ink-2);font-size:var(--fs-meta)}
+.s-scope button{--rad:var(--r-key);width:var(--pill-h);height:var(--pill-h);padding:0;border:0;background:none;border-radius:var(--rad);display:grid;place-items:center;color:var(--muted)}
+.s-scope button:hover{background:var(--well-2);color:var(--ink)}
+.s-scope .s-ico{font-size:var(--ico-xs)}
+.s-composer{align-self:stretch;min-height:var(--tap);display:flex;align-items:center;gap:var(--s-0);padding:0 var(--s-1h) 0 var(--s-3h);border-radius:var(--r-card);background:var(--well);box-shadow:inset 0 0 0 1px var(--line)}
+.s-composer:hover{box-shadow:inset 0 0 0 1px var(--line-strong)}
+.s-composer:focus-within,.s-composer.is-focus{box-shadow:inset 0 0 0 var(--ring-w) var(--focus)}
+.s-composer-text{flex:1;min-width:0;color:var(--muted);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.s-composer.is-typing .s-composer-text{color:var(--ink)}
+.s-send{--rad:var(--r-ctl);width:var(--ctl);height:var(--ctl);padding:0;border:0;border-radius:var(--rad);background:var(--well-2);color:var(--muted);display:grid;place-items:center;flex:none;margin-left:var(--s-1)}
+/* the font has no up arrow: the forward one, turned */
+.s-send .s-ico{transform:rotate(-90deg)}
+.s-send.is-ready{background:var(--fill);color:var(--on-fill)}
+.s-send.is-ready:is(:hover,.is-hover,:active,.is-pressed){background:var(--fill-hover)}
+.s-send:is(:disabled,.is-disabled){background:var(--fill-disabled)}
+/* An empty chat: who it is, and three things to ask. A starter is a sentence you can send as it stands. */
+.s-starters{align-self:stretch;margin-top:auto;display:grid;justify-items:start;gap:var(--s-4)}
+.s-starters ul{list-style:none;margin:0;padding:0;justify-self:stretch;display:grid;gap:var(--s-1)}
+.s-starter{--rad:var(--r-ctl);width:100%;min-height:var(--ctl-lg);display:flex;align-items:center;justify-content:space-between;gap:var(--s-3);padding:0 var(--s-2) 0 var(--s-3);border:0;border-radius:var(--rad);background:none;
+  box-shadow:inset 0 0 0 1px var(--line-strong);color:var(--ink-2);text-align:left}
+.s-starter .s-ico{color:var(--faint)}
+.s-starter:hover,.s-starter.is-hover{background:var(--hover);color:var(--ink)}
+.s-starter:active,.s-starter.is-pressed{background:var(--well-2);color:var(--ink)}
+/* the chat column closed: a strip with who you were talking to */
+.s-side.is-closed{width:56px;align-items:center}
+.s-side.is-closed .s-side-head{padding:0;border-bottom:0;justify-content:center}
+.s-side.is-closed .s-ib{margin-top:auto;margin-bottom:var(--s-3)}
+
+/* ---------- thread rows and the thread bar ---------- */
+.s-tl{width:var(--list-w);flex:none;min-height:0;display:flex;flex-direction:column;border-right:1px solid var(--line)}
+.s-tl .s-page-head{padding-right:var(--s-2)}
+.s-tl-list{flex:1;min-height:0;overflow:auto;scrollbar-width:none;padding:0 var(--s-2) var(--s-3);display:grid;gap:1px;align-content:start}
+.s-tl-row{grid-template-columns:var(--av-sm) minmax(0,1fr) auto var(--s-6);column-gap:var(--s-2);padding:0 var(--s-1h) 0 var(--s-3);color:var(--ink-2)}
+.s-tl-row.is-unread{color:var(--ink)}
+.s-tl-row.is-unread .s-row-title{font-weight:var(--w-strong)}
+.s-tl-row .s-row-age{font-size:var(--fs-meta)}
+.s-tl-kind{width:var(--av-sm);height:var(--av-sm);display:grid;place-items:center;color:var(--muted)}
+.s-tl-slot{display:flex;justify-content:flex-end;align-items:center}
+.s-conv{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
+.s-conv-head{height:var(--bar);display:flex;align-items:center;gap:var(--s-1);padding:0 var(--s-3) 0 var(--s-6);border-bottom:1px solid var(--line);flex:none}
+.s-conv-title{margin:0;font-size:var(--fs-head);font-weight:var(--w-title);line-height:var(--lh-meta);min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.s-conv-body{flex:1;min-height:0;overflow:auto;scrollbar-width:none;padding:0 var(--s-6) var(--s-3);-webkit-mask-image:linear-gradient(transparent,#000 var(--s-6));mask-image:linear-gradient(transparent,#000 var(--s-6))}
+.s-day{display:flex;align-items:center;gap:var(--s-3);margin:var(--s-5) 0 calc(var(--s-0)*-1);font-size:var(--fs-meta);color:var(--muted)}
+.s-day::before,.s-day::after{content:"";flex:1;height:1px;background:var(--line)}
+.s-conv-foot{flex:none;padding:var(--s-1) var(--s-5) var(--s-4);display:flex}
+.s-conv-foot .s-composer{flex:1}
+
+/* ---------- the rail: sections, a stage track, facts ---------- */
+.s-rail-body{flex:1;min-height:0;overflow:auto;scrollbar-width:none}
+.s-rail-sec{padding:var(--s-3h) var(--s-4);border-bottom:1px solid var(--line)}
+.s-rail-sec:last-child{border-bottom:0}
+.s-rail-h{margin:0 0 var(--s-2h);font-size:var(--fs-small);font-weight:var(--w-strong);line-height:var(--lh-none);color:var(--ink-2)}
+.s-track{display:flex;gap:var(--s-1);margin:var(--s-0) 0 var(--s-2h)}
+.s-track i{flex:1;height:var(--s-1);border-radius:var(--r-pill);background:var(--track)}
+.s-track .is-done{background:var(--track-done)}
+.s-track .is-on{background:var(--track-on)}
+/* A fact: a label and its value on one line, the label in a column every fact shares (--label-w: 176px, 128px on a
+   phone), so values stand on one axis down a page. A long value wraps; the label stays on its first line. */
+.s-fact{display:grid;grid-template-columns:var(--label-w) minmax(0,1fr);column-gap:var(--s-3);align-items:baseline;min-height:var(--row-sm);padding:var(--s-1) 0}
+.s-fact-k{color:var(--muted)}
+.s-fact-v{min-width:0;display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-1) var(--s-2);overflow-wrap:anywhere}
+.s-fact.is-edit{--rad:var(--r-row);margin:0 calc(var(--s-2)*-1);padding:var(--s-1) var(--s-2);border-radius:var(--rad);cursor:pointer}
+.s-fact.is-edit:is(:hover,.is-hover){--under:var(--hover);background:var(--hover)}
+.s-fact.is-edit:is(:active,.is-pressed){--under:var(--selected);background:var(--selected)}
+.s-fact.is-edit:is(:focus-visible,.is-focus){outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
+.s-fact.is-disabled{pointer-events:none}
+.s-fact.is-disabled .s-fact-v{color:var(--text-disabled)}
+.s-people{display:flex;gap:var(--s-2)}
+.s-rail-row{--rad:var(--r-row);height:var(--row);display:flex;align-items:center;gap:var(--s-2h);margin:0 calc(var(--s-2)*-1);padding:0 var(--s-2);border-radius:var(--rad);color:var(--ink)}
+.s-rail-row:hover,.s-rail-row.is-hover{--under:var(--hover);background:var(--hover)}
+.s-rail-row:active,.s-rail-row.is-pressed,.s-rail-row.is-on{--under:var(--selected);background:var(--selected)}
+.s-rail-row .s-ico{color:var(--muted)}
+
+/* ---------- task view: list, standing line, tabs, frame ---------- */
+/* the list sheet, where navigation was */
+.s-li-head{height:var(--bar);display:flex;align-items:center;gap:var(--s-1);padding:0 var(--s-2h) 0 var(--s-1h);flex:none}
+.s-li-pick{--rad:var(--r-ctl);height:var(--ctl);border:0;background:none;border-radius:var(--rad);padding:0 var(--s-1h) 0 var(--s-2h);display:inline-flex;align-items:center;gap:var(--s-1);color:var(--ink);font-weight:var(--w-title);font-size:var(--fs-head)}
+.s-li-pick .s-ico{color:var(--muted)}
+.s-li-pick:hover,.s-li-pick.is-hover{background:var(--well-2)}
+.s-li-pick:active,.s-li-pick.is-pressed,.s-li-pick.is-on{background:var(--selected)}
+/* the Flow control: the Dot and its count. A toggle; down, the list shows only the rows it counts */
+.s-li-flow{--rad:var(--r-ctl);height:var(--ctl-sm);border:0;border-radius:var(--rad);padding:0 var(--s-1) 0 var(--s-2);margin-right:var(--s-0);display:inline-flex;align-items:center;gap:var(--s-1h);background:none;box-shadow:inset 0 0 0 1px var(--line-strong);
+  font-size:var(--fs-small);font-weight:var(--w-strong);color:var(--ink-2);white-space:nowrap}
+.s-li-flow>b{min-width:var(--ico-lg);height:var(--ico-lg);line-height:var(--ico-lg);border-radius:var(--r-pill);padding:0 var(--s-1);background:var(--well-2);font-size:var(--fs-meta);font-weight:var(--w-strong);font-variant-numeric:tabular-nums;text-align:center}
+.s-li-flow:hover,.s-li-flow.is-hover{color:var(--ink)}
+.s-li-flow:active,.s-li-flow.is-pressed,.s-li-flow.is-on{background:var(--well-2);color:var(--ink);box-shadow:inset 0 0 0 1px var(--muted)}
+.s-li-flow.is-on>b{background:var(--ink);color:var(--under)}
+.s-li-run{flex:none;display:flex;align-items:center;gap:var(--s-0);height:var(--row-sm);padding:0 var(--s-2h) var(--s-1) var(--s-4);font-size:var(--fs-small);color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.s-li-run b{color:var(--ink);font-weight:var(--w-strong)}
+.s-li-body{padding:0 var(--s-2) var(--fade-edge);display:grid;grid-template-columns:minmax(0,1fr);align-content:start;gap:1px}
+.s-li-stage{height:var(--row);display:flex;align-items:flex-end;padding:0 var(--s-2) var(--s-1h);font-size:var(--fs-meta);color:var(--muted)}
+.s-li{--rad:var(--r-row);display:grid;grid-template-columns:var(--s-3h) minmax(0,1fr) auto;column-gap:var(--s-2);align-items:start;padding:var(--s-2) var(--s-2h) var(--s-2) var(--s-2);border-radius:var(--rad);color:var(--ink)}
+.s-li:hover,.s-li.is-hover{background:var(--well-2)}
+.s-li:active,.s-li.is-pressed,.s-li.is-on{--under:var(--selected);background:var(--selected)}
+.s-li-mark{height:var(--ico-lg);display:flex;align-items:center;justify-content:center;color:var(--muted)}
+.s-li-mark .s-ico{font-size:var(--ico-sm)}
+.s-li-main{min-width:0;display:grid;justify-items:start;gap:var(--s-1h)}
+.s-li-title{font-size:var(--fs-small);line-height:var(--lh-meta);color:var(--ink-2);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.s-li.is-on .s-li-title{color:var(--ink);font-weight:var(--w-strong)}
+.s-li.is-done .s-li-title{color:var(--muted)}
+.s-li-who{display:flex;align-items:center;gap:var(--s-1h)}
+.s-li-who .s-row-age{font-size:var(--fs-meta);min-width:var(--av-md)}
+/* the task sheet: where it stands, its title, its pages. Nothing else sits above a page. */
+.s-tv-top,.s-dock{display:none}
+.s-tv-head{flex:none;position:relative;display:flex;flex-direction:column;padding:var(--s-5) 60px 0 var(--pad-task)}
+.s-tv-where{display:flex;align-items:center;gap:var(--s-1);min-height:var(--av-sm);font-size:var(--fs-small);color:var(--muted)}
+.s-tv-where>.s-ico{font-size:var(--ico-xs);color:var(--faint)}
+.s-tv-where .s-av{margin-left:var(--s-2)}
+.s-tv-where .s-pill{margin-left:var(--s-1)}
+.s-tv-title{margin:var(--s-2) 0 0;font-size:var(--fs-title);font-weight:var(--w-title);line-height:var(--lh-display);letter-spacing:var(--track-title);text-wrap:balance;max-width:620px;overflow-wrap:anywhere}
+.s-tv-more{position:absolute;right:var(--s-3);top:var(--s-3h)}
+.s-tv-tabs{flex:none;display:flex;align-items:center;gap:var(--s-2);margin-top:var(--s-2h);padding:0 var(--s-3) 0 var(--pad-task)}
+.s-tv-tabs .s-tabs{flex:1;margin-left:calc(var(--s-2h)*-1)}
+.s-tv-expand{color:var(--faint)}
+.s-tv-col{flex:1;min-height:0;width:100%;max-width:var(--bare-w);margin:0 auto;display:flex;flex-direction:column}
+/* A page is HTML its bot wrote. One that keeps its own look is paper lying in a well; one that takes Tico's colours
+   sits in the sheet with a rule above it. Either way it scrolls inside its frame. */
+.s-frame{flex:1;min-height:0;display:flex;border-top:1px solid var(--line)}
+.s-frame iframe{flex:1;min-width:0;width:100%;height:100%;border:0;display:block;background:var(--under)}
+.s-frame.is-inset{padding:var(--pad-paper);border-top:0;background:var(--desk);box-shadow:var(--lift-desk)}
+.s-frame.is-inset iframe{border-radius:var(--r-paper);box-shadow:var(--lift-paper)}
+.s-frame-wait{flex:1;min-width:0;padding:var(--s-8);display:grid;align-content:start;gap:var(--s-4);background:var(--under)}
+.s-frame.is-inset .s-frame-wait{border-radius:var(--r-paper);box-shadow:var(--lift-paper)}
+.s-frame-fail{flex:1;min-width:0;display:grid;place-content:center;justify-items:center;gap:var(--s-3);padding:var(--s-8);color:var(--muted)}
+.s-frame-fail b{color:var(--ink);font-weight:var(--w-strong)}
+
+/* ---------- the answer ---------- */
+/* The one answer part: a slim raised card at the foot of the chat, above the message box. The Dot, the question, then
+   the answers as buttons, the recommended one filled. Short answers share a line; long ones (is-stack) stand one under
+   another at full width, their words wrapping. The other shape is a bot's work waiting for a yes: its name, a pill
+   for the decision model when it is not sure, then the two verbs. */
+.s-answer{--under:var(--raised);align-self:stretch;padding:var(--s-3);border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-card)}
+.s-an-q{display:flex;align-items:flex-start;gap:var(--s-2);margin:0;padding:0 var(--s-0);font-weight:var(--w-strong);line-height:var(--lh-meta);text-wrap:balance;overflow-wrap:anywhere}
+.s-an-q .s-flow{height:calc(var(--fs-body)*var(--lh-meta))}
+.s-an-row{display:flex;align-items:center;gap:var(--s-2);min-height:var(--ctl)}
+.s-an-q+.s-an-row{margin-top:var(--s-3)}
+.s-an-q+.s-an-row .s-btn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.s-answer .s-btn:not(.s-btn-fill){background:var(--btn-raised)}
+.s-answer .s-btn:not(.s-btn-fill):is(:hover,.is-hover){background:var(--raised-hover)}
+.s-answer .s-btn:not(.s-btn-fill):is(:active,.is-pressed){background:var(--raised-pressed)}
+.s-answer.is-stack .s-an-row{flex-direction:column;align-items:stretch}
+.s-answer.is-stack .s-btn{flex:none;height:auto;min-height:var(--ctl-lg);padding:var(--s-2) var(--ctl-pad);justify-content:flex-start;text-align:left;white-space:normal;line-height:var(--lh-meta);overflow-wrap:anywhere}
+.s-an-name{white-space:nowrap;font-weight:var(--w-strong)}
+.s-an-pill{--rad:var(--r-chip);border:0;background:none;margin-left:var(--s-0);position:relative}
+.s-an-pill:hover,.s-an-pill.is-hover{color:var(--ink)}
+.s-an-pill:active,.s-an-pill.is-pressed,.s-an-pill.is-on{background:var(--well-2);color:var(--ink);box-shadow:inset 0 0 0 1px var(--muted)}
+.s-an-why{margin:0 var(--s-1h) var(--s-2) 0;padding:var(--s-1) 0 var(--s-2h);border-bottom:1px solid var(--line-strong);line-height:var(--lh);color:var(--ink-2);font-size:var(--fs-small);text-wrap:pretty}
+.s-an-why span{display:block;margin-bottom:1px;font-size:var(--fs-meta);color:var(--muted)}
+
+/* ---------- tabs ---------- */
+/* One row that never wraps: past its edge it scrolls sideways and fades out there (is-more-start, is-more-end, which
+   the kit's tabsSync sets). The line under the chosen tab slides to the next one: tabsSync measures it and marks the
+   row is-live; until then the chosen tab draws its own. A tab's mark is a tick, the Dot or a hollow ring. */
+.s-tabs{display:flex;gap:var(--s-0);min-width:0;position:relative;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;white-space:nowrap}
+.s-tabs::-webkit-scrollbar{display:none}
+.s-tabs.is-more-end{-webkit-mask-image:linear-gradient(to right,#000 calc(100% - var(--fade-edge)),transparent);mask-image:linear-gradient(to right,#000 calc(100% - var(--fade-edge)),transparent)}
+.s-tabs.is-more-start{-webkit-mask-image:linear-gradient(to left,#000 calc(100% - var(--fade-edge)),transparent);mask-image:linear-gradient(to left,#000 calc(100% - var(--fade-edge)),transparent)}
+.s-tabs.is-more-start.is-more-end{-webkit-mask-image:linear-gradient(to right,transparent,#000 var(--fade-edge),#000 calc(100% - var(--fade-edge)),transparent);mask-image:linear-gradient(to right,transparent,#000 var(--fade-edge),#000 calc(100% - var(--fade-edge)),transparent)}
+.s-tab{--rad:var(--r-chip);height:var(--ctl-lg);display:inline-flex;align-items:center;gap:var(--s-1h);padding:0 var(--s-2h);position:relative;flex:none;border:0;border-radius:0;background:none;color:var(--muted);white-space:nowrap}
+.s-tab:hover,.s-tab.is-hover{color:var(--ink)}
+.s-tab:active,.s-tab.is-pressed{color:var(--ink)}
+.s-tab.is-on{color:var(--ink);font-weight:var(--w-strong)}
+.s-tab.is-on::before{content:"";position:absolute;left:var(--s-2h);right:var(--s-2h);bottom:0;height:2px;border-radius:2px 2px 0 0;background:var(--ink)}
+.s-tabs.is-live .s-tab.is-on::before{content:none}
+.s-tab .s-ico{font-size:var(--ico-sm)}
+.s-tabs-line{display:none;position:absolute;left:0;bottom:0;width:1px;height:2px;background:var(--ink);transform-origin:0 50%;transform:translateX(var(--tab-x,0px)) scaleX(var(--tab-w,0));pointer-events:none}
+.s-tabs.is-live .s-tabs-line{display:block;transition:transform var(--dur) var(--ease)}
+.s-hollow{width:var(--s-2);height:var(--s-2);flex:none;border-radius:50%;box-shadow:inset 0 0 0 var(--ring-w) var(--muted)}
+
+/* ---------- tables: thin rules, numbers on one axis ---------- */
+.s-table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.s-table :is(th,td){height:var(--row);padding:0 var(--s-3);border:0;text-align:left;white-space:nowrap;vertical-align:middle;text-transform:none;letter-spacing:0;font-size:inherit}
+.s-table th{font-size:var(--fs-small);font-weight:var(--w-text);color:var(--muted);border-bottom:1px solid var(--line-strong)}
+.s-table td{border-bottom:1px solid var(--line)}
+.s-table tbody tr:last-child td{border-bottom:0}
+.s-table .is-num{text-align:right}
+.s-table th button{--rad:var(--r-chip);height:var(--ctl-sm);margin:0 calc(var(--s-2)*-1);padding:0 var(--s-2);border:0;border-radius:var(--rad);background:none;color:inherit;display:inline-flex;align-items:center;gap:var(--s-1)}
+.s-table th button:hover{background:var(--hover);color:var(--ink)}
+.s-table th button .s-ico{font-size:var(--ico-xs)}
+.s-table th.is-sorted{color:var(--ink);font-weight:var(--w-strong)}
+.s-table tbody tr:hover td,.s-table tr.is-hover td{background:var(--hover)}
+.s-table tr.is-selected td{background:var(--selected)}
+.s-table td .s-av{vertical-align:middle;margin-right:var(--s-2)}
+.s-table .is-empty td{height:136px;text-align:center;color:var(--muted);background:none}
+
+/* ---------- menus ---------- */
+/* An item is an icon and one or two words. A destructive item has no colour of its own: it is the last item, under a
+   rule, its words name the thing, and it never acts at once. */
+.s-menu{--under:var(--raised);width:var(--menu-w);padding:var(--s-1h);border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-overlay);display:grid;grid-template-columns:minmax(0,1fr);z-index:var(--z-overlay)}
+.s-menu.is-select{width:208px}
+.s-menu-item{--rad:var(--r-row);height:var(--ctl);display:flex;align-items:center;gap:var(--s-2h);padding:0 var(--s-2);border:0;border-radius:var(--rad);background:none;color:var(--ink);text-align:left}
+.s-menu-item .s-ico{color:var(--muted)}
+.s-menu-item:hover,.s-menu-item.is-hover{background:var(--raised-hover)}
+.s-menu-item:active,.s-menu-item.is-pressed{background:var(--raised-pressed)}
+.s-menu-item.is-on{font-weight:var(--w-strong)}
+.s-menu-item>.s-ico:last-child:not(:first-child){margin-left:auto;color:var(--ink)}
+.s-menu-item>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.s-menu-rule{border:0;border-top:1px solid var(--line-strong);margin:var(--s-1h) calc(var(--s-1h)*-1)}
+
+/* ---------- dialogs ---------- */
+/* One dialog: 400px wide (--modal-w), or 440px when it walks through steps (is-steps); --r-card corners; on --scrim.
+   A <dialog> shown with showModal() takes the scrim as its backdrop; a plain element sits in an s-scrim. */
+.s-scrim{position:fixed;inset:0;z-index:var(--z-scrim);display:grid;place-items:center;background:var(--scrim)}
+.s-scrim.is-soft{background:var(--scrim-soft)}
+.s-modal{--under:var(--raised);width:var(--modal-w);max-width:calc(100% - var(--s-8));margin:auto;padding:var(--s-5);border:0;border-radius:var(--r-card);background:var(--raised);color:var(--ink);box-shadow:var(--lift-overlay);
+  display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s-4);z-index:var(--z-dialog)}
+dialog.s-modal:not([open]){display:none}
+.s-modal::backdrop{background:var(--scrim)}
+.s-modal.is-steps{width:var(--modal-w-lg)}
+.s-modal-title{margin:0;font-size:var(--fs-head);font-weight:var(--w-title);line-height:var(--lh-meta);text-wrap:balance}
+.s-modal-text{margin:calc(var(--s-2)*-1) 0 0;color:var(--muted);overflow-wrap:anywhere}
+.s-modal .s-field{width:100%}
+.s-modal-row{display:flex;justify-content:flex-end;gap:var(--s-2);margin-top:var(--s-1)}
+.s-modal-step{margin-right:auto;align-self:center;font-size:var(--fs-meta);color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* ---------- toasts: one line, at the foot of the page sheet ---------- */
+.s-toasts{position:fixed;z-index:var(--z-toast);left:0;right:0;bottom:var(--s-6);display:grid;justify-items:center;gap:var(--s-2);pointer-events:none}
+.s-toast{--under:var(--raised);pointer-events:auto;display:inline-flex;align-items:center;gap:var(--s-2h);height:var(--ctl-lg);max-width:calc(100% - var(--s-8));padding:0 var(--s-1) 0 var(--s-3);border-radius:var(--r-ctl);background:var(--raised);color:var(--ink);box-shadow:var(--lift-overlay);white-space:nowrap}
+.s-toast>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.s-toast .s-ico{color:var(--ink)}
+.s-toast.is-plain{padding-right:var(--s-3)}
+.s-toast:is(.is-failed,.is-offline)>.s-ico{color:var(--warn-ink)}
+.s-toast button{--rad:var(--r-chip);height:var(--ctl);padding:0 var(--s-2h);margin-left:var(--s-2);border:0;background:none;border-radius:var(--rad);color:var(--ink);font-weight:var(--w-strong)}
+.s-toast button:hover{background:var(--raised-hover)}
+.s-toast button:active{background:var(--raised-pressed)}
+
+/* ---------- a phone: one sheet, 44px targets, the five-slot bar, the sub-page head ---------- */
+.s-bar,.s-sub-head{display:none}
+@media (max-width:760px){
+  .s-not-phone.s-not-phone{display:none}
+  .s-only-phone{display:inline-grid}
+  .s-app,.s-app-thread,.s-app-task{display:block;padding:0;height:100dvh;background:var(--sheet)}
+  .s-nav,.s-side,.s-tl{display:none}
+  .s-page{height:100dvh;border-radius:0;box-shadow:none}
+  .s-page-head{padding:var(--s-1) var(--s-1) 0 var(--head-inset)}
+  .s-page-body{padding-bottom:88px}
+  .s-ib .s-ico{font-size:var(--ico-xl)}
+  .s-btn{padding:0 var(--s-3h);--rad:var(--r-card)}
+  .s-field{width:100%}
+  .s-seg{padding:0}
+  .s-seg button{min-width:var(--tap);height:var(--ctl)}
+  .s-check,.s-radio,.s-opt{min-height:var(--tap)}
+  .s-file{height:var(--tap)}
+  .s-cal{width:auto}
+  .s-cal-day{height:var(--tap);line-height:var(--tap)}
+  .s-nav-kid,.s-li-flow{min-height:var(--tap)}
+  /* nothing you press is under 44px, even when it is drawn smaller: its target reaches past its edge */
+  :is(.s-send,.s-composer .s-ib,.s-an-pill,.s-scope button,.s-search .s-ib,.s-switch){position:relative}
+  :is(.s-send,.s-composer .s-ib)::before{content:"";position:absolute;inset:calc(var(--s-1)*-1)}
+  :is(.s-an-pill,.s-scope button,.s-search .s-ib,.s-switch)::before{content:"";position:absolute;inset:calc(var(--s-3)*-1) calc(var(--s-1h)*-1)}
+  .s-send{width:36px;height:36px;margin-left:var(--s-1h)}
+  .s-composer{min-height:var(--s-12)}
+  .s-composer .s-ib{width:36px;height:36px}
+
+  .s-tasks-body{padding:0 var(--s-2) 96px}
+  .s-stage-head{height:var(--ctl-lg);padding-left:var(--s-2)}
+  .s-stage-fold{padding-left:var(--s-2)}
+  /* a task row: the mark leads, the title may take two lines, its pills go under it */
+  .s-task{height:auto;min-height:var(--row);grid-template-columns:var(--s-5) minmax(0,1fr) var(--av-sm) 34px;grid-template-areas:"mark title av age" ". pills pills pills";padding:var(--s-2);row-gap:var(--s-1h)}
+  .s-task .s-row-title{grid-area:title;white-space:normal;line-height:var(--lh-meta);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;padding-right:var(--s-2h)}
+  .s-task .s-row-mark{grid-area:mark;align-self:start;height:calc(var(--fs-body)*var(--lh-meta))}
+  .s-task .s-av{grid-area:av}
+  .s-task .s-row-age{grid-area:age}
+  .s-task .s-row-pills{grid-area:pills;padding:0}
+  .s-task .s-row-pills:empty{display:none}
+
+  .s-conv-head{padding:0 var(--s-1);gap:0}
+  .s-conv-title{margin-left:var(--s-0)}
+  .s-conv-body{padding:0 var(--s-4) var(--s-2)}
+  .s-conv-foot{padding:var(--s-1h) var(--s-3) var(--s-3h)}
+  .s-msg pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--fs-micro);padding:var(--s-2h)}
+
+  /* A task on a phone: one column. Back and the place in the run, the title, where it stands, then one row of tabs
+     where Chat sits beside the pages. The answer is docked at the foot. No main bar here. */
+  .s-tv-head{padding:0 var(--s-4)}
+  .s-tv-top{display:flex;align-items:center;height:var(--s-12);margin:0 var(--s-10) 0 calc(var(--s-3)*-1)}
+  .s-tv-n{margin-left:var(--s-0);font-size:var(--fs-small);color:var(--muted);font-variant-numeric:tabular-nums}
+  .s-tv-n b{color:var(--ink);font-weight:var(--w-strong)}
+  .s-tv-more{right:var(--s-1);top:var(--s-0)}
+  .s-tv-title{order:1;margin-top:var(--s-0);font-size:var(--fs-fig);max-width:none}
+  .s-tv-where{order:2;margin-top:var(--s-2)}
+  .s-tv-tabs{margin-top:var(--s-0);padding:0 0 0 var(--s-4)}
+  .s-tv-expand{display:none}
+  .s-frame,.s-frame.is-inset{padding:0;background:none;box-shadow:none;border-top:1px solid var(--line)}
+  .s-frame.is-inset iframe{border-radius:0;box-shadow:none}
+  .s-dock{--under:var(--raised);flex:none;display:flex;flex-direction:column;align-items:stretch;gap:var(--s-2);padding:var(--s-2) var(--s-2h) calc(var(--s-2) + max(env(safe-area-inset-bottom),var(--s-5)));
+    background:var(--raised);border-top:1px solid var(--line)}
+  .s-dock .s-answer{padding:var(--s-1h) 0 0;border-radius:0;background:none;box-shadow:none}
+  .s-dock .s-composer{background:var(--dock-field)}
+
+  /* A sub-page (a page opened from another on a phone): Back, its title, at most two icons, then ⋯. It has no bar
+     under it. */
+  .s-sub-head{flex:none;display:flex;align-items:center;height:var(--bar);padding:0 var(--s-1)}
+  .s-sub-title{flex:1;min-width:0;margin:0 var(--s-1);font-size:var(--fs-head);font-weight:var(--w-title);line-height:var(--lh-meta);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+
+  /* a menu or a dialog is a sheet that comes up from the bottom edge, where the bar was */
+  .s-scrim{place-items:end stretch}
+  .s-menu.is-sheet,.s-modal,.s-modal.is-steps{position:relative;width:auto;max-width:none;margin:auto var(--s-2h) var(--s-2h);border-radius:var(--r-sheet)}
+  .s-menu.is-sheet{padding:var(--s-5) var(--s-2) var(--s-2)}
+  :is(.s-menu.is-sheet,.s-modal)::before{content:"";position:absolute;left:50%;top:var(--s-2);width:36px;height:var(--s-1);margin-left:-18px;border-radius:var(--r-pill);background:var(--line-strong)}
+  .s-menu.is-sheet .s-menu-item{--rad:var(--r-pane);padding:0 var(--s-3);gap:var(--s-3)}
+  .s-menu.is-sheet .s-menu-rule{margin:var(--s-1h) var(--s-3)}
+  .s-modal{padding:var(--s-6) var(--s-4) var(--s-4)}
+  .s-modal-row .s-btn{flex:1}
+  .s-toasts{bottom:84px}
+  .s-toast{height:var(--s-12);border-radius:var(--r-pane)}
+
+  /* the five-slot bar: Tasks, Threads, the Dot, Company, More */
+  .s-bar{--under:var(--raised);display:grid;grid-template-columns:repeat(5,1fr);align-items:center;position:fixed;left:var(--s-2h);right:var(--s-2h);bottom:var(--s-2h);height:62px;padding:0 var(--s-1);border-radius:var(--r-dock);z-index:var(--z-dock);
+    background:var(--raised);box-shadow:var(--lift-overlay)}
+  .s-slot{--rad:var(--r-slot);height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s-0);border-radius:var(--rad);color:var(--muted);font-size:var(--fs-meta);line-height:var(--lh-none)}
+  .s-slot .s-ico{font-size:var(--ico-xl)}
+  .s-slot:is(:active,.is-pressed){background:var(--raised-pressed)}
+  .s-slot.is-active{color:var(--ink);font-weight:var(--w-strong)}
+  .s-slot-dot.is-active{background:var(--well-2)}
+  .s-bar .s-slot-n{box-shadow:0 0 0 2px var(--raised)}
+}
+/* The three slides a part owns (a switch's knob, a chevron's turn, the line under a tab) are instant when motion is
+   reduced. */
+@media (prefers-reduced-motion:reduce){.s-switch i,:is(.s-nav-chev,.s-tree-chev) .s-ico,.s-tabs.is-live .s-tabs-line{transition:none}}

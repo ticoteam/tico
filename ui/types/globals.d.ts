@@ -73,6 +73,8 @@ declare var ticoBootTiming: BootTimingReport | undefined;
 declare var ticoCallStartTiming: Partial<Record<CallStartMark, number | null>> | undefined;
 declare var ticoPageHidden: (() => { inCall: boolean }) | undefined;
 declare var ticoSearch: any;
+// The Sheets look (ui/theme.ts): whether <html> has the class `sheets`, and the way to turn it on or off for this browser.
+declare var ticoSheets: { get(): boolean; set(on: boolean): void };
 declare var ticoTheme: any;
 
 // The page parts' stand-ins (scripts/build-ui.cjs stubs), declared by the bundle before the shell's files; none when

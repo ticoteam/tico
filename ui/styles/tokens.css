@@ -1,5 +1,9 @@
-/* ui/styles/tokens.css — Font faces, the type scale, motion, the gray ramp and the colour tokens for dark and light.
+/* ui/styles/tokens.css — Font faces, the type scale, motion, the gray ramp and the colour tokens for dark and light; then the
+   Sheets look's tokens, and the old names re-pointed to them under html.sheets (the second half of the file).
    The cascade runs in the order index.html links these files; keep rules in order. */
+/* The order of the cascade layers, named once. Nothing is in a layer yet: an unlayered rule beats a layered one, so new
+   rules stay unlayered. When a page has moved to the Sheets look, what is left of its old rules goes into legacy. */
+@layer legacy, parts, pages;
 /* swap, not block: text never waits on the icon font. Its ligature names ("dynamic_feed") stay hidden until the font
    is in (html.icons-ready, set by ui/theme.ts; see base.css), so they never flash as words. */
 @font-face{font-family:"Material Symbols Outlined";font-style:normal;font-weight:300;font-display:swap;src:url(/vendor/fonts/material-symbols-outlined.woff2?v=b9aadddc64b8) format("woff2")}
@@ -126,3 +130,235 @@
   --select-arrow-off:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none' stroke='%235e5e5e' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
   --date-icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14' fill='none' stroke='%233b3b3b' stroke-width='1.3' stroke-linecap='round'%3E%3Crect x='1.5' y='2.5' width='11' height='10' rx='2'/%3E%3Cpath d='M1.5 6h11M4.5 1v3M9.5 1v3'/%3E%3C/svg%3E");--date-icon-off:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14' fill='none' stroke='%235e5e5e' stroke-width='1.3' stroke-linecap='round'%3E%3Crect x='1.5' y='2.5' width='11' height='10' rx='2'/%3E%3Cpath d='M1.5 6h11M4.5 1v3M9.5 1v3'/%3E%3C/svg%3E");
   color-scheme:light}}
+
+/* ---------------------------------------------------------------------------------------------------------------
+   Sheets: three floating sheets on a ground, in one grey ramp with no hue. The only colour on a normal day is the
+   Liquid Dot. It is on when <html> has the class `sheets` (ui/theme.ts: off unless this browser saved it on).
+
+   Two kinds of name. A Sheets name the app did not have (--ground, --sheet, --fs-body, --r-card...) is set on :root
+   and reads the same in both looks. A name both have (--ink, --line, --t-sm, --ctl...) and every name only the old
+   look has (--bg, --surface, --g0, --accent, --s1...) keep their old values on :root, and are set or re-pointed in
+   the html.sheets blocks at the end, so with the class off nothing here changes a pixel.
+
+   Each value set is written once. ui/theme.ts puts the theme as it shows on <html data-scheme> ("dark" or "light",
+   with System resolved to the computer's own), and the light values hang on that, so System needs no copy.
+   --------------------------------------------------------------------------------------------------------------- */
+:root{
+  /* Type: one family, seven sizes, and 11px for a count on an icon or a key cap (never a sentence). A phone's page
+     title is 24px (below). Interface text is 14px. */
+  --fs-micro:11px;   /* a count on an icon, a key cap, a tag on a picture */
+  --fs-meta:12px;    /* times, counts, pills */
+  --fs-small:13px;   /* second lines, stage and section names */
+  --fs-body:14px;    /* every row, button, field and message */
+  --fs-head:16px;    /* a pane's own title, a dialog's title, the one line of an empty state */
+  --fs-fig:20px;     /* a figure in a page or a row */
+  --fs-display:22px; /* the figure on a widget, hall names */
+  --fs-title:26px;   /* a page title, a task title */
+  --font-text:var(--sans);--font-code:var(--mono);
+  /* Three weights: text, names and labels, titles. */
+  --w-text:400;--w-strong:550;--w-title:650;
+  /* Four line heights: --lh-display (figures and titles), --lh-meta (times, counts, pills), --lh (interface text) and
+     --lh-read (messages and anything longer than two lines). The other three are set under html.sheets. */
+  --lh-meta:1.3;
+  --track-title:-.018em;
+  /* avatar initials, by avatar size; a 16px avatar has none */
+  --av-sm-t:10px;--av-md-t:var(--fs-micro);--av-lg-t:var(--fs-body);--track-initials:.01em;
+  /* icons (the Material Symbols font), five sizes: in a line of text; in a tab or a pill; rows, navigation and buttons;
+     an icon button; a phone's bar */
+  --ico-xs:12px;--ico-sm:14px;--ico:16px;--ico-lg:18px;--ico-xl:22px;
+
+  /* Space: a 4px grid. The half steps (2, 6, 10, 14) are for the inside of a control only: icon to label, a pill's
+     padding. */
+  --s-1:4px;--s-2:8px;--s-3:12px;--s-4:16px;--s-5:20px;--s-6:24px;--s-8:32px;--s-10:40px;--s-12:48px;--s-18:72px;
+  --s-0:2px;--s-1h:6px;--s-2h:10px;--s-3h:14px;
+  --gap-pane:8px;       /* between sheets, and from a sheet to the window's edge */
+  --pad-pane:20px;      /* a sheet's inner side padding */
+  --head-inset:var(--pad-pane);   /* the one left inset of every page title */
+
+  /* Sizes. A phone makes every control and row a 44px target (below). */
+  --row:34px;--row-sm:30px;--ctl-lg:40px;--bar:60px;--tap:44px;
+  --nav-w:248px;--chat-w:344px;--rail-w:280px;--list-w:328px;
+  --tlist-w:288px;      /* the list sheet beside an open task */
+  --ask-w:392px;        /* an open task's chat sheet */
+  --bare-w:760px;       /* a task with no pages: the column its title and chat keep */
+  --label-w:176px;      /* the label column of a fact line; 128px on a phone */
+  --modal-w:400px;--modal-w-lg:440px;   /* a dialog, and one that walks through steps */
+  --palette-w:600px;--menu-w:200px;
+  --overlay-top:104px;  /* where a palette opens, from the window's top */
+  --fade-edge:28px;     /* a list or a tab row that runs past its edge fades out over this much */
+  --pad-paper:12px;     /* round a bot's page that keeps its own look */
+  --pad-task:32px;      /* a task page's side padding: its title axis */
+  --decide-h:264px;--proof-w:276px;
+  --measure:560px;      /* about 75 characters of 14 to 16px text */
+  --av-xs:16px;--av-sm:22px;--av-md:28px;--av-lg:36px;
+  --pill-h:20px;--ctl-pad:12px;
+  --ring-w:1.5px;--ring-gap:1.5px;   /* the working ring round an avatar, and its gap */
+
+  /* Radius follows hierarchy, in five steps: 4, 6, 8, 12, 14. --r-ctl (8px) is set under html.sheets. A dialog is
+     --r-card. */
+  --r-key:4px;--r-chip:6px;--r-row:6px;--r-paper:8px;--r-card:12px;--r-pane:14px;--r-pill:999px;
+  --r-sheet:24px;--r-dock:24px;--r-slot:18px;   /* a phone's bottom sheet and its floating bar */
+  --r-bubble:14px 14px 4px 14px;                /* your own message: the corner nearest you is tight */
+  --r-bot:30%;                                  /* a bot's avatar: a rounded square. A person's is a circle. */
+  --r-blob:43% 57% 55% 45%/38% 44% 56% 62%;     /* the Dot at rest, then at the top of a breath and on the way back */
+  --r-blob-2:56% 44% 42% 58%/52% 58% 42% 48%;--r-blob-3:47% 53% 60% 40%/44% 40% 60% 56%;
+
+  /* Motion. Only transform and opacity move; nothing animates layout, and nothing animates on first paint.
+     ui/styles/motion.css and ui/app/motion.ts read these names; no page sets a duration or an easing of its own.
+     --dur-fast, --dur and --ease are set under html.sheets. */
+  --dur-slow:280ms;--dur-page:360ms;
+  --ease-in:cubic-bezier(.4,0,1,1);        /* leaving */
+  --spring:cubic-bezier(.3,1.35,.5,1);     /* arriving: one small overshoot */
+  --move-sm:4px;--move:8px;--move-lg:16px; /* how far a thing travels: a tab's content, a card, a dialog or a toast */
+  --pop:.96;                               /* the size a card or an overlay starts from */
+  --press:.975;                            /* a button while it is held */
+  --dur-arrive:600ms;                      /* the Dot's one pulse when something starts to wait on you */
+  --breathe-dot:4.4s;                      /* the Dot at rest, one breath */
+  --breathe:2.6s;--spin:1.8s;--typing:1.3s;--toast-stay:5s;
+  --pulse:1.16;--rest:.55;--loop:running;
+  --breath:1.075;--breath-back:.985;--breath-turn:9deg;--breath-turn-back:-6deg;
+  --dur-enter:var(--dur-slow);--dur-leave:var(--dur);   /* arriving, leaving */
+
+  /* Focus: one ring, in ink, on :focus-visible only. Outside a control, inside a row or anything that meets a sheet's
+     edge. */
+  --focus-w:2px;--focus-gap:2px;--focus-gap-in:-2px;
+
+  /* Layers, low to high. A thing takes the layer of its kind, never a number of its own. */
+  --z-page:1;--z-stick:2;--z-pop:4;--z-dock:20;--z-overlay:30;--z-scrim:40;--z-dialog:50;--z-toast:60;--z-tip:70;
+
+  /* Colour, dark (the default). True greys; jade is the Dot's alone. */
+  --ground:#0b0b0b;        /* the window behind the sheets */
+  --sheet:#1a1a1a;         /* the page sheet, the highest */
+  --sheet-mid:#161616;     /* the chat sheet, between the two */
+  --sheet-low:#111111;     /* the navigation sheet, close to the ground */
+  --well:#222222;          /* a field, a code block: set into a sheet */
+  --well-2:#2b2b2b;        /* a chosen segment's track, a skeleton bar */
+  --selected:#2e2e2e;      /* the chosen row: a grey wash */
+  /* Lines are ink at low alpha, so one value reads on every sheet. */
+  --line-strong:rgba(255,255,255,.16);
+  --line-overlay:rgba(255,255,255,.10);   /* the hairline round an overlay: a shadow alone does not read on near-black */
+  --border-field:#737373;  /* a field's edge: 3:1 or better on every sheet */
+  --ink-2:#c8c8c8;--faint:#737373;
+  --text-disabled:#6e6e6e;--fill-disabled:var(--well-2);   /* disabled is a colour, never an opacity */
+  --fill:#f0f0f0;--fill-hover:#ffffff;--on-fill:#111111;   /* the one filled button per bar */
+  --raised-hover:color-mix(in srgb,var(--ink) 7%,var(--raised));     /* under the pointer on a raised surface */
+  --raised-pressed:color-mix(in srgb,var(--ink) 14%,var(--raised));
+  --track:#303030;--track-done:#8a8a8a;--track-on:#f2f2f2;           /* a stage track: to come, passed, current */
+  --warn-ink:#e2b25a;--warn-line:rgba(226,178,90,.45);               /* something is wrong: amber text in a thin outline */
+  --danger-ink:#f08080;--danger-bg:#3d1f1f;
+  --stack:#474747;--stack-top:#6c6c6c;
+  --desk:#101010;          /* the well a bot's page lies in when it keeps its own look */
+  --btn-raised:#303030;    /* a plain button on a raised card */
+  --dock-field:#191919;    /* the message box in a phone's bottom dock */
+  --seg-on:#383838;--knob:#f2f2f2;
+  --on-dot:#0b0b0b;--dot-glint:rgba(255,255,255,.3);--dot-shade:rgba(0,0,0,.14);
+  --work:#c8c8c8;--work-rest:rgba(200,200,200,.3);   /* the working ring: its head and its track */
+  --av-bg:.335 .052;--av-fg:.9 .06;                  /* an avatar: lightness and chroma; the hue is the teammate's */
+  --scrim:rgba(0,0,0,.48);--scrim-soft:rgba(0,0,0,.32);--on-scrim:#ffffff;   /* behind a dialog; behind a menu or a sheet */
+  --shot-dim:brightness(.86);
+  /* Elevation: each height is a surface and a two-layer shadow, in black. Dark lifts are a top highlight, an inner
+     hairline and a deeper drop. */
+  --lift-ctl:inset 0 1px 0 rgba(255,255,255,.07),0 0 0 1px rgba(0,0,0,.3);
+  --lift-fill:inset 0 1px 0 rgba(255,255,255,.5),0 1px 2px rgba(0,0,0,.5),0 6px 14px -6px rgba(0,0,0,.7);
+  --lift-0:inset 0 0 0 1px rgba(255,255,255,.03);
+  --lift-1:inset 0 1px 0 rgba(255,255,255,.05),inset 0 0 0 1px rgba(255,255,255,.035),0 12px 32px -14px rgba(0,0,0,.6);
+  --lift-2:inset 0 1px 0 rgba(255,255,255,.075),inset 0 0 0 1px rgba(255,255,255,.05),0 18px 40px -12px rgba(0,0,0,.7);
+  --lift-3:inset 0 1px 0 rgba(255,255,255,.1),inset 0 0 0 1px rgba(255,255,255,.075),0 30px 60px -16px rgba(0,0,0,.85);
+  --lift-desk:inset 0 1px 0 rgba(0,0,0,.55);
+  --lift-paper:0 0 0 1px rgba(0,0,0,.55),0 10px 22px -10px rgba(0,0,0,.9);
+  --lift-knob:0 1px 2px rgba(0,0,0,.25);
+  --lift-tip:0 4px 12px -4px rgba(0,0,0,.35);
+  /* The five heights by name: navigation, chat, the page, a raised card, an overlay. */
+  --surface-nav:var(--sheet-low);--lift-nav:var(--lift-0);
+  --surface-chat:var(--sheet-mid);--lift-chat:var(--lift-1);
+  --surface-page:var(--sheet);--lift-page:var(--lift-2);
+  --surface-card:var(--raised);--lift-card:var(--lift-2);
+  --surface-overlay:var(--raised);--lift-overlay:var(--lift-3);
+  /* The surface a part sits on, for a ring cut round an avatar or a bar that sticks: the sheet, unless a part that
+     paints its own (a hovered row, a raised card) says so. */
+  --under:var(--sheet);
+}
+:root[data-scheme="light"]{
+  --ground:#e9e9e9;--sheet:#ffffff;--sheet-mid:#fbfbfb;--sheet-low:#f4f4f4;--well:#f3f3f3;--well-2:#e9e9e9;--selected:#eaeaea;
+  --line-strong:rgba(0,0,0,.20);--line-overlay:rgba(0,0,0,.07);--border-field:#878787;
+  --ink-2:#3b3b3b;--faint:#878787;--text-disabled:#8e8e8e;
+  --fill:#111111;--fill-hover:#2b2b2b;--on-fill:#ffffff;
+  --track:#dcdcdc;--track-done:#6a6a6a;--track-on:#111111;
+  --warn-ink:#8a5a10;--warn-line:rgba(138,90,16,.5);
+  --danger-ink:#b02a2a;--danger-bg:#fbe7e4;
+  --stack:#bdbdbd;--stack-top:#858585;
+  --desk:#f2f2f2;--btn-raised:#ffffff;--dock-field:#f3f3f3;--seg-on:#ffffff;--knob:#ffffff;
+  --work:#3b3b3b;--work-rest:rgba(59,59,59,.3);
+  --av-bg:.925 .042;--av-fg:.37 .09;
+  --scrim:rgba(17,17,17,.32);--scrim-soft:rgba(17,17,17,.16);--shot-dim:none;
+  /* Light lifts are a hairline and a soft drop. */
+  --lift-ctl:0 0 0 1px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.07);
+  --lift-fill:inset 0 1px 0 rgba(255,255,255,.14),0 1px 2px rgba(0,0,0,.24),0 5px 12px -6px rgba(0,0,0,.4);
+  --lift-0:0 0 0 1px rgba(0,0,0,.04);
+  --lift-1:0 0 0 1px rgba(0,0,0,.045),0 1px 2px rgba(0,0,0,.05),0 10px 28px -14px rgba(0,0,0,.16);
+  --lift-2:0 0 0 1px rgba(0,0,0,.055),0 2px 4px rgba(0,0,0,.06),0 16px 36px -12px rgba(0,0,0,.24);
+  --lift-3:0 0 0 1px rgba(0,0,0,.07),0 4px 10px rgba(0,0,0,.08),0 28px 56px -16px rgba(0,0,0,.32);
+  --lift-desk:inset 0 1px 0 rgba(0,0,0,.06);
+  --lift-paper:0 0 0 1px rgba(0,0,0,.07),0 1px 2px rgba(0,0,0,.05),0 8px 18px -10px rgba(0,0,0,.22);
+}
+/* With reduced motion nothing travels, grows or loops: the distances are nothing, the sizes are whole and every loop
+   is held. A part or a keyframe built on these names needs no rule of its own. */
+@media (prefers-reduced-motion:reduce){:root{--move-sm:0px;--move:0px;--move-lg:0px;--pop:1;--press:1;--pulse:1;--rest:1;--loop:paused;
+  --dur-enter:var(--dur-fast);--dur-leave:var(--dur-fast);--dur-arrive:0ms}}
+@media (max-width:760px){:root{--row:var(--tap);--row-sm:var(--tap);--ctl-lg:var(--tap);--pad-pane:16px;--pad-task:16px;--label-w:128px;--fs-title:24px}}
+
+/* The names both looks have, at their Sheets values, and every old name re-pointed to a Sheets one. html.sheets:root
+   outranks the old light and System blocks above, so an old name follows the Sheets tokens in every theme and is
+   written once; only the eleven colours both looks name need a light block of their own. Pages written by bots read
+   the old names too (--ink, --surface, --muted, --line; ui/app/task-docs.ts docLook), so they stay defined. */
+html.sheets:root{
+  --ink:#f2f2f2;--muted:#9c9c9c;--line:rgba(255,255,255,.08);--hover:#242424;
+  --raised:#242424;        /* a lifted card, a menu, a phone's bar */
+  --bubble:#2c2c2c;
+  --dot:#56a578;--dot-hi:#5fb083;--dot-lo:#4d966c;--dot-shadow:rgba(0,0,0,.5);
+  --focus:var(--ink);
+
+  /* The old roles. */
+  --bg:var(--ground);--surface:var(--sheet);--surface2:var(--well);
+  --g0:var(--ground);--g1:var(--sheet);--g2:var(--well);--g3:var(--well-2);--g4:var(--line-strong);--g5:var(--faint);
+  --g6:var(--muted);--g7:var(--ink-2);--g8:var(--ink);
+  --accent:var(--fill);--accent-ink:var(--on-fill);
+  --ask-face:var(--raised);--sup:var(--well);--sup-ink:var(--ink-2);
+  /* The old status hues. Amber says something is wrong and red that it failed; working, done and idle are grey, and
+     their washes are a well. */
+  --run:var(--work);--ok:var(--muted);--idle:var(--faint);
+  --wait:var(--warn-ink);--wait-ink:var(--warn-ink);--fail:var(--danger-ink);
+  --run-bg:var(--well);--ok-bg:var(--well);--idle-bg:var(--well);--wait-bg:var(--well);--fail-bg:var(--danger-bg);
+  /* --select-arrow and --date-icon keep their old pictures: their strokes are --ink-2 and --muted to within a shade. */
+
+  /* Type: the old steps by what they are used for. Body text is 14px. --t-sm stays 12px: at 13px sixteen padded
+     rows across the app grow past the 34px row. */
+  --t-2xs:var(--fs-micro);--t-xs:var(--fs-meta);--t-sm:var(--fs-meta);--t-label:var(--fs-meta);
+  --t-base:var(--fs-body);--t-md:var(--fs-body);
+  --t-card:var(--fs-head);--t-lg:var(--fs-head);
+  --t-xl:var(--fs-fig);--t-page:var(--fs-title);--t-2xl:var(--fs-title);
+  --prose:var(--fs-head);--prose-h3:var(--fs-head);--prose-h2:var(--fs-fig);--prose-h1:var(--fs-display);--prose-title:var(--fs-title);
+  --lh-display:1.15;--lh:1.45;--lh-read:1.55;--lh-tight:var(--lh-meta);
+  --read-leading:var(--lh-read);
+  --track-tight:var(--track-title);--track-snug:0em;
+
+  /* Space, radius, controls. */
+  --s1:var(--s-1);--s2:var(--s-2);--s3:var(--s-3);--s4:var(--s-4);--s5:var(--s-5);--s6:var(--s-8);
+  --r-ctl:8px;--radius:var(--r-card);--r-pop:var(--r-card);
+  --skel-a:var(--well-2);--skel-b:var(--well);--skel-r:var(--r-chip);
+  --ctl:32px;--ctl-sm:28px;
+
+  /* Motion and focus. A text field's edge turns to ink; it has no halo. */
+  --dur-fast:120ms;--dur:180ms;--ease:cubic-bezier(.2,0,0,1);--ease-out:var(--ease);
+  --focus-ring:var(--focus-w) solid var(--focus);--focus-offset:var(--focus-gap);--focus-inset:var(--focus-gap-in);
+  --focus-halo:1px solid var(--focus);
+}
+html.sheets:root[data-scheme="light"]{
+  --ink:#111111;--muted:#5e5e5e;--line:rgba(0,0,0,.10);--hover:#f0f0f0;--raised:#ffffff;--bubble:#ececec;
+  --dot:#48956b;--dot-hi:#5aa87c;--dot-lo:#468d65;--dot-shadow:rgba(0,0,0,.2);
+}
+@media (max-width:760px){html.sheets:root{--ctl:var(--tap);--ctl-sm:var(--tap)}}
+/* The zero has no slash: the font's ss09 feature, turned on once for the whole page. A `font:` shorthand resets
+   font-feature-settings to normal on the element it is written on, so a rule that needs one sets the feature again
+   after it, or writes font-size, font-weight and line-height apart. */
+html.sheets{font-feature-settings:"ss09" 1}
