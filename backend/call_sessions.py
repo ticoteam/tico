@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import logging
 from typing import Any, Literal
 
 from . import bot_settings as BS
@@ -19,6 +20,8 @@ harnesses: Any = _harnesses
 live_meetings: Any = _live_meetings
 providers: Any = _providers
 shared_bots: Any = _shared_bots
+
+log = logging.getLogger("tico.calls")
 
 CAPABILITY = "voice_sessions_v1"
 CLOSED_COMPLETION: dict[str, Any] = {"outcome": "interrupted", "message": None}
@@ -244,6 +247,7 @@ def output(c: Any, attempt: Any, origin: dict[str, Any], events: list[tuple[str,
             if isinstance(text, str) and machine is not None:
                 c.after_commit.append(lambda tid=tid, text=text: machine.voice.delta(call_id, bot, tid, text))
         elif kind == "message" and payload.get("final") is True:
+            _log_timing(call_id, tid, payload.get("timing"))
             model = payload.get("model")
             if isinstance(model, str) and 0 < len(model) <= 120:
                 c.execute("UPDATE live_meeting_turns SET ran_model=? WHERE id=?", (model, tid))
@@ -252,6 +256,18 @@ def output(c: Any, attempt: Any, origin: dict[str, Any], events: list[tuple[str,
                 live_meetings._reply(c, rid, Identity("bot:" + bot, "bot", attempt_id=aid), tid, text)
             else:
                 live_meetings._finish_pass(c, rid, turn, "bot_pass")
+
+
+def _log_timing(call_id: str, turn_id: Any, timing: Any) -> None:
+    """The runner's share of one answer, no words in it: its poll, and question sent to first output and first text."""
+    if not isinstance(timing, dict):
+        return
+    keys = ("poll_ms", "first_frame_ms", "first_text_ms")
+    values = [timing.get(k) for k in keys]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    shown = [v if isinstance(v, int) and not isinstance(v, bool) else "null" for v in values]
+    log.info(
+        "call_voice_runner call=%s turn=%s poll_ms=%s first_frame_ms=%s first_text_ms=%s", call_id, turn_id, *shown
+    )
 
 
 def finish(c: Any, rid: str, aid: str) -> None:

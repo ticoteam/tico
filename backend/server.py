@@ -31,7 +31,7 @@ def _logging_config(log_level):
             },
             "call_diagnostics": {"()": lambda: RING},
         },
-        "loggers": {**LOGGING_CONFIG["loggers"], "tico.calls": call_logger, "tico.call_media": call_logger},
+        "loggers": {**LOGGING_CONFIG["loggers"], "tico.calls": call_logger, "tico.call_media": call_logger, "tico.call_voice": call_logger},
     }
 
 

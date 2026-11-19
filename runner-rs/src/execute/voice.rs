@@ -24,8 +24,52 @@ pub(super) enum End {
     Restart,
 }
 
+/// One call question's runner-side clock, sent with its final message for the server's `call_voice_runner` line:
+/// how long the poll that brought the question took, and how long after it went to the model the first output and
+/// the first spoken text came back. It splits the runner's and the model's share of a slow answer.
+#[derive(Default)]
+pub(super) struct VoiceClock {
+    poll_ms: Option<u64>,
+    sent: Option<Instant>,
+    frame_ms: Option<u64>,
+    text_ms: Option<u64>,
+}
+
+impl VoiceClock {
+    pub(super) fn sent(poll_ms: Option<u64>) -> Self {
+        Self {
+            poll_ms,
+            sent: Some(Instant::now()),
+            ..Self::default()
+        }
+    }
+
+    fn since(&self) -> Option<u64> {
+        self.sent
+            .map(|at| u64::try_from(at.elapsed().as_millis()).unwrap_or(u64::MAX))
+    }
+
+    pub(super) fn frame(&mut self) {
+        if self.frame_ms.is_none() {
+            self.frame_ms = self.since();
+        }
+    }
+
+    pub(super) fn text(&mut self) {
+        self.frame();
+        if self.text_ms.is_none() {
+            self.text_ms = self.since();
+        }
+    }
+
+    pub(super) fn json(&self) -> Value {
+        json!({"poll_ms": self.poll_ms, "first_frame_ms": self.frame_ms, "first_text_ms": self.text_ms})
+    }
+}
+
 struct Turn {
     id: Option<String>,
+    clock: VoiceClock,
     question: Option<String>,
     spoken: String,
     answer: String,
@@ -36,6 +80,7 @@ impl Turn {
     fn new(question: Option<String>) -> Self {
         Self {
             id: None,
+            clock: VoiceClock::sent(None),
             question,
             spoken: String::new(),
             answer: String::new(),
@@ -206,7 +251,9 @@ impl Runner {
                             let reply = if ev["status"] == "interrupted" { String::new() } else {
                                 voice_answer(&turn.spoken, &turn.answer)
                             };
-                            self.voice_event(d, "message", json!({"voice_turn": question, "text": reply, "final": true})).await?;
+                            self.voice_event(d, "message", json!({
+                                "voice_turn": question, "text": reply, "final": true, "timing": turn.clock.json(),
+                            })).await?;
                         } else if ev["status"] == "completed" {
                             // A thread/start reply has no persisted rollout yet, and a half-finished primer
                             // cannot stand for a warm thread after a crash.
@@ -216,8 +263,10 @@ impl Runner {
                             return Err(Fail::runtime("Codex did not complete the voice primer"));
                         }
                     } else if let Some(question) = turn.question.as_ref().filter(|_| interrupt_at.is_none()) {
+                        turn.clock.frame();
                         if kind == "delta" {
                             if let Some(text) = ev["text"].as_str().filter(|text| !text.is_empty()) {
+                                turn.clock.text();
                                 let piece = crate::hosts::add_piece(&mut turn.spoken, std::mem::take(&mut turn.next_message), text);
                                 self.voice_event(d, "delta", json!({"voice_turn": question, "text": piece})).await?;
                             }
@@ -265,6 +314,8 @@ impl Runner {
                             last.clone_from(&question);
                             starting = Some(Box::pin(begin(prompt)));
                             active = Some(Turn::new(Some(question)));
+                            // Each question's first text goes up at once, as a turn's first text does (upload_pace).
+                            self.first_posted.lock().unwrap().remove(d.aid);
                         }
                     }
                 }

@@ -1691,6 +1691,7 @@ impl Runner {
         let mut spoken = String::new();
         let mut model = String::new();
         let mut text_block = false;
+        let mut clock = voice::VoiceClock::default();
         loop {
             if let Some(grace) = restart.take() {
                 resident.stop_for_restart(grace).await?;
@@ -1741,16 +1742,19 @@ impl Runner {
                             let answer = voice_answer(&spoken, &answer);
                             self.voice_event(d, "message", json!({
                                 "voice_turn": turn, "text": answer, "model": model, "final": true,
+                                "timing": clock.json(),
                             })).await?;
                         }
                         if context >= VOICE_CONTEXT_TOKENS {
                             restart = Some(Duration::from_millis(250));
                         }
                     } else if let Some(turn) = active.as_ref().filter(|_| interrupt_at.is_none()) {
+                        clock.frame();
                         if frame["type"] == "assistant" && frame["parent_tool_use_id"].is_null() {
                             model = text_of(&frame["message"]["model"]);
                         }
                         if let Some(text) = hosts::claude::voice_delta(&frame) {
+                            clock.text();
                             text_block = true;
                             spoken.push_str(text);
                             self.voice_event(d, "delta", json!({"voice_turn": turn, "text": text})).await?;
@@ -1780,7 +1784,9 @@ impl Runner {
                         return Err(Fail::runtime("Voice session lease ended"));
                     }
                     let phase = if warming || active.is_some() { "busy" } else { "ready" };
+                    let polled = Instant::now();
                     let input = self.voice_inputs(d.aid, phase).await?;
+                    let poll_ms = u64::try_from(polled.elapsed().as_millis()).unwrap_or(u64::MAX);
                     if input.is_null() || input["closed"] == true {
                         meter.add(&resident.take_usage().1);
                         return Ok(());
@@ -1802,6 +1808,9 @@ impl Runner {
                     }
                     let question = voice_question(&input["turn"], &mut notes_stamp);
                     resident.send(&question).await?;
+                    clock = voice::VoiceClock::sent(Some(poll_ms));
+                    // Each question's first text goes up at once, as a turn's first text does (upload_pace).
+                    self.first_posted.lock().unwrap().remove(d.aid);
                     spoken.clear();
                     model.clear();
                     text_block = false;
