@@ -73,7 +73,7 @@ export const show = defineAction({
   input: showInput,
   run: showRun,
   show: showRun,
-  did: ({ view, q }) => (q ? `Searched meetings for ${q}` : view ? `Opened Calendar, ${view}` : 'Opened Calendar'),
+  did: ({ view, q }) => (q ? `Searched meetings for ${q}` : view ? `Opened Calendar, ${view === '3day' ? '3 days' : view}` : 'Opened Calendar'),
   target: () => PAGE,
 });
 

@@ -77,7 +77,7 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
           {doc && !past && !doc.locked && (
             <IconButton icon="edit" label="Edit" onClick={() => void press('docs.open', { doc: id, edit: true })} data-target={`doc-edit:${id}`} />
           )}
-          <OwnerButton page="docs" />
+          <OwnerButton page="docs" phone />
         </>
       }
       more={

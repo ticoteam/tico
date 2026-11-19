@@ -35,11 +35,18 @@ export function Who({ actor, name, className = 'doc-owner' }: { actor: string | 
 
 /**
  * The page owner's face in the head (backend/page_owners.py: docs and contacts default to the Librarian, skills to
- * BotOps, tools to the Tools owner). It opens their chat beside the page; nothing when the page has no owner.
+ * BotOps, tools to the Tools owner). It opens their chat beside the page; nothing when the page has no owner. `phone`
+ * keeps it in a phone's head (pagekinds.css keeps only `data-phone` controls there), as the Roadmap's face is kept.
  */
-export function OwnerButton({ page }: { page: 'docs' | 'skills' | 'contacts' | 'tools' }) {
+export function OwnerButton({ page, phone }: { page: 'docs' | 'skills' | 'contacts' | 'tools'; phone?: boolean }) {
   const bot = useQuery(pageOwnersQuery).data?.[page]?.bot ?? null;
-  return <ChatWith actor={bot && !bot.includes(':') ? `bot:${bot}` : bot} />;
+  const face = <ChatWith actor={bot && !bot.includes(':') ? `bot:${bot}` : bot} />;
+  if (!phone || !bot) return face;
+  return (
+    <span className="lib-ask" data-phone>
+      {face}
+    </span>
+  );
 }
 
 /** A teammate's face that opens their chat beside the page (a file's maker, a page's owner). */

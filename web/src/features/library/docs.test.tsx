@@ -167,6 +167,37 @@ describe('docs list', () => {
     const more = screen.getByRole('button', { name: 'More' });
     expect(add.compareDocumentPosition(more) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
+
+  it('files a doc under the folders below its section, never its own file name', async () => {
+    serve();
+    queryClient.setQueryData(docsListQuery.queryKey, {
+      docs: [
+        { ...doc('d1', 'Glossary'), path: 'plant-care/glossary.md' },
+        { ...doc('d2', 'Repotting'), path: 'plant-care/how-to/repotting.md' },
+      ],
+      next_cursor: null,
+    });
+    at('/library/docs', <DocsPage search={{}} />);
+    const glossary = (await screen.findByText('Glossary')).closest('.drow') as HTMLElement;
+    expect(glossary.querySelector('.tie')?.textContent).toBe('');
+    expect(screen.queryByText('glossary.md')).toBeNull();
+    const repotting = screen.getByText('Repotting').closest('.drow') as HTMLElement;
+    expect(repotting.querySelector('.tie')?.textContent).toBe('How to');
+  });
+
+  it('keeps the owner’s face in a phone’s head, so Docs and Skills can open a chat', async () => {
+    serve();
+    queryClient.setQueryData(['settings', 'page-owners'], { docs: { bot: 'fern-librarian' }, skills: { bot: 'fern-ops' } });
+    queryClient.setQueryData(docsListQuery.queryKey, { docs: [doc('d1', 'Fern index')], next_cursor: null });
+    at('/library/docs', <DocsPage search={{}} />);
+    const face = await screen.findByRole('link', { name: /^Chat with/ });
+    expect(face.closest('[data-phone]')).toBeTruthy();
+    expect(face.getAttribute('href')).toContain('chat=');
+    cleanup();
+    queryClient.setQueryData(skillsQuery.queryKey, []);
+    at('/library/skills', <SkillsPage search={skillsSearch({})} />);
+    expect((await screen.findByRole('link', { name: /^Chat with/ })).closest('[data-phone]')).toBeTruthy();
+  });
 });
 
 describe('import a file', () => {

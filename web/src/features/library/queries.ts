@@ -5,10 +5,13 @@ import type {
   BotFile,
   DocSourceList,
   DocSourceResult,
+  EmailSendingPolicy,
   ExternalDocResult,
   FileLibrary,
   GitHubApp,
+  InboundCompanyConnection,
   InboundInboxes,
+  InboundPhoneRequests,
   InboundMessages,
   InternalDoc,
   InternalDocList,
@@ -17,8 +20,13 @@ import type {
   InternalDocVersionResult,
   InternalDocVersions,
   LetterOutPage,
+  LettersSettings,
   LibraryFile,
   MailboxDetail,
+  PolicyUpdate,
+  PostalMailGrants,
+  PostalMailSettings,
+  SetLettersSettingsBody,
   SkillPropose,
   SourceCreate,
   SourceDocumentList,
@@ -1014,3 +1022,226 @@ export function addNote(ref: string, body: string, audience: 'company' | 'me') {
     send: (idempotencyKey) => api.post('/api/v2/entities/notes', { ref, body, audience }, { idempotencyKey }),
   });
 }
+
+/* ---------------------------------------------------------------- company settings for Email, Texts and Letters */
+
+/* The old Tools › Settings (ui/app/inboxes-*.ts). Google's routes, the postal intake and the postal address list are not
+   in the generated schema: their shapes are typed here from backend/google_workspace.py, google_connect.py and
+   postal_mail.py. A secret sent here (a key, a connection code) is never kept: not in the cache, not in a key. */
+
+/** What the company lets Tico do in Google beyond reading (backend/google_workspace.py permissions). */
+export interface MailMay {
+  organize_mail: boolean;
+  send_mail: boolean;
+  change_calendar: boolean;
+}
+/** A Workspace key as the server shows it: never the key itself. */
+export interface GoogleKey {
+  status: string;
+  domain: string;
+  client_id: string;
+  delegation_url: string;
+  checked_at: string | null;
+  last_error: string | null;
+}
+/** GET /api/v2/google */
+export interface GoogleState {
+  can_admin: boolean;
+  workspace: GoogleKey | null;
+  pending: GoogleKey | null;
+  me: { mailbox: string; covered_by_workspace: boolean } | null;
+  permissions: MailMay;
+}
+/** GET /api/v2/mail/google: the person's own Google sign-in. */
+export interface MyGoogle {
+  configured: boolean;
+  mailbox: string;
+  status: string;
+  message: string | null;
+}
+
+export const googleQuery = queryOptions({ queryKey: ['tools', 'google'], queryFn: () => api.get<GoogleState>('/api/v2/google'), ...quiet });
+export const myGoogleQuery = queryOptions({ queryKey: ['tools', 'google', 'me'], queryFn: () => api.get<MyGoogle>('/api/v2/mail/google'), ...quiet });
+const googleChanged = () => toolChanged(googleQuery.queryKey);
+
+export const setMailMay = (may: MailMay) =>
+  write<unknown>({
+    key: googleQuery.queryKey,
+    optimistic: (cur: GoogleState | undefined) => cur && { ...cur, permissions: may },
+    send: (idempotencyKey) => api.put('/api/v2/google/permissions', may, { idempotencyKey }),
+  });
+
+/** Asks Google whether the key works, for a mailbox the server picks. */
+export const checkGoogle = () =>
+  api.post<{ ok: boolean; message: string }>('/api/v2/google/workspace/check', {}).then(async (r) => {
+    await googleChanged();
+    return r;
+  });
+
+/** A one-time setup command for a Workspace domain. Its code is a secret: shown once in the dialog, never cached. */
+export const googleSetupCommand = (domain: string) => api.post<{ command: string; expires_at: string }>('/api/v2/google/workspace/setup-code', { domain });
+
+/** A service-account key, sealed on the server and kept pending until its check passes. */
+export const uploadGoogleKey = (domain: string, key: Record<string, unknown>) =>
+  api.post<{ delegation_url: string }>('/api/v2/google/workspace/key', { domain, key }).then(async (r) => {
+    await googleChanged();
+    return r;
+  });
+
+export const disconnectGoogle = () => api.delete<unknown>('/api/v2/google/workspace').then(googleChanged);
+
+/** The person's own Google sign-in: Google's page to go to. */
+export const connectMyGoogle = () => api.post<{ auth_url: string }>('/api/v2/mail/google/connect', {});
+export const disconnectMyGoogle = () => api.post<unknown>('/api/v2/mail/google/disconnect', {}).then(() => toolChanged(myGoogleQuery.queryKey));
+
+/** A sending policy, effective or as stored: what agents may send and when they ask first (backend/email_sending.py). */
+export interface SendPolicy {
+  mode?: string | null;
+  what?: string;
+  to?: string;
+  daily_cap?: number;
+  mailbox_daily_cap?: number;
+  company_daily_cap?: number;
+  undo_seconds?: number;
+  max_outside_recipients?: number;
+  blocked_recipients?: string[];
+  ask_new_address?: boolean;
+  ask_legal_money?: boolean;
+  ask_attachments?: boolean;
+  ask_many_recipients?: boolean;
+  ask_outside_cc?: boolean;
+}
+export interface SendPolicies {
+  effective: SendPolicy;
+  company: SendPolicy;
+}
+
+export const sendingQuery = queryOptions({
+  queryKey: ['tools', 'sending'],
+  queryFn: () => api.get<EmailSendingPolicy>('/api/v2/email/sending-policy').then((r) => ({ effective: r.effective as SendPolicy, company: r.company as SendPolicy })),
+  ...quiet,
+});
+export const agentSendingQuery = (bot: string) =>
+  queryOptions({
+    queryKey: ['tools', 'sending', 'agent', bot],
+    queryFn: () => api.get<EmailSendingPolicy>(`/api/v2/bots/${enc(bot)}/email-sending-policy`).then((r) => ({ mode: (r.bot.mode as string | null | undefined) ?? null })),
+    ...quiet,
+  });
+
+export const setSending = (change: PolicyUpdate) =>
+  write<unknown>({
+    key: sendingQuery.queryKey,
+    optimistic: (cur: SendPolicies | undefined) => cur && { effective: { ...cur.effective, ...change } as SendPolicy, company: { ...cur.company, ...change } as SendPolicy },
+    send: (idempotencyKey) => api.put('/api/v2/email/sending-policy', change, { idempotencyKey }),
+  });
+
+/** One agent's own mode, or `null`: the company's. */
+export const setAgentSending = (bot: string, mode: string | null) =>
+  write<unknown>({
+    key: agentSendingQuery(bot).queryKey,
+    optimistic: () => ({ mode }),
+    send: (idempotencyKey) => api.put(`/api/v2/bots/${enc(bot)}/email-sending-policy`, mode ? { mode } : { inherit: true }, { idempotencyKey }),
+  });
+
+/** Joining the company's shared Inbox with a connection code from the customer portal. `preview` names the company. */
+export type SharedInbox = InboundCompanyConnection & { company: { name?: string } };
+export const sharedInbox = (action: 'preview' | 'connect', code: string) =>
+  api.post<SharedInbox>('/api/v2/inbound/company-connection', { action, code }).then(async (r) => {
+    if (action === 'connect') await toolChanged(inboxesQuery.queryKey);
+    return r;
+  });
+
+/** A phone number asked for: priced by Tico, then accepted by a person. */
+export interface NumberRequest {
+  request_id: string;
+  name: string;
+  state: string;
+  price_micros?: number | null;
+  quoted_until?: number | string | null;
+}
+export const numberRequestsQuery = queryOptions({
+  queryKey: ['tools', 'phone-requests'],
+  queryFn: () => api.get<InboundPhoneRequests>('/api/v2/inbound/phone-requests').then((r) => r.phone_requests as unknown as NumberRequest[]),
+  ...quiet,
+});
+const requestsChanged = () => Promise.all([toolChanged(numberRequestsQuery.queryKey), queryClient.invalidateQueries({ queryKey: inboxesQuery.queryKey })]);
+export const acceptQuote = (request: string, price_micros: number) =>
+  api.post<unknown>(`/api/v2/inbound/phone-requests/${enc(request)}/accept`, { price_micros }, { idempotencyKey: crypto.randomUUID() }).then(requestsChanged);
+export const cancelNumberRequest = (request: string) => api.post<unknown>(`/api/v2/inbound/phone-requests/${enc(request)}/cancel`, {}).then(requestsChanged);
+
+/** A mailing address or an open order for one (GET /api/v2/postal/addresses). 409 `gateway` while the Gateway is off. */
+export interface PostalAddress {
+  id?: string | null;
+  assignment_id?: string | null;
+  address?: string | null;
+  state: string;
+  kind: string;
+  status: string;
+}
+export interface PostalOrder {
+  order_id?: string | null;
+  kind: string;
+  state: string;
+  status?: string;
+}
+export const postalAddressesQuery = queryOptions({
+  queryKey: ['tools', 'postal', 'addresses'],
+  queryFn: () => api.get<{ addresses?: PostalAddress[]; orders?: PostalOrder[] }>('/api/v2/postal/addresses'),
+  ...quiet,
+});
+
+/** Letters emailed in: PDFs and images sent to this inbox by these senders become letters. */
+export interface LetterIntake {
+  inbox_id?: string | null;
+  address?: string | null;
+  hidden?: boolean;
+  senders?: string[] | null;
+}
+export const intakeQuery = queryOptions({
+  queryKey: ['tools', 'postal', 'intake'],
+  queryFn: () => api.get<{ intake?: LetterIntake }>('/api/v2/postal/intake').then((r) => r.intake ?? {}),
+  ...quiet,
+});
+export const setIntake = (inbox_id: string | null, senders: string[]) =>
+  write<unknown>({
+    key: intakeQuery.queryKey,
+    optimistic: (cur: LetterIntake | undefined) => ({ ...cur, inbox_id, senders }),
+    send: (idempotencyKey) => api.put('/api/v2/postal/intake', { inbox_id, senders }, { idempotencyKey }),
+  });
+
+/** Read on every address: who may read every letter and scan, private ones included. */
+export const letterGrantsQuery = queryOptions({
+  queryKey: ['tools', 'postal', 'grants'],
+  queryFn: () => api.get<PostalMailGrants>('/api/v2/postal/addresses/all/grants?limit=50').then((r) => r.grants),
+  ...quiet,
+});
+export const setLetterGrant = (type: 'person' | 'bot', who: string, on: boolean) => {
+  const path = `/api/v2/postal/addresses/all/grants/${type}/${enc(who)}` as const;
+  return (on ? api.put<unknown>(path, { level: 'read' }) : api.delete<unknown>(path)).then(() => toolChanged(letterGrantsQuery.queryKey));
+};
+
+export const legalMailQuery = queryOptions({
+  queryKey: ['tools', 'postal', 'settings'],
+  queryFn: () => api.get<PostalMailSettings>('/api/v2/postal/settings').then((r) => r.settings.legal_bot_id),
+  ...quiet,
+});
+export const setLegalMail = (legal_bot_id: string | null) =>
+  write<unknown>({
+    key: legalMailQuery.queryKey,
+    optimistic: () => legal_bot_id,
+    send: (idempotencyKey) => api.put('/api/v2/postal/settings', { legal_bot_id }, { idempotencyKey }),
+  });
+
+export const lettersSettingsQuery = queryOptions({
+  queryKey: ['tools', 'letters', 'settings'],
+  queryFn: () => api.get<LettersSettings>('/api/v2/letters/settings'),
+  ...quiet,
+});
+export const setLettersOut = (change: SetLettersSettingsBody) =>
+  api.put<LettersSettings>('/api/v2/letters/settings', change).then((r) => queryClient.setQueryData(lettersSettingsQuery.queryKey, r));
+/** Asks the Gateway whether letters can go out now; the answer is the settings, checked. */
+export const checkLetters = () =>
+  api.get<LettersSettings>('/api/v2/letters/settings?check=true').then((r) => {
+    queryClient.setQueryData(lettersSettingsQuery.queryKey, r);
+    return r;
+  });

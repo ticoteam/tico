@@ -108,7 +108,7 @@ function SkillsList({ search }: { search: SkillsSearch }) {
       actions={
         <>
           <Find label="Search skills" value={search.q} onFind={(q) => void press('skills.list', { q })} />
-          <OwnerButton page="skills" />
+          <OwnerButton page="skills" phone />
           <Button variant="primary" icon="plus" onClick={() => setMaking(true)} data-target="skills:new">
             New skill
           </Button>
@@ -275,7 +275,7 @@ function SkillPage({ name }: { name: string }) {
       className="lib"
       actions={
         <>
-          <OwnerButton page="skills" />
+          <OwnerButton page="skills" phone />
           {latest && (
             <Button variant={d.data?.installs.length ? 'plain' : 'primary'} onClick={() => setInstalling(true)} data-target={`skill-install:${name}`}>
               Install
@@ -448,7 +448,7 @@ function ProposalPage({ id }: { id: string }) {
       path={`/library/skills?proposal=${id}`}
       crumb={CRUMB}
       className="lib"
-      actions={<OwnerButton page="skills" />}
+      actions={<OwnerButton page="skills" phone />}
       state={stateOf(d)}
       onRetry={() => void d.refetch()}
       noAccess={{ text: 'Only an admin or the one who proposed it can read it.' }}

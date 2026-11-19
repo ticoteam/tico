@@ -2,8 +2,8 @@
 // Pure functions on local days ("2026-11-18"), so tests need no clock and no server.
 import type { CalendarOccurrence } from '@/api/schema';
 
-export type CalView = 'day' | 'week' | 'month' | 'list';
-export const VIEWS: readonly CalView[] = ['day', 'week', 'month', 'list'];
+export type CalView = 'day' | '3day' | 'week' | 'month' | 'list';
+export const VIEWS: readonly CalView[] = ['day', '3day', 'week', 'month', 'list'];
 
 /** A meeting is solid, a due date outlined, a routine's run dashed (cal.css .km-m / -d / -r). */
 export type Mark = 'm' | 'd' | 'r';
@@ -35,6 +35,7 @@ export function rangeOf(view: CalView, day: Date): Range {
   let from: Date;
   let n: number;
   if (view === 'day') [from, n] = [day, 1];
+  else if (view === '3day') [from, n] = [day, 3];
   else if (view === 'week') [from, n] = [startOfWeek(day), 7];
   else if (view === 'list') [from, n] = [day, 7];
   else {
@@ -47,9 +48,10 @@ export function rangeOf(view: CalView, day: Date): Range {
   return { from, to: addDays(from, n), days, weeks: Math.ceil(n / 7) };
 }
 
-/** One step back or on: a day, a week, a month (to its first), a week of the list. */
+/** One step back or on: a day, three days, a week, a month (to its first), a week of the list. */
 export function step(view: CalView, day: Date, dir: -1 | 1): Date {
   if (view === 'day') return addDays(day, dir);
+  if (view === '3day') return addDays(day, 3 * dir);
   if (view === 'month') return new Date(day.getFullYear(), day.getMonth() + dir, 1);
   return addDays(day, 7 * dir);
 }
@@ -63,12 +65,21 @@ export const md = (d: Date) => `${MONTHS[d.getMonth()]} ${d.getDate()}`;
 /** "Wed, Nov 18" */
 export const dl = (d: Date) => `${DOW[d.getDay()]}, ${md(d)}`;
 
-/** The range in the head: "Nov 15 to Nov 21", "November 2026", "Wed, Nov 18". */
+/** The range in the head: "Nov 15 to Nov 21" (a week or three days), "November 2026", "Wed, Nov 18". */
 export function rangeWords(view: CalView, day: Date): string {
   if (view === 'day') return dl(day);
   if (view === 'month') return `${LONG_MONTHS[day.getMonth()]} ${day.getFullYear()}`;
   const r = rangeOf(view, day);
   return `${md(r.from)} to ${md(addDays(r.to, -1))}`;
+}
+
+/** The phone's short range: "Nov 16 – 22", "Nov 30 – Dec 2", "Nov 2026", "Nov 18". */
+export function shortRange(view: CalView, day: Date): string {
+  if (view === 'day') return md(day);
+  if (view === 'month') return `${MONTHS[day.getMonth()]} ${day.getFullYear()}`;
+  const r = rangeOf(view, day);
+  const last = addDays(r.to, -1);
+  return `${md(r.from)} – ${last.getMonth() === r.from.getMonth() ? last.getDate() : md(last)}`;
 }
 
 /** "Today", "Tomorrow", "Yesterday", else "Wed, Nov 18". */

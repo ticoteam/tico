@@ -13,7 +13,7 @@ import { Select } from '@/kit/Select';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { Foot, SCHEMES, trimmed, useGo, type Scheme } from './AddTool';
-import { More } from './parts';
+import { More, press } from './parts';
 import { readMessage, type Inbox, type PasteItem } from './queries';
 
 /* The dialogs an open tool raises (the old app's tools-api, tools-website and inboxes dialogs). A secret shown here
@@ -354,7 +354,11 @@ export function NewAddressDialog({ onClose }: { onClose: () => void }) {
 
 export function RequestNumberDialog({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('Mobile number');
-  const [busy, go] = useGo(onClose);
+  // the price comes back on Phone numbers' requests, which opens once asked
+  const [busy, go] = useGo(() => {
+    onClose();
+    void press('tools.open', { tool: 'number' });
+  });
   return (
     <Dialog
       open
