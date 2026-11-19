@@ -546,8 +546,9 @@ def with_compact_default(config):
 # What a model costs at the provider's public list price, in USD per 1M tokens: (input, cached input,
 # output). The one exception is gpt-6.1-terra, Tico's approved rate (its row says so). Usage (backend/usage.py) multiplies a run's token counts by these to estimate spend, so a
 # model missing here shows its tokens and no cost. Standard tier, prompts under the long-context
-# threshold; batch, priority, regional and cache-write premiums are not modelled (a cache write is
-# counted as input). A bot that names a model by another id than these gets no estimate.
+# threshold; batch, priority and regional premiums are not modelled. A cache write is input, plus Anthropic's
+# write premium on a Claude model (CACHE_WRITE below); other providers' writes are priced as input. A bot that
+# names a model by another id than these gets no estimate.
 # Sources, read 2026-09-29 (Anthropic re-read 2026-10-17):
 #   Anthropic  platform.claude.com/docs/en/about-claude/pricing (cache hit = "cache hits and refreshes";
 #              0.025x input on Fable 5.2 and 5.1, 0.05x on Opus 5.5 and Sonnet 5.5, 0.1x on the rest)
@@ -667,14 +668,42 @@ def price_of(model):
     return PRICES.get(str(model or "").strip().lower())
 
 
-def estimate(model, input_tokens, cached_tokens, output_tokens, requests=None):
+# Anthropic bills a prompt-cache write at a multiple of the model's input rate, by how long the entry lives:
+# 1.25x for the 5-minute TTL, 2x for the 1-hour TTL (platform.claude.com/docs/en/about-claude/pricing, "Prompt
+# caching"; read 2026-11-18). Claude Code signed in with a Claude plan writes 1-hour entries; on an API key it writes
+# 5-minute ones unless told otherwise. Only Anthropic's own ids (`claude-*` in PRICES) pay it: a Gateway id
+# (`tico-*`) is priced from the Gateway's own rates, and other providers' writes stay at the input rate.
+CACHE_WRITE_AS_OF = "2026-11-18"
+CACHE_WRITE = {"5m": 1.25, "1h": 2.0}
+
+
+def prices_cache_writes(model):
+    """Whether `model`'s cache writes pay Anthropic's write premium (CACHE_WRITE): an Anthropic id with a list price."""
+    key = str(model or "").strip().lower()
+    return key.startswith("claude-") and dict.__contains__(PRICES, key)
+
+
+def estimate(model, input_tokens, cached_tokens, output_tokens, requests=None, cache_writes=None):
     """(USD, may be low) for one run's tokens at list price; USD is None for a model with no price.
     `input_tokens` are the uncached ones; cached tokens are billed at the cached rate. On a model with a
     LONG_PROMPT rate each of `requests` ((input, cached, output) per model request, as the runner counted
-    them) pays its own tier. Tokens no request accounts for pay the lower rate, and the estimate may be low."""
+    them) pays its own tier. Tokens no request accounts for pay the lower rate, and the estimate may be low.
+    `cache_writes` is (5-minute, 1-hour) cache-write tokens already counted in `input_tokens`: on a Claude model
+    (prices_cache_writes) each pays the rest of its CACHE_WRITE multiple at the standard input rate. Which request wrote
+    them is not known, so on a model with a LONG_PROMPT rate a run with a request over the limit may be low."""
     price = price_of(model)
     if not price:
         return None, False
+    cost, low = _estimate(model, price, input_tokens, cached_tokens, output_tokens, requests)
+    five, hour = (int(n or 0) for n in cache_writes or (0, 0))
+    if (five or hour) and prices_cache_writes(model):
+        cost += (five * (CACHE_WRITE["5m"] - 1) + hour * (CACHE_WRITE["1h"] - 1)) * price[0] / 1_000_000
+        long = LONG_PROMPT.get(str(model or "").strip().lower())
+        low = low or bool(long and any(int(r[0] or 0) + int(r[1] or 0) > long[0] for r in requests or ()))
+    return cost, low
+
+
+def _estimate(model, price, input_tokens, cached_tokens, output_tokens, requests):
     totals = [int(input_tokens or 0), int(cached_tokens or 0), int(output_tokens or 0)]
     long = LONG_PROMPT.get(str(model or "").strip().lower())
     if not long:

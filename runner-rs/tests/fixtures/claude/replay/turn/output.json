@@ -37,6 +37,7 @@
           "input": 16419,
           "cached": 10584,
           "cache_write": 5833,
+          "cache_write_1h": 5833,
           "output": 8,
           "requests": [[5835, 10584, 8, 1]]
         },
