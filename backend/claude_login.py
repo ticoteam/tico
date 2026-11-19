@@ -663,9 +663,11 @@ class _Line:
             MS = _MS()
             self.following = set()
             ctx: Any = None
+            picked: set[tuple[str, str]] = set()  # many computers given one person's set pick from it alike
             for (_, runtime), entry in self.given().items():
-                if not entry.get("person"):
+                if not entry.get("person") or (entry["person"], runtime) in picked:
                     continue
+                picked.add((entry["person"], runtime))
                 members: list[Row] = entry.get("members") or []
                 ready = [m for m in members if MS.available(self.c, m, runtime)]
                 if len(ready) > 1 and ctx is None:
@@ -865,8 +867,9 @@ class UsageResult(M.Contract):
 
 
 # The records of this computer's running turns on a plan that its poll moves up to the revision they hold (`poll`).
+# Capped at the plan's own revision, as the move is: a computer ahead of its hub (a restored database) is not behind.
 _BEHIND = (
-    "WHERE subscription_id=? AND revision<? AND attempt_id IN "
+    "WHERE subscription_id=? AND revision<min(?,(SELECT revision FROM model_subscriptions WHERE id=?)) AND attempt_id IN "
     "(SELECT id FROM attempts WHERE runner_id=? AND state IN ('leased','running'))"
 )
 
@@ -883,14 +886,14 @@ def poll(c: Any, vault: Any, runner_id: str, body: "Poll", write: bool = True) -
         if not write:
             if c.execute(
                 f"SELECT 1 FROM attempt_subscriptions {_BEHIND} LIMIT 1",
-                (item.subscription, item.revision, runner_id),
+                (item.subscription, item.revision, item.subscription, runner_id),
             ).fetchone():
                 raise _Write
             continue
         c.execute(
             "UPDATE attempt_subscriptions SET revision=min(?,(SELECT revision FROM model_subscriptions WHERE id=?)) "
             + _BEHIND,
-            (item.revision, item.subscription, item.subscription, item.revision, runner_id),
+            (item.revision, item.subscription, item.subscription, item.revision, item.subscription, runner_id),
         )
     tokens: list[Row] = []
     for sub in _tokens(c, runner_id, body.live):
@@ -922,21 +925,24 @@ def install(app: Any, store: Any) -> None:
         # ask) is decided again whole under the write lock, as before, so no two computers take the same lease.
         vault = app.state.vault
         for first in (True, False):
-            key = False
             with store.read_transaction() as c:
                 runner_only(c, who)
                 try:
                     return poll(c, vault, who.runner_id, body, write=False)
                 except _Write as why:
                     key = why.key
-            if not (first and key):
+            # The vault's key not in memory yet (a restart): loaded here, outside the write lock (KMS), so neither the
+            # read again nor the write path below loads it under the lock.
+            if not first or getattr(vault.cipher, "cached", True) is not None:
                 break
-            # The vault's key is not in memory yet (a restart): loaded outside the write lock, then the poll is read again.
-            # A key that will not load here goes on under the write lock, as before.
             try:
                 vault.cipher.prepare(store)
-            except Exception:  # noqa: BLE001 - the write path loads it and refuses as it always has
-                break
+            except Exception:
+                if key:
+                    raise  # the poll hands a plan's value out: refused as the write path would refuse it, unlocked
+                break  # the write path loads it, and refuses as it always has
+            if not key:
+                break  # a write is due anyway: under the lock, with the key now in memory
         with store.transaction() as c:
             runner_only(c, who)
             return poll(c, vault, who.runner_id, body)

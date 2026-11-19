@@ -596,6 +596,11 @@ def test_a_poll_with_nothing_to_write_is_answered_off_the_write_lock_as_the_writ
         assert (
             c.execute("SELECT revision FROM attempt_subscriptions WHERE attempt_id=?", (turn["id"],)).fetchone()[0] == 1
         )
+    # A computer ahead of its hub (a restored database): the record is at the plan's own revision, so nothing moves and
+    # the poll stays off the write lock.
+    modes.clear()
+    poll(api, m, [(sid, 5)])
+    assert modes == [False]
     # Before the vault's key is in memory (a restart), a poll that hands a value out loads it outside the write lock
     # and is read again.
     vault.cipher.cached = None
@@ -643,3 +648,17 @@ def test_the_plans_next_in_line_are_read_once_per_poll_and_are_the_ones_each_pla
     jobs = poll(api, m)["usage"]
     assert {j["subscription"] for j in jobs} == expected
     assert len(listings) <= 2  # at most once on the read snapshot and once more under the write lock
+    # A second computer given the same person's set picks from it alike: the pick is made once for both.
+    other = computer(api, label="Second box")
+    put(api, "computer-subscriptions", {"runner_id": other["runner_id"], "runtime": "claude", "person": "ana"})
+    picks = []
+    real_ordered = MS._ordered
+
+    def ordered(c, subs, runtime, ctx=None):
+        picks.append(runtime)
+        return real_ordered(c, subs, runtime, ctx)
+
+    monkeypatch.setattr(MS, "_ordered", ordered)
+    with store.read_transaction() as c:
+        assert {sid for sid in plans if sid in CL._Line(c)} == expected
+    assert picks == ["claude"]
