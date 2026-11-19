@@ -3156,5 +3156,40 @@
     "suggested_fix": "pin",
     "pin_glob": "ui/styles/task-code.css",
     "hub_file": null
+  },
+  {
+    "fix_pr": 4303,
+    "breaking_prs": [
+      "#3798 (Cloud machines: offer Large as the biggest size)"
+    ],
+    "failing_tests": [
+      "clients/tests/test_cli_fixtures.py::test_the_command_line_does_what_its_fixtures_froze[computer]"
+    ],
+    "changed_files": [
+      "backend/cloud_machines.py",
+      "backend/performance.py",
+      "backend/settings_catalog.py",
+      "backend/settings_entries.py",
+      "backend/tests/test_cloud_grow.py",
+      "backend/tests/test_performance.py",
+      "backend/tests/test_settings_catalog.py",
+      "clients/commands/admin.py",
+      "clients/commands/computer_upkeep.py",
+      "clients/commands/computers.py",
+      "clients/tests/test_hubcli.py",
+      "clients/tests/test_hubtools_computers.py",
+      "docs/cloud-machines.md",
+      "ui/app/cloud-machines.ts",
+      "ui/app/computer-performance.ts",
+      "ui/app/pages-shell.ts",
+      "ui/app/settings-bot-editor.ts",
+      "ui/tests/cloud-machines.cts"
+    ],
+    "cause": "dynamic_ref",
+    "confidence": "high",
+    "evidence": "Release validation for v0.6.66 (run 44390657063) failed test_cli_fixtures[computer]: #3798 added `advice` to what `tico computer performance` prints, and clients/tests/cli_fixtures/computer.json was not re-recorded. The test reads its command lines from JSON and runs them through clients/tests/helpers/cli_fixtures.py run_line, so the dependency map has no edge from clients/commands/computers.py to it. The release train stalled about two hours.",
+    "suggested_fix": "pin",
+    "pin_glob": "clients/commands/*.py",
+    "hub_file": null
   }
 ]
