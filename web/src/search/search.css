@@ -3,6 +3,7 @@
    .pal-set, a group's wrapper that leaves the list's layout as the mock draws it. The group's font is .t-label
    (type.css owns the shorthand). Spacing is the mock's, in scale tokens (calc where it sits between steps). */
 .pal{--surface:var(--raised);width:600px;max-height:calc(100vh - 208px);display:flex;flex-direction:column;overflow:hidden;border-radius:var(--r-pane);background:var(--raised);box-shadow:var(--lift-3);color:var(--ink)}
+.pal.is-drop{position:fixed;z-index:var(--z-dialog);top:var(--gap-pane);left:var(--gap-pane);right:var(--gap-pane);width:auto;max-width:600px}
 .pal-field{flex:none;height:54px;display:flex;align-items:center;gap:var(--s-2h);padding:0 var(--s-3) 0 calc(var(--s-4) + var(--s-0));border-bottom:1px solid var(--line-strong);font-size:var(--t-md)}
 .pal-field>.ico{width:18px;height:18px;color:var(--muted);order:-2}
 .pal-field input{flex:1;min-width:0;border:0;outline:0;background:none;color:var(--ink);padding:0}
@@ -20,7 +21,7 @@
 :where(html:not([data-layout="cards"])){
   /* it drops from the menu's head: it starts where the menu starts and covers the menu and the page, which dim;
      Tico at the left stays lit */
-  .pal.is-drop{position:fixed;z-index:var(--z-dialog);max-height:calc(100vh - 120px)}
+  .pal.is-drop{max-height:calc(100vh - 120px)}
   .pal.is-drop .pal-field{height:60px;padding-left:var(--s-5)}
-  .app.is-search>.nav::after,.app.is-search>.page::after{content:"";position:absolute;inset:0;z-index:var(--z-scrim);border-radius:inherit;background:var(--scrim)}
+  .shell-frame.is-search>.shell-place:is([data-sheet="menu"],[data-sheet="list"],[data-sheet="page"],[data-sheet="stage"])::after{content:"";position:absolute;inset:0;z-index:var(--z-scrim);border-radius:var(--r-pane);background:var(--scrim)}
 }
