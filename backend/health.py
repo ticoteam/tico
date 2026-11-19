@@ -476,23 +476,33 @@ def _history_check(c, withheld):
     return _check("bot_history", "Bot history", "info", ". ".join(said) + ".", claim)
 
 
+def _hosted_warnings(c):
+    """(bot, warning) for each readiness warning a computer reports for a bot it hosts, read once a snapshot: Health
+    asks for four kinds of them, and each ask read both tables and parsed every computer's readiness again."""
+
+    def build():
+        hosting = {
+            (a["bot"], a["runner_id"])
+            for a in c.execute(
+                "SELECT a.bot,a.runner_id FROM assignments a JOIN bots b ON b.id=a.bot WHERE b.state<>'archived'"
+            )
+        }
+        found = []
+        for r in c.execute("SELECT id,readiness FROM runners_with_state WHERE revoked_at IS NULL"):
+            for bot, row in ((readiness_document(r["readiness"]).get("bots")) or {}).items():
+                if (bot, r["id"]) not in hosting:
+                    continue  # a computer that no longer hosts the bot has nothing to publish for it
+                found += [(bot, str(warning)) for warning in (row or {}).get("warnings") or []]
+        return tuple(found)
+
+    return read_cache.value(c, ("health_hosted_warnings",), build, shared=True)
+
+
 def _reported(c, prefix, limit=200):
     """(bot, the rest of the line) for each readiness warning starting with `prefix` from the computer hosting the bot."""
-    out = []
-    hosting = {
-        (a["bot"], a["runner_id"])
-        for a in c.execute(
-            "SELECT a.bot,a.runner_id FROM assignments a JOIN bots b ON b.id=a.bot WHERE b.state<>'archived'"
-        )
-    }
-    for r in c.execute("SELECT id,readiness FROM runners_with_state WHERE revoked_at IS NULL"):
-        for bot, row in ((readiness_document(r["readiness"]).get("bots")) or {}).items():
-            if (bot, r["id"]) not in hosting:
-                continue  # a computer that no longer hosts the bot has nothing to publish for it
-            for warning in (row or {}).get("warnings") or []:
-                if str(warning).startswith(prefix):
-                    out.append((bot, str(warning)[len(prefix) :][:limit]))
-    return sorted(set(out))
+    return sorted(
+        {(bot, warning[len(prefix) :][:limit]) for bot, warning in _hosted_warnings(c) if warning.startswith(prefix)}
+    )
 
 
 def harness_denies(c, settings):
