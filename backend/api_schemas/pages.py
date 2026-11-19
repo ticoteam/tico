@@ -89,6 +89,22 @@ SCHEMAS.update(
             },
             required=["page"],
         ),
+        "PageUnlinked": obj(
+            {
+                "page": {
+                    "anyOf": [ref("Page"), {"type": "null"}],
+                    "description": "null after the caller took a page they may not read off a task whose pages they write",
+                },
+                "can_manage": "b",
+                "can_delete": "b",
+                "pinned": {
+                    "type": "array",
+                    "description": "The places it is pinned that the caller may open",
+                    "items": obj({"place": "s", "label": "s"}),
+                },
+            },
+            required=["page"],
+        ),
         "PagePublished": obj(
             {
                 "page": ref("Page"),

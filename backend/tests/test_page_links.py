@@ -530,3 +530,69 @@ def test_a_bot_that_may_comment_on_a_task_still_may_not_link_its_page_as_the_tas
     refused = add_link(api, fid, 'task:' + t['id'], 'Spec', token=outsider)
     assert refused.status_code == 403, refused.text
     assert add_link(api, fid, 'task:' + t['id'], 'related', token=outsider).status_code == 200
+
+
+def test_a_task_writer_takes_an_unreadable_page_off_its_approval(api):
+    """A page bound to a document approval that the task's writers may not read (only its maker does) is taken off by
+    one of them with `page unlink`, unseen; nothing else is unlinked and nobody else learns of the page (#665)."""
+    from backend.tests.helpers import engine as X
+    from backend import task_engine as E
+    from backend import task_pages as P
+
+    ops = bot(api, 'ops')
+    bot(api, 'cpo')
+    with api.app.state.store.transaction() as c:
+        X.pipeline(
+            c,
+            "page-unread",
+            "Check",
+            (
+                {
+                    "name": "QA",
+                    "owner": "bot:ops",
+                    "requirements": [
+                        {"kind": "page", "line": "QA report", "settings": {"document": "QA report"}, "who_oks": "none"}
+                    ],
+                },
+            ),
+            manager="human:ana",
+        )
+        t = X.new_task(c, X.ANA, "Check the report", "page-unread", assignee="bot:ops")
+    secret = task(api, private=True, token='ben-test')
+    hidden = publish_page(api, ops, 'Hidden', task=secret['id']).json()['page']['file_id']
+    assert add_link(api, hidden, 'task:' + t['id'], 'QA report', token='ben-test').status_code == 200
+    shown = publish_page(api, 'ana-test', 'Shown', task=t['id'], name='qa.html')
+    assert shown.status_code == 200, shown.text
+    readable = shown.json()['page']['file_id']
+    assert add_link(api, readable, 'task:' + t['id'], 'QA report').status_code == 200
+
+    def bound():
+        with api.app.state.store.read() as c:
+            visit = E.task(c, t['id'])['visit']['id']
+            ids = c.execute(
+                "SELECT DISTINCT requirement_id FROM requirement_pages WHERE visit_id=?", (visit,)
+            ).fetchall()
+            return sorted({p['file_id'] for (rid,) in ids for p in P.current_pages(c, visit, rid)})
+
+    assert bound() == sorted([hidden, readable])
+    assert api.get('/api/v2/pages/' + hidden, headers=headers('cara-test')).status_code == 404
+
+    def unlink(token, role='QA report', target=None):
+        return api.delete(
+            '/api/v2/pages/' + hidden + '/links',
+            params={'target': target or 'task:' + t['id'], 'role': role},
+            headers=headers(token),
+        )
+
+    assert unlink('cpo-test').status_code == 404  # no right on the task's pages
+    assert unlink('cara-test', role='writer').status_code == 404  # never a writer link
+    assert unlink('cara-test', target='task:' + secret['id']).status_code == 404  # a task cara does not write
+    gone = unlink('cara-test')
+    assert gone.status_code == 200, gone.text
+    assert gone.json() == {'page': None}
+    assert bound() == [readable]
+    assert unlink('cara-test').status_code == 404  # already gone
+    with api.app.state.store.read() as c:
+        links = {tuple(r) for r in c.execute("SELECT target,role FROM page_links WHERE page_id=?", (hidden,))}
+    assert ('task:' + t['id'], 'QA report') not in links
+    assert any(role == 'writer' for _, role in links)  # its maker keeps it
