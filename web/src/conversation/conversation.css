@@ -25,7 +25,7 @@
 .chat-page .chat-foot{padding:var(--s-1) var(--s-5) var(--s-5)}
 .chat-page .day:first-child{margin-top:auto}
 .chat-page .mine-col{max-width:72%}
-@media (max-width:760px){
+:where(html[data-layout="cards"]){
   .chat-page .chat-body{padding:var(--s-2) var(--s-4)}
   .chat-page .mine-col{max-width:86%}
 }

@@ -209,7 +209,7 @@
 .pnl .lrow{grid-template-columns:32px minmax(0,1fr) auto}
 
 /* ---------- a phone: the name may take two lines; the side columns go ---------- */
-@media (max-width:760px){
+:where(html[data-layout="cards"]){
   .lib .lrow{height:auto;min-height:var(--row);--rule-from:38px}
   .lib .frow{grid-template-columns:30px minmax(0,1fr) var(--av-sm) 40px;padding:var(--s-2h) var(--s-2)}
   .lib .frow .row-title{white-space:normal;line-height:1.35;padding-right:var(--s-3);overflow-wrap:anywhere}

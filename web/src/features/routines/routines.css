@@ -103,7 +103,7 @@
 .ps-moments .rule-new{margin:var(--s-1) calc(var(--s-5) + var(--s-0)) var(--s-2) calc(var(--s-4) + var(--s-0))}
 .ps-moments .rule-new-foot{display:flex;gap:var(--s-2)}
 
-@media (max-width:760px){
+:where(html[data-layout="cards"]){
   .rr .set{min-height:48px}
 
   /* the rule row on a phone: the sentence wraps, because a rule cut off is not a rule */

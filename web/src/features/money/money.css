@@ -5,7 +5,7 @@
 .money .range{display:inline-flex;align-items:center;gap:var(--s-1);color:var(--ink-2);font-size:var(--t-sm);white-space:nowrap;font-variant-numeric:tabular-nums}
 
 /* a wide table scrolls sideways on a phone only, so its head stays put on a desk */
-@media (max-width:760px){
+:where(html[data-layout="cards"]){
   .money .t-scroll{overflow-x:auto}
   .money .t-scroll .table{min-width:640px}
 }
@@ -145,7 +145,7 @@
 .money .fr-group{height:var(--s-10);display:flex;align-items:flex-end;gap:var(--s-2);padding:0 var(--s-2) var(--s-1h);font-family:var(--font-text);font-size:var(--t-sec);font-weight:var(--w-title);line-height:var(--lh-tight);color:var(--ink);border-bottom:1px solid var(--line)}
 .money .fr-group .count{font-size:var(--t-sm)}
 
-@media (max-width:760px){
+:where(html[data-layout="cards"]){
   .money .chart-sec{padding:0 var(--s-2) var(--s-3)}
   .money .ctl-row{padding:var(--s-3) var(--s-2) var(--s-2h)}
   .money .two-col{grid-template-columns:minmax(0,1fr)}

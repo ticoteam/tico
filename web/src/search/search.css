@@ -17,7 +17,7 @@
 .pal-ask::before{content:"";position:absolute;left:-6px;right:-6px;top:-6px;border-top:1px solid var(--line-strong)}
 .pal-ask b{font-weight:var(--w-strong)}
 .pal .sr-none{padding:calc(var(--s-6) + var(--s-1)) var(--s-2) calc(var(--s-5) + var(--s-0))}
-@media (min-width:761px){
+:where(html:not([data-layout="cards"])){
   /* it drops from the menu's head: it starts where the menu starts and covers the menu and the page, which dim;
      Tico at the left stays lit */
   .pal.is-drop{position:fixed;z-index:var(--z-dialog);max-height:calc(100vh - 120px)}

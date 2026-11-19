@@ -104,7 +104,7 @@
 .read p+p{margin-top:calc(var(--s-2) + var(--s-0))}
 .read-lead+p{margin-top:var(--s-4)}
 
-@media (max-width:760px){
+:where(html[data-layout="cards"]){
   .conv-about{display:none}
   .tl-row{padding:0 var(--s-2) 0 var(--s-3)}
   .conv-head .av{margin:0 var(--s-2) 0 var(--s-1)}
@@ -143,7 +143,7 @@ button.ab-people{display:flex;align-items:center;border:0;background:none;paddin
 .lr-row:hover .lr-more,.lr-more:focus-within,.lr-more:has([aria-expanded="true"]){opacity:1}
 .lr-row.is-who{grid-template-columns:var(--av-sm) minmax(0,1fr) 64px 28px}
 a.lr-row{color:inherit}
-@media (max-width:760px){
+:where(html[data-layout="cards"]){
   .lr-row{grid-template-columns:minmax(0,1fr) var(--av-sm) 52px 28px;padding:calc(var(--s-2) + 3px) var(--s-2)}
   .lr-row.is-who{grid-template-columns:var(--av-sm) minmax(0,1fr) 52px 28px}
   .lr-more{opacity:1}

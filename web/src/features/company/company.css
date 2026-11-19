@@ -280,7 +280,7 @@
   .co .hall-head{flex-direction:row;justify-content:space-between;align-items:center;padding:0;margin-bottom:calc(-1 * var(--s-3h))}
 }
 
-@media (max-width:760px){
+:where(html[data-layout="cards"]){
   .co .hall{grid-template-columns:minmax(0,1fr);padding:var(--s-3) 0 var(--s-1h)}
   .co .hall-head{flex-direction:row;justify-content:space-between;align-items:center;padding:0 0 var(--s-0)}
   .co .pipe{grid-template-columns:76px 38px minmax(0,1fr) 38px;column-gap:var(--s-1h)}

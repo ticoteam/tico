@@ -33,7 +33,7 @@
 .wl-row.radio{grid-template-columns:16px minmax(0,1fr) auto;min-height:48px;display:grid}
 .wl-row.radio.is-on b{color:var(--ink)}
 
-@media (max-width:760px){
+:where(html[data-layout="cards"]){
   .modal.wl{width:auto;padding:var(--s-6) var(--s-4) var(--s-4)}
   .wl-row{min-height:60px}
   .wl-row.radio{min-height:52px}

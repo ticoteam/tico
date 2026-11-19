@@ -59,8 +59,8 @@ html[data-layout="cards"] .tk-item>.tk-more{display:none}
 
 /* Archived: a row names its stage (list.css) */
 .is-arch .row-title{color:var(--ink-2)}
-@media (min-width:761px){.task.is-arch{grid-template-columns:24px minmax(0,1fr) 104px var(--av-sm) 38px}}
-@media (max-width:760px){.task.is-arch .row-stage{grid-area:pills;padding:0}}
+:where(html:not([data-layout="cards"])) .task.is-arch{grid-template-columns:24px minmax(0,1fr) 104px var(--av-sm) 38px}
+:where(html[data-layout="cards"]) .task.is-arch .row-stage{grid-area:pills;padding:0}
 
 /* Edit pipeline: the stages in order down one line; a side stage hangs off it (more.css) */
 .pe-held{margin-bottom:var(--s-2);color:var(--ink-2)}

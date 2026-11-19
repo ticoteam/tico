@@ -369,7 +369,7 @@ button.act-text{padding:0;border:0;background:none;color:inherit;font-family:inh
 .cw-back .ico{width:16px;height:16px}
 
 /* ---------- a phone ---------- */
-@media (max-width:760px){
+:where(html[data-layout="cards"]){
   .cl-body{padding:var(--s-1h) var(--s-2) calc(var(--s-12) * 2 + var(--s-2))}
   .cl-row,.cl-row.is-live{grid-template-columns:62px 16px minmax(0,1fr) auto;padding:0 var(--s-2)}
   .cl-row .row-pills,.cl-kept,.cl-len,.er-who{display:none}

@@ -1,9 +1,10 @@
 import { Link, useRouter, useSearch } from '@tanstack/react-router';
-import { useSyncExternalStore, type MouseEvent, type ReactNode } from 'react';
+import { type MouseEvent, type ReactNode } from 'react';
 import { registry } from '@/actions';
 import { runIn } from '@/actions/run';
 import { useActor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
+import { useCards } from '@/kit/Popover';
 import { toast } from '@/kit/Toast';
 import { validateFinanceSearch } from './search';
 
@@ -126,13 +127,5 @@ export function Who({ id }: { id: string }) {
   );
 }
 
-const PHONE = '(max-width: 760px)';
-const media = () => (typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia(PHONE) : null);
-const onMedia = (cb: () => void) => {
-  const m = media();
-  m?.addEventListener('change', cb);
-  return () => m?.removeEventListener('change', cb);
-};
-
-/** A phone's width, where a wide table becomes rows of a name, its words and one figure (finance.js rowsPhone). */
-export const usePhone = () => useSyncExternalStore(onMedia, () => media()?.matches ?? false, () => false);
+/** The phone's cards, where a wide table becomes rows of a name, its words and one figure (finance.js rowsPhone). */
+export const usePhone = useCards;

@@ -88,7 +88,7 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 /* rows: a task with its stage, a run, a file, a link */
 .dt .row-sub{display:contents}
 .row-stage{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-@media (min-width:761px){
+:where(html:not([data-layout="cards"])){
   .task.has-stage{grid-template-columns:24px minmax(0,1fr) auto 76px var(--av-sm) 38px}
 }
 .dt .task.is-done .row-title{color:var(--muted)}
@@ -117,7 +117,7 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .an-err{margin:var(--s-2) var(--s-1h) 0 0;font-size:var(--t-sm);line-height:var(--lh);color:var(--ink-2);text-wrap:pretty}
 
 /* ---------- a phone: the page is the back card; Details fills it and the answer holds the bottom ---------- */
-@media (max-width:760px){
+:where(html[data-layout="cards"]){
   .dt{padding:var(--s-1) var(--s-2) var(--s-6)}
   .dt-line{grid-template-columns:22px minmax(0,1fr) var(--av-sm);min-height:var(--row);padding:var(--s-3) var(--s-2)}
   .dt-kv{grid-template-columns:0 104px minmax(0,1fr);min-height:var(--row);padding:var(--s-3) var(--s-2)}
