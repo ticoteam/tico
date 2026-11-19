@@ -10,6 +10,7 @@ export function watchKeyboard(onChange: (keys: Keys) => void): () => void {
   const vv = window.visualViewport;
   if (!vv) return () => {};
   let raf = 0;
+  let blur = 0;
   let last = '';
   const apply = () => {
     cancelAnimationFrame(raf);
@@ -25,7 +26,10 @@ export function watchKeyboard(onChange: (keys: Keys) => void): () => void {
       }
     });
   };
-  const later = () => setTimeout(apply, 50);
+  const later = () => {
+    clearTimeout(blur);
+    blur = window.setTimeout(apply, 50);
+  };
   vv.addEventListener('resize', apply);
   vv.addEventListener('scroll', apply);
   window.addEventListener('focusin', apply);
@@ -33,6 +37,7 @@ export function watchKeyboard(onChange: (keys: Keys) => void): () => void {
   apply();
   return () => {
     cancelAnimationFrame(raf);
+    clearTimeout(blur);
     vv.removeEventListener('resize', apply);
     vv.removeEventListener('scroll', apply);
     window.removeEventListener('focusin', apply);

@@ -12,9 +12,10 @@ import type { flowGroups as FlowGroups } from '@/features/tasks/routing';
 /* The root as the app draws it, with the features around the shell stood in: the second chat for Tico support, the
    desktop app's small call window, and what the page tells the desktop app. */
 
-const { gate, q } = vi.hoisted(() => ({
+const { gate, q, catchUpRead } = vi.hoisted(() => ({
   gate: { screen: null as string | null, setup: false },
   q: <T,>(key: string, data: T) => ({ queryKey: [key], queryFn: async () => data, staleTime: Infinity }),
+  catchUpRead: vi.fn(async () => ({ count: 0 })),
 }));
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -78,7 +79,7 @@ vi.mock('@/features/task/exports', () => ({ TaskChat: () => <p>task chat</p> }))
 vi.mock('@/features/team/routing', () => ({ teamSlug: (t: string) => t, whoHref: () => '/' }));
 vi.mock('@/features/threads/exports', () => ({ ChatSheet: () => <p>a teammate chat</p> }));
 vi.mock('@/features/threads/routing', () => ({
-  catchUpQuery: q('catch-up', { count: 0 }),
+  catchUpQuery: { ...q('catch-up', { count: 0 }), queryFn: catchUpRead },
   updateListQuery: () => ({ queryKey: ['updates'], queryFn: async () => ({ unread: 0 }), initialPageParam: '', getNextPageParam: () => undefined }),
 }));
 vi.mock('@/features/support/exports', () => ({ SupportChat: () => <p>support chat</p> }));
@@ -140,6 +141,7 @@ function fakeDesktop() {
 beforeEach(() => {
   gate.screen = null;
   gate.setup = false;
+  catchUpRead.mockClear();
   queryClient.clear();
   resetDesktopReports();
 });
@@ -148,6 +150,36 @@ afterEach(() => {
 });
 
 describe('the root', () => {
+  it('defers the catch-up badge read while the first page is loading', async () => {
+    let open!: () => void;
+    const loading = new Promise<void>((resolve) => { open = resolve; });
+    const page = createRoute({
+      getParentRoute: () => root,
+      path: '/slow',
+      loader: () => loading,
+      pendingComponent: () => <p>Opening page</p>,
+      component: () => <p>Page opened</p>,
+    });
+    const router = createRouter({
+      routeTree: root.addChildren([page]),
+      context: { queryClient },
+      history: createMemoryHistory({ initialEntries: ['/slow'] }),
+      defaultPendingMs: 0,
+      defaultPendingMinMs: 0,
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText('Opening page')).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy();
+    expect(catchUpRead).not.toHaveBeenCalled();
+    await act(async () => open());
+    expect(await screen.findByText('Page opened')).toBeTruthy();
+    await waitFor(() => expect(catchUpRead).toHaveBeenCalledTimes(1));
+  });
+
   it('draws Tico support as the second chat for ?chat=support, and the menu shows its unread count', async () => {
     show('/?chat=support');
     const sheet = await screen.findByRole('complementary', { name: 'Tico support' });
