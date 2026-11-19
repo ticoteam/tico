@@ -3350,7 +3350,8 @@ def view(c, who, settings, auth, github, config, filing=False):
         if waits := worktree_waiting(c):
 
             def age(since):
-                minutes = int(max(0, (datetime.now(timezone.utc) - H.parse_ts(since)).total_seconds()) // 60)
+                now = datetime.now(timezone.utc)
+                minutes = int(max(0, (now - (H.parse_ts(since) or now)).total_seconds()) // 60)
                 return f'{minutes} min' if minutes < 120 else f'{minutes // 60} h'
 
             checks.append(
