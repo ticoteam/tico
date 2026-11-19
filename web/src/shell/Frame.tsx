@@ -287,6 +287,8 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
   if (mode === 'cards' || L.mode === 'cards' || !stretch) {
     // a call takes the screen in the chat's place (phone/notes.md)
     const call = p.arr === 'call';
+    // a teammate's own page: their page at the back, their chat the card that comes up over it
+    if (p.arr === 'agent' && p.widgets) return <PhoneCards page={p.widgets} tico={p.tico} menu={p.menu} chat={p.page} />;
     return <PhoneCards page={call ? null : p.page} tico={p.tico} menu={p.menu} chat={call ? undefined : p.chat} call={call ? p.page : undefined} />;
   }
 

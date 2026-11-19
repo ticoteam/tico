@@ -47,6 +47,8 @@ export interface MenuProps {
   me: MenuMate;
   teams: MenuTeam[];
   counts?: MenuCounts;
+  /* the pipelines, drawn under Tasks while a Tasks page is open (as Company's pages are under Company) */
+  pipelines?: { id: string; name: string; to: string }[];
   /* whether the person may open a page: 'tasks', 'company/finance', 'library/tools', 'settings' … (default: yes) */
   can?: (page: string) => boolean;
   /* the team shown open (by default, the team of the teammate whose page is open) */
@@ -106,6 +108,10 @@ export function Menu(p: MenuProps) {
   const isOpen = (t: MenuTeam) => (t.id in shut ? !shut[t.id] : t.id === openTeam);
   const rows = ROWS.filter(r => can(r.id));
   const c = p.counts ?? {};
+  const kidsOf = (id: MenuRowId) =>
+    id === 'tasks'
+      ? (p.pipelines ?? []).map(x => ({ key: x.id, label: x.name, to: x.to }))
+      : (KIDS[id] ?? []).filter(k => can(`${id}/${slug(k)}`)).map(k => ({ key: k, label: k, to: `/${id}/${slug(k)}` }));
 
   if (folded) {
     const faces = p.teams.find(t => t.id === openTeam)?.members ?? [];
@@ -169,7 +175,7 @@ export function Menu(p: MenuProps) {
     if (id === 'calendar' && c.next) return <span className="nav-next">{c.next}</span>;
     if (id === 'threads' && c.threads) return <span className="count">{c.threads}</span>;
     if (id === 'updates' && c.updates) return <span className="count">{c.updates}</span>;
-    if (KIDS[id])
+    if (kidsOf(id).length)
       return (
         <span className={`nav-chev${top === id ? ' is-open' : ''}`}>
           <Icon name="chevron" />
@@ -191,9 +197,9 @@ export function Menu(p: MenuProps) {
   const items = (
     <div className="nav-items">
       {rows.map(r => {
-        const kids = (KIDS[r.id] ?? []).filter(k => can(`${r.id}/${slug(k)}`));
+        const kids = kidsOf(r.id);
         return [
-          <Link key={r.id} className="nav-item" to={to(`/${r.id}`)} activeProps={ACTIVE} activeOptions={{ exact: !!KIDS[r.id] }}>
+          <Link key={r.id} className="nav-item" to={to(`/${r.id}`)} activeProps={ACTIVE} activeOptions={{ exact: kids.length > 0 }}>
             <Icon name={r.icon} />
             <span className="nav-label">{r.label}</span>
             {right(r.id)}
@@ -201,8 +207,8 @@ export function Menu(p: MenuProps) {
           top === r.id && kids.length ? (
             <div key={`${r.id}-kids`} className="nav-kids">
               {kids.map(k => (
-                <Link key={k} className="nav-kid" to={to(`/${r.id}/${slug(k)}`)} activeProps={ACTIVE}>
-                  {k}
+                <Link key={k.key} className="nav-kid" to={to(k.to)} activeProps={ACTIVE}>
+                  {k.label}
                 </Link>
               ))}
             </div>

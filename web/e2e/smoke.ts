@@ -1,6 +1,7 @@
 // A first run of the new app in a real browser, against a server already running on a rehearsal copy (e2e/hub).
 //   node e2e/smoke.ts <out dir> [step ...]     steps: boot, menu, sheets, keys, phone, dev, light (default: all)
 // Needs the server on 127.0.0.1:8765 and `npx vite` on 127.0.0.1:5173. Pictures hold real data: keep them local.
+/// <reference lib="dom" />
 import { readFileSync } from 'node:fs';
 import { chromium, webkit, type Browser, type BrowserContext, type Page } from 'playwright';
 
@@ -71,7 +72,7 @@ async function desktop(browser: Browser) {
       ['Company', '/company'],
       ['Library', '/library'],
       ['Tasks', '/tasks'],
-    ]) {
+    ] as const) {
       await page.locator('[data-sheet="menu"] .nav-item', { hasText: label }).first().click();
       await settle(page, 500);
       const at = new URL(page.url()).pathname.replace(/^\/next/, '');

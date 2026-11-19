@@ -1,10 +1,15 @@
-import { useQuery, type QueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, type QueryClient } from '@tanstack/react-query';
 import { Outlet, createRootRouteWithContext, useLocation, useRouter } from '@tanstack/react-router';
-import { useEffect, type ComponentType, type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
-import { ApiError } from '@/api/client';
-import { Conversation, ticoRoomQuery } from '@/conversation';
+import { ticoRoomQuery } from '@/conversation';
 import { configQuery, directoryQuery, meQuery, recordVisit, useHeldCount, type Actor, type Directory } from '@/data';
+import { FirstRun, StartScreen, useStartGate } from '@/features/start/exports';
+import { TaskChat } from '@/features/task/exports';
+import { flowQuery, pipelinesQuery } from '@/features/tasks/exports';
+import { TeammateChat, teamSlug, whoHref } from '@/features/team/exports';
+import { ChatSheet, catchUpQuery, updateListQuery } from '@/features/threads/exports';
+import { Avatar } from '@/kit/Avatar';
 import { OfflineBar } from '@/kit/OfflineBar';
 import { Placeholder } from '@/kit/placeholder/Placeholder';
 import { Toasts } from '@/kit/Toast';
@@ -13,47 +18,66 @@ import { useMotionRoot } from '@/motion';
 import { PanelHost, usePagePanelOpen } from '@/pagekinds';
 import { useTheme } from '@/prefs';
 import { openSearch } from '@/search';
-import { Frame, Menu, Sheet, SheetHead, foldSheet, type MenuMate, type MenuTeam } from '@/shell';
+import { Frame, Menu, Sheet, SheetHead, arrangementFor, foldSheet, type MenuMate, type MenuTeam } from '@/shell';
 import { TicoSheet } from '@/tico';
 import { dot } from '@/tico/dot';
+import { pageName } from '@/tico/pageName';
 
 export interface RouterContext {
   queryClient: QueryClient;
 }
 
+/** What the shell keeps in every page's address: the second chat and an open side panel (the page reads `panel`). */
+export interface RootSearch {
+  chat?: string;
+  panel?: string;
+}
+const word = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+
 export const Route = createRootRouteWithContext<RouterContext>()({
   component: Root,
-  // the second chat rides every page's address; each page's own keys pass through untouched
-  validateSearch: (s: Record<string, unknown>): { chat?: string } => (typeof s.chat === 'string' && s.chat ? { chat: s.chat } : {}),
+  // Each page's own keys pass through untouched: a child route's search is the address's, plus what it validates.
+  validateSearch: (s: Record<string, unknown>): RootSearch => {
+    const out: RootSearch = {};
+    const chat = word(s.chat);
+    const panel = word(s.panel);
+    if (chat) out.chat = chat;
+    if (panel) out.panel = panel;
+    return out;
+  },
   notFoundComponent: () => <Placeholder title="Not found" />,
 });
 
-/* The threads feature's second chat, once it exists: `ChatSheet` in its exports, given the `?chat=` value. Until then
-   a thread opens in a plain side conversation. */
-const threads = import.meta.glob<{ ChatSheet?: ComponentType<{ chat: string }> }>('/src/features/threads/exports.ts', { eager: true });
-const ChatSheet = Object.values(threads)[0]?.ChatSheet;
-
 const dotEl = () => dot.el();
 const closeChat = () => void run('shell.closeChat', {}, { via: 'click' });
+const bare = (id: string) => id.slice(id.indexOf(':') + 1);
 
+/* Before the app: sign in, a refusal, a boot failure. The start feature decides; the app opens once it says so. */
 function Root() {
   useMotionRoot();
   useTheme();
+  const gate = useStartGate();
+  if (gate.screen) return <StartScreen screen={gate.screen} error={gate.error} retry={gate.retry} busy={gate.busy} />;
+  return <App />;
+}
+
+function App() {
   const router = useRouter();
   const me = useQuery(meQuery);
   const signedIn = me.isSuccess;
+  const { data: dir } = useQuery(directoryQuery);
   const status = useLiveStatus();
   const held = useHeldCount();
   const panel = usePagePanelOpen();
-  const chat = useLocation({ select: (l) => (l.search as { chat?: unknown }).chat });
 
-  // Signed out: the server's sign-in page, then back here.
-  useEffect(() => {
-    const e = me.error;
-    if (!(e instanceof ApiError) || e.status !== 401 || !e.signIn) return;
-    const back = location.pathname + location.search + location.hash;
-    location.assign(`${e.signIn}${e.signIn.includes('?') ? '&' : '?'}next=${encodeURIComponent(back)}`);
-  }, [me.error]);
+  // A teammate's own page is the `agent` arrangement; a team's page (not a teammate) is a plain page.
+  const isActor = (who: string) => !!(dir?.byId[who] ?? dir?.byId[`human:${who}`]);
+  const at = {
+    path: useLocation({ select: (l) => l.pathname.replace(/^\/next(?=\/|$)/, '') || '/' }),
+    chat: useLocation({ select: (l) => word((l.search as Record<string, unknown>).chat) }),
+  };
+  const arrangement = arrangementFor(at.path, at.chat ? { chat: at.chat } : {}, isActor);
+  const [, top, a, b] = at.path.split('/');
 
   // One stream, once the person is known and Tico's room is drawn (its follow then rides the first connection).
   const room = useQuery(ticoRoomQuery);
@@ -62,28 +86,48 @@ function Root() {
     if (ready) startLive();
   }, [ready]);
 
-  // Each page the person opens goes to their page history (dev pages do not).
-  const path = useLocation({ select: (l) => l.pathname.replace(/^\/next(?=\/|$)/, '') || '/' });
+  // Each page the person opens goes to their page history (dev pages do not), named as its head names it.
   useEffect(() => {
-    if (!signedIn || path.startsWith('/_dev')) return;
-    const t = setTimeout(() => recordVisit(path, document.title || undefined), 400);
+    if (!signedIn || at.path.startsWith('/_dev')) return;
+    const t = setTimeout(() => recordVisit(at.path, pageName() || undefined), 400);
     return () => clearTimeout(t);
-  }, [signedIn, path]);
+  }, [signedIn, at.path]);
 
   const closePanel = () =>
     void router.navigate({ to: '.', search: ({ panel: _, ...rest }: Record<string, unknown>) => rest } as never);
 
+  /* What each place holds in this arrangement (layout.md 6): an open task's chat beside it; a teammate's chat
+     stretching, with their page as the column beside it; otherwise the page, and a second chat when one is open. */
+  let page: ReactNode = <Outlet />;
+  let chat: ReactNode = at.chat ? <SecondChat chat={at.chat} /> : undefined;
+  let widgets: ReactNode;
+  if (arrangement === 'task') {
+    const task = top === 'tasks' ? b : a;
+    chat = task ? (
+      <Sheet kind="chat" label="The task's chat">
+        <TaskChat task={decodeURIComponent(task)} flow={top === 'flow'} />
+      </Sheet>
+    ) : undefined;
+  } else if (arrangement === 'agent' && a) {
+    widgets = page;
+    page = <TeammateSheet who={decodeURIComponent(a)} />;
+    chat = undefined;
+  }
+
   return (
     <>
       <Frame
+        arrangement={arrangement}
         tico={<TicoSheet />}
         menu={<AppMenu note={status === 'offline' ? <OfflineBar held={held} /> : null} />}
-        page={<Outlet />}
-        chat={typeof chat === 'string' && chat ? <SecondChat chat={chat} /> : undefined}
+        page={page}
+        chat={chat}
+        widgets={widgets}
         panel={panel ? <PanelHost /> : undefined}
         onCloseChat={closeChat}
         onClosePanel={closePanel}
       />
+      {signedIn ? <FirstRun /> : null}
       <ActionsRoot dot={dotEl} fold={foldSheet} />
       <Toasts />
     </>
@@ -92,7 +136,6 @@ function Root() {
 
 /* ---------------------------------------------------------------- the menu, from the directory */
 
-const bare = (id: string) => id.slice(id.indexOf(':') + 1);
 const short = (name: string) => {
   const w = name.trim().split(/\s+/).filter(Boolean);
   return (w.length > 1 ? `${w[0]![0]}${w[1]![0]}` : (w[0] ?? '').slice(0, 2)).toUpperCase();
@@ -103,10 +146,9 @@ const mate = (a: Actor): MenuMate => ({
   short: short(a.name),
   hue: a.hue ?? 0,
   kind: a.kind,
-  to: `/team/${encodeURIComponent(a.slug ?? bare(a.id))}`,
+  to: whoHref(a),
   live: a.working,
 });
-const teamSlug = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
 function teamsOf(d: Directory | undefined, meId: string | undefined): MenuTeam[] {
   const by = new Map<string, MenuTeam>();
@@ -119,10 +161,17 @@ function teamsOf(d: Directory | undefined, meId: string | undefined): MenuTeam[]
   return [...by.values()];
 }
 
+/* Counts are what the server already answers (needs-you, catch-up, updates); the stream keeps them current. */
+const some = (n: number | undefined) => (n ? n : undefined);
+
 function AppMenu({ note }: { note: ReactNode }) {
   const { data: me } = useQuery(meQuery);
   const { data: config } = useQuery(configQuery);
   const { data: dir } = useQuery(directoryQuery);
+  const { data: pipelines } = useQuery(pipelinesQuery);
+  const { data: flow } = useQuery(flowQuery);
+  const { data: catchUp } = useQuery(catchUpQuery);
+  const { data: updates } = useInfiniteQuery(updateListQuery('all'));
   const self = me ? dir?.byId[me.id] : undefined;
   const name = config?.company_name || config?.app_name || '';
   const meMate: MenuMate = self
@@ -133,28 +182,39 @@ function AppMenu({ note }: { note: ReactNode }) {
       company={{ name, mark: name.slice(0, 1).toUpperCase() }}
       me={meMate}
       teams={teamsOf(dir, me?.id)}
+      pipelines={pipelines?.map((p) => ({ id: p.id, name: p.name, to: `/tasks/${encodeURIComponent(p.id)}` }))}
+      counts={{ flow: some(flow?.count), threads: some(catchUp?.count), updates: some(updates?.pages[0]?.unread) }}
       note={note}
       onSearch={() => openSearch()}
     />
   );
 }
 
-/* ---------------------------------------------------------------- the second chat */
+/* ---------------------------------------------------------------- the chats */
 
 function SecondChat({ chat }: { chat: string }) {
-  const kind = chat.slice(0, chat.indexOf(':'));
-  const id = bare(chat);
   const { data: dir } = useQuery(directoryQuery);
-  const who = dir?.byId[id];
+  const who = dir?.byId[bare(chat)];
   return (
     <Sheet kind="chat" label={`Chat with ${who?.name ?? 'teammate'}`}>
-      {ChatSheet ? (
-        <ChatSheet chat={chat} />
-      ) : kind === 'thread' ? (
-        <Conversation id={id} variant="side" title={who?.name} />
-      ) : (
-        <SheetHead kind="side" title={who?.name ?? id} />
-      )}
+      <ChatSheet chat={chat} />
+    </Sheet>
+  );
+}
+
+/* A teammate's own page: their chat (or, on your own page, Tico's room) stretching beside the page's column. */
+function TeammateSheet({ who }: { who: string }) {
+  const { data: dir } = useQuery(directoryQuery);
+  const actor = dir?.byId[who] ?? dir?.byId[`human:${who}`];
+  const name = actor?.name ?? 'Teammate';
+  return (
+    <Sheet kind="chat" label={`Chat with ${name}`}>
+      <SheetHead
+        kind="side"
+        title={name}
+        lead={actor ? <Avatar decorative kind={actor.kind} name={actor.name} initials={short(actor.name)} hue={actor.hue ?? 0} size={28} live={actor.working} /> : null}
+      />
+      <TeammateChat who={who} />
     </Sheet>
   );
 }
