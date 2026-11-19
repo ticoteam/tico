@@ -25,7 +25,9 @@ declare function callVoiceDraw(box: HTMLElement, voice: unknown): void;
 
 type Page = import('playwright').Page;
 const shots = process.env.TICO_SCREENSHOT_DIR;
-const now = Date.now(), at = (sec: number) => new Date(now - sec * 1000).toISOString();
+// One fixed midday in UTC, for the fixtures and the page's clock alike: on the real clock a call that ended just after
+// midnight started yesterday, and its notes read "Nov 18, 11:49 PM" instead of "Today".
+const now = Date.parse('2026-11-14T12:00:00Z'), at = (sec: number) => new Date(now - sec * 1000).toISOString();
 const me = () => ({member: true, following: true, notify: 'live', last_read_seq: 9, unread: 0, activity: false, can_post: true, can_manage: false, pinned: false});
 const plan = {id: 't-plan', title: 'Growth weekly', audience: 'team', audience_group_id: 'growth', last_seq: 4, last_message_at: at(60), me: me(), members: [], live_call: null};
 const msg = (id: string, seq: number, from: string, body: string, extra: Record<string, unknown> = {}) =>
@@ -59,7 +61,8 @@ const FILE_TEXT: Record<string, string> = {'f-plan-0001': '# Q4 growth plan\n\nD
   'f-dash-0001': '# Signups\n\n| Week | Signups |\n|---|---|\n| 45 | 212 |\n| 46 | 241 |'};
 async function open(browser: import('playwright').Browser, {phone = false, big = false, lm2 = true, wide = false}: {phone?: boolean; big?: boolean; lm2?: boolean; wide?: boolean} = {}) {
   const context = await browser.newContext({viewport: phone ? {width: 390, height: 844} : wide ? {width: 1280, height: 800} : {width: 420, height: 680}, serviceWorkers: 'block', reducedMotion: 'reduce',
-    ...(phone ? {isMobile: true, hasTouch: true} : {})});
+    timezoneId: 'UTC', ...(phone ? {isMobile: true, hasTouch: true} : {})});
+  await context.clock.setSystemTime(now);
   const page = await context.newPage();
   const call = liveCall(big);
   const seen = {errors: [] as string[], joins: 0, botWrites: [] as string[], tasks: [] as unknown[], rings: [] as string[], memberWrites: 0, meetingReads: 0,
