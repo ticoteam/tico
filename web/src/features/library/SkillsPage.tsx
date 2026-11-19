@@ -279,7 +279,9 @@ function SkillPage({ name }: { name: string }) {
   const asks = useQuery(proposalsQuery);
   const ask = asks.data?.find((p) => p.name === name);
   const use = usage.data?.find((u) => u.name === name);
-  const files = text.data?.files ?? [];
+  const shipped = d.data.skill.id === null ? d.data.shipped : undefined;
+  const holders = shipped?.bots.map((bot) => ({ id: bot.id, target: bot })) ?? d.data.installs;
+  const files = text.data?.files ?? shipped?.files ?? [];
   const extra = files.filter((f) => !/(^|\/)SKILL\.md$/i.test(f.path));
   const [installing, setInstalling] = useState(false);
 
@@ -323,7 +325,7 @@ function SkillPage({ name }: { name: string }) {
               </p>
             )}
             {d.data.skill.description && <p className="read-lead">{d.data.skill.description}</p>}
-            {text.data && <Markdown text={mainText(files)} />}
+            {files.length > 0 && <Markdown text={mainText(files)} />}
             {extra.map((f) => (
               <section key={f.path}>
                 <h3 className="t-label">{f.path}</h3>
@@ -341,9 +343,9 @@ function SkillPage({ name }: { name: string }) {
               <LabelValue label="This week">{`${use?.uses ?? 0} runs`}</LabelValue>
               {latest?.approved_at && <LabelValue label="Changed">{when(latest.approved_at)}</LabelValue>}
             </Facts>
-            {d.data.installs.length > 0 && (
-              <Section name="Has it" count={d.data.installs.length}>
-                {d.data.installs.map((i) => (
+            {holders.length > 0 && (
+              <Section name="Has it" count={holders.length}>
+                {holders.map((i) => (
                   <span key={i.id} className="sp-who">
                     <Face actor={actorOf(i.target)} name={i.target.name} />
                     <span>{i.target.name ?? 'Teammate'}</span>

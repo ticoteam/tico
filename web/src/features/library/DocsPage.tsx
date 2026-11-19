@@ -1,6 +1,6 @@
-import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useSuspenseInfiniteQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -14,7 +14,7 @@ import { toast } from '@/kit/Toast';
 import { List, PageMore, Section, SidePanel, type PageState, type PageTab } from '@/pagekinds';
 import { Foot, trimmed, useGo } from './AddTool';
 import { Face, Find, KindGlyph, OwnerButton, press, Who } from './parts';
-import { archivedDocsQuery, docsListQuery, docsSearchQuery, IMPORT_MAX, IMPORT_TYPES, sourceDocsQuery, sourcesQuery, type DocHit, type DocRow } from './queries';
+import { archivedDocsQuery, docRows, docsListQuery, docsSearchQuery, IMPORT_MAX, IMPORT_TYPES, sourceDocsQuery, sourcesQuery, type DocHit, type DocRow } from './queries';
 import type { DocSource } from '@/api/schema';
 import type { DocsSearch } from './search';
 import './library.css';
@@ -79,31 +79,35 @@ function DocsMore({ archived }: { archived: boolean }) {
 
 function OwnDocs({ search }: { search: DocsSearch }) {
   const archived = !!search.archived;
-  const { data: docs } = useSuspenseQuery(archived ? archivedDocsQuery : docsListQuery);
-  const live = useQuery(docsListQuery);
+  const list = useSuspenseInfiniteQuery(archived ? archivedDocsQuery : docsListQuery);
+  const live = useInfiniteQuery(docsListQuery);
   const sources = useQuery(sourcesQuery);
-  const words = search.q?.toLowerCase() ?? '';
+  const docs = docRows(list.data);
+  const query = search.q?.trim() ?? '';
+  const words = query.toLowerCase();
   // Words to search for go to the server's search of the docs' text (docs-search.ts); until it answers, and in
   // the archive, the loaded list is matched by title and path.
-  const full = !archived && /\w/.test(search.q ?? '');
-  const found = useQuery({ ...docsSearchQuery(search.q?.trim() ?? ''), enabled: full });
+  const full = !archived && /[\p{L}\p{N}_]/u.test(query);
+  const found = useQuery({ ...docsSearchQuery(query), enabled: full });
   const hits = full ? found.data : undefined;
-  const rows = docs.docs.filter((d) => !words || d.title.toLowerCase().includes(words) || d.path.toLowerCase().includes(words));
+  const rows = docs.filter((d) => !words || d.title.toLowerCase().includes(words) || d.path.toLowerCase().includes(words));
 
   const groups = new Map<string, DocRow[]>();
   for (const d of rows) {
     const [name] = archived ? ['Archived'] : folder(d.path);
-    groups.set(name, [...(groups.get(name) ?? []), d]);
+    const group = groups.get(name);
+    if (group) group.push(d);
+    else groups.set(name, [d]);
   }
 
-  const state: PageState = !docs.docs.length && !hits?.length ? 'empty' : 'ready';
+  const state: PageState = !docs.length && !hits?.length && !list.hasNextPage ? 'empty' : 'ready';
 
   return (
     <List
       title="Docs"
       path="/library/docs"
       className="lib"
-      tabs={tabs(live.data?.docs.length, sources.data?.sources.length)}
+      tabs={tabs(live.data && docRows(live.data).length, sources.data?.sources.length)}
       search={<Find label="Search docs" value={search.q} onFind={(q) => void press('docs.list', { q, archived: archived || undefined })} />}
       actions={
         <>
@@ -121,22 +125,26 @@ function OwnDocs({ search }: { search: DocsSearch }) {
           hits.length ? (
             <Section name="Found" count={hits.length}>
               {hits.map((h) => (
-                <HitLine key={`${h.type}:${h.id}`} hit={h} row={docs.docs.find((d) => d.id === h.id)} />
+                <HitLine key={`${h.type}:${h.id}`} hit={h} row={docs.find((d) => d.id === h.id)} />
               ))}
             </Section>
           ) : (
             <Empty title="Nothing matches" />
           )
-        ) : rows.length ? (
+        ) : (
           <>
-            <div className={archived ? 'doc-cols is-gone' : 'doc-cols'} aria-hidden="true">
-              <span />
-              <span>Doc</span>
-              <span>Filed under</span>
-              <span>Edited by</span>
-              <span>Changed</span>
-              {archived && <span />}
-            </div>
+            {rows.length > 0 ? (
+              <div className={archived ? 'doc-cols is-gone' : 'doc-cols'} aria-hidden="true">
+                <span />
+                <span>Doc</span>
+                <span>Filed under</span>
+                <span>Edited by</span>
+                <span>Changed</span>
+                {archived && <span />}
+              </div>
+            ) : (
+              (full || !list.hasNextPage) && <Empty title="Nothing matches" />
+            )}
             {[...groups].map(([name, list]) => (
               <Section key={name} name={name} count={list.length}>
                 {list.map((d) => (
@@ -144,13 +152,39 @@ function OwnDocs({ search }: { search: DocsSearch }) {
                 ))}
               </Section>
             ))}
+            {!full && list.hasNextPage && (
+              <MoreDocs loading={list.isFetching} failed={list.isFetchNextPageError} fetchNext={list.fetchNextPage} />
+            )}
           </>
-        ) : (
-          <Empty title="Nothing matches" />
         )
       }
     />
   );
+}
+
+function MoreDocs({
+  loading,
+  failed,
+  fetchNext,
+}: {
+  loading: boolean;
+  failed: boolean;
+  fetchNext: (options: { cancelRefetch: boolean }) => Promise<unknown>;
+}) {
+  const end = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = end.current;
+    if (!el || loading || failed || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) void fetchNext({ cancelRefetch: false });
+      },
+      { root: el.closest('.pk-body'), rootMargin: '200px' },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loading, failed, fetchNext]);
+  return failed ? <Button onClick={() => void fetchNext({ cancelRefetch: false })}>Try again</Button> : <div ref={end} aria-hidden="true" />;
 }
 
 function DocLine({ d, archived }: { d: DocRow; archived: boolean }) {
@@ -206,7 +240,7 @@ const hostOf = (url: string) => {
 const BAD: Partial<Record<DocSource['status'], string>> = { failed: 'Failed', access_needed: 'Needs access', empty: 'Empty' };
 
 function SourcesPage({ panel }: { panel?: string }) {
-  const docs = useQuery(docsListQuery);
+  const docs = useInfiniteQuery(docsListQuery);
   const { data: sources } = useSuspenseQuery(sourcesQuery);
   const list = sources.sources;
   const [adding, setAdding] = useState(false);
@@ -216,7 +250,7 @@ function SourcesPage({ panel }: { panel?: string }) {
       title="Docs"
       path="/library/docs?tab=sources"
       className="lib"
-      tabs={tabs(docs.data?.docs.length, list.length)}
+      tabs={tabs(docs.data && docRows(docs.data).length, list.length)}
       actions={
         <>
           <OwnerButton page="docs" />

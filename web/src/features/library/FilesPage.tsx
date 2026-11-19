@@ -52,7 +52,7 @@ const fileHref = (search: FilesSearch, id: string, v?: number) => {
 };
 
 export function FilesPage({ search }: { search: FilesSearch }) {
-  if (search.file) return <FilePage id={search.file} version={search.v} />;
+  if (search.file) return <FilePage id={search.file} search={search} />;
   return <FilesList search={search} />;
 }
 
@@ -228,15 +228,16 @@ function UploadDialog({ files, onClose }: { files: File[]; onClose: () => void }
 
 /* ---------------------------------------------------------------- one file */
 
-function FilePage({ id, version }: { id: string; version?: number }) {
+function FilePage({ id, search }: { id: string; search: FilesSearch }) {
   const { data: file } = useSuspenseQuery(fileQuery(id));
   const versions = useQuery(fileVersionsQuery(id));
   const cards = useCards();
+  const version = search.v;
   const older = version !== undefined && version !== file.version;
   const shown = versions.data?.find((v) => (version === undefined ? v.current : v.version === version));
   const unavailable = older && !shown;
   const n = version ?? shown?.version ?? file.version;
-  const mime = shown?.mime ?? file.mime ?? '';
+  const mime = shown?.mime ?? (older ? '' : file.mime ?? '');
   const url = fileUrl(id, n);
 
   return (
@@ -278,7 +279,17 @@ function FilePage({ id, version }: { id: string; version?: number }) {
       }
       framed
       body={
-        <Preview id={id} version={n ?? 1} mime={mime} kind={file.library_kind} title={file.title} url={url} name={shown?.name ?? file.name} link={linkOf(file)} />
+        <Preview
+          id={id}
+          version={n ?? 1}
+          mime={mime}
+          kind={older ? undefined : file.library_kind}
+          title={file.title}
+          url={url}
+          name={shown?.name ?? (older ? '' : file.name)}
+          size={shown?.size ?? (older ? undefined : file.size)}
+          link={linkOf(file)}
+        />
       }
       side={
         file && (
@@ -301,7 +312,7 @@ function FilePage({ id, version }: { id: string; version?: number }) {
                   <Link
                     key={v.version}
                     className={v.version === n ? 'fv-ver is-on' : 'fv-ver'}
-                    href={fileHref({}, id, v.current ? undefined : v.version)}
+                    href={fileHref(search, id, v.current ? undefined : v.version)}
                   >
                     <b>v{v.version}</b>
                     <span>{when(v.created_at)}</span>
