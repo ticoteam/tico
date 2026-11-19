@@ -41,8 +41,9 @@ TTL = 6 * 3600
 CHECK_WAIT = 10  # the owner's "Check for updates" waits this long for the fresh answer
 FORCE_GAP = 60  # the owner's "Check for updates" may reach GitHub at most this often
 RETRY = 15 * 60  # after a failed check; a rate-limited or offline box should not hammer GitHub
-# A cached release older than the version running is a stale answer (read just before a release's caches caught up):
-# it is read again after this long, not after TTL, and unconditionally, so a cached 304 cannot keep it.
+# A cached release older than the stable version running: this server is ahead of the newest promoted release (the
+# canary runs a release before it is marked latest, scripts/release_train.py), or the answer is stale. It is read again
+# after this long, not after TTL, and unconditionally, so a cached 304 cannot keep it, and promotion shows within minutes.
 BEHIND = 5 * 60
 MANUAL_COMMAND = "docker compose pull && docker compose up -d"
 SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
@@ -105,8 +106,8 @@ def newer(latest, current):
 
 
 def ahead(current, tag):
-    """A stable `current` newer than the release `tag`: a release read before that version's caches caught up. A
-    prerelease is expected to be ahead of the newest stable release, so it never counts."""
+    """A stable `current` newer than the release `tag`: this server runs a release not yet marked latest (the canary), or
+    the read is stale. A prerelease is expected to be ahead of the newest stable release, so it never counts."""
     return "-" not in str(current or "") and newer(current, str(tag or "").lstrip("v"))
 
 
@@ -290,7 +291,7 @@ class Checker:
         return True
 
     def _behind(self, current=None):
-        """The cached release is older than the version running: the answer was read before the release caught up."""
+        """The cached release is older than the stable version running (see `ahead`)."""
         return bool(self.release) and ahead(current or version(), self.release["tag"])
 
     def _refresh_if_stale(self, current=None):
@@ -322,10 +323,13 @@ class Checker:
             return out
         self._refresh_if_stale(current)
         release, more = self.release, self.extras
-        # The check reads the newest stable release. A server ahead of the cached one (0.6.0-rc.8 against 0.5.216, or
-        # 0.6.79 against 0.6.78 read before 0.6.79's caches caught up) knows of nothing newer than itself, so an older
-        # release is never shown as the latest; a stale read is read again after BEHIND.
-        if release and not newer(current, release["tag"].lstrip("v")):
+        # The check reads the newest promoted stable release, and an older one is never shown as the latest. A stable
+        # server ahead of it (the canary on 0.6.79 while 0.6.78 is still latest) runs the newest release there is, so
+        # its own version is the latest, with no update offered (Chris, 2026-11-19). A prerelease ahead of it
+        # (0.6.0-rc.8 against 0.5.216) shows none: it is not a published release.
+        if release and ahead(current, release["tag"]):
+            out.update(latest=current, name=current)
+        elif release and not newer(current, release["tag"].lstrip("v")):
             latest = release["tag"].lstrip("v")
             out.update(
                 latest=latest,

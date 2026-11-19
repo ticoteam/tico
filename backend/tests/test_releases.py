@@ -48,13 +48,14 @@ def test_a_server_on_a_newer_prerelease_is_not_shown_an_older_release_as_the_lat
     seen = checker.view("0.6.0-rc.8")
     assert (seen["latest"], seen["available"], seen["url"]) == ("", False, "")
     assert checker.view("0.5.200")["latest"] == "0.5.216" and checker.view("0.5.200")["available"]
-    assert checker.view("0.5.300")["latest"] == ""  # nor is it to a stable build ahead of it
+    ahead = checker.view("0.5.300")  # a stable server ahead of it (the canary) runs the newest release there is
+    assert (ahead["latest"], ahead["available"], ahead["url"]) == ("0.5.300", False, "")
 
 
 def test_a_release_read_before_the_running_version_caught_up_is_read_again_soon(monkeypatch):
-    """Health said latest 0.6.78 for an hour while 0.6.79 was published and running: the check had read just before
-    0.6.79's caches caught up and kept that answer for TTL. Behind the running version, it reads again after BEHIND,
-    unconditionally, and past an HQ answer that is behind too; an older release is never shown as the latest."""
+    """Health on the canary said latest 0.6.78 for an hour while it ran 0.6.79: a release is marked latest only once
+    the canary runs it healthy, and the check kept the older answer for TTL. Behind the running version, it shows the
+    running version as the latest with no update offered, and reads again after BEHIND, so promotion shows soon."""
     monkeypatch.setenv("TICO_VERSION", "0.6.79")
     monkeypatch.setattr(releases.Checker, "enabled", staticmethod(lambda: True))
     now = [1000.0]
@@ -63,16 +64,29 @@ def test_a_release_read_before_the_running_version_caught_up_is_read_again_soon(
     checker.etag = "e78"
     checker.checked = now[0]
     started = []
-    monkeypatch.setattr(releases.Checker, "refresh", lambda self, force=False: started.append(force))
+
+    def refresh(self, force=False):
+        started.append(force)
+        self.running = False
+
+    monkeypatch.setattr(releases.Checker, "refresh", refresh)
     monkeypatch.setattr(
         releases.threading, "Thread", lambda target, **kw: type("T", (), {"start": lambda s: target()})()
     )
     seen = checker.view("0.6.79")
-    assert (seen["latest"], seen["available"], seen["url"]) == ("", False, "")
+    assert (seen["latest"], seen["available"], seen["url"]) == ("0.6.79", False, "")
     assert started == []  # fresh: not read again at once
     now[0] += releases.BEHIND + 1
     checker.view("0.6.79")
     assert started == [False]  # read again well before TTL
+    checker.release = {**RELEASE, "tag": "v0.6.79", "url": "u79", "name": "n"}  # promoted: no longer behind
+    checker.checked = now[0]
+    now[0] += releases.BEHIND + 1
+    checker.view("0.6.79")
+    assert started == [False]  # a current answer keeps TTL
+    now[0] += releases.TTL
+    checker.view("0.6.79")
+    assert started == [False, False]
     assert checker.view("0.6.80-rc.1")["latest"] == ""  # a prerelease ahead shows none
     assert not checker._behind("0.6.80-rc.1")  # and is not read again every BEHIND
 
