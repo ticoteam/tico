@@ -466,6 +466,10 @@ Turn on **Private** to limit reads to the requester, the owner, its readers and 
 the person who asked for it can make it company-visible again; a bot never can. Reassigning a private task gives the
 new owner access and takes it from the old one, unless they are still the requester, a reader or a manager.
 
+A bot's run on a private task writes its own task and thread, not company-wide resources; a refusal names the route.
+Mail is not held back by it: the bot drafts, checks and queues email in any mailbox it may write, and a send that needs
+an OK asks it, on a private task of its own, of the inbox's approver alone.
+
 ### Who can see a private task
 
 A private task is seen by its requester, its owner and its **readers**: people, bots and groups listed on it. A group
