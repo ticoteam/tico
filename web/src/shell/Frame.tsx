@@ -3,7 +3,7 @@ import { motionLevel } from '@/motion';
 import { PhoneCards, type PhoneCardsProps } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
 import { useArrangement } from './arrangement';
-import { useDesktopInset } from './desktop';
+import { useDesktopInset } from '@/desktop';
 import { IconButton } from '@/kit/IconButton';
 import { C, layout, modeFor, press, specOf, type Arrangement, type ArrangementSpec, type Saved, type SheetId, type SheetLayout } from './layout';
 import { keepOne, useSheetMemory, withFold, withWidth, withoutWidth } from './memory';

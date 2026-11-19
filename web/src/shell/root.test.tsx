@@ -4,7 +4,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data/query-client';
 import { Route as root } from '@/routes/__root';
-import { resetDesktopReports, type TicoDesktop } from './desktop';
+import { resetDesktopReports, type TicoDesktop } from '@/desktop';
 
 /* The root as the app draws it, with the features around the shell stood in: the second chat for Tico support, the
    desktop app's small call window, and what the page tells the desktop app. */

@@ -1,0 +1,7 @@
+/* Notices over the whole app: the plan lock and the failed-files card. Each is the centered card (pagekinds.css .q,
+   pages/15-start) laid over the frame on the window's own ground. */
+.nt-cover{position:fixed;inset:0;z-index:var(--z-dialog);background:var(--ground);overflow:auto}
+.nt-cover .q-row{flex-wrap:wrap}
+.nt-foot{display:inline-flex;align-items:center;gap:var(--s-2)}
+.nt-foot .btn-quiet{font-size:inherit;color:inherit}
+.nt-foot .btn-quiet:hover{color:var(--ink)}

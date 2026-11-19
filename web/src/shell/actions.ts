@@ -2,7 +2,7 @@ import { defineAction, run, s } from '@/actions';
 import { directoryQuery, meQuery } from '@/data';
 import { teamSlug } from '@/features/team/exports';
 import { companiesBridge } from './companies';
-import { desktop, openCallWindow } from './desktop';
+import { desktop, openCallWindow } from '@/desktop';
 
 /* What the menu's own controls do, as actions so Tico can do them too: add a teammate from the Team section's plus,
    and, in the desktop app, switch to or add a company. The account menu's rows are other parts' actions

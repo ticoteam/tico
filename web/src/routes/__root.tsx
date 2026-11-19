@@ -6,6 +6,7 @@ import { ticoRoomQuery } from '@/conversation';
 import { configQuery, directoryQuery, meQuery, recordVisit, useHeldCount, type Actor, type Directory } from '@/data';
 import { CallBar, CallSide, RingCard, TOGGLE_MUTE, useCall } from '@/features/calls/exports';
 import { FileViewerHost } from '@/features/library/exports';
+import { AssetRecovery, PlanLock } from '@/features/notices/exports';
 import { FirstRun, StartScreen, useStartGate } from '@/features/start/exports';
 import { SUPPORT_CHAT, SupportChat, supportUnreadQuery } from '@/features/support/exports';
 import { flowQuery, pipelinesQuery } from '@/features/tasks/exports';
@@ -96,6 +97,7 @@ function CallWindow() {
       </div>
       <ActionsRoot dot={dotEl} fold={foldSheet} />
       <Toasts />
+      <AssetRecovery />
     </>
   );
 }
@@ -217,6 +219,9 @@ function App() {
       {/* the file `files.view` opens, over any page */}
       <FileViewerHost />
       <RingCard />
+      {/* over every page: a locked plan; the app's own files failing to load after a release */}
+      <PlanLock />
+      <AssetRecovery />
     </>
   );
 }

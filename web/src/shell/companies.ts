@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { desktop, type TicoDesktop } from './desktop';
+import { desktop, type TicoDesktop } from '@/desktop';
 
 /* The companies this person is in. Only the desktop app knows them: its bridge, `window.tico` (desktop.ts), lists
    them and switches the window to another one. In a browser there is no bridge, and a company is its own address:

@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
-/* The desktop app's bridge, `window.tico` (desktop/src/bridge.d.ts, mirrored here so web/ imports nothing from desktop/).
+/* Its own folder, below the shell, so a feature (Settings' rows, the call page) can read it too.
+   The desktop app's bridge, `window.tico` (desktop/src/bridge.d.ts, mirrored here so web/ imports nothing from desktop/).
    It exists only inside the desktop app; in a browser every accessor here gives null and every report does nothing.
    The page checks for the bridge and never sniffs the user agent (platforms.md 4.10). */
 

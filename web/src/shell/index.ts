@@ -24,4 +24,4 @@ export {
   type DesktopSelf,
   type UpdateState,
   type CallWindowNow,
-} from './desktop';
+} from '@/desktop';
