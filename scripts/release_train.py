@@ -57,6 +57,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import http.client
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -67,6 +68,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -294,6 +296,18 @@ def ceiling_stops(gh, runs, now):
     ]
 
 
+def receipt_from_zip(data):
+    """run.json from a release-validation report artifact's zip: {} when it has none, None when it cannot be read."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            if "run.json" not in archive.namelist():
+                return {}
+            receipt = json.loads(archive.read("run.json"))
+    except (zipfile.BadZipFile, ValueError, KeyError):
+        return None
+    return receipt if isinstance(receipt, dict) else None
+
+
 class GitHub:
     """The few REST calls the release jobs make, with the Actions token."""
 
@@ -451,8 +465,38 @@ class GitHub:
         if any(entry.get("conclusion") != "cancelled" for entry in failed):
             failed = [entry for entry in failed if not fail_fast_cancelled(entry)]
         return increment.infrastructure_red(
-            [(entry.get("name") or "", self.annotations(entry["id"])) for entry in failed]
+            [
+                (
+                    entry.get("name") or "",
+                    self.annotations(entry["id"]),
+                    self.gate_receipt(run_id, entry.get("name") or "")
+                    if increment.GATE_JOB.fullmatch(entry.get("name") or "")
+                    else None,
+                )
+                for entry in failed
+            ]
         )
+
+    def gate_receipt(self, run_id, name, attempt=1):
+        """A gate part's receipt (run.json in its release-validation report artifact): whether its gate finished, and
+        how. {} when the report has no receipt (the gate never started), None when the report cannot be read."""
+        artifact = "release-validation-%d-%d-%s" % (int(run_id), attempt, name)
+        found = self.get("actions/runs/%d/artifacts?name=%s" % (int(run_id), urllib.parse.quote(artifact)))
+        listed = [
+            item for item in found.get("artifacts", []) if item.get("name") == artifact and not item.get("expired")
+        ]
+        if not listed:
+            return None
+        result = subprocess.run(
+            ["gh", "api", "repos/%s/actions/artifacts/%d/zip" % (self.repo, listed[0]["id"])],
+            capture_output=True,
+            check=False,
+            env={**os.environ, "GH_TOKEN": self.token or ""},
+            timeout=180,
+        )
+        if result.returncode != 0:
+            return None
+        return receipt_from_zip(result.stdout)
 
     def rerun_failed(self, run_id):
         """Run a finished run's failed jobs again, and the jobs that need them, as a new attempt of the same run."""

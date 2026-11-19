@@ -231,20 +231,32 @@ BUILDKIT_DENIED = (
 SPOT = "AWS interrupted the EC2 Spot instance running this job. RunsOn can retry it after the workflow run finishes."
 
 
+# Receipts (hosted_release_check.py's run.json) as this morning's reports hold them: the Spot part's gate was still
+# running when AWS took it; v0.6.87's product never started its gate (its report has no receipt); the v0.6.83 isolation
+# race finished its gate with exit 1.
+RUNNING = {"gate_started": True, "gate_state": "running", "success": False}
+NOT_STARTED = {}
+FAILED_GATE = {"gate_started": True, "gate_state": "finished", "gate_exit": 1, "success": False}
+LOST = "The runner has received a shutdown signal. This can happen when the runner service is stopped."
+
+
 def test_a_registry_pull_denial_and_the_product_part_waiting_on_its_images_are_infrastructure():
     # v0.6.87: one image build could not pull moby/buildkit from Docker Hub; product failed waiting for the images.
     parts = [
-        ("images (tico-updater, arm64)", [BUILDKIT_DENIED]),
-        ("product", ["Process completed with exit code 1.", "An image build did not succeed."]),
-        ("release-check", ["Process completed with exit code 1."]),
+        ("images (tico-updater, arm64)", [BUILDKIT_DENIED], None),
+        ("product", ["Process completed with exit code 1.", "An image build did not succeed."], NOT_STARTED),
+        ("release-check", ["Process completed with exit code 1."], None),
     ]
     assert ri.infrastructure_red(parts) == [("images (tico-updater, arm64)", "registry pull denied", BUILDKIT_DENIED)]
 
 
-def test_a_spot_interruption_is_infrastructure_whatever_part_it_took():
-    # v0.6.89: AWS took the product part's Spot VM (exit 137); the train waited for a commit selecting "product".
-    parts = [("product", ["Process completed with exit code 1.", SPOT, "Process completed with exit code 137.", SPOT])]
-    assert ri.infrastructure_red(parts) == [("product", "Spot interrupted", SPOT)]
+def test_a_spot_interruption_of_a_gate_that_had_not_answered_is_infrastructure():
+    # v0.6.89: AWS took the product part's Spot VM (exit 137) mid-gate; the train waited for a commit selecting "product".
+    annotations = ["Process completed with exit code 1.", SPOT, "Process completed with exit code 137.", SPOT]
+    assert ri.infrastructure_red([("product", annotations, RUNNING)]) == [("product", "Spot interrupted", SPOT)]
+    # A gate that passed, or never started, before its machine went is infrastructure too.
+    assert ri.infrastructure_red([("python-3", [SPOT], {"gate_state": "finished", "gate_exit": 0})])
+    assert ri.infrastructure_red([("python-3", [SPOT], NOT_STARTED)])
 
 
 @pytest.mark.parametrize(
@@ -257,28 +269,43 @@ def test_a_spot_interruption_is_infrastructure_whatever_part_it_took():
             "runner lost",
         ),
         ("The hosted runner: GitHub Actions 12 lost communication with the server.", "runner lost"),
-        (
-            "The runner has received a shutdown signal. This can happen when the runner service is stopped.",
-            "runner lost",
-        ),
+        (LOST, "runner lost"),
     ],
 )
 def test_rate_limits_and_lost_runners_are_infrastructure(message, cause):
-    assert ri.infrastructure_red([("python-3", [message])]) == [("python-3", cause, message)]
+    assert ri.infrastructure_red([("python-3", [message], RUNNING)]) == [("python-3", cause, message)]
+
+
+def test_a_test_that_failed_before_its_runner_was_lost_is_a_test_failure():
+    # The gate finished with exit 1, then the runner went during the always-run log upload: both annotations show.
+    assert ri.infrastructure_red([("python-3", ["Process completed with exit code 1.", LOST], FAILED_GATE)]) is None
+    assert ri.infrastructure_red([("product", [SPOT], FAILED_GATE)]) is None
+    # A gate that crashed (its receipt has an error) answered too.
+    assert (
+        ri.infrastructure_red([("product", [SPOT], {"gate_state": "running", "error": "source tree changed"})]) is None
+    )
+    # A report that cannot be read cannot show the gate had not answered: no retry.
+    assert ri.infrastructure_red([("product", [SPOT], None)]) is None
 
 
 def test_a_red_with_any_other_failure_is_not_infrastructure():
     # A test failure beside a lost VM is still a test failure: it is never run again until it passes (CLAUDE.md).
-    assert ri.infrastructure_red([("product", [SPOT]), ("python-2", ["Process completed with exit code 1."])]) is None
-    assert ri.infrastructure_red([("python-2", ["Process completed with exit code 1."])]) is None
+    other = ("python-2", ["Process completed with exit code 1."], FAILED_GATE)
+    assert ri.infrastructure_red([("product", [SPOT], RUNNING), other]) is None
+    assert ri.infrastructure_red([("python-2", ["Process completed with exit code 1."], RUNNING)]) is None
     # A part with nothing said is unknown, not infrastructure.
-    assert ri.infrastructure_red([("contracts-1", [])]) is None
+    assert ri.infrastructure_red([("contracts-1", [], RUNNING)]) is None
     assert ri.infrastructure_red([]) is None
-    # "An image build did not succeed" excuses product only when an image build itself failed on infrastructure.
-    assert ri.infrastructure_red([("product", ["An image build did not succeed."])]) is None
-    assert ri.infrastructure_red([("python-2", [SPOT]), ("product", ["An image build did not succeed."])]) is None
+    # "An image build did not succeed" excuses product only, and only when an image build failed on infrastructure.
+    assert ri.infrastructure_red([("product", ["An image build did not succeed."], NOT_STARTED)]) is None
+    assert (
+        ri.infrastructure_red([("python-2", [SPOT], RUNNING), ("product", ["An image build did not succeed."], {})])
+        is None
+    )
+    images = ("images (tico, amd64)", [BUILDKIT_DENIED], None)
+    assert ri.infrastructure_red([images, ("python-2", ["An image build did not succeed."], NOT_STARTED)]) is None
     # A test that prints the words is not a registry: only annotations are read, and a test's own says it failed.
-    assert ri.infrastructure_red([("python-2", ["FAILED test_registry.py::test_pull - pull access"])]) is None
+    assert ri.infrastructure_red([("python-2", ["FAILED test_registry.py::test_pull - pull access"], RUNNING)]) is None
 
 
 # ---- when a red validation runs again ----

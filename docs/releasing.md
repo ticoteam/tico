@@ -132,7 +132,9 @@ The train validates a head in one of two ways. A **full** validation is the whol
   limited it; GitHub lost its runner), or failed only because such an image build did (product's "An image build did
   not succeed"), the train runs its failed jobs again, once: at its first attempt, on its own finish, whatever its diff
   selects. A part that failed any other way, a test above all, keeps the run out of this rule: a test is never run
-  again until it passes. Each case is a line on the release-train issue starting `Infrastructure rerun:`, with the run,
+  again until it passes. A gate part counts only when its report's receipt (`run.json`) shows its gate had not run
+  to a failing answer (still running, never started, or passed): a runner lost after a test failed says "lost" too.
+  A report that cannot be read counts as not shown, so that run waits as before. Each case is a line on the release-train issue starting `Infrastructure rerun:`, with the run,
   the part and the message, so the issue counts how often it happens. A second attempt that is red waits like any red
   run. The causes are `release_increment.INFRASTRUCTURE`.
 - **An incremental run stops at its first failure.** Its gate parts fail fast: the first part that fails cancels the

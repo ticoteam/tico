@@ -92,8 +92,9 @@ INFRASTRUCTURE = (
         ),
     ),
 )
-# A part that failed only because another part's infrastructure did: product waits for the image builds (ci.yml).
+# A product part that failed only because an image build did: it waits for the images before its gate starts (ci.yml).
 CONSEQUENCE = re.compile(r"An image build did not succeed")
+GATE_JOB = re.compile(r"(python|browser)-\d+|conformance|contracts(-\d+)?|product|desktop")
 
 
 def infrastructure_cause(messages):
@@ -106,19 +107,34 @@ def infrastructure_cause(messages):
     return None
 
 
+def gate_answered(receipt):
+    """Whether a gate part's receipt (hosted_release_check.py's run.json) shows its gate ran to a failing answer, or
+    crashed: a real failure, whatever went wrong with the machine afterwards. {} is a report without a receipt (the gate
+    never started); None, a report that could not be read."""
+    if not receipt:
+        return False
+    return "error" in receipt or (receipt.get("gate_state") == "finished" and receipt.get("gate_exit") != 0)
+
+
 def infrastructure_red(parts):
-    """Whether a red validation failed on its infrastructure alone, from (job name, annotation messages) pairs of its
-    failed parts (fail fast's cancellations left out, as failed_tokens reads them). Returns [(job, cause, message)] for
-    the parts infrastructure failed, or None when any part failed some other way, or none on infrastructure: a test
-    failure is never run again (CLAUDE.md), and a part that failed only because an image build did comes back with it."""
+    """Whether a red validation failed on its infrastructure alone, from (job name, annotation messages, receipt) for
+    its failed parts (fail fast's cancellations left out, as failed_tokens reads them). The receipt is a gate part's
+    run.json from its report: {} when the report has none (the gate never started), None when the report cannot be read.
+    Returns [(job, cause, message)] for the parts infrastructure failed, or None when any part failed some other way,
+    or none on infrastructure: a test failure is never run again (CLAUDE.md). A gate part counts only when its receipt
+    shows the gate did not run to a failing answer, because a runner lost after a test failed says "lost" too; with
+    no readable receipt it does not count. Product failing because an image build did comes back with it."""
     found, consequences = [], 0
-    for name, messages in parts:
+    for name, messages, receipt in parts:
         if name in IGNORED_JOBS:
             continue
+        gate = GATE_JOB.fullmatch(name) is not None
+        if gate and gate_answered(receipt):
+            return None
         cause = infrastructure_cause(messages)
-        if cause:
+        if cause and (not gate or receipt is not None):
             found.append((name, *cause))
-        elif any(CONSEQUENCE.search(message or "") for message in messages):
+        elif name == PRODUCT and receipt is not None and any(CONSEQUENCE.search(m or "") for m in messages):
             consequences += 1
         else:
             return None

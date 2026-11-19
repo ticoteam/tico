@@ -2,8 +2,11 @@
 automatically when no person is needed), and that a failure reaches the release-train issue (scripts/release_train.py)."""
 
 from datetime import datetime, timedelta, timezone
+import io
 import re
 import sys
+from types import SimpleNamespace
+import zipfile
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -682,8 +685,43 @@ def test_infrastructure_is_read_from_the_annotations_of_the_parts_that_failed(mo
         return jobs if "/jobs" in path else notes[int(path.split("/")[1])]
 
     monkeypatch.setattr(gh, "pages", pages)
+    receipts = {"product": {"gate_state": "running"}}
+    asked = []
+    monkeypatch.setattr(gh, "gate_receipt", lambda run_id, name: asked.append((run_id, name)) or receipts.get(name))
     assert gh.infrastructure_red(44490064278) == SPOT_CAUSES
     assert reads == ["actions/runs/44490064278/jobs?per_page=100", "check-runs/1/annotations?per_page=50"]
+    assert asked == [(44490064278, "product")]
+    # The same annotations on a gate that finished with a failing exit are a test failure the runner was lost after.
+    gh.__dict__.pop("_failed_parts")
+    receipts["product"] = {"gate_state": "finished", "gate_exit": 1}
+    assert gh.infrastructure_red(44490064278) is None
+
+
+def test_a_gate_receipt_is_read_from_its_report_artifact(monkeypatch):
+    def archive(**files):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as handle:
+            for name, text in files.items():
+                handle.writestr(name.replace("_", "."), text)
+        return buffer.getvalue()
+
+    assert rt.receipt_from_zip(archive(run_json='{"gate_state": "running"}')) == {"gate_state": "running"}
+    assert rt.receipt_from_zip(archive(prepare_json="{}")) == {}  # the gate never started
+    assert rt.receipt_from_zip(b"not a zip") is None and rt.receipt_from_zip(archive(run_json="[1]")) is None
+    gh = rt.GitHub("ticoteam/tico", "token")
+    listed = {"artifacts": [{"id": 5, "name": "release-validation-9-1-product", "expired": False}]}
+    monkeypatch.setattr(gh, "get", lambda path: listed)
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout=archive(run_json='{"gate_state": "finished", "gate_exit": 1}'))
+
+    monkeypatch.setattr(rt.subprocess, "run", fake_run)
+    assert gh.gate_receipt(9, "product") == {"gate_state": "finished", "gate_exit": 1}
+    assert calls[0][:3] == ["gh", "api", "repos/ticoteam/tico/actions/artifacts/5/zip"]
+    listed["artifacts"] = []  # no report (expired, or the machine went before the upload): unreadable
+    assert gh.gate_receipt(9, "product") is None
 
 
 def test_a_stale_anchor_runs_the_full_validation_once_a_day():
