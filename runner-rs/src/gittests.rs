@@ -3709,3 +3709,31 @@ async fn a_template_repository_with_links_to_agent_md_gets_one_agents_md_file() 
     assert_eq!(sh(&main, &["status", "--porcelain"]), "");
     assert_eq!(sh(&main, &["ls-tree", "--name-only", "HEAD"]), "AGENTS.md");
 }
+
+/// A turn's start skips the computer's push lock only where publish_history would find nothing to publish.
+#[tokio::test]
+async fn only_a_branch_that_tracks_its_upstream_is_published_already() {
+    let tmp = Tmp::new();
+    let (_bare, seed) = remote(&tmp.0, "ops");
+    let env = turn_env(&tmp.0, &[]);
+    let agree = |path: PathBuf| {
+        let env = env.clone();
+        async move {
+            let quick = execute::published_already(&path, &env).await;
+            let (state, _) = execute::publish_history(&path, "acme/ops", &env).await;
+            (quick, state)
+        }
+    };
+    assert_eq!(agree(seed.clone()).await, (true, "current"));
+    sh(&seed, &["checkout", "-q", "-b", "local"]);
+    // (publish_history would publish it, to GitHub: not run here.)
+    assert!(
+        !execute::published_already(&seed, &env).await,
+        "a branch with no upstream"
+    );
+    sh(&seed, &["checkout", "-q", "--detach", "main"]);
+    assert_eq!(agree(seed.clone()).await, (false, "skipped"));
+    let empty = tmp.0.join("empty");
+    sh(&tmp.0, &["init", "-q", empty.to_str().unwrap()]);
+    assert_eq!(agree(empty).await, (false, "skipped"));
+}

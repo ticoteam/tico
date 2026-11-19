@@ -1243,6 +1243,7 @@ impl Runner {
         tokio::spawn(crate::idle_load::run_loop(self.clone()));
         tokio::spawn(self.clone().probe_loop());
         tokio::spawn(crate::afterwatch::run_loop(self.clone()));
+        tokio::spawn(crate::fetch_fresh::run_loop(self.clone()));
         let mut clock = Clock {
             polled: [None; crate::events::CHANNELS.len()],
             next_claim: None,

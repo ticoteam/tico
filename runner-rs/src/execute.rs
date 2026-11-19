@@ -474,21 +474,34 @@ pub async fn pull_repo(path: &Path, env: &Env) -> String {
         Some(_) => return String::new(),
         None => return "timed out".into(),
     }
-    // A turn's second refresh of this repository and upstream merges what its first fetch brought (crate::fetch_fresh).
+    // A turn's second refresh of this repository and upstream merges what its first fetch brought, and a chat turn
+    // merges what the runner's fetch from moments ago brought, then fetches again in the background (crate::fetch_fresh).
     let upstream = crate::fetch_fresh::upstream(path, &env).await;
-    if !upstream.as_ref().is_some_and(|u| u.fresh()) {
+    let fresh = upstream.as_ref().is_some_and(|u| u.fresh());
+    let mut behind = None;
+    if let Some(u) = upstream.as_ref().filter(|u| !fresh && u.recent()) {
+        if u.take_behind(path, &env).await {
+            behind = Some(u);
+        }
+    }
+    if let Some(u) = behind {
+        crate::util::mark("fetch_skipped", u.turn());
+    } else if !fresh {
         let began = Instant::now();
         match git(path, &env, &["fetch", "--quiet", "--no-tags"], 45).await {
             Some((true, _, _)) => {
                 if let Some(u) = &upstream {
                     u.fetched(began);
+                    if u.chat() {
+                        crate::util::mark("fetched_first", u.turn());
+                    }
                 }
             }
             Some((false, _, err)) => return git_reason(&err, &env),
             None => return "timed out".into(),
         }
     }
-    match git(path, &env, &["merge", "--ff-only", "--quiet", "@{u}"], 45).await {
+    let merged = match git(path, &env, &["merge", "--ff-only", "--quiet", "@{u}"], 45).await {
         Some((true, _, _)) => String::new(),
         Some((false, _, err)) => {
             let lower = err.to_lowercase();
@@ -502,7 +515,12 @@ pub async fn pull_repo(path: &Path, env: &Env) -> String {
             }
         }
         None => "timed out".into(),
+    };
+    // After the fast-forward, so the turn's tree is settled before anything fetches beside it.
+    if let Some(u) = behind {
+        u.refresh_behind(path, &env);
     }
+    merged
 }
 
 /// Push the turn's commits to the checkout's upstream (service.py push_repo): never forces or pulls; a
@@ -789,6 +807,25 @@ impl Runner {
 /// and no upstream gets `origin` set to the bot's repository and `git push -u origin <branch>`, with the turn's own
 /// scoped token. Never forces; a remote holding history this checkout lacks is left alone and reported.
 /// (state, detail): `published`, `current` (nothing to do), `skipped` or `failed`.
+/// Whether `publish_history` would find the checkout's history already published ("current"): a branch with commits
+/// that tracks an upstream. Read without the push lock; anything else goes the whole way, under it.
+pub(crate) async fn published_already(path: &Path, env: &Env) -> bool {
+    if crate::repo_safety::outside_installation(path).is_err() || !path.join(".git").exists() {
+        return false;
+    }
+    let env = git_env(env);
+    // An upstream means a branch is checked out: a detached HEAD has none.
+    for args in [
+        &["rev-parse", "--verify", "-q", "HEAD"][..],
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    ] {
+        if !matches!(git(path, &env, args, 15).await, Some((true, _, _))) {
+            return false;
+        }
+    }
+    true
+}
+
 pub async fn publish_history(path: &Path, repository: &str, env: &Env) -> (&'static str, String) {
     if let Err(problem) = crate::repo_safety::outside_installation(path) {
         return ("failed", problem);
@@ -1915,6 +1952,10 @@ impl Runner {
         if repository.is_empty() {
             return Ok(("skipped", String::new()));
         }
+        // Most turns: the history is on GitHub already, and nothing waits for the computer's push lock to say so.
+        if published_already(path, env).await {
+            return Ok(self.published(bot, &repository, ("current", String::new())));
+        }
         let result = self
             .pre_start_lock(attempt, flags, async {
                 let _one = self
@@ -2395,9 +2436,11 @@ impl Runner {
                 }
             }
             let start_attempt = attempt.clone();
+            mark("prepared", &aid);
             // The turn's refreshes share their fetches (crate::fetch_fresh): a repository fetched a moment ago by this
-            // turn is not fetched again for its worktree.
-            let placed = crate::fetch_fresh::in_turn(&aid, async {
+            // turn is not fetched again for its worktree, and a chat turn starts on the runner's fetch from moments ago.
+            let chat = crate::sessions::chat_refresh(p, &attempt);
+            let placed = crate::fetch_fresh::in_turn(&aid, chat, async {
                 if p.has_checkout() {
                     // A returning bot's old clone is caught up to GitHub once per placement (crate::placement).
                     crate::placement::catch_up(&bot, &attempt["generation"], &execution_path, &env).await;
