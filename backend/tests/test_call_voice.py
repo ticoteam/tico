@@ -409,7 +409,7 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
     assert prep["message"]["refs"]["call_prep"] == call["id"]
     first, full = "Yes.", "Yes. Ops can take the reliability review."
     caplog.set_level(logging.INFO, logger="tico.calls")
-    with caplog.at_level(logging.WARNING, logger="tico.call_voice"):
+    with caplog.at_level(logging.INFO, logger="tico.call_voice"):
         post(
             meet,
             f"{path}/events",
