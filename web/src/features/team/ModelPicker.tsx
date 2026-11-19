@@ -50,12 +50,6 @@ export function ModelPicker({
   const chosen = models.find((m) => m.id === model);
   const efforts = chosen?.efforts ?? [];
 
-  const reset = () => {
-    setHarness(agent.harness ?? '');
-    setModel(agent.model || agent.resolved_model || '');
-    setEffort(agent.reasoning_effort ?? '');
-    setCompact(null);
-  };
   const pickHarness = (h: string) => {
     setHarness(h);
     const fits = usable.filter((m) => !m.harnesses || m.harnesses.includes(h));
@@ -72,14 +66,20 @@ export function ModelPicker({
   const moving = [agent, ...also].filter(differs);
   const modelChanged = moving.length > 0;
   const compactChanged = compactNow !== savedCompact;
+  const save = async () => {
+    onOpenChange(false);
+    // Both edits advance the same configuration revision. The model change must use the revision from compact-at.
+    if (compactChanged) {
+      const result = await compactAt.run({ slug: agent.slug, at: compactNow ? Number(compactNow) : null });
+      if (!result.ok) return;
+    }
+    for (const a of moving) void apply.run({ slug: a.slug, model, ...(effort ? { effort } : {}), ...(harness ? { harness } : {}) });
+  };
 
   return (
     <Dialog
       open={open}
-      onOpenChange={(o) => {
-        if (o) reset();
-        onOpenChange(o);
-      }}
+      onOpenChange={onOpenChange}
       title="Model"
       actions={
         <>
@@ -87,11 +87,7 @@ export function ModelPicker({
           <Button
             variant="primary"
             disabled={!model || (!modelChanged && !compactChanged)}
-            onClick={() => {
-              onOpenChange(false);
-              for (const a of moving) void apply.run({ slug: a.slug, model, ...(effort ? { effort } : {}), ...(harness ? { harness } : {}) });
-              if (compactChanged) void compactAt.run({ slug: agent.slug, at: compactNow ? Number(compactNow) : null });
-            }}
+            onClick={() => void save()}
           >
             Apply
           </Button>

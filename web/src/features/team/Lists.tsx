@@ -65,7 +65,7 @@ function ListSection({ slug, list, tab, me, canEdit }: { slug: string; list: str
               <MenuItem label="Edit" icon="edit" onSelect={() => setEditing(true)} />
               <MenuItem label="Remove" icon="close" onSelect={() => void remove.run({ slug, list })} />
             </Menu>
-            <ListEditor open={editing} onOpenChange={setEditing} slug={slug} list={list} tab={tab} />
+            {editing && <ListEditor open onOpenChange={setEditing} slug={slug} list={list} tab={tab} />}
           </>
         )
       }
