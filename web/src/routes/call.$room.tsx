@@ -1,6 +1,11 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { Placeholder } from '@/kit/placeholder/Placeholder';
+import { CallPage } from '@/features/calls/exports';
 
+/** One call's window. Nothing joins until the person presses Join; leaving the page hangs up. */
 export const Route = createFileRoute('/call/$room')({
-  component: () => <Placeholder title="Call" />,
+  component: Page,
 });
+
+function Page() {
+  return <CallPage room={Route.useParams().room} />;
+}

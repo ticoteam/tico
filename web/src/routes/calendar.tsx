@@ -1,6 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { Placeholder } from '@/kit/placeholder/Placeholder';
+import { CalendarPage, calendarSearch } from '@/features/calls/exports';
 
+/** Calendar: `?view=` day, week, month or list; `?date=` the day it shows; `?panel=event:<id>` or `meeting:<id>` beside. */
 export const Route = createFileRoute('/calendar')({
-  component: () => <Placeholder title="Calendar" />,
+  validateSearch: calendarSearch,
+  component: CalendarPage,
 });
