@@ -5942,6 +5942,8 @@ mod tests {
         let url = format!("http://{}", listener.local_addr().unwrap());
         let seen = Arc::new(Mutex::new(Vec::<(String, String, Value)>::new()));
         let kept = seen.clone();
+        // Voice turns a ready poll has claimed, in order.
+        let claimed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let server = tokio::spawn(async move {
             loop {
                 let Ok((mut socket, _)) = listener.accept().await else {
@@ -5951,6 +5953,7 @@ mod tests {
                 let hold = hold.clone();
                 let window = window.clone();
                 let voice = voice.clone();
+                let claimed = claimed.clone();
                 tokio::spawn(async move {
                     let mut request = Vec::new();
                     let mut buffer = [0u8; 8192];
@@ -6031,7 +6034,11 @@ mod tests {
                             } else if path.ends_with("voice=busy") && stalled && completed == 2
                                 || voice.stream.as_ref().is_some_and(|s| path.contains(s.idle_attempt)) {
                                 json!({"closed": false})
+                            } else if path.ends_with("voice=busy") && next >= claimed.load(Ordering::SeqCst) {
+                                // As on the hub, a busy poll reports only a turn a ready poll already claimed.
+                                json!({"closed": false})
                             } else {
+                                claimed.fetch_max(next + 1, Ordering::SeqCst);
                                 json!({"closed": false, "turn": voice.turns[next]})
                             };
                             json!({"messages": [], "call_voice": payload})
