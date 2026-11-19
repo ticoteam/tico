@@ -2288,7 +2288,9 @@ def main(argv=None, make_slack=None):
         if not (credentials["bot_token"] and credentials["app_token"]):
             store = store or Store(settings)
             _when_free(stopping, "Slack start-up", store.initialize)
-            stored = _when_free(stopping, "Slack token load", slack_app.load, store)  # sealed in the vault by Tools > Slack (backend/slack_app.py)
+            stored = _when_free(
+                stopping, "Slack token load", slack_app.load, store
+            )  # sealed in the vault by Tools > Slack (backend/slack_app.py)
             if stored:
                 credentials = stored
         if not credentials["bot_token"] or not credentials["app_token"]:
@@ -2350,7 +2352,10 @@ def main(argv=None, make_slack=None):
             "link_shared (previews for %s)",
             ", ".join(sorted(SU.hosts(settings))) or "no host",
         )
-        state = {"connected": None, "stamp": _when_free(stopping, "Slack token stamp", slack_app.stamp, store) if stored else None}
+        state = {
+            "connected": None,
+            "stamp": _when_free(stopping, "Slack token stamp", slack_app.stamp, store) if stored else None,
+        }
 
         def heartbeat(gateway=gateway, state=state, store=store, verified=verified):  # this connection's own
             up = gateway.slack.connected() if hasattr(gateway.slack, "connected") else True
