@@ -397,6 +397,14 @@ def test_each_page_opens_the_way_its_reader_needs(tmp_path):
     internal = pages["release"].replace("<p class=\"plus\">", "<p class=\"plus\">Fixed in PR #4325. ", 1)
     found = tool.problems_in(internal, "release")
     assert any("'PR' in the changelog" in p for p in found) and any("'#4325' in the changelog" in p for p in found)
+    # Nov 18: a spec may be long when clarity needs it, so its length warns and passes; a release report's still fails.
+    padding = "<p>" + " ".join(["row"] * 2000) + "</p></section>"
+    long_spec = pages["screen-spec"].replace("</section>", padding, 1)
+    assert tool.problems_in(long_spec, "screen-spec") == []
+    assert any("words" in w for w in tool.warnings_in(long_spec, "screen-spec"))
+    long_release = pages["release"].replace("</section>", padding, 1)
+    assert any("words; a release page" in p for p in tool.problems_in(long_release, "release"))
+    assert tool.warnings_in(long_release, "release") == []
 
 
 def test_the_release_label_flow_stays_off_stages_that_wait_for_a_published_release():

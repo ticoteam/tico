@@ -128,7 +128,9 @@ it. `page.py build` draws them in Tico's red (`var(--fail)`, with a fallback so 
 
    `check` names each rule the page breaks: the opening, the sections, a picture that is not a screenshot, a picture
    in the details, a placeholder left, a request to test, filler, length, more than three risks, a pull request
-   number in a changelog. Fix each and build again.
+   number in a changelog. Fix each and build again. A spec over its usual length (1,200 words, 1,000 for a change
+   spec) is a warning, not a failure: a spec may be long when clarity needs it, so cut every word that does not help
+   and keep the rest. Every other page's length is a rule.
 4. Publish it on the task: `tico page publish <page>.html --task <id> --title "<title>"`, with `--as Spec` for a spec (or
    the document's name). It prints the file id and anything it removed. Anything of yours removed is a fault to fix;
    with `--as Spec`, Tico's own fonts (`/vendor/fonts/...woff2`, from the app styles it adds) are always listed and are
