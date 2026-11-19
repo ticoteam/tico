@@ -47,8 +47,10 @@ declare function draw(): void;
 declare function card(key: string, file: VisualFile): Element | null;
 
 (async () => {
+  // --disable-audio-output: on a machine whose sound server takes Chrome's stream but never drains it (the cloud
+  // computers' pulseaudio), the media clock stalls and a playing clip never moves; Chrome's fake output keeps time.
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true,
-    args: ['--autoplay-policy=no-user-gesture-required']});
+    args: ['--autoplay-policy=no-user-gesture-required', '--disable-audio-output']});
   try {
     const page = await browser.newPage({viewport: {width: 390, height: 844}, serviceWorkers: 'block'});
     const errors: string[] = [], served: Served[] = [], expired = new Set<string>(), hold = new Set<string>(), holding: (() => void)[] = [];
