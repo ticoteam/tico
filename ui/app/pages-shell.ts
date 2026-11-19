@@ -177,7 +177,7 @@ function riskRoute(r: string): boolean {
     try { slug = decodeURIComponent(slug); } catch { /* an address typed by hand: use it as it is */ }
     void pageRiskOne(slug);
   } else {
-    void pageRisk(rest === 'disputes' ? 'disputes' : 'risks');
+    void pageRisk(rest === 'disputes' || rest === 'obligations' ? rest : 'risks');
   }
   return true;
 }

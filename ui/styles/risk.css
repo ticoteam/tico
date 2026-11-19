@@ -61,6 +61,33 @@ a.rk-t:hover{text-decoration:underline}
 .rk-table .rk-d{width:92px}
 .rk-more-gap{width:28px;flex:none}
 
+/* Dates (obligations): one line each, the day, what is due, its basis, its proof and its state. A date that binds us
+   (law, order, agency, contract) reads in ink, one the other side asked for or must meet reads grey, and an
+   unconfirmed binding one is bold with an outlined Unconfirmed: weight and outline, never colour. */
+.rk-due{cursor:pointer}
+.rk-due:hover{background:var(--hover)}
+.rk-rd{width:96px;flex:none;color:var(--ink-2);white-space:nowrap;font-variant-numeric:tabular-nums}
+.rk-bs{width:64px;flex:none;color:var(--muted);font-size:var(--t-xs);white-space:nowrap}
+.rk-ev{width:128px;flex:none;min-width:0;display:flex;overflow:hidden}
+.rk-os{flex:none;min-width:40px;display:inline-flex;align-items:center;justify-content:flex-end;gap:5px;color:var(--muted);font-size:var(--t-xs);white-space:nowrap}
+.rk-dues .rk-os,.rk-sec .rk-os{width:136px;justify-content:flex-start}
+.rk-dues .rk-k{width:160px}
+.rk-tick{font-size:14px;color:var(--ink-2)}
+.rk-un{display:inline-flex;align-items:center;height:var(--pill-h);padding:0 7px;border-radius:var(--r-chip);color:var(--ink);font-size:var(--t-xs);font-weight:600;box-shadow:inset 0 0 0 1px var(--ink-2)}
+.rk-bind .rk-rd,.rk-bind .rk-t{color:var(--ink)}
+.rk-soft .rk-rd,.rk-soft .rk-t{color:var(--muted)}
+.rk-loud .rk-rd,.rk-loud .rk-t{font-weight:600}
+.rk-pf{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:100%;color:var(--muted);font-size:var(--t-sm);white-space:nowrap;text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:3px}
+.rk-pf>span:last-child{overflow:hidden;text-overflow:ellipsis}
+.rk-pf .nav-icon{flex:none;font-size:14px}
+span.rk-pf{text-decoration:none}
+a.rk-pf:hover{color:var(--ink)}
+/* a live risk: its matters, and its dates beside them */
+.rk-cat-b{display:grid;grid-template-columns:minmax(0,620px) minmax(0,1fr);gap:0 var(--s4);align-items:start}
+.rk-dts .rk-rd{width:84px}
+.rk-dts .rk-bs{width:54px}
+.rk-dts .rk-os{min-width:0}
+
 /* One risk: sections, then Rules | Sources side by side, then its page */
 .rk-sec{padding:var(--s3) 0 var(--s2)}
 .rk-sec+.rk-sec,.rk-cols,.rk-cols+.rk-sec{border-top:1px solid var(--line)}
@@ -99,16 +126,29 @@ a.rk-t:hover{text-decoration:underline}
 .rk-none-found{padding:6px 8px;color:var(--muted)}
 .rk-err{margin:0;color:var(--ink);font-size:var(--t-sm)}
 .rk-foot{display:flex;justify-content:flex-end;gap:var(--s2)}
+/* a date's facts in the panel: label | value lines, then what the viewer may do */
+.rk-kv{display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px;align-items:baseline;padding:6px 0;font-size:var(--t-sm)}
+.rk-kv>span{color:var(--muted)}
+.rk-kv>div{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;color:var(--ink);overflow-wrap:anywhere}
+.rk-note{color:var(--muted)}
+.rk-acts{padding:4px 16px 16px}
 .rk-dlg{width:min(480px,calc(100vw - 32px))}
 .rk-dlg .rk-form{padding:0}
 .rk-dlg textarea{resize:vertical}
 
 /* The columns follow the list's own width, which the docked chat and the facts panel narrow, not the window's */
+/* a live risk's dates go under its matters once the two cannot sit side by side with each date's title whole: 620px of
+   matters, the gap, and about 440px for a date (day, title, basis, state, ⋯) */
+@container (max-width:1080px){
+  .rk-cat-b{grid-template-columns:minmax(0,1fr)}
+  .rk-dts{margin-top:var(--s2)}
+}
 @container (max-width:860px){
-  .rk-table .rk-f,.rk-table .rk-d,.rk-sec .rk-f{display:none}
+  .rk-table .rk-f,.rk-table .rk-d,.rk-sec .rk-f,.rk-dues .rk-bs{display:none}
 }
 @container (max-width:640px){
-  .rk-table .rk-k,.rk-table .rk-o,.rk-sec .rk-o{display:none}
+  .rk-table .rk-k,.rk-table .rk-o,.rk-sec .rk-o,.rk-ev{display:none}
+  .rk-dues .rk-os,.rk-sec .rk-os{width:auto}
 }
 @media (hover:none),(max-width:760px){
   .rk-more{opacity:1;width:44px;height:44px}   /* no hover on a phone: ⋯ shows, with a finger-sized target */
@@ -129,5 +169,7 @@ a.rk-t:hover{text-decoration:underline}
   .rk-cols>.rk-sec+.rk-sec{border-left:0;border-top:1px solid var(--line)}
   .rk-sec .rk-f,.rk-sec .rk-o,.rk-table .rk-k,.rk-table .rk-m,.rk-table .rk-o,.rk-colh .rk-more-gap{display:none}
   .rk-sec .rk-a{width:auto;max-width:40%}
+  .rk-rd,.rk-dts .rk-rd{width:76px}
+  .rk-bs,.rk-ev{display:none}
   .rk-table .rk-a{width:auto}
 }

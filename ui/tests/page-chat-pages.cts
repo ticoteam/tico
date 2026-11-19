@@ -34,7 +34,7 @@ const PAGES: [string, string, string[]][] = [
   ['strategy', 'engineering-manager', ['#/strategy', '#/strategy/org', '#/strategy/budget', '#/strategy/market']],
   ['finance', 'release-manager', ['#/finance']],
   ['growth', 'builder-claude', ['#/growth']],
-  ['risk', 'release-manager', ['#/risk', '#/risk/disputes']],
+  ['risk', 'release-manager', ['#/risk', '#/risk/disputes', '#/risk/obligations']],
   ['automations', 'builder-openai', ['#/automations']],
   ['docs', 'engineering-manager', ['#/docs', '#/library/files']],
   ['updates', 'release-manager', ['#/updates']],

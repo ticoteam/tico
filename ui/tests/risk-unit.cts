@@ -1,6 +1,7 @@
 // No browser: Company › Risk's words and rows (ui/app/risk.ts). Money reads exact on a row and compact in a total, live
 // risks open with their matters while open and quiet ones are one line, the rules icon shows only on a risk with rules,
-// a matter in the viewer's Needs you carries the Flow dot, and a typed amount becomes minor units.
+// a matter in the viewer's Needs you carries the Flow dot, and a typed amount becomes minor units. Dates sit in four
+// groups in the tab's order, read in ink or grey by their basis, and show only the proof the viewer may open.
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const vm: typeof import('node:vm') = require('node:vm');
@@ -8,7 +9,7 @@ const path: typeof import('node:path') = require('node:path');
 
 const esc = (s: unknown): string => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 const context = vm.createContext({
-  Intl, Date, Number, Math, Set, Map, URLSearchParams, encodeURIComponent,
+  Intl, Date, Number, Math, Set, Map, URL, URLSearchParams, encodeURIComponent, API: '/api',
   document: {addEventListener: () => {}, hidden: true, documentElement: {}},
   setInterval: () => 0, requestAnimationFrame: () => 0, addEventListener: () => {}, matchMedia: () => ({matches: false}),
   MutationObserver: class { observe() {} }, HTMLInputElement: class {},
@@ -22,7 +23,7 @@ const context = vm.createContext({
 // or a time (a task's due_at), and both read as the same local day.
 Object.defineProperty((context as {HTMLInputElement: {prototype: object}}).HTMLInputElement.prototype, 'value', {get: () => '', set: () => {}});
 for (const file of ['format.js', 'risk.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../../build/ui/app/', file), 'utf8'), context);
-const {rkMoney, rkClaimed, rkGroups, rkMinor, rkRisksHTML, rkDisputesHTML} = context;
+const {rkMoney, rkClaimed, rkGroups, rkMinor, rkRisksHTML, rkDisputesHTML, rkDatesHTML, rkDueSort, rkProofHTML} = context;
 
 // Money: exact on a row, compact in a total, one total per currency, nothing when nothing is claimed.
 assert.equal(rkMoney(5_000_000, 'USD'), '$50,000');
@@ -93,5 +94,52 @@ assert.match(d, /data-label="Amount">\$50,000<\/span>\s*<span class="rk-f" data-
 assert.match(d, /<div class="rk-lbl">Closed<\/div><div class="rk-row rk-matter rk-done" data-rk-task="t9">.*<span class="rk-m">Closed<\/span><span class="rk-d" data-label="Next"><\/span>/s);
 assert.ok(!d.includes('needs-mark'), 'nothing waits on this viewer');
 assert.match(rkDisputesHTML([], [], new Set()), /No disputes\./);
+
+// Dates: one or two per group, out of order, as a live patch may leave them.
+type Proof = {kind: string; ref: string | null; name: string | null};
+type Due = {id: string; due_on: string; title: string; basis: string; state: string | null; group: string; owner: string;
+  rule: {id: string; kind: string; text: string; source: null}; risks: {id: string; key: string; label: string}[]; task: null;
+  mark: {satisfied_by: string; satisfied_at: string; outcome: string; proof: Proof | null; note: string} | null};
+const date = (id: string, due_on: string, group: string, state: string | null, basis: string, more: Partial<Due> = {}): Due => ({
+  id, due_on, title: id, basis, state, group, owner: 'bot:legal-owner', rule: {id: 'rule-1', kind: 'internal', text: 'Meet every date', source: null},
+  risks: [{id: 'r-theft', key: 'risk:theft', label: 'Customer theft claims'}], task: null, mark: null, ...more});
+const dates = [
+  date('Hearing', '2031-03-20', 'later', 'due', 'order'),
+  date('Production', '2031-02-25', 'past', 'met', 'order', {mark: {satisfied_by: 'human:dana', satisfied_at: '2031-02-27T12:00:00Z', outcome: 'met',
+    proof: {kind: 'link', ref: 'https://www.files.acme.example/p', name: null}, note: ''}}),
+  date('Reply', '2031-02-26', 'past', 'passed', 'asked'),
+  date('Discovery', '2031-03-09', 'next', 'due', 'theirs'),
+  date('Premium', '2031-02-01', 'unconfirmed', 'unconfirmed', 'contract'),
+  date('Records', '2031-03-07', 'next', 'due', 'order'),
+];
+// Unconfirmed, then next and later soonest first, then past newest first by its day or its mark.
+assert.deepEqual(JSON.parse(JSON.stringify(rkDueSort(dates).map((x: Due) => x.id))), ['Premium', 'Records', 'Discovery', 'Hearing', 'Production', 'Reply']);
+const tab: string = rkDatesHTML(dates);
+assert.deepEqual([...tab.matchAll(/data-rk-group="\w+">([^<]+)</g)].map(m => m[1]), ['Unconfirmed', 'Next 14 days', 'Later', 'Past 30 days']);
+const rowOf = (id: string) => { const at = tab.lastIndexOf('<div', tab.indexOf(`data-rk-due="${id}"`)); return tab.slice(at, tab.indexOf('</div>', at)); };
+// An unconfirmed binding date is loud; a binding one is ink; one the other side asked for or must meet is grey.
+assert.match(rowOf('Premium'), /class="rk-row rk-due rk-bind rk-loud"/);
+assert.match(rowOf('Premium'), /<span class="rk-un">Unconfirmed<\/span>/);
+assert.match(rowOf('Premium'), /<span class="rk-k">Customer theft claims<\/span>/, 'the tab names the risk');
+assert.match(rowOf('Records'), /class="rk-row rk-due rk-bind"/);
+assert.match(rowOf('Discovery'), /class="rk-row rk-due rk-soft"/);
+assert.match(rowOf('Discovery'), /<span class="rk-os"><\/span>/, 'a date theirs to meet shows no owner of ours');
+assert.match(rowOf('Reply'), /<span>Passed<\/span>/);
+// A due date shows its owner; a met one a tick, the day it was met, who met it, and its link by host.
+assert.match(rowOf('Records'), /<span class="rk-os"><i data-face="bot:legal-owner"><\/i><\/span>/);
+assert.match(rowOf('Production'), /aria-label="Met">check<\/span><span>Thu, Feb 27, 2031<\/span><i data-face="human:dana">/);
+assert.match(rowOf('Production'), /href="https:\/\/www\.files\.acme\.example\/p"[^>]*>.*<span>files\.acme\.example<\/span><\/a>/);
+assert.match(rkDatesHTML([]), /No dates\./);
+// Proof the viewer cannot open keeps its kind and no link; a file opens by its id; a sent email reads Sent mail.
+assert.equal(rkProofHTML({kind: 'file', ref: null, name: null}), '<span class="rk-pf"><span class="nav-icon" aria-hidden="true">description</span><span>File</span></span>');
+assert.match(rkProofHTML({kind: 'file', ref: 'f1', name: 'receipt.pdf'}), /href="\/api\/v2\/files\/f1".*receipt\.pdf/);
+assert.match(rkProofHTML({kind: 'email', ref: 'e1', name: 'Premium paid'}), /title="Premium paid".*Sent mail/);
+assert.equal(rkProofHTML(null), '');
+// A live risk: its dates beside its matters, the unconfirmed count in its head; a live risk with no dates has no column.
+const withDates: string = rkRisksHTML([risk('theft', 'Customer theft claims', 'live', {open: 1, unconfirmed: 1})], [], new Set(), dates);
+assert.match(withDates, /<em><span>1 open<\/span><span>1 unconfirmed<\/span><\/em>/);
+assert.match(withDates, /<div class="rk-rows rk-dts" data-rk-dates>.*data-rk-due="Premium".*data-rk-due="Records"/s);
+assert.ok(!withDates.includes('All dates'), 'six dates fit');
+assert.ok(!(rkRisksHTML([risk('pros', 'Pro disputes', 'live', {open: 1})], [], new Set(), dates) as string).includes('rk-dts'));
 
 console.log('risk-unit: ok');

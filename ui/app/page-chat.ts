@@ -106,10 +106,10 @@ const PGC_ROUTES: readonly (readonly [string, string])[] = [
   ['#/tags', 'tags'], ['#/tag', 'tags'], ['#/computers', 'computers'], ['#/sql', 'sql'], ['#/seat', 'seat'],
 ];
 // A page's own panel the address opens (the query keys that open it), which swaps with the column: Rules' rule detail
-// and its due date's, and Risk's matter facts.
+// and its due date's, and Risk's matter facts and dates.
 const PGC_HOLDS: Record<string, readonly string[]> = {
   rules: ['rule', 'due'],
-  risk: ['matter'],
+  risk: ['matter', 'due'],
 };
 // The pages whose chat is Ask itself, the Assistant's one chat (ask-panel.ts).
 const PGC_ASK: ReadonlySet<string> = new Set(['calendar', 'meetings']);
