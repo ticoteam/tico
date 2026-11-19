@@ -1698,7 +1698,27 @@ def guard_write(c, who, path, auth):
 
         if bookkeeper.private_finance_run(c, who):
             return  # the Finance Owner's Finance actions from its own Books check or Watch task; the act route checks the kind
-    raise Problem("privacy", "Private task work cannot publish into company-wide resources", 403)
+    if MAILBOX_WRITE.fullmatch(path):
+        # Mail from a mailbox the bot may use publishes nothing into Tico: the route checks the mailbox's own level
+        # (mailbox_access.may), and a send waits on the inbox's send gate, whose OK is a private task of the bot and its
+        # approver alone (email_sending.request_approval). The run's private task is no reason to refuse it.
+        return
+    raise Problem(
+        "privacy",
+        f"Private task work cannot publish into company-wide resources: {path} is one. A private task's run writes "
+        "its own task and thread, and mail from mailboxes it may use",
+        403,
+    )
+
+
+# A mailbox's own writes (backend/mail.py, backend/email_sending.py, backend/org_rule_check.py mail-check): a draft,
+# its discard, a lint or org rule check, labels, an unsubscribe, and queuing or canceling a send. Not the sending
+# policy, suppressions or Google connection, which are company settings.
+MAILBOX_WRITE = re.compile(
+    r"/api/v2/mail/(?:drafts(?:/[^/]+)?|lint|messages/organize|messages/[^/]+/unsubscribe)"
+    r"|/api/v2/email/sends(?:/[^/]+/cancel)?"
+    r"|/api/v2/bots/[^/]+/mail-check"
+)
 
 
 PRIVATE_THREAD_REFUSAL = "Private task work posts only in its own private task's thread"
