@@ -401,6 +401,9 @@ def test_the_read_records_growth_first_opened(api):
 def test_pushed_costs_win_over_typed_spend_and_a_blank_count_with_none_eligible_is_not_supplied(api):
     post(api, "growth/channels", {"slug": "cards", "name": "Cards"})
     put(api, "growth/cohorts", {"channel": "cards", "month": "2026-10", "spend": 300, "bot_cost": 40})
+    retention = lines("period,channel,kind,purpose,amount", "2026-10,cards,money,retention,50")
+    push(api, "costs", "ads", retention)
+    assert read(api, "period=2026-10")["channels"][0]["cost"] == 300.0  # a retention cost leaves typed spend alone
     header = "anchor,period,channel,as_of,entered,activated,activated_eligible,net_d90_sum,net_d90_eligible"
     push(api, "rows", "hq", lines(header, "customer,2026-10,cards,2026-11-01,4,,0,,0"))
     push(api, "costs", "ads", lines("period,channel,kind,amount", "2026-10,cards,money,120"))

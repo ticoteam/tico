@@ -549,10 +549,11 @@ def load(c: sqlite3.Connection) -> Data:
                 "entered": int(typed["new_customers"]),
             }
         )
-    pushed = {(k["channel"], k["period"], k["kind"]) for k in costs}
+    pushed = {(k["channel"], k["period"], k["kind"]) for k in costs if k["purpose"] == "acquisition"}
     for (slug, month), typed in typed_months.items():
         for field, kind in (("spend", "money"), ("bot_cost", "bot")):
-            # A typed month's spend or bot cost counts where no pushed cost of that kind covers the channel and month.
+            # A typed month's spend or bot cost (acquisition) counts where no pushed acquisition cost of that kind covers
+            # the channel and month.
             if typed.get(field) is not None and (slug or "", month, kind) not in pushed:
                 costs.append(
                     {
