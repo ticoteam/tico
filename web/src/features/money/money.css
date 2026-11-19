@@ -1,0 +1,111 @@
+/* Finance and Growth: what pages/3-company/finance.css has that the kit and parts.css do not yet. Scoped to .money, the
+   class on the page sheet and on its panel. The font shorthand became longhands (R13). */
+
+/* the date range after the title, with its steps */
+.money .range{display:inline-flex;align-items:center;gap:var(--s-1);color:var(--ink-2);font-size:var(--t-sm);white-space:nowrap;font-variant-numeric:tabular-nums}
+
+/* a wide table scrolls sideways on a phone only, so its head stays put on a desk */
+@media (max-width:760px){
+  .money .t-scroll{overflow-x:auto}
+  .money .t-scroll .table{min-width:640px}
+}
+
+/* meter, with a tick for where today is in the period */
+.money .meter{display:block;height:4px;border-radius:var(--r-pill);background:var(--line-strong);position:relative}
+.money .meter i{display:block;height:100%;border-radius:var(--r-pill);background:var(--ink-2);max-width:100%}
+.money .meter.is-over i{background:var(--ink)}
+.money .meter u{position:absolute;top:-3px;width:1.5px;height:10px;border-radius:var(--r-pill);background:var(--muted);text-decoration:none}
+
+/* table extras */
+.money .table{table-layout:fixed}
+.money .table td.t-title{overflow:hidden;text-overflow:ellipsis}
+.money .table td.t-words{color:var(--ink-2);overflow:hidden;text-overflow:ellipsis}
+.money .table td .who-cell{display:flex;align-items:center;gap:var(--s-2);min-width:0}
+.money .table td .who-cell span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.money .table td .who-cell .av{margin:0}
+.money .table td.t-bar{padding-right:var(--s-1)}
+.money .table tr.is-sub td:first-child{padding-left:calc(var(--s-6) + var(--s-1));color:var(--ink-2)}
+.money .table tr.is-pct td{color:var(--muted);font-size:var(--t-sm)}
+.money .table tr.is-net td{height:40px;font-family:var(--font-display);font-size:var(--t-base);font-weight:var(--w-title);line-height:1;border-top:1.5px solid var(--ink-2);border-bottom:0}
+.money .table tr.is-net:hover td,.money .table tr.is-pct:hover td{background:none}
+.money .table .proj{color:var(--muted)}
+.money .table th.is-now{color:var(--ink);font-weight:var(--w-strong)}
+.money .table td .pill{margin-left:var(--s-2);vertical-align:1px}
+.money .table td.t-fig{font-weight:var(--w-strong)}
+.money .table tr.is-quiet td.t-fig{font-weight:var(--w-text)}
+.money .table tr.is-selected td{background:var(--selected)}
+.money .table .t-link{color:inherit}
+.money .table .t-link:hover{text-decoration:underline}
+.money .table td .row-check{margin-right:var(--s-2);vertical-align:-2px}
+.money .row-check{display:inline-grid;place-items:center;color:var(--muted)}
+.money .row-check .ico{width:14px;height:14px;stroke-width:2.2}
+.money .word-late{font-weight:var(--w-strong);color:var(--ink)}
+.money col.t-col{width:100px}
+.money col.t-n{width:76px}
+.money col.t-meter{width:200px}
+.money col.t-date{width:116px}
+.money col.t-line{width:184px}
+.money col.t-src{width:130px}
+.money col.t-no{width:88px}
+.money col.t-who{width:196px}
+
+/* the row of controls over a table: a search, a count */
+.money .ctl-row{display:flex;align-items:center;gap:var(--s-2);padding:var(--s-2h) var(--s-3);position:sticky;top:0;z-index:var(--z-stick);background:var(--surface)}
+.money .ctl-row+.t-scroll .table.is-stick thead th{top:52px}
+.money .ctl-row .count{font-size:var(--t-sm)}
+
+/* charts: lines in greys, the dot at each line's end */
+.money .chart-sec{padding:0 var(--s-3) var(--s-3h)}
+.money .chart text{font-size:var(--t-xs)}
+.money .chart .l1,.money .chart .l2,.money .chart .l3{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.money .chart .l1{stroke:var(--ink-2)}
+.money .chart .l2{stroke:var(--muted)}
+.money .chart .l3{stroke:var(--faint)}
+.money .chart .d1{fill:var(--ink-2)}
+.money .chart .d2{fill:var(--muted)}
+.money .chart .d3{fill:var(--faint)}
+
+/* two statements side by side (the balance sheet, a funnel per segment) */
+.money .two-col{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:var(--s-2);align-items:start}
+.money .two-col>*+*{box-shadow:-1px 0 0 var(--line)}
+
+/* a rule on one line: what it matches, where it sends it */
+.money .rule{grid-template-columns:minmax(0,1fr) 16px minmax(0,1fr) 72px;column-gap:var(--s-2h);padding:0 var(--s-3)}
+.money .rule .ico{width:14px;height:14px;color:var(--faint)}
+.money .rule.is-quiet{color:var(--muted)}
+.money .rule-to{display:flex;align-items:center;gap:var(--s-2);min-width:0;color:var(--ink-2)}
+.money .rule-to span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* a fold: the many rows that say nothing, as one line */
+.money .fold{height:var(--row);display:flex;align-items:center;gap:var(--s-2h);padding:0 var(--s-3);color:var(--muted);border-radius:var(--r-row)}
+
+/* a definition: a word and what it means here, one line */
+.money .def{grid-template-columns:132px minmax(0,1fr);column-gap:var(--s-3);padding:0 var(--s-3)}
+.money .def span:last-child{color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* the panel: one big figure, rows of name, word and figure, where a number comes from */
+.money .pfig{display:grid;gap:var(--s-1);padding:var(--s-2h) var(--s-2) var(--s-4)}
+.money .pfig b{font-family:var(--font-display);font-size:var(--t-lg);font-weight:var(--w-title);line-height:1.1;font-variant-numeric:tabular-nums}
+.money .pfig span{font-size:var(--t-sm);color:var(--muted)}
+.money .pfig .meter{margin-top:var(--s-2h)}
+.money .row-sub{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.money .prow{grid-template-columns:minmax(0,1fr) auto 76px;column-gap:var(--s-3)}
+.money .prow.is-plan .row-title,.money .prow.is-plan .row-fig{color:var(--muted)}
+.money .ptrace{height:auto;min-height:50px;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-3);padding:var(--s-2) var(--s-2);align-items:start}
+.money .ptrace-main{display:grid;gap:var(--s-0);min-width:0}
+.money .ptrace .row-sub{white-space:normal;line-height:1.35}
+.money .facts .field{width:84px;height:var(--ctl-sm);padding:0 var(--s-2);font-size:var(--t-sm)}
+.money .facts .field input{text-align:right;font-variant-numeric:tabular-nums}
+.money.new-budget{display:grid;gap:var(--s-3);padding:var(--s-2)}
+
+@media (max-width:760px){
+  .money .chart-sec{padding:0 var(--s-2) var(--s-3)}
+  .money .ctl-row{padding:var(--s-3) var(--s-2) var(--s-2h)}
+  .money .two-col{grid-template-columns:minmax(0,1fr)}
+  .money .two-col>*+*{box-shadow:none;border-top:1px solid var(--line);margin-top:var(--s-2)}
+  .money .rule{grid-template-columns:minmax(0,1fr) auto;height:auto;min-height:52px;padding:var(--s-2) var(--s-2)}
+  .money .rule>.ico{display:none}
+  .money .fold{height:44px;padding:0 var(--s-2)}
+  .money .def{grid-template-columns:minmax(0,1fr);height:auto;min-height:44px;padding:var(--s-2) var(--s-2)}
+  .money .def span:last-child{white-space:normal;font-size:var(--t-sm)}
+}

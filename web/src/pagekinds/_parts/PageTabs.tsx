@@ -13,12 +13,15 @@ export interface PageTabsProps {
 
 const trim = (p: string) => (p.length > 1 ? p.replace(/\/+$/, '') : p);
 
-/** On at its address (or under it, when not exact), and while the address's search holds each of the tab's own. */
-function isOn(t: PageTab, path: string, search: Record<string, unknown>): boolean {
+/**
+ * On at its address (or under it, when not exact), and while the address's search matches the tab's own for every key
+ * the row's tabs use: a tab with no search of its own (Overview) is off once a sibling's `?tab=` is in the address.
+ */
+function isOn(t: PageTab, path: string, search: Record<string, unknown>, rowKeys: readonly string[]): boolean {
   const here = trim(path);
   const there = trim(t.to.split('?')[0] ?? t.to);
   const pathOn = (t.exact ?? true) ? here === there : here === there || here.startsWith(`${there}/`);
-  return pathOn && Object.entries(t.search ?? {}).every(([k, v]) => String(search[k] ?? '') === v);
+  return pathOn && rowKeys.every((k) => String(search[k] ?? '') === (t.search?.[k] ?? ''));
 }
 
 /**
@@ -28,11 +31,12 @@ function isOn(t: PageTab, path: string, search: Record<string, unknown>): boolea
 export function PageTabs({ tabs, label, after }: PageTabsProps) {
   const at = useLocation();
   const search = at.search as Record<string, unknown>;
+  const rowKeys = [...new Set(tabs.flatMap((t) => Object.keys(t.search ?? {})))];
   return (
     <nav className={after ? 'page-tabs pk-tabs has-after' : 'page-tabs pk-tabs'} aria-label={label}>
       <div className="docs">
         {tabs.map((t) => {
-          const on = isOn(t, at.pathname, search);
+          const on = isOn(t, at.pathname, search, rowKeys);
           return (
             <Link
               key={`${t.to}?${new URLSearchParams(t.search).toString()}`}
