@@ -15,5 +15,10 @@
   if (theme === 'system') theme = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   if (theme !== 'light') theme = 'dark';
   root.setAttribute('data-theme', theme);
-  if (read('motion.v1') === 'reduced') root.setAttribute('data-motion', 'reduce');
+  // Motion as src/motion/level.ts resolves it: ?motion= wins, then the person's level, else the system's (reduced = off).
+  var levels = ['more', 'less', 'off'];
+  var motion = new URLSearchParams(location.search).get('motion');
+  if (levels.indexOf(motion) < 0) motion = read('motion.v1');
+  if (levels.indexOf(motion) < 0) motion = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'off' : 'more';
+  root.setAttribute('data-motion', motion);
 })();

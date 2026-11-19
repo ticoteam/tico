@@ -1,14 +1,15 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { meQuery } from '@/data';
 import { useFollow } from '@/live';
 import { Icon, type IconName } from '@/kit/Icon';
-import { VirtualList } from '@/kit/VirtualList';
+import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
 import { SheetHead } from '@/shell';
 import { dot, type DotState } from '@/tico/dot';
 import { Composer } from './Composer';
 import { dayKey, dayLabel } from './dates';
 import { DidLine, Face, LiveRow, Message, whoOf } from './Message';
-import { installConversationLive, liveQuery, liveText, markRead, meQuery, rowsOf, sendMessage, timelineQuery } from './queries';
+import { installConversationLive, liveQuery, liveText, markRead, rowsOf, sendMessage, timelineQuery } from './queries';
 import type { ChatMessage, LiveRun, PageRef, Variant } from './types';
 
 /** Within this many pixels of the end counts as "at the bottom": what comes in is read. */
@@ -82,8 +83,6 @@ const herePage = (): PageRef => ({
   title: typeof document === 'undefined' ? '' : document.title,
 });
 
-const scrollerOf = (foot: HTMLElement | null) => foot?.previousElementSibling as HTMLElement | null | undefined;
-const atEnd = (el: HTMLElement | null | undefined) => !el || el.scrollHeight - el.scrollTop - el.clientHeight <= READ_PX;
 
 installConversationLive();
 
@@ -107,22 +106,20 @@ export function Conversation({ id, variant, title, actor, page }: ConversationPr
   const at = page === undefined ? herePage() : page;
 
   /* VirtualList follows the end while the person is at it (a new row, a reply growing) and keeps their place
-     otherwise, and when older pages load above. It owns the scroller and gives no handle: the scroller is the
-     element just before the foot. */
-  const foot = useRef<HTMLElement>(null);
+     otherwise, and when older pages load above. */
+  const scroller = useRef<VirtualListHandle>(null);
   // What the person sends takes them to the end, wherever they had scrolled.
   const jump = useRef(false);
   useLayoutEffect(() => {
     if (!jump.current) return;
     jump.current = false;
-    const el = scrollerOf(foot.current);
-    el?.scrollTo({ top: el.scrollHeight });
+    scroller.current?.scrollToEnd();
   });
 
   /* ---- read up to the last message shown, while it is in view */
   const lastSeq = rows.reduce((n, m) => (typeof m.seq === 'number' && m.seq > n ? m.seq : n), 0);
   useEffect(() => {
-    if (!lastSeq || !atEnd(scrollerOf(foot.current)) || document.visibilityState !== 'visible') return;
+    if (!lastSeq || (scroller.current?.fromEnd() ?? 0) > READ_PX || document.visibilityState !== 'visible') return;
     markRead(id, lastSeq);
   }, [id, lastSeq]);
 
@@ -141,6 +138,7 @@ export function Conversation({ id, variant, title, actor, page }: ConversationPr
 
   const list = (
     <VirtualList
+      ref={scroller}
       items={items}
       getKey={(it) => it.key}
       estimateSize={ROW_PX}
@@ -177,7 +175,7 @@ export function Conversation({ id, variant, title, actor, page }: ConversationPr
     ) : null;
 
   const footer = (
-    <footer className="chat-foot" ref={foot}>
+    <footer className="chat-foot">
       {look}
       {myId && <Composer id={id} me={myId} to={name} onSend={(text, files) => send(text, files)} />}
     </footer>

@@ -1,4 +1,3 @@
-/* stylelint-disable declaration-property-value-allowed-list -- copied from the mock (tico/dot-states.css), not redrawn */
 /* The Dot and what it does: every state in tico/dot.html. Copied from tico/dot-states.css L225-275, L289-303 and the
    level bars from L132-138, with the mock's numbers unchanged. The Dot's base (.dot, .dot i, .dot b, blob, glint) is in
    styles/dot.css. Jade lives only here, in styles/dot.css and in motion/. */
@@ -7,8 +6,7 @@
 .dw .dot i{overflow:hidden;animation:blob var(--breathe-dot) cubic-bezier(.45,0,.55,1) infinite;transition:opacity .16s var(--ease)}
 .dw .dot b{animation:glint var(--breathe-dot) cubic-bezier(.45,0,.55,1) infinite}
 /* gray, for "cannot": a layer over the jade that fades in */
-/* stylelint-disable-next-line color-no-hex -- the mock's gray layer: --faint lit toward white and shaded toward black */
-.dw .dot i::before{content:"";position:absolute;inset:0;background:radial-gradient(120% 120% at 30% 20%,color-mix(in srgb,var(--faint) 82%,#fff),var(--faint) 52%,color-mix(in srgb,var(--faint) 86%,#000));opacity:0;transition:opacity .22s var(--ease)}
+.dw .dot i::before{content:"";position:absolute;inset:0;background:radial-gradient(120% 120% at 30% 20%,var(--faint-lit),var(--faint) 52%,var(--faint-shade));opacity:0;transition:opacity .22s var(--ease)}
 /* it writes back: the quick breath. Live, the app changes the playback rate instead, which keeps the phase (motion.md A8). */
 .is-frozen .dw.s-busy .dot i,.is-frozen .dw.s-busy .dot b{animation-duration:1.5s}
 /* thinking: the outline turns, very slowly. The light stays where it is; nothing spins inside. */
@@ -50,11 +48,12 @@
 .dw.s-off .dot i::before,.dw.s-off .dot b{display:none}
 /* a Dot off screen stands still (motion.md 7) */
 .dw.is-idle *,.dw.is-idle *::before,.dw.is-idle *::after{animation-play-state:paused}
+/* a face in an avatar is drawn still */
+.dw.is-still *,.dw.is-still *::before,.dw.is-still *::after{animation:none}
 
 /* flights and the landing ring (the film's), drawn on motion's layer */
 .fly{position:absolute;left:0;top:0;opacity:0;will-change:transform}
-/* stylelint-disable-next-line function-disallowed-list -- the mock's droplet shadow */
-.fly i{box-shadow:0 2px 8px rgba(0,0,0,.35)}
+.fly i{box-shadow:var(--dot-drop)}
 .rip{position:absolute;left:0;top:0;width:40px;height:40px;margin:-20px 0 0 -20px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--dot);opacity:0}
 
 /* the level bars on a call: a tiny meter, alive only with sound (C2, C3) */

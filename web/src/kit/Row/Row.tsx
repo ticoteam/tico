@@ -2,6 +2,7 @@ import type { AnchorHTMLAttributes, ReactNode } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Count } from '@/kit/Count';
 import { Icon, type IconName } from '@/kit/Icon';
+import { Link } from '@/kit/Link';
 import { LatePill } from '@/kit/Pill';
 
 type Base = Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'title' | 'children' | 'className'> & {
@@ -31,9 +32,9 @@ export function Row({ className, selected, unread, target, title, href, children
     );
   }
   return (
-    <a {...rest} href={href} className={cls} title={title} data-target={target} aria-current={selected ? 'true' : undefined}>
+    <Link {...rest} href={href} className={cls} title={title} data-target={target} aria-current={selected ? 'true' : undefined}>
       {children}
-    </a>
+    </Link>
   );
 }
 

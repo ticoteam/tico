@@ -3,7 +3,6 @@
 // what only a conversation knows: a pending send giving way to its echo, and a reply being written (`runs`).
 import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import { adaptMe } from '@/api/adapt';
 import { keys, queryClient, write } from '@/data';
 import { onTopic } from '@/live';
 import { newId } from '@/lib/ids';
@@ -15,12 +14,6 @@ const enc = encodeURIComponent;
 export const timelineKey = (id: string) => ['thread', id, 'timeline'] as const;
 export const liveKey = (id: string) => ['thread', id, 'live'] as const;
 export const proposalKey = (aid: string) => ['assistant', 'action', aid] as const;
-
-/** The signed-in person (as data/session.ts reads it; that file is not exported from @/data). */
-export const meQuery = queryOptions({
-  queryKey: keys.me(),
-  queryFn: async ({ signal }) => adaptMe(await api.get<Parameters<typeof adaptMe>[0]>('/api/v2/me', { signal })),
-});
 
 /** Tico's chat with the signed-in person: the conversation id Tico's sheet shows. */
 export const ticoRoomQuery = queryOptions({

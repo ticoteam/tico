@@ -7,15 +7,18 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 // Only these files talk to the server or build queries; everything else asks them.
-const SERVER_FILES = ['src/api/**', 'src/data/**', 'src/live/**', 'src/features/*/queries.ts'];
+const SERVER_FILES = ['src/api/**', 'src/data/**', 'src/live/**', 'src/*/queries.ts', 'src/features/*/queries.ts'];
 
 // A later flat-config block replaces a rule entirely, so each folder's list repeats the shared part.
-const SHARED = [{ regex: '^\\.\\./', message: 'Import through the @/ alias, not ../' }];
+const SHARED = [
+  { regex: '^\\.\\./', message: 'Import through the @/ alias, not ../' },
+  { regex: '(^|/)ui/(app|styles)(/|$)', message: 'web/ imports nothing from ui/' },
+  { regex: '^@/features/[^/]+/(?!exports$)', message: 'Use a feature only through its exports.ts' },
+];
 const ban = (...rules) => ({
   'no-restricted-imports': ['error', { patterns: [...SHARED, ...rules.map(([regex, message]) => ({ regex, message }))] }],
 });
 
-const FEATURE_INTERNALS = ['^@/features/[^/]+/(?!exports$)', 'Use a feature only through its exports.ts'];
 const NO = (area, why) => [`^@/${area}(/|$)`, why];
 
 export default defineConfig(
@@ -59,12 +62,11 @@ export default defineConfig(
   // The boundaries table.
   {
     files: ['src/routes/**'],
-    rules: ban(FEATURE_INTERNALS, NO('api', 'Routes load through data/ or a feature'), NO('live', 'Routes do not open the stream'), NO('actions', 'Routes do not run actions')),
+    rules: ban(NO('api', 'Routes load through data/ or a feature'), NO('live', 'Routes do not open the stream'), NO('actions', 'Routes do not run actions')),
   },
   {
     files: ['src/features/**'],
     rules: ban(
-      FEATURE_INTERNALS,
       ['^@/live/(?!follow$)', 'Features use live only through follow'],
       NO('shell', 'Features do not reach into the shell'),
       ['^@/actions/(?!run$|types$)', 'Features use actions only through run and types'],
@@ -75,7 +77,13 @@ export default defineConfig(
     files: ['src/kit/**'],
     rules: ban(
       ...['data', 'api', 'actions', 'features', 'live', 'shell', 'tico', 'routes'].map((a) => NO(a, 'The kit draws; it knows no data or app')),
+      ['^@tanstack/react-router(/|$)', 'The kit links through kit/Link; main.tsx gives it the router'],
     ),
+  },
+  {
+    // The screen parts every page shares: kit, data, live, actions and motion below them, never a route or a feature.
+    files: ['src/conversation/**', 'src/search/**', 'src/pagekinds/**'],
+    rules: ban(NO('routes', 'Routes sit above the screen parts')),
   },
   {
     files: ['src/data/**'],

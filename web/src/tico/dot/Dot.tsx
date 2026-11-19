@@ -16,26 +16,28 @@ export type DotProps = {
   message?: boolean;
   /** Drive it from this controller rather than Tico's. */
   of?: DotController;
+  /** Drawn still, with no controller: Tico's face in an avatar. */
+  still?: boolean;
 };
 
 /** The droplets' start angles (DS.js L50). */
 const START = [40, 200, 130, 290, 245];
 const [ROUND_BACK, ROUND_FRONT] = flowPaths(0);
 
-export function Dot({ size = 30, state, work, message, of }: DotProps) {
+export function Dot({ size = 30, state, work, message, of, still }: DotProps) {
   const [own] = useState(createDot);
   const local = state !== undefined || work !== undefined || message !== undefined;
   const ctl = of ?? (local ? own : dot);
   const ref = useRef<HTMLSpanElement>(null);
   const gid = `fg${useId().replace(/[^\w-]/g, '')}`;
 
-  useEffect(() => (ref.current ? ctl.attach(ref.current) : undefined), [ctl]);
+  useEffect(() => (ref.current && !still ? ctl.attach(ref.current) : undefined), [ctl, still]);
   useEffect(() => {
-    if (ctl === own && local) own.show(state ?? 'rest', work ?? 0, !!message);
-  }, [ctl, own, local, state, work, message]);
+    if (ctl === own && local && !still) own.show(state ?? 'rest', work ?? 0, !!message);
+  }, [ctl, own, local, state, work, message, still]);
 
   return (
-    <span ref={ref} className="dw" style={{ '--d': `${size}px` } as CSSProperties} aria-hidden="true">
+    <span ref={ref} className={still ? 'dw is-still' : 'dw'} style={{ '--d': `${size}px` } as CSSProperties} aria-hidden="true">
       <svg className="fshape" viewBox="0 0 48 48" aria-hidden="true">
         <defs>
           <radialGradient id={gid} cx=".3" cy=".2" r="1.2">

@@ -34,6 +34,8 @@ export interface Action<I = unknown, O = unknown> {
   readonly kind: 'view' | 'change';
   /** Validates input from search, keys and Tico. Typed callers are checked too; it is cheap. */
   readonly input: Schema<I>;
+  /** false: the person's own press only. Left out of Tico's catalog, and refused from Tico (run via 'tico', show). */
+  readonly tico?: boolean;
   /** Tico's did line and the result: "Opened #412". Defaults to the title. */
   did?(input: I, out: O | undefined): string;
   /** From data already in the cache (my role, a row's can_* fields). The server still decides. */

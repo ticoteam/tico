@@ -1,4 +1,3 @@
-/* stylelint-disable declaration-property-value-allowed-list -- dev only: the mock's stage (tico/dot-states.css L65-192), copied */
 /* The dev gallery of the Dot's states. Sizes are the mock's stage, so a frame compares with tico/dot.html. */
 .dg{max-width:1160px;margin:0 auto;padding:24px 16px 96px;color:var(--ink);background:var(--ground)}
 .dg-top{display:flex;align-items:center;gap:16px;margin-bottom:16px}

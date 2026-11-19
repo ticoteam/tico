@@ -1,1 +1,1 @@
-export { usePref, readPref, writePref } from './prefs';
+export { usePref, readPref, writePref, removePref } from './prefs';

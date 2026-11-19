@@ -29,6 +29,7 @@ export async function runIn(
 ): Promise<Result> {
   const a = actions.get(id);
   if (!a) return { ok: false, error: `unknown_action: ${id}` };
+  if (via === 'tico' && a.tico === false) return { ok: false, error: 'not_allowed' };
   const parsed = a.input.parse(raw);
   if (!parsed.ok) return { ok: false, error: `bad_input: ${parsed.error}` };
   if (!router) return { ok: false, error: 'not_ready: the app is still starting' };
@@ -59,6 +60,7 @@ export async function showIn(
 ): Promise<Result> {
   const a = actions.get(id);
   if (!a) return { ok: false, error: `unknown_action: ${id}` };
+  if (a.tico === false) return { ok: false, error: 'not_allowed' };
   const parsed = a.input.parse(raw);
   if (!parsed.ok) return { ok: false, error: `bad_input: ${parsed.error}` };
   if (!router) return { ok: false, error: 'not_ready: the app is still starting' };

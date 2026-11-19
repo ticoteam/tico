@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Link } from '@/kit/Link';
 
 /* The little of Markdown a chat message uses: paragraphs, lists, code blocks, **bold**, `code` and [links](url).
    Built as React elements, never as HTML, and never cut: a message shows in full. */
@@ -17,9 +18,9 @@ function inline(text: string): ReactNode[] {
     else if (m[3] != null && m[4] != null && SAFE_URL.test(m[4])) {
       const external = /^https?:/i.test(m[4]);
       out.push(
-        <a key={i} className="lnk" href={m[4]} {...(external && { target: '_blank', rel: 'noreferrer' })}>
+        <Link key={i} className="lnk" href={m[4]} {...(external && { target: '_blank', rel: 'noreferrer' })}>
           {m[3]}
-        </a>,
+        </Link>,
       );
     } else out.push(m[0]);
     at = i + m[0].length;

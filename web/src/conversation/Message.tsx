@@ -1,5 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import type { CSSProperties } from 'react';
 import { useAction } from '@/actions';
 import { Avatar, type AvatarKind, type AvatarSize } from '@/kit/Avatar';
 import { ConfirmCard } from '@/kit/ConfirmCard';
@@ -20,14 +19,8 @@ export interface Who {
 /** A teammate's avatar, or Tico's face: the Dot in its `.av-dot` frame (parts-kit.js av()), drawn still here. */
 export function Face({ who, size, live }: { who: Who; size: AvatarSize; live?: boolean }) {
   if (who.kind !== 'tico') return <Avatar kind={who.kind} name={who.name} hue={who.hue} size={size} live={live} />;
-  return (
-    <span className="av-dot" style={{ '--a': `${size}px` } as CSSProperties} role="img" aria-label={who.name}>
-      <span className={live ? 'dot is-breathing' : 'dot'} style={{ '--d': `${Math.round(size * 0.86)}px` } as CSSProperties} aria-hidden="true">
-        <i />
-        <b />
-      </span>
-    </span>
-  );
+  const d = Math.round(size * 0.86);
+  return <Avatar kind="agent" name={who.name} size={size} live={live} dot={live ? <Dot size={d} state="rest" /> : <Dot size={d} still />} />;
 }
 
 const hueOf = (s: string) => {

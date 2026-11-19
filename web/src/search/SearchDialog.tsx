@@ -1,8 +1,10 @@
 import { Dialog } from '@base-ui/react/dialog';
 import { useEffect, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { ctxFor, registry, run } from '@/actions';
+import { Avatar } from '@/kit/Avatar';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { Dot } from '@/tico/dot';
 import * as copy from './copy';
 import { providers, type Lead, type SearchHit } from './providers';
 import { gather, highlight, remember, RECENT, type Group } from './results';
@@ -128,12 +130,7 @@ function Palette({ opened }: { opened: string }) {
         )}
         {ask && (
           <div className={on === hits.length ? 'sr pal-ask is-on' : 'sr pal-ask'} {...option(hits.length)}>
-            <span className="av-dot" style={{ '--a': '22px' } as CSSProperties}>
-              <span aria-hidden="true" className="dot" style={{ '--d': '19px' } as CSSProperties}>
-                <i />
-                <b />
-              </span>
-            </span>
+            <Avatar kind="agent" name="Tico" size={22} decorative dot={<Dot size={19} still />} />
             <span>
               {copy.ask} <b>{ask}</b>
             </span>

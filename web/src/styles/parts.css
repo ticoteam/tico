@@ -432,8 +432,6 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
   .slot-dot{justify-content:center}
 }
 
-@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
-
 /* ====================================================================================================
    New for the system: every state, and the parts the mocks did not draw. Same tokens, same grammar:
    hollow = off or not yet, filled ink = on or chosen, a grey wash = selected, the Dot = waits on you.
@@ -446,7 +444,7 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
 .btn:hover,.answer .btn:not(.btn-fill):hover,.menu a:hover,.toast button:hover,.sr:hover,.sr.is-on,.date-pick-grid a:hover{background:var(--raised-hover)}
 .btn-fill:hover{background:var(--fill-hover)}
 
-/* ---------- states by class, so a sheet or a test can hold one still: is-hover is-pressed is-focus is-disabled is-busy ---------- */
+/* ---------- states by class, so a sheet or a test can hold one still: is-hover is-pressed is-focus is-disabled ---------- */
 /* Focus has three shapes. Something you press: a ring 2px off its edge. A row in a list: the ring inside its edge.
    Something you type in: the edge itself turns to ink. */
 .ib:focus-visible,.btn:focus-visible,.scope-pick:focus-visible,.li-pick:focus-visible,.li-flow:focus-visible,.pill:focus-visible,.switch:focus-visible,.check:focus-visible .check-box,.radio:focus-visible .radio-box,.seg button:focus-visible,.send:focus-visible,.file:focus-visible,.starter:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
@@ -469,14 +467,6 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
 .ib:active{background:var(--well-2);color:var(--ink)}
 .ib.is-on{background:var(--selected);color:var(--ink)}                     /* a filter that is set, a panel that is open */
 .btn[disabled],.ib[disabled],.ib.is-disabled{opacity:.45;pointer-events:none}
-/* busy: the button keeps its size and its place, the label gives way to a turning ring */
-.btn.is-busy,.ib.is-busy{position:relative;pointer-events:none}
-.btn.is-busy{color:transparent}
-.btn.is-busy>*,.ib.is-busy>*{visibility:hidden}
-.btn.is-busy::after,.ib.is-busy::after{content:"";position:absolute;left:50%;top:50%;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;
-  border:2px solid color-mix(in srgb,var(--ink) 22%,transparent);border-top-color:var(--ink);animation:turn calc(var(--turn)/2) linear infinite}
-.btn-fill.is-busy::after{border-color:color-mix(in srgb,var(--on-fill) 28%,transparent);border-top-color:var(--on-fill)}
-@keyframes turn{to{transform:rotate(360deg)}}
 
 /* ---------- fields: a label over a control. An error is a heavier edge, a mark, and at most four words, in greys: amber is for "Late" alone. ---------- */
 .f{display:grid;gap:var(--s-2);min-width:0;justify-items:start}

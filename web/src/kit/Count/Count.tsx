@@ -22,15 +22,13 @@ export function Count({ n, label, className }: CountProps) {
 export type BadgeProps = {
   n: number;
   label: string;
-  /** The Dot holding the count, on the Flow slot only. */
-  flow?: boolean;
 };
 
 /** A count on an icon. Only the 56px rail and the phone's bar use it; it sits inside a `.slot-ico`. */
-export function Badge({ n, label, flow }: BadgeProps) {
+export function Badge({ n, label }: BadgeProps) {
   if (n <= 0) return null;
   return (
-    <i className={flow ? 'slot-n is-flow' : 'slot-n'} aria-label={label}>
+    <i className="slot-n" aria-label={label}>
       {capCount(n)}
     </i>
   );

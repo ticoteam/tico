@@ -19,8 +19,9 @@ export type FollowScope =
   | { place: string }
   | { topic: Topic }; // a topic sent whole (letters on a records page)
 
-/** Always followed: the menu's counts, agents' status lines, the rail, refetch signals for calendar and setup. */
-const BASE: Topic[] = ['bots', 'needs', 'threads', 'calendar', 'setup'];
+/** Always followed: the menu's counts, agents' status lines, the rail, refetch signals for calendar and setup, and
+    Tico's moves of this screen. */
+const BASE: Topic[] = ['bots', 'needs', 'threads', 'calendar', 'setup', 'screen'];
 
 const counts = new Map<string, number>();
 

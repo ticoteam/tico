@@ -42,6 +42,6 @@ describe('Menu', () => {
     for (const name of ['Tasks', 'Calendar', 'Threads', 'Updates', 'Company', 'Library', 'QA Owner', 'Settings']) expect(within(nav).getByRole('link', { name })).toBeTruthy();
     expect(within(nav).getByRole('button', { name: 'Fernhill' })).toBeTruthy();
     expect(within(nav).getByRole('button', { name: 'Search' })).toBeTruthy();
-    expect(within(nav).getByRole('link', { name: 'Tasks' }).textContent).toBe('8');
+    expect(within(nav).getByRole('link', { name: 'Tasks' }).textContent).toBe(''); // the folded Dot holds no count
   });
 });

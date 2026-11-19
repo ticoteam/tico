@@ -1,32 +1,16 @@
 import { api } from '@/api/client';
+import { tabId } from '@/lib/tab';
 import { onTopic } from '@/live';
 import { run, show } from './run';
 import type { Result } from './types';
-import { isScreenEvent, resultPath, SCREEN_TOPIC, type ScreenEvent, type ScreenResult } from './wire';
+import { isScreenEvent, RESULT_TEXT_MAX, resultPath, SCREEN_TOPIC, type ScreenEvent, type ScreenResult } from './wire';
 
-/* Tico moves the person's screen (architecture.md 5 and 12.3). The tab that sent the message acts; for a background
-   turn, the most recently focused visible tab does, agreed over a BroadcastChannel. Nobody visible: nothing happens and
-   the server answers Tico `{sent: true}` on its own. */
+/* Tico moves the person's screen (architecture.md 5 and 12.3). The server sends each request to every open stream of
+   the person's; the most recently focused visible tab acts, agreed over a BroadcastChannel. Nobody visible: nothing
+   happens and the server tells Tico the app did not answer. */
 
-const TAB_KEY = 'tico-next:tab';
 const CHANNEL = 'tico-next:tab';
 const REMEMBER = 200;
-
-let memoryTab: string | null = null;
-
-/** This tab's id: a uuid kept in sessionStorage, so a reload keeps it and another tab has its own. */
-export function tabId(): string {
-  try {
-    const kept = sessionStorage.getItem(TAB_KEY);
-    if (kept) return kept;
-    const id = crypto.randomUUID();
-    sessionStorage.setItem(TAB_KEY, id);
-    return id;
-  } catch {
-    memoryTab ??= crypto.randomUUID();
-    return memoryTab;
-  }
-}
 
 type Channel = Pick<BroadcastChannel, 'postMessage' | 'close'> & {
   onmessage: ((e: MessageEvent) => void) | null;
@@ -63,13 +47,14 @@ export function screenHandler(d: ScreenDeps) {
   const handle = (raw: unknown): Promise<void> => {
     if (!isScreenEvent(raw) || handled.has(raw.id)) return Promise.resolve();
     const e = raw;
-    if (e.client ? e.client !== d.tab : front !== d.tab || !d.visible()) return Promise.resolve();
+    if (front !== d.tab || !d.visible()) return Promise.resolve();
     handled.add(e.id);
     if (handled.size > REMEMBER) handled.delete(handled.values().next().value as string);
     // One at a time, in arrival order, so two navigations never interleave.
     const next = queue.then(async () => {
       const r: Result = await d.act(e).catch((err: unknown) => ({ ok: false, error: `failed: ${String(err)}` }));
-      await d.post(e.id, { ok: r.ok, ...(r.error && { error: r.error }), ...(r.did && { did: r.did }) }).catch(() => {});
+      const cut = (t: string) => t.slice(0, RESULT_TEXT_MAX);
+      await d.post(e.id, { ok: r.ok, ...(r.error && { error: cut(r.error) }), ...(r.did && { did: cut(r.did) }) }).catch(() => {});
     });
     queue = next;
     return next;

@@ -1,8 +1,8 @@
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { capCount } from '@/kit/Count';
 import './Avatar.css';
 
-// Tico's own face is the Dot in its `.av-dot` frame; the kit may not import the Dot, so `@/tico/dot` draws it.
+// Tico's own face is the Dot in its `.av-dot` frame; the kit may not import the Dot, so the caller passes it in `dot`.
 export type AvatarKind = 'person' | 'agent';
 export type AvatarSize = 16 | 22 | 28 | 36;
 
@@ -16,6 +16,10 @@ export type AvatarProps = {
   size?: AvatarSize;
   /** Working now: the ink ring travels round it. */
   live?: boolean;
+  /** Beside the name already (a menu row, a link labelled with it): hidden from screen readers and no hover title. */
+  decorative?: boolean;
+  /** Tico's face: a still `<Dot>` from `@/tico/dot`, drawn in the `.av-dot` frame instead of initials. */
+  dot?: ReactNode;
   className?: string;
 };
 
@@ -26,13 +30,20 @@ function initialsOf(name: string): string {
 }
 
 /** A person is a circle, an agent a rounded square (parts-kit.js av()). */
-export function Avatar({ kind, name, hue = 0, initials, size = 22, live, className }: AvatarProps) {
+export function Avatar({ kind, name, hue = 0, initials, size = 22, live, decorative, dot, className }: AvatarProps) {
   const label = live ? `${name}, working now` : name;
+  const a11y = decorative ? { 'aria-hidden': true as const } : { role: 'img', 'aria-label': label, title: label };
+  if (dot)
+    return (
+      <span className={className ? `av-dot ${className}` : 'av-dot'} style={{ '--a': `${size}px` } as CSSProperties} {...a11y}>
+        {dot}
+      </span>
+    );
   const cls = ['av', `av-${size}`, kind === 'person' ? 'is-person' : 'is-agent', live && 'is-live', className]
     .filter(Boolean)
     .join(' ');
   return (
-    <span className={cls} style={{ '--h': hue } as CSSProperties} role="img" aria-label={label} title={label}>
+    <span className={cls} style={{ '--h': hue } as CSSProperties} {...a11y}>
       {size > 16 ? (initials ?? initialsOf(name)) : null}
     </span>
   );

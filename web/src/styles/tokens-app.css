@@ -6,5 +6,20 @@
   --paper:#FFFFFF;                          /* an agent's page that keeps its own look */
   --lift-tip:0 4px 12px -4px rgba(0,0,0,.35);   /* a tip, as the mock drew it */
   --dot-shade-sm:rgba(0,0,0,.12);           /* the small Dot's inner shade, as the mock drew it */
+  --dot-drop:0 2px 8px rgba(0,0,0,.35);     /* a droplet in flight, as the mock drew it */
+  --faint-lit:color-mix(in srgb,var(--faint) 82%,#fff);    /* the gray Dot's light side ("cannot") */
+  --faint-shade:color-mix(in srgb,var(--faint) 86%,#000);  /* the gray Dot's shaded side */
 }
 @media (max-width:760px){:root{--page-x:16px}}
+
+/* The phone's cards (B/phone/phone.css): their tones, the shadow cast up from a card, and how far the page behind dims. */
+:root,[data-theme="light"]{
+  --phone-tico:#FFFFFF;--phone-menu:#F6F6F6;--phone-chat:#EFEFEF;
+  --phone-up:rgba(0,0,0,.16);--phone-dim:.21;
+}
+[data-theme="dark"]{
+  --phone-tico:var(--raised);
+  --phone-menu:color-mix(in srgb,var(--raised) 58%,var(--sheet));
+  --phone-chat:color-mix(in srgb,var(--raised) 26%,var(--sheet));
+  --phone-up:rgba(0,0,0,.6);--phone-dim:.64;
+}

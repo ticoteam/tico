@@ -27,20 +27,13 @@ html:has(.ph),html:has(.ph) body{height:100%;overflow:hidden;overscroll-behavior
   --p:0;--f:0;
   --card-dur:560ms;--card-ease:cubic-bezier(.3,1.2,.4,1);
   --r-layer:24px;
-  --c-tico:var(--raised);
-  --c-menu:color-mix(in srgb,var(--raised) 58%,var(--sheet));
-  --c-chat:color-mix(in srgb,var(--raised) 26%,var(--sheet));
-  --dim:.64}                  /* of --scrim: .42 black */
+  --c-tico:var(--phone-tico);--c-menu:var(--phone-menu);--c-chat:var(--phone-chat);   /* tokens-app.css, per theme */
+  --up:var(--phone-up);       /* the shadow cast up from a card */
+  --dim:var(--phone-dim)}     /* of --scrim */
 /* the card spring: zeta .74, 45 samples, settled to 0.2% (motion.md section 6) */
 @supports (transition-timing-function:linear(0,1)){
   .ph{--card-ease:linear(0,0.0175,0.0634,0.1291,0.2072,0.2922,0.3793,0.4652,0.5473,0.6238,0.6935,0.7559,0.8107,0.858,0.8981,0.9315,0.9587,0.9805,0.9974,1.0101,1.0193,1.0255,1.0293,1.0312,1.0315,1.0307,1.0291,1.0269,1.0244,1.0217,1.0189,1.0162,1.0137,1.0113,1.0092,1.0073,1.0056,1.0042,1.0029,1.0019,1.0011,1.0005,1,0.9996,1)}
 }
-/* the mock's light card tones and the shadow cast up from a card, per theme. They belong in tokens.css; until its
-   owner adds them they are kept here, and only here. */
-/* stylelint-disable color-no-hex, function-disallowed-list, selector-disallowed-list -- phone tones, pending tokens */
-.ph{--up:rgba(0,0,0,.6)}
-:root:not([data-theme="dark"]) .ph{--c-tico:#FFFFFF;--c-menu:#F6F6F6;--c-chat:#EFEFEF;--up:rgba(0,0,0,.16);--dim:.21}
-/* stylelint-enable color-no-hex, function-disallowed-list, selector-disallowed-list */
 .ph.has-chat{--lipC:38px;--drawC:var(--drawM)}
 .ph.is-peek{--lipT:84px}
 .ph.is-handle{--stack:0px}
@@ -48,10 +41,9 @@ html:has(.ph),html:has(.ph) body{height:100%;overflow:hidden;overscroll-behavior
 /* a window wider than a phone (the narrow desktop): a small bottom margin, a taller half */
 @media (min-width:501px){.ph{--sab:max(env(safe-area-inset-bottom,0px),10px);--half:440px}}
 
-/* motion levels: Off (or the system asking for less, unless the person chose a level) moves cards at once.
+/* motion Off (which the system's reduced motion comes to, unless the person chose a level) moves cards at once.
    Drag-follow still tracks the finger: it is the person's own movement. */
-:root[data-motion="off"] .ph,:root[data-motion="reduce"] .ph{--card-dur:1ms}
-@media (prefers-reduced-motion:reduce){:root:not([data-motion="more"]):not([data-motion="less"]) .ph{--card-dur:1ms}}
+:root[data-motion="off"] .ph{--card-dur:1ms}
 
 /* ---------- the page: the back card ---------- */
 .ph>.pg{position:absolute;left:env(safe-area-inset-left,0px);right:env(safe-area-inset-right,0px);top:0;bottom:0;z-index:1;background:var(--sheet);--surface:var(--sheet);

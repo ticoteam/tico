@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { run, show } from './run';
-import { actOn, screenHandler, tabId } from './screen';
+import { actOn, screenHandler } from './screen';
 import type { ScreenEvent } from './wire';
 
 vi.mock('./run', () => ({ run: vi.fn(), show: vi.fn() }));
@@ -32,9 +32,7 @@ const event = (o: Partial<ScreenEvent> = {}): ScreenEvent => ({
   id: 'e1',
   action: 'task.open',
   input: { task: 412 },
-  client: null,
-  turn_id: 't1',
-  message_id: 'm1',
+  done: false,
   ...o,
 });
 
@@ -60,15 +58,6 @@ describe('screen', () => {
     await Promise.all([a.h.handle(event({ id: 'e2' })), b.h.handle(event({ id: 'e2' }))]);
     expect(a.act).toHaveBeenCalledTimes(1);
     expect(b.act).toHaveBeenCalledTimes(1);
-  });
-
-  it('the tab that sent the message acts, wherever focus is', async () => {
-    const join = bus();
-    const a = tab('A', join, false);
-    const b = tab('B', join, true);
-    await Promise.all([a.h.handle(event({ client: 'A' })), b.h.handle(event({ client: 'A' }))]);
-    expect(a.act).toHaveBeenCalledTimes(1);
-    expect(b.act).not.toHaveBeenCalled();
   });
 
   it('posts the result once, even when the event arrives twice', async () => {
@@ -101,10 +90,5 @@ describe('screen', () => {
     await actOn(event());
     expect(run).toHaveBeenCalledWith('task.open', { task: 412 }, { via: 'tico' });
     expect(show).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps one tab id per tab', () => {
-    expect(tabId()).toBe(tabId());
-    expect(sessionStorage.getItem('tico-next:tab')).toBe(tabId());
   });
 });

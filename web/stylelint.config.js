@@ -2,7 +2,8 @@
 // sizes, radii, tracking, layers and spacing on the scale. `font:` belongs to type.css; elsewhere only `inherit`.
 const WEIGHTS = /^var\(--w-(text|strong|title)\)$/;
 const FONT = ['inherit'];
-const COPIED = ['src/styles/parts.css', 'src/styles/shell.css', 'src/styles/dot.css', 'src/styles/avatar.css', 'src/styles/late.css', 'src/shell/phone/phone.css'];
+const COPIED = ['src/styles/parts.css', 'src/styles/shell.css', 'src/styles/dot.css', 'src/styles/avatar.css', 'src/styles/late.css', 'src/shell/phone/phone.css',
+  'src/motion/motion.css', 'src/tico/dot/dot.css', 'src/tico/dot/DotGallery.css'];
 const SPACE = [/^(0|auto|inherit)$/, /^((var\(--(s|pad|gap|page)-[a-z0-9-]+\)|0|auto|calc\(.*\))\s*)+$/];
 
 export default {

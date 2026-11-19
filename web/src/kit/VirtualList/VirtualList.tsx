@@ -1,6 +1,13 @@
-import { useEffect, useLayoutEffect, useRef, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useImperativeHandle, useLayoutEffect, useRef, type CSSProperties, type ReactNode, type Ref } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import './VirtualList.css';
+
+/** What a list's owner may do to it: a chat goes to its end when the person sends. */
+export type VirtualListHandle = {
+  scrollToEnd: () => void;
+  /** How far the scroller is from its end, in px (0 before it is drawn). */
+  fromEnd: () => number;
+};
 
 export type VirtualListProps<T> = {
   items: readonly T[];
@@ -22,6 +29,7 @@ export type VirtualListProps<T> = {
   className?: string;
   label?: string;
   role?: 'list' | 'log' | 'feed';
+  ref?: Ref<VirtualListHandle>;
 };
 
 /** The only wrapper over TanStack Virtual (architecture.md 4): any list that can pass 50 rows. Overscan 6. */
@@ -37,6 +45,7 @@ export function VirtualList<T>({
   className,
   label,
   role = 'list',
+  ref,
 }: VirtualListProps<T>) {
   // The virtualizer mutates itself between renders; the React Compiler must not memoize what it returns.
   'use no memo';
@@ -51,6 +60,16 @@ export function VirtualList<T>({
     anchorTo: anchor,
     followOnAppend: anchor === 'end',
   });
+  useImperativeHandle(ref, () => ({
+    scrollToEnd: () => {
+      const el = scrollRef.current;
+      el?.scrollTo({ top: el.scrollHeight });
+    },
+    fromEnd: () => {
+      const el = scrollRef.current;
+      return el ? el.scrollHeight - el.scrollTop - el.clientHeight : 0;
+    },
+  }));
   const rows = v.getVirtualItems();
   const first = rows[0]?.index;
   const last = rows[rows.length - 1]?.index;

@@ -1,9 +1,6 @@
-/* stylelint-disable declaration-property-value-allowed-list -- copied from the mock (tico/dot-states.css), not redrawn */
 /* What lands and where it is drawn: the flight layer, the wash, the edge chip, and the freeze rule for pictures.
    The wash, the chip and the freeze rule are tico/dot-states.css L175-177, L191-192 and L291, numbers unchanged. */
 
-/* motion.md 7 proposes the flight layer at 35: above sheets and phone cards, below the scrim. Belongs in tokens.css. */
-:root{--z-fx:35}
 .fx-layer{position:fixed;inset:0;z-index:var(--z-fx);pointer-events:none;overflow:hidden}
 
 /* the short gray wash on the thing that changed (B5). Its opacity is driven by wash(). */

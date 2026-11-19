@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { Outlet, createRootRouteWithContext } from '@tanstack/react-router';
 import { Placeholder } from '@/kit/placeholder/Placeholder';
+import { useMotionRoot } from '@/motion';
 import { Frame } from '@/shell';
 
 export interface RouterContext {
@@ -13,5 +14,6 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 });
 
 function Root() {
+  useMotionRoot();
   return <Frame tico={null} menu={null} page={<Outlet />} />;
 }

@@ -1,4 +1,4 @@
-import { readPref, usePref, writePref } from '@/prefs';
+import { readPref, removePref, usePref, writePref } from '@/prefs';
 import { ARR, type Arrangement, type Memory, type Saved, type SheetId } from './layout';
 
 /* Sheet sizes and hand folds, on this device (layout.md 6): one key, sparse, Tico's width one number.
@@ -65,5 +65,5 @@ export function useSheetMemory(): [Saved, (change: (now: Saved) => Saved) => voi
 
 /* "Reset sheet sizes" in Settings, General. Every open window follows at once. */
 export function resetSheetSizes(): void {
-  if (!newer(readPref<unknown>(KEY, null))) writePref(KEY, { v: V });
+  if (!newer(readPref<unknown>(KEY, null))) removePref(KEY);
 }

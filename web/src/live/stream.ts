@@ -3,6 +3,7 @@ import { ApiError, api } from '@/api/client';
 import { connectionChanged } from '@/data/held';
 import { refetchQuiet } from '@/data/optimistic';
 import { queryClient } from '@/data/query-client';
+import { tabId } from '@/lib/tab';
 import { dropFrame, push, setSink } from './frame';
 import { dispatch, installPatchers, resetPatchState } from './patch';
 
@@ -23,6 +24,7 @@ export const TOPICS = [
   'letters',
   'calendar',
   'setup',
+  'screen',
 ] as const;
 export type Topic = (typeof TOPICS)[number];
 export type LiveStatus = 'live' | 'connecting' | 'offline' | 'signed-out';
@@ -52,7 +54,7 @@ const AWAY_MS = 30_000; // a tab hidden this long reconnects when shown: iOS dro
 const RESTART_MS = 30; // several follows changing at once reconnect once
 
 let scopeOf: () => StreamScope = () => ({
-  topics: ['bots', 'needs', 'threads', 'calendar', 'setup'],
+  topics: ['bots', 'needs', 'threads', 'calendar', 'setup', 'screen'],
   conversation: [],
   thread: [],
   task: [],
@@ -105,7 +107,8 @@ export function setScopeSource(fn: () => StreamScope): void {
 
 function url(): string {
   const s = scopeOf();
-  const q = new URLSearchParams({ topics: s.topics.join(','), needs: 'changes', output: 'compact' });
+  // `client`: this tab's id (architecture.md 5).
+  const q = new URLSearchParams({ topics: s.topics.join(','), needs: 'changes', output: 'compact', client: tabId() });
   if (after != null) q.set('after', String(after));
   // Past the server's cap a pair is left out: the stream then sends more (every readable row), never less.
   const pair = (a: 'conversation' | 'task', b: 'thread' | 'party') => {

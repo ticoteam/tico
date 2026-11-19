@@ -312,6 +312,7 @@
   --z-pop:4;                      /* a card that opens in place, inside its sheet */
   --z-dock:20;                    /* the phone's bar and the answer docked above it */
   --z-overlay:30;                 /* menus, pickers */
+  --z-fx:35;                      /* the flight layer: above sheets and phone cards, below the scrim (motion.md 7) */
   --z-scrim:40;                   /* the dim behind a dialog or a phone sheet */
   --z-dialog:50;                  /* a dialog, a phone sheet */
   --z-toast:60;
@@ -335,19 +336,15 @@
   --move-lg:16px;                       /* a dialog, a toast */
   --pop:.96;                            /* the size a card or overlay starts from */
   --press:.975;                         /* a button while it is held */
-  --pulse:1.16;                         /* the top of the Dot's pulse */
+  --pulse:1.14;                         /* the top of the Dot's pulse */
   --rest:.55;                           /* the low point of a skeleton's breath */
   --loop:running;                       /* animation-play-state of every loop */
 }
 
 /* Reduced motion. Nothing travels, grows or loops. A change is a --dur-fast fade or instant.
    Components built on the names below need no rule of their own.
-   data-motion="reduce" forces it on any element, for the board and for checks. */
-@media (prefers-reduced-motion:reduce){
-  :root{--move-sm:0px;--move:0px;--move-lg:0px;--pop:1;--press:1;--pulse:1;--rest:1;--loop:paused;
-    --ease-arrive:var(--ease);--dur-enter:var(--dur-fast);--dur-leave:var(--dur-fast);--dur-arrive:0ms}
-}
-[data-motion="reduce"]{--move-sm:0px;--move:0px;--move-lg:0px;--pop:1;--press:1;--pulse:1;--rest:1;--loop:paused;
+   Motion Off (data-motion="off", set before the first paint from the pref; "system" with reduced motion is Off). */
+[data-motion="off"]{--move-sm:0px;--move:0px;--move-lg:0px;--pop:1;--press:1;--pulse:1;--rest:1;--loop:paused;
   --ease-arrive:var(--ease);--dur-enter:var(--dur-fast);--dur-leave:var(--dur-fast);--dur-arrive:0ms}
 
 /* ---------- elevation ----------

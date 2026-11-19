@@ -49,6 +49,18 @@ export function writePref<T>(key: string, value: T): void {
   for (const fn of listeners) fn();
 }
 
+/** Forget a preference: it reads as its default again, here and in every other tab. */
+export function removePref(key: string): void {
+  const k = PREFIX + key;
+  memory.delete(k);
+  try {
+    storage()?.removeItem(k);
+  } catch {
+    // blocked: memory is already clear
+  }
+  for (const fn of listeners) fn();
+}
+
 function subscribe(fn: () => void): () => void {
   listeners.add(fn);
   // another tab changed a pref

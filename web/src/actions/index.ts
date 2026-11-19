@@ -7,7 +7,7 @@ export type { CatalogEntry } from './registry';
 export { run, useAction, ctxFor } from './run';
 export { installKeys, shortcuts } from './keys';
 export type { Shortcut } from './keys';
-export { startScreen, tabId } from './screen';
+export { startScreen } from './screen';
 export type { ScreenEvent, ScreenResult } from './wire';
 export { ActionsRoot } from './ActionsRoot';
 export type { ActionsRootProps } from './ActionsRoot';

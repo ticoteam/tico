@@ -18,5 +18,4 @@
 .flow-mark.live g{animation:fl-ride 3.6s ease-in-out infinite}
 .flow-mark.live .f1{animation-delay:-.5s}
 @keyframes fl-ride{0%,100%{transform:translateY(-1.5px)}50%{transform:translateY(1.5px)}}
-@media (prefers-reduced-motion:reduce){.flow-mark g{animation:none!important}}
-.slot-n.is-flow{left:13px;top:-7px;min-width:19px;height:19px;line-height:19px;border-radius:var(--r-blob);background:var(--dot);color:var(--on-dot)}   /* the Dot, holding the count */
+[data-motion="off"] .flow-mark g{animation:none}

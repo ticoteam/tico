@@ -89,6 +89,16 @@ describe('run', () => {
     expect(did).not.toHaveBeenCalled();
   });
 
+  it('refuses an action kept from Tico, from Tico only', async () => {
+    const mine = defineAction({ ...setOwner, id: 'task.confirm', tico: false });
+    const only = new Map<string, AnyAction>([[mine.id, mine as AnyAction]]);
+    const input = { task: 412, owner: 'agent:qa' };
+    expect(await runIn(only, 'task.confirm', input, 'tico', router)).toEqual({ ok: false, error: 'not_allowed' });
+    expect(await showIn(only, 'task.confirm', input, router)).toEqual({ ok: false, error: 'not_allowed' });
+    expect(did).not.toHaveBeenCalled();
+    expect(await runIn(only, 'task.confirm', input, 'click', router)).toEqual({ ok: true, did: 'Gave #412 away' });
+  });
+
   it('refuses an unknown action', async () => {
     expect(await runIn(actions, 'task.nope', {}, 'tico', router)).toEqual({ ok: false, error: 'unknown_action: task.nope' });
   });

@@ -1,5 +1,6 @@
 import { Link, useLocation, type LinkProps } from '@tanstack/react-router';
 import { useState, type CSSProperties } from 'react';
+import { Avatar } from '@/kit/Avatar';
 import { Icon, type IconName } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { useSheet } from './Sheet';
@@ -74,13 +75,9 @@ const slug = (s: string) => s.toLowerCase();
 const to = (path: string) => path as LinkProps['to'];
 const ACTIVE = { className: 'is-active', 'aria-current': 'page' as const };
 
+/* the row or link already says the name */
 function Face({ m, size }: { m: MenuMate; size: 16 | 22 | 28 }) {
-  const cls = `av av-${size} ${m.kind === 'person' ? 'is-person' : 'is-agent'}${m.live ? ' is-live' : ''}`;
-  return (
-    <span className={cls} style={{ '--h': m.hue } as CSSProperties} aria-hidden="true">
-      {size <= 16 ? '' : m.short}
-    </span>
-  );
+  return <Avatar decorative kind={m.kind} name={m.name} initials={m.short} hue={m.hue} size={size} live={m.live} />;
 }
 function FlowMark() {
   return (
@@ -116,12 +113,12 @@ export function Menu(p: MenuProps) {
         <div className="nav-scroll">
           <div className="nav-items">
             {rows.map(r => {
-              const n = r.id === 'tasks' ? c.flow : r.id === 'threads' ? c.threads : r.id === 'updates' ? c.updates : undefined;
+              const n = r.id === 'threads' ? c.threads : r.id === 'updates' ? c.updates : undefined;
               return (
                 <Link key={r.id} className="nav-item" to={to(`/${r.id}`)} activeProps={ACTIVE} aria-label={r.label} title={r.label}>
                   <span className="slot-ico">
                     <Icon name={r.icon} />
-                    {n ? <i className={r.id === 'tasks' ? 'slot-n is-flow' : 'slot-n'}>{n}</i> : null}
+                    {n ? <i className="slot-n">{n}</i> : null}
                   </span>
                 </Link>
               );
