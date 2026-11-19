@@ -102,6 +102,10 @@ def seed(api):
                         (room, new, tid),
                     )
                 made += 1
+        # A copied room is its own root, as every task room is, not a second root of the room it was copied from.
+        c.execute(
+            "UPDATE conversations SET root_id=id, path='/'||id||'/' WHERE parent_id IS NULL AND root_id IS NOT id"
+        )
     people = ["human:ana", "human:ben", "human:cara"]
     rooms = []
     with store.transaction() as c:

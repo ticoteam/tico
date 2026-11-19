@@ -3999,6 +3999,10 @@ _SUBTREE_OPEN = "s.archived_at IS NULL AND s.closed_at IS NULL"
 
 
 FINISHED_TASKS = "'done','closed'"
+# A task's root that may show: not dormant (migration 20261119223603_dormant_task_rooms), so its task is open, or
+# finished with a post since that a reader may read. A dormant room is hidden from every reader by task_open_sql's rule,
+# kept for it by triggers, so only these few are worth its check. The terms are conversations_awake_task_roots's WHERE.
+AWAKE_TASK_ROOT = "{r}.task_id IS NOT NULL AND {r}.dormant_at IS NULL"
 
 
 def _finish_sql(t="t"):
@@ -4047,8 +4051,8 @@ def revival_scope(c, v, within, args=None, *, source="conversations r"):
     roots = [
         row[0]
         for row in c.execute(
-            f"SELECT r.id FROM {source} WHERE r.parent_id IS NULL AND r.task_id IN "
-            f"(SELECT id FROM tasks WHERE status IN ({FINISHED_TASKS})) AND ({within})",
+            f"SELECT r.id FROM {source} WHERE r.parent_id IS NULL AND {AWAKE_TASK_ROOT.format(r='r')} AND EXISTS "
+            f"(SELECT 1 FROM tasks ft WHERE ft.id=r.task_id AND ft.status IN ({FINISHED_TASKS})) AND ({within})",
             args or {},
         )
     ]
@@ -4073,9 +4077,10 @@ def _revived_roots(c, v, roots):
     scope = f" AND r.id IN {_qlist(sorted(roots))}" if roots is not None else ""
     rows = []
     for m in c.execute(
-        "SELECT r.id AS revived_root, m.* FROM tasks t JOIN conversations r ON r.task_id=t.id AND r.parent_id IS NULL "
+        "SELECT r.id AS revived_root, m.* FROM conversations r JOIN tasks t ON t.id=r.task_id "
         "JOIN conversations s ON s.root_id=r.id JOIN messages m ON m.conversation_id=s.id "
-        f"WHERE t.status IN ({FINISHED_TASKS}) AND {readable_sql(c, v, 'r')}{scope} "
+        f"WHERE r.parent_id IS NULL AND {AWAKE_TASK_ROOT.format(r='r')} AND t.status IN ({FINISHED_TASKS}) "
+        f"AND {readable_sql(c, v, 'r')}{scope} "
         "AND m.kind<>'notice' AND m.deleted_at IS NULL "
         "AND (m.restricted IS NULL OR m.restricted<>0 OR m.legacy_audience IS NOT NULL) "
         f"AND m.created_at>{_finish_sql('t')}"
@@ -4130,8 +4135,9 @@ def task_open_sql(c, v, r="r", revived=frozenset(), *, per_row=False):
     """SQL: a thread on a task is open unless its task is done or closed and no post the viewer reads has come
     since: a plain post in its subtree (readable_sql on the sub-thread), or a root in `revived` (revived_roots). A notice
     (what the task's own changes write into its thread) is not a post. The finish is the task's latest move to Done or Closed, so
-    a later edit to the task neither hides a thread someone posted in nor brings a finished one back. `per_row`: the
-    post's readable check is readable_sql's per_row form, for a query that reaches this check for few rows."""
+    a later edit to the task neither hides a thread someone posted in nor brings a finished one back. A dormant root
+    (AWAKE_TASK_ROOT) has no post since, so it is out before any of that is read. `per_row`: the post's readable check
+    is readable_sql's per_row form, for a query that reaches this check for few rows."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     plain = (
         f"EXISTS (SELECT 1 FROM conversations s JOIN messages m ON m.conversation_id=s.id WHERE s.root_id={r}.id "
@@ -4140,8 +4146,8 @@ def task_open_sql(c, v, r="r", revived=frozenset(), *, per_row=False):
     )
     kept = f" OR {r}.id IN {_qlist(sorted(revived))}" if revived else ""
     return (
-        f"NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id={r}.task_id AND t.status IN ({FINISHED_TASKS}) "
-        f"AND NOT ({plain}{kept}))"
+        f"{r}.dormant_at IS NULL AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id={r}.task_id "
+        f"AND t.status IN ({FINISHED_TASKS}) AND NOT ({plain}{kept}))"
     )
 
 

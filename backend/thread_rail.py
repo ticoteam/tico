@@ -966,13 +966,13 @@ def _walk(c, v, flags, after=None):
 def _walk_where(c, v, rest, args):
     """(the walk's WHERE terms, its finished-task check, their args): open roots that pass `rest`, the check to be
     tested last, after every cheaper term. Only the finished-task roots this walk could list have their posts checked:
-    the reader's, with something new (T.revival_scope, one read of every finished task's root). The batches then pass
-    over every other finished-task root by its task's status, before any other per-row term: most of a company's roots
-    are finished tasks', and only those `rest` admits could be listed."""
+    the reader's, with something new and not dormant (T.revival_scope, through the index of the few task roots that are
+    not). The batches then pass over every other finished-task root by its dormant mark or its task's status, before any
+    other per-row term: most of a company's roots are finished tasks', and only those `rest` admits could be listed."""
     roots, revived = T.revival_scope(c, v, " AND ".join(rest), args)
     finished = (
-        "(r.task_id IS NULL OR r.id IN (SELECT value FROM json_each(:finished_in_scope)) OR NOT EXISTS (SELECT 1 "
-        f"FROM tasks ft WHERE ft.id=r.task_id AND ft.status IN ({T.FINISHED_TASKS})))"
+        "(r.task_id IS NULL OR (r.dormant_at IS NULL AND (r.id IN (SELECT value FROM json_each(:finished_in_scope)) "
+        f"OR NOT EXISTS (SELECT 1 FROM tasks ft WHERE ft.id=r.task_id AND ft.status IN ({T.FINISHED_TASKS})))))"
     )
     return (
         [OPEN_ROOT, finished, *rest],
