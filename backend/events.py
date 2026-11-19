@@ -3134,7 +3134,7 @@ class _Snapshot:
         self.c = c
         self.newest = latest(c)
         self.first = oldest(c)
-        self.tail_from = None
+        self.tail_from = self.page_access = None
         self.tail, self.seqs, self.paths = [], [], {}
         self._mine = {}
         # Run steps (attempt_events rows by id), their stored sizes and decoded payloads, read once for every stream of
@@ -3147,6 +3147,15 @@ class _Snapshot:
         if self.tail_from < self.newest:
             self.tail = _change_rows(c, ["seq>?"], [self.tail_from], TAIL_SPAN + 1)
             self.seqs = [row["seq"] for row in self.tail]
+        # Where page access last moved within the tail (read_in resets a stream reading across it), for every stream.
+        self.page_access = max(
+            (
+                r["seq"]
+                for r in self.tail
+                if r["topic"] == "tasks" and r["kind"] == "bulk" and r["ref"] == "page_access"
+            ),
+            default=None,
+        )
         scopes = {thread for poll in polls for thread in poll.scope}
         if scopes:
             wanted = scopes | {row["conversation_id"] for row in self.tail if row["conversation_id"]}
@@ -3406,9 +3415,14 @@ def read_in(
     floor = (first - 1) if first is not None else newest
     if after > newest or after < floor or newest - after > BACKLOG_MAX:
         return [], newest, True, False
-    if c.execute(
-        "SELECT 1 FROM changes WHERE topic='tasks' AND kind='bulk' AND ref='page_access' AND seq>? LIMIT 1", (after,)
-    ).fetchone():
+    if snapshot.tail_from is not None and after >= snapshot.tail_from:
+        moved = snapshot.page_access is not None and snapshot.page_access > after  # the tail holds every change since
+    else:
+        moved = c.execute(
+            "SELECT 1 FROM changes WHERE topic='tasks' AND kind='bulk' AND ref='page_access' AND seq>? LIMIT 1",
+            (after,),
+        ).fetchone()
+    if moved:
         return [], newest, True, False
     rows = snapshot.changes(
         who, after, limit, topics, conversations, bots, tasks, parties, threads_scope, meetings, places

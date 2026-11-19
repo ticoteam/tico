@@ -411,3 +411,16 @@ def test_one_persons_streams_of_a_round_build_each_topic_once_and_read_what_each
     for result, person in zip(got, [ana] * 5 + [ben], strict=True):
         assert [(s, t, dict(d)) for s, t, d in result[0]] == [(s, t, dict(d)) for s, t, d in alone[person.actor][0]]
     assert {t for _, t, _ in got[0][0]} >= {"tasks", "threads", "runs"}
+
+
+def test_a_page_access_change_resets_a_round_stream_reading_across_it_as_a_lone_read_does(api):  # noqa: F811
+    after = cursor(api)
+    new_thread(api, title="Launch", body="Kickoff")
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO changes(topic,kind,ref,created_at) VALUES('tasks','bulk','page_access',?)", (H.now(),))
+    moved = cursor(api)
+    new_thread(api, title="Press list", body="Who takes it?")
+    ben = who(api, "ben-test")
+    got = round_of(api, (ben, after, {}, lambda: None), (ben, moved, {}, lambda: None))
+    assert [result[2] for result in got] == [True, False]  # (events, cursor, reset, more)
+    assert [lone_read(api, ben, at)[2] for at in (after, moved)] == [True, False]
