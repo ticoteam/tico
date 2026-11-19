@@ -107,6 +107,8 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .fv-bar small,.fv-n{font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .fv-bar .av{margin-left:var(--s-1h)}
 .fv-n b{color:var(--ink);font-weight:var(--w-strong)}
+.frame.fv .fv-embed{min-width:0}
+.frame.fv .fv-frame{width:auto;height:auto}
 .frame.fv iframe,.frame.fv img,.frame.fv video{background:var(--desk)}
 .frame.fv img,.frame.fv video{flex:1;min-width:0;width:100%;height:100%;object-fit:contain}
 /* a picture opens full size (kit/PictureViewer) */
