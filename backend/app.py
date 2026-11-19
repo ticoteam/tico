@@ -2440,6 +2440,9 @@ def _install_features(
     stage_rules_api.install(app, store, auth, mutate)  # stage rules: the Rules button, the Rules page's groups
     why_here.install(app, store, auth)  # GET /api/v2/origins/{ref}: why an item is on the list
     assistant_changes.install(app, store, auth, mutate, settings_admin)  # the Assistant's changes, and undoing one
+    from . import page_history
+
+    page_history.install(app, store, mutate)  # the pages a person opened, kept for Tico (backend/page_history.py)
     reach.install(app, store, auth, mutate)  # Rules › Internal: who reaches whom (docs/reach.md)
     from . import feedback
 

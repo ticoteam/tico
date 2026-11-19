@@ -460,6 +460,7 @@ def parser():
     from clients.commands import calls, webhooks
     from clients.commands import contacts as contacts_commands
     from clients.commands import products as products_commands
+    from clients.commands import page_history as page_history_commands
     from clients.commands import computer_upkeep, computers, org as org_commands, pipelines as pipeline_commands
     from clients.commands import gateway as gateway_commands, goals as goal_commands
     from clients.commands import admin as admin_commands, content as content_commands, task_work as task_work_commands
@@ -1314,6 +1315,7 @@ def parser():
     cli_spec.add(sub, finance.CLI)  # tico finance: clients/commands/finance.py
     # Contacts (backend/entities/routes.py): every reader sees what the read rule lets it see; writes name their actor.
     cli_spec.add(sub, products_commands.PRODUCTS)  # tico products: clients/commands/products.py (backend/products.py)
+    cli_spec.add(sub, page_history_commands.PAGE_HISTORY)  # tico page-history: clients/commands/page_history.py
     cli_spec.add(sub, contacts_commands.CONTACTS)  # tico contacts: clients/commands/contacts.py (not attribute add)
     attribute = (
         _group_subparsers(sub, "contacts")
