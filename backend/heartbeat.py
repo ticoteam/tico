@@ -165,6 +165,7 @@ def github_sync(ctx: Context) -> tuple[str, bool]:
         reconcile_worktree_prs,
         refresh_deployed_tasks,
         refresh_conflicts,
+        refresh_finished_task_prs,
         refresh_pending_checks,
         refresh_queue_removals,
     )
@@ -181,6 +182,8 @@ def github_sync(ctx: Context) -> tuple[str, bool]:
     refresh_queue_removals(github_app)
     # An open pull request's conflict with a moved base sends no event: read the unknown and stale ones (github.refresh_conflicts).
     refresh_conflicts(github_app)
+    # A finished task's link still open is read too: a missed close must not keep it in Health's aged_prs (#2398).
+    refresh_finished_task_prs(github_app)
     # A worktree is released by its pull requests' state, so a missed webhook must heal unread.
     reconcile_worktree_prs(github_app)
     return "Done", True

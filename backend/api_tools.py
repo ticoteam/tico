@@ -1975,7 +1975,7 @@ def _mailbox_rows(c, who, view):
                 {"tone": tone, "text": text},
                 "#/tools/mailbox/" + address,
                 detail=row["readers"],
-                way="Mail bot",
+                way="Mail agent",
                 who=people,
                 who_total=total,
             )

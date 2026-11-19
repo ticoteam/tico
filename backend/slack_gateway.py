@@ -60,6 +60,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Any
 
 
 from . import hubdb as H
@@ -445,6 +446,15 @@ def humanize(text, names=None):
     return s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&").strip()
 
 
+def slack_name(user: dict[str, Any] | None) -> str:
+    """What to call a Slack user from their users.info answer; "" when it names nobody."""
+    user = user or {}
+    profile: dict[str, Any] = user.get("profile") or {}
+    return str(
+        profile.get("real_name") or profile.get("display_name") or user.get("real_name") or user.get("name") or ""
+    )
+
+
 def slack_escape(text):
     """Text as Slack's parser must see it: `&`, `<` and `>` escaped, so a bot's `<!channel>` is
     shown as text rather than paging the channel and "x < y" survives."""
@@ -755,18 +765,32 @@ class Gateway:
             # Slack thread still reaches it, and message automations still hear the channel.
         if event["op"] in ("edit", "delete"):
             return self.amend(event)
+        names = self.names_for(event["text"])  # before the transaction: a cache miss asks Slack
         with self.store.transaction() as c:
-            outcome = self.persist(c, event)
+            outcome = self.persist(c, event, names)
         if outcome == "queued":
             self.wake.set()
         return outcome
 
-    def persist(self, c, event):
+    def names_for(self, text):
+        """`humanize`'s names for the people `text` mentions: the Tico app is the assistant, anyone else their Slack
+        name from the bridge's users.info cache (USER_CACHE_SECONDS), so a message costs no call a recent one made.
+        Someone Slack cannot answer for keeps their id."""
+        names = {self.bot_user_id: self.settings.assistant_name}
+        for uid in set(USER_RE.findall(str(text or ""))) - names.keys():
+            try:
+                name = slack_name(self.bridge.slack_user(uid))
+            except (SlackError, SlackUnreachable):
+                continue
+            if name:
+                names[uid] = name
+        return names
+
+    def persist(self, c, event, names):
         """One message into `slack_events`: `queued` for the fast lane, `stored` for message automations and the
-        bots' channel reads, `duplicate` when it is already there. Pure store; the caller holds the transaction."""
-        event["text"] = (
-            humanize(event["text"], {self.bot_user_id: self.settings.assistant_name})[:TEXT_CHARS] or event["text"]
-        )
+        bots' channel reads, `duplicate` when it is already there. Pure store; the caller holds the transaction and
+        passes `names_for` the text, read before it."""
+        event["text"] = humanize(event["text"], names)[:TEXT_CHARS] or event["text"]
         state = "received"
         if event["op"] == "store":
             # A person's reply in a thread a bot already talks in is for that bot, now; anything
@@ -820,12 +844,11 @@ class Gateway:
     def amend(self, event):
         """An edit or a deletion in a channel, applied to the stored row; unknown rows are ignored."""
         now = self.clock()
+        text = ""
+        if event["op"] == "edit":  # named before the transaction: a cache miss asks Slack
+            text = humanize(event["text"], self.names_for(event["text"]))[:TEXT_CHARS] or event["text"]
         with self.store.transaction() as c:
             if event["op"] == "edit":
-                text = (
-                    humanize(event["text"], {self.bot_user_id: self.settings.assistant_name})[:TEXT_CHARS]
-                    or event["text"]
-                )
                 changed = c.execute(
                     "UPDATE slack_events SET text=?,edited_at=?,updated_at=? WHERE channel=? AND ts=? AND deleted_at IS NULL",
                     (text, event.get("edited_ts") or now, now, event["channel"], event["ts"]),

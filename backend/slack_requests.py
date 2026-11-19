@@ -283,7 +283,7 @@ def _channel(gateway: Any, ref: str) -> dict[str, Any]:
 
 def _names(gateway: Any, messages: list[dict[str, Any]]) -> dict[str, str]:
     """Each person's Slack name (`users.info`); one Slack cannot answer for keeps its id."""
-    from .slack_gateway import SlackError, SlackUnreachable
+    from .slack_gateway import SlackError, SlackUnreachable, slack_name
 
     names: dict[str, str] = {}
     for uid in {str(m.get("user")) for m in messages if m.get("user") and not m.get("bot_id")}:
@@ -291,10 +291,7 @@ def _names(gateway: Any, messages: list[dict[str, Any]]) -> dict[str, str]:
             user: dict[str, Any] = gateway.slack.users_info(uid) or {}
         except (SlackError, SlackUnreachable):
             user = {}
-        profile: dict[str, Any] = user.get("profile") or {}
-        names[uid] = str(
-            profile.get("real_name") or profile.get("display_name") or user.get("real_name") or user.get("name") or uid
-        )
+        names[uid] = slack_name(user) or uid
     return names
 
 

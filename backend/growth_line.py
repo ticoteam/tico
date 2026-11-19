@@ -46,7 +46,7 @@ BAD = ("stale", "failing")
 USES = ("trace", "source")
 WORDS = {
     "spend": "spend",
-    "bot_cost": "bot cost",
+    "bot_cost": "agent cost",
     "new_customers": "new customers",
     "kept_d30": "kept to day 30",
     "cac": "CAC",
@@ -247,7 +247,7 @@ def _economics(row: Row, numbers: dict[str, Row], guard: Row | None) -> dict[str
         "cac": {
             "value": cac,
             "says": _fmt("cac", cac),
-            "formula": "(spend + bot cost) ÷ new customers",
+            "formula": "(spend + agent cost) ÷ new customers",
             "from": [*inputs_cac, "new_customers"],
             "trace": cac_said,
             "stale": stale_cac and cac is not None,
@@ -458,7 +458,7 @@ def line(c: Any, month: str | None = None, hidden: Iterable[str] = ()) -> Row | 
     if total.get("cac") is not None:
         from_unknown = (unknown or {}).get("new_customers") or 0
         every["economics"]["cac"]["trace"] = (
-            f"{money((total.get('spend') or 0) + (total.get('bot_cost') or 0))} spend and bot cost from named channels "
+            f"{money((total.get('spend') or 0) + (total.get('bot_cost') or 0))} spend and agent cost from named channels "
             f"only ÷ all {_num(total['new_customers'], 0)} new customers, {_num(from_unknown, 0)} of them from Unknown "
             f"= {money(total['cac'])} CAC"
         )

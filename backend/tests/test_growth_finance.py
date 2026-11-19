@@ -548,7 +548,7 @@ def test_weekly_cac_from_daily_spend_says_it_leaves_out_the_monthly_bot_cost(api
     result, weeks = _weeks(api)
     first = weeks["2026-08-31"]
     assert first["cac"]["value"] == round(1800.0 / first["new_customers"]["value"], 2)
-    assert result["cac_note"] == "weekly CAC is daily ad spend: bot cost is monthly"
+    assert result["cac_note"] == "weekly CAC is daily ad spend: agent cost is monthly"
 
 
 def test_a_campaign_mapped_by_channel_name_counts_in_its_weeks_and_one_with_no_channel_counts_nowhere(
@@ -601,7 +601,7 @@ def test_when_only_some_weeks_say_monthly_the_note_says_which(api: Any, monkeypa
     assert weeks["2026-08-31"]["cac"]["status"] == "spend_monthly" and weeks["2026-09-07"]["cac"]["status"] == "ok"
     assert result["cac_note"] == "weeks touching a month with typed spend say monthly"
     put(api, "growth/cohorts", {"channel": "search-ads", "month": "2026-09", "bot_cost": 300})
-    assert _weeks(api)[0]["cac_note"] == "weeks touching a month with typed spend say monthly; bot cost is monthly"
+    assert _weeks(api)[0]["cac_note"] == "weeks touching a month with typed spend say monthly; agent cost is monthly"
 
 
 def test_one_channel_mapped_by_its_slug_and_its_name_sums_into_one_month(api: Any):
