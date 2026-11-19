@@ -455,10 +455,25 @@ def test_signup_rows_alone_give_health_and_channels_their_gaps_and_segment_none_
     october = read(api, "period=2026-10")
     health = october["health"]
     assert health["basis"] == "signups" and health["unknown_share"] == 1.0 and health["no_segment"] == 98
-    assert october["channels"] == [{"slug": "unknown", "signups": 200, "new_customers": 0, "new_share": None}]
+    # no customer rows: new customers not supplied, on the channel line as in the headline
+    assert october["channels"] == [{"slug": "unknown", "signups": 200, "new_customers": None, "new_share": None}]
     # nothing pushed for November: not supplied, never a measured 0
     assert read(api, "period=2026-11")["headline"]["signups"] == {"value": None, "status": "not_supplied"}
     none = read(api, "scope=segment:none&period=2026-10")
     assert none["scope"] == "segment:none" and none["headline"]["signups"]["value"] == 98
     push(api, "rows", "hotmic-db", lines(header, "customer,2026-10,viewers,,2026-11-12,10"))
     assert read(api, "period=2026-10")["health"]["basis"] == "customers"
+
+
+def test_a_quiet_company_lists_its_channels_reads_nobody_and_measures_health_over_sign_ups(api):
+    post(api, "growth/channels", {"slug": "content", "name": "Content"})
+    header = "anchor,period,channel,as_of,entered,kept_d30,kept_d30_eligible"
+    push(api, "rows", "hq", lines(header, "signup,2026-10,,2026-11-12,2,,", "customer,2026-10,,2026-11-12,0,0,0"))
+    out = read(api, "period=2026-10")
+    # set up but quiet: listed all the same
+    assert [c["slug"] for c in out["channels"]] == ["content", "unknown"]
+    assert out["channels"][0]["new_customers"] == 0 and out["channels"][0]["status"] == "no_spend"
+    # a cohort of nobody has nothing to wait for
+    assert out["headline"]["kept"]["status"] == "nobody"
+    # zero customer rows don't make customers the basis
+    assert out["health"]["basis"] == "signups" and out["health"]["unknown_share"] == 1.0
