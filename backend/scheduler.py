@@ -428,6 +428,7 @@ class Scheduler:
         self.listening_since = H.now()  # when this server began listening; a computer is not silent before it
         self.onboarding, self.auth = onboarding, auth  # the Finance Owner is built the tick Finance is set up
         self.swept = None
+        self.planner_checked = None
         self.asks_checked = None
         self.never_stuck_read = None
         self.goals_checked = None
@@ -681,6 +682,16 @@ class Scheduler:
 
                 screening.sweep(self.store, stamp(at))  # a screened item waits at most an hour
                 run.did(SR.words_of(off, "webhook turned off", "Done", "webhooks turned off"), quiet=not off)
+        if self.planner_checked is None or at - self.planner_checked >= timedelta(hours=1):
+            # The planner's statistics (backend/planner_stats.py): every table on the first pass after a start, so each
+            # release a company takes refreshes them, then hourly the tables never analysed or changed tenfold.
+            every, self.planner_checked = self.planner_checked is None, at
+            try:
+                from . import planner_stats
+
+                planner_stats.refresh(self.store, every=every)
+            except sqlite3.Error as exc:
+                failures.append({"planner_stats": type(exc).__name__})
         if self.never_stuck_read is None or at - self.never_stuck_read >= timedelta(hours=1):
             # The never-stuck check's rules over every open task, and where the ladder has them, for Health (S15).
             # The check itself runs every beat (step_never_stuck); this reading is the hourly proof that it holds.
