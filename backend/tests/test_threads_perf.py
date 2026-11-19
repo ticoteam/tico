@@ -314,3 +314,32 @@ def test_shared_event_text_never_names_someone_this_reader_may_not_see(api, monk
     assert seen["ben-test"]["message"]["sender_id"] == author and seen["ben-test"]["actor"] == author
     assert seen["cara-test"]["message"]["sender_id"] == "" and seen["cara-test"]["actor"] is None
     assert author not in encode(seen["cara-test"]), seen["cara-test"]
+
+
+def test_one_persons_streams_of_a_round_decide_each_thread_once_and_read_what_each_would_alone(api, monkeypatch):  # noqa: F811
+    after = cursor(api)
+    open_room = new_thread(api, title="Launch", body="Kickoff")
+    say(api, open_room["id"], "Who takes the press list?")
+    private = new_thread(api, title="Salary bands", members=("human:ben",))
+    say(api, private["id"], "Only Ana and Ben read this")
+    asked = []
+    real = threads.readable_ids
+
+    def counted(c, v, ids):
+        asked.extend(ids)
+        return real(c, v, ids)
+
+    monkeypatch.setattr(threads, "readable_ids", counted)
+    topics = {"topics": ("messages", "threads")}
+    ben, cara = who(api, "ben-test"), who(api, "cara-test")
+    got = round_of(api, *[(ben, after, topics, lambda: None)] * 5, (cara, after, topics, lambda: None))
+    per_viewer = {}
+    for cid in asked:
+        per_viewer[cid] = per_viewer.get(cid, 0) + 1
+    assert all(n <= 2 for n in per_viewer.values()), per_viewer  # once for Ben's five streams, once for Cara's
+    alone_ben = lone_read(api, ben, after, **topics)
+    alone_cara = lone_read(api, cara, after, **topics)
+    for result in got[:5]:
+        assert [(s, t, dict(d)) for s, t, d in result[0]] == [(s, t, dict(d)) for s, t, d in alone_ben[0]]
+    assert [(s, t, dict(d)) for s, t, d in got[5][0]] == [(s, t, dict(d)) for s, t, d in alone_cara[0]]
+    assert private["id"] not in str(got[5][0]) and private["id"] in str(got[0][0])

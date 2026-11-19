@@ -2270,10 +2270,13 @@ def _trashed_visible(c, who, task_id):
 class _Viewer:
     """Per-read caches of what `who` may read, so one batch asks each question once."""
 
-    def __init__(self, c, auth, who):
+    def __init__(self, c, auth, who, decided=None):
         from . import task_privacy as privacy
 
         self.c, self.auth, self.who, self.privacy = c, auth, who, privacy
+        # {thread id: readable} this same identity's other streams of the round already decided in this snapshot
+        # (_Snapshot.decided): ten open apps of one person decide each thread once a round, not ten times.
+        self._decided = {} if decided is None else decided
         self.principal = privacy.actor(who)
         self._bots = None
         self._conversations = {}
@@ -2342,7 +2345,11 @@ class _Viewer:
         if not wanted:
             return
         self.auth.domain(self.who)
-        readable = threads.readable_ids(self.c, self.reader, wanted)
+        unknown = [cid for cid in wanted if cid not in self._decided]
+        if unknown:
+            found = threads.readable_ids(self.c, self.reader, unknown)
+            self._decided.update((cid, cid in found) for cid in unknown)
+        readable = {cid for cid in wanted if self._decided[cid]}
         H.prime_conversations(self.c, readable)
         for cid in wanted:
             self._conversations[cid] = H.conversation(self.c, cid) if cid in readable else None
@@ -3033,6 +3040,7 @@ class _Snapshot:
         self.first = oldest(c)
         self.tail_from = None
         self.tail, self.seqs, self.paths = [], [], {}
+        self._decided = {}
         near = [poll.cursor for poll in polls if self.newest - TAIL_SPAN <= poll.cursor <= self.newest]
         if not near:
             return
@@ -3049,6 +3057,11 @@ class _Snapshot:
                         "SELECT id, path FROM conversations WHERE id IN (%s)" % ",".join("?" * len(part)), part
                     ).fetchall()
                 )
+
+    def decided(self, who):
+        """{thread id: readable} for this identity in this snapshot, shared by its streams of one round. Keyed by the
+        whole identity (needs_cache.viewer), so two callers who may read different threads never share an answer."""
+        return self._decided.setdefault(repr(who), {})
 
     def _in_scope(self, conversation_id, threads_scope):
         path = self.paths.get(conversation_id)
@@ -3292,7 +3305,7 @@ def read_in(
     cursor = rows[-1]["seq"] if more else newest
     if not rows:
         return [], cursor, False, False
-    view = _Viewer(c, auth, who)
+    view = _Viewer(c, auth, who, snapshot.decided(who))
     by_topic = {}
     authorized_places = {}
     for row in rows:
