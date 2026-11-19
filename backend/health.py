@@ -3256,20 +3256,21 @@ def view(c, who, settings, auth, github, config, filing=False):
     if full and (denies := _harness_denies_check(c, settings)):
         checks.append(denies)
     if full:
-        from .worktrees import current_error, supported, statuses
+        from .worktrees import current_error, finished_and_retired, supported, statuses
 
         if supported(c):
             usage, failing = {}, []
             for row in statuses(
                 c,
                 c.execute(
-                    "SELECT t.owner_id,l.* FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND l.state<>'removed'"
+                    "SELECT t.owner_id,t.status AS task_status,l.* FROM task_links l JOIN tasks t ON t.id=l.task_id "
+                    "WHERE l.kind='worktree' AND l.state<>'removed'"
                 ),
             ):
                 detail = json.loads(row['detail'] or '{}')
                 bot = H.actor_id(row['owner_id'])
                 usage[bot] = usage.get(bot, 0) + (0 if row['state'] == 'retired' else detail.get('size_mb', 0))
-                if error := current_error(row['state'], detail):
+                if not finished_and_retired(row) and (error := current_error(row['state'], detail)):
                     failing.append((bot, error))
             names = _bot_names(c, [bot for bot, _ in failing])  # one read for the bots named, not one a worktree
             errors = [names[bot] + ': ' + error for bot, error in failing]

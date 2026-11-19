@@ -92,6 +92,13 @@ def statuses(c, rows):
     return [status(c, row, gone=bool(row.get('computer_id') and row['computer_id'] not in live)) for row in rows]
 
 
+def finished_and_retired(row):
+    """A retired checkout of a done or closed task needs nothing: re-adding it helps nobody, and work left unpushed on
+    the retired computer cannot be fetched either way. Reopening the task restores the checkout. `row` carries the
+    task's status as `task_status`."""
+    return row['state'] == 'retired' and row.get('task_status') in ('done', 'closed')
+
+
 def recovery_prompt(c, task, bot):
     """The owner turn can recover a retired checkout without waiting for a person."""
     if task['owner_id'] != 'bot:' + bot or start_refusal(c, task):

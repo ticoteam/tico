@@ -642,16 +642,18 @@ def _bot_checks(c, settings=None):
                     BUG_FIX["queue_idle"],
                 )
             )
-    from .worktrees import current_error, supported, statuses
+    from .worktrees import current_error, finished_and_retired, supported, statuses
 
     if supported(c):
         for r in statuses(
             c,
             c.execute(
-                "SELECT t.owner_id,l.* FROM task_links l JOIN tasks t ON t.id=l.task_id "
+                "SELECT t.owner_id,t.status AS task_status,l.* FROM task_links l JOIN tasks t ON t.id=l.task_id "
                 "WHERE l.kind='worktree' AND l.state<>'removed'"
             ),
         ):
+            if finished_and_retired(r):
+                continue
             error = current_error(r["state"], json.loads(r["detail"] or "{}"))
             if error:
                 bot = H.actor_id(r["owner_id"])
