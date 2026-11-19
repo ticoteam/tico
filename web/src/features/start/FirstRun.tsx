@@ -1,4 +1,3 @@
-import { Dialog as BaseDialog } from '@base-ui/react/dialog';
 import { Radio } from '@base-ui/react/radio';
 import { RadioGroup } from '@base-ui/react/radio-group';
 import { useQuery } from '@tanstack/react-query';
@@ -6,40 +5,47 @@ import { useLocation } from '@tanstack/react-router';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { run, useAction } from '@/actions';
 import { Button } from '@/kit/Button';
-import '@/kit/Dialog';
+import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { Select } from '@/kit/Select';
+import { Dot } from '@/tico/dot';
 import { loginLive, loginQuery, setupQuery, subscriptionsQuery, type KeyKind, type PlanKind } from './queries';
 import { setupStep, stepNumber, type SetupStep } from './steps';
 import './start.css';
 
 /* The first run: a short dialog over the app (pages/9-first-run). Choose who sets the company up first; by hand it is
    name, model, team. The step is in the address, so it closes, reopens and resumes; the app stays readable under it.
-   The kit's Dialog puts its title first, and the mock puts the step bar over it, so this composes Base UI's parts with
-   the kit's classes. */
+   Each step ends in its own foot, so a form's Enter reaches its button. */
 
 const click = { via: 'click' } as const;
 const FAILED = 'That did not go through. Try again.';
 
+const TITLES: Record<SetupStep, string> = {
+  path: 'Set up your company',
+  name: 'Name your company',
+  model: 'Connect a model',
+  paste: 'Paste a key',
+  team: 'Pick a team',
+};
+
 export function FirstRun() {
   const step = useLocation({ select: (l) => setupStep((l.search as { setup?: unknown }).setup) });
+  // The last step stays drawn while the dialog closes.
+  const [shown, setShown] = useState<SetupStep>(step ?? 'path');
+  if (step !== null && step !== shown) setShown(step);
   return (
-    <BaseDialog.Root
+    <Dialog
       open={step !== null}
       onOpenChange={(open) => {
         if (!open) void run('setup.close', {}, click);
       }}
+      className="wl"
+      lead={<Head step={shown} back={shown === 'paste'} />}
+      title={TITLES[shown]}
     >
-      <BaseDialog.Portal>
-        <BaseDialog.Backdrop className="scrim kit-scrim" />
-        <BaseDialog.Viewport className="scrim kit-viewport">
-          <BaseDialog.Popup className="modal kit-modal wl" data-target="dialog:setup">
-            {step && <Step step={step} />}
-          </BaseDialog.Popup>
-        </BaseDialog.Viewport>
-      </BaseDialog.Portal>
-    </BaseDialog.Root>
+      <Step step={shown} />
+    </Dialog>
   );
 }
 
@@ -53,14 +59,16 @@ function Step({ step }: { step: SetupStep }) {
 
 /* ---------------------------------------------------------------- parts */
 
-function Head({ step, back = false }: { step: SetupStep; back?: boolean }) {
+function Head({ step, back }: { step: SetupStep; back: boolean }) {
   const n = stepNumber(step);
   return (
     <header className="wl-head">
-      {back && (
+      {back ? (
         <button className="ib" type="button" aria-label="Back" title="Back" onClick={() => void run('setup.back', { from: step }, click)}>
           <Icon name="chevron" className="flip" />
         </button>
+      ) : (
+        <Dot size={28} />
       )}
       <span className="grow" />
       {n !== null && (
@@ -120,8 +128,6 @@ function PathStep() {
   const choose = useStepAction('setup.choosePath');
   return (
     <>
-      <Head step="path" />
-      <BaseDialog.Title className="t-hall">Set up your company</BaseDialog.Title>
       <RadioGroup className="wl-list" value={path} onValueChange={(v) => setPath(v as 'agents' | 'self')} aria-label="Who sets it up">
         <Choice value="agents" label="Have my agents set it up" on={path === 'agents'} />
         <Choice value="self" label="Set it up myself" on={path === 'self'} />
@@ -149,8 +155,6 @@ function NameStep() {
   };
   return (
     <form className="wl-form" onSubmit={submit}>
-      <Head step="name" />
-      <BaseDialog.Title className="t-hall">Name your company</BaseDialog.Title>
       <Field label="Company name" labelHidden value={shown} onValueChange={setName} autoComplete="organization" autoFocus />
       <Foot
         error={next.error}
@@ -207,8 +211,6 @@ function ModelStep() {
   const failed = login && !going && login.state === 'failed' ? login.message || 'The sign-in did not finish' : null;
   return (
     <>
-      <Head step="model" />
-      <BaseDialog.Title className="t-hall">Connect a model</BaseDialog.Title>
       <div className="wl-list">
         {PLANS.map((plan, i) => (
           <div className="wl-row" key={plan.kind}>
@@ -279,8 +281,6 @@ function PasteStep() {
   };
   return (
     <form className="wl-form" onSubmit={(e) => void submit(e)}>
-      <Head step="paste" back />
-      <BaseDialog.Title className="t-hall">Paste a key</BaseDialog.Title>
       <div className="wl-fields">
         <Select label="Model" labelHidden options={KEYS} value={kind} onValueChange={setKind} />
         <Field label="Key" labelHidden type="password" value={secret} onValueChange={setSecret} autoComplete="off" />
@@ -305,8 +305,6 @@ function TeamStep() {
   const finish = useStepAction('setup.finish');
   return (
     <>
-      <Head step="team" />
-      <BaseDialog.Title className="t-hall">Pick a team</BaseDialog.Title>
       <RadioGroup className="wl-list" value={job} onValueChange={(v) => setPicked(v as string)} aria-label="First job">
         {choices.map((c) => (
           <Choice key={c.key} value={c.key} label={c.label} on={c.key === job} />

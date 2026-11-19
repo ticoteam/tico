@@ -2,7 +2,7 @@
    pagekinds.css and the kit do not. Class names are the mock's. */
 
 /* the server did not answer: what to check, under the line (15-start) */
-.q-try{width:100%;margin-top:var(--s-6);padding:0 0 0 var(--s-5);text-align:left;color:var(--ink-2);line-height:var(--lh-read);display:grid;gap:var(--s-1)}
+.q-try{width:100%;margin-top:calc(var(--s-5) + var(--s-0));padding:0 0 0 calc(var(--s-4) + var(--s-0));text-align:left;color:var(--ink-2);line-height:var(--lh-read);display:grid;gap:var(--s-1)}
 .q-try li::marker{color:var(--faint)}
 
 /* ---------- Welcome (9-first-run): a dialog of a few steps. Where you are, one title, one thing to do. ---------- */
@@ -13,6 +13,7 @@
 .wl-steps{display:flex;gap:var(--s-1)}
 .wl-steps i{width:20px;height:3px;border-radius:var(--r-pill);background:var(--line-strong)}
 .wl-steps i.is-on{background:var(--ink)}
+.modal.wl h2{font-family:var(--font-display);font-size:var(--t-lg);line-height:1.2;letter-spacing:var(--track-title)}
 .wl .field{height:var(--ctl-lg);padding:0 var(--s-3);font-size:var(--t-md)}
 .wl-fields{display:grid;gap:var(--s-2)}
 /* a step that is a form (Enter sends): its parts stay the dialog's own rows */

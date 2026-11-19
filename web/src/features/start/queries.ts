@@ -1,7 +1,7 @@
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
 import type { CalendarOccurrence, GetConfigResponse, GetNeedsYouResponse, ListCalendarEventsResponse, ModelSubscriptionList, NeedsYouItem } from '@/api/schema';
-import { QUIET_STALE_MS, configQuery, keys, meQuery, queryClient, quietRoot, write } from '@/data';
+import { configQuery, keys, meQuery, queryClient, write } from '@/data';
 
 const enc = encodeURIComponent;
 
@@ -42,9 +42,6 @@ export function retryStart(): void {
 
 /* ---------------------------------------------------------------- the start page */
 
-// No patcher follows the `needs` topic yet: read again after the person's own writes, a reconnect, and on open.
-quietRoot('needs');
-
 export interface Need {
   id: string;
   kind: NeedsYouItem['kind'];
@@ -79,11 +76,11 @@ export function adaptNeeds(data: GetNeedsYouResponse): { count: number; items: N
   };
 }
 
-/** What waits on the person: approvals and questions, one record per item, oldest first (GET /api/v2/needs-you). */
+/** What waits on the person: approvals and questions, one record per item, oldest first (GET /api/v2/needs-you). Read
+    again on the `needs` signal. */
 export const needsQuery = queryOptions({
   queryKey: ['needs', 'start'] as const,
   queryFn: async ({ signal }) => adaptNeeds(await api.get<GetNeedsYouResponse>('/api/v2/needs-you?limit=50', { signal })),
-  staleTime: QUIET_STALE_MS,
 });
 
 /** Today's events and dues on the person's calendar, in order. Refetched on the `calendar` signal. */

@@ -20,7 +20,7 @@ describe('Before the app opens @s1155 @s1156 @s1157 @s1194 @s1195', () => {
     expect(within(main).getByRole('heading', { level: 1, name: "You're not on the list" })).toBeTruthy();
     expect(within(main).getByText('Ask an owner to add you.')).toBeTruthy();
     expect(within(main).getByRole('link', { name: 'Use another account' }).getAttribute('href')).toBe('/api/v2/logout');
-    expect(within(main).getByRole('link', { name: 'Tico support' })).toBeTruthy();
+    expect(within(main).getByText('Contact Tico support')).toBeTruthy();
   });
 
   it('signed out offers to sign in again', async () => {

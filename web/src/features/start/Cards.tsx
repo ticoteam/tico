@@ -9,12 +9,12 @@ import './start.css';
 /* Before the app can open: sign in, a refusal, signed out, and the two boot failures. The server's own pages do the
    signing in (/auth/...); these only point at them. They draw without the action layer, which is not up yet. */
 
-const SUPPORT = 'https://tico.team/';
 const LOGOUT = '/api/v2/logout';
 // The mock's down card tries again by itself after this long.
 const AGAIN_S = 8;
 
-const Support = () => <a href={SUPPORT}>Tico support</a>;
+// Tico support is a chat inside the app (ui/support.ts); with no app open there is nowhere to link, so the foot only names it.
+const Support = () => <>Contact Tico support</>;
 
 /** The server's sign-in path, coming back here after. */
 export function signInHref(path: string, back = location.pathname + location.search + location.hash): string {
