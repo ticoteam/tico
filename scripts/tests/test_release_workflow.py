@@ -578,3 +578,28 @@ def test_each_main_validation_hands_its_run_to_main_red_which_waits_for_it_to_fi
     for name in ("alarm", "bisect"):
         runs = [step for step in red["jobs"][name]["steps"] if "main_red.py" in str(step.get("run", ""))]
         assert runs and all(step["env"]["RUN_ID"] == "${{ inputs.run_id }}" for step in runs), name
+
+
+@pytest.mark.parametrize(
+    "gate, images, failed",
+    [
+        ("success", "success", None),
+        ("failure", "success", "gate (failure)"),
+        ("success", "skipped", "images (skipped)"),
+    ],
+)
+def test_the_release_check_step_name_never_reads_as_a_result_and_its_exit_code_is_the_verdict(gate, images, failed):
+    """A red gate once showed a step named "...passed" followed by exit 1: the name is neutral, the log names the part."""
+    jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+    (step,) = jobs["release-check"]["steps"]
+    assert "pass" not in step["name"].lower() and "fail" not in step["name"].lower()
+    assert jobs["release-check"]["needs"] == ["gate", "images"] and jobs["release-check"]["if"] == "always()"
+    done = subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        env={**os.environ, "GATE": gate, "IMAGES": images},
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode == (0 if failed is None else 1)
+    if failed:
+        assert f"::error::Release gate failed: {failed}" in done.stdout
