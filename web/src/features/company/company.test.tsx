@@ -7,7 +7,7 @@ import { queryClient } from '@/data';
 import type { CompanyFloor, GoalTree, Kpi, KpiDetail, ProductList } from '@/api/schema';
 import { CompanyPage } from './CompanyPage';
 import { ProductsPage } from './ProductsPage';
-import { floorQuery, goalsTreeQuery, kpiQuery, productsQuery } from './queries';
+import { brandQuery, floorQuery, goalsTreeQuery, kpiQuery, productsQuery, strategyQuery, strategyVersionsQuery, type Brand, type Strategy } from './queries';
 import { RiskPage } from './RiskPage';
 import { StrategyPage } from './StrategyPage';
 
@@ -144,6 +144,47 @@ describe('Goals', () => {
     refuse({ status: 403, body: { detail: 'forbidden' } });
     await waitFor(() => expect(within(panel).queryAllByText('31')).toHaveLength(0));
     expect(within(panel).getAllByText('12').length).toBeGreaterThan(0);
+  });
+});
+
+describe('Strategy and Brand versions', () => {
+  const strategy: Strategy = {
+    current: { n: 3, summary: 'Sell kits to new gardeners.', sections: { serve: 'First gardeners.\n\nRenters with a balcony.' }, published_by: 'bot:strat', published_at: '2026-11-18T10:00:00Z' },
+    bets: [{ id: 'b1', statement: 'Balcony kits', status: 'active' }],
+  };
+
+  it('marks what changed from the version before, from the count in the head', async () => {
+    serve((url) => {
+      if (url.includes('/strategy/diff?from=2&to=3'))
+        return { status: 200, body: { fields: [{ key: 'sections.serve', from: 'First gardeners.', to: 'First gardeners.\n\nRenters with a balcony.' }], bets: { added: [{ id: 'b1', statement: 'Balcony kits', status: 'active' }], retired: [], changed: [] } } };
+      return nothing();
+    });
+    queryClient.setQueryData(strategyQuery.queryKey, strategy);
+    queryClient.setQueryData(strategyVersionsQuery.queryKey, [{ n: 3 }, { n: 2 }]);
+    show(<StrategyPage tab="strategy" search={{ compare: true }} />, '/company/strategy?compare=true');
+    const count = await screen.findByRole('button', { name: '2 changes' });
+    expect(count.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'v3' })).toBeTruthy();
+    expect(screen.getByText('Renters with a balcony.').tagName).toBe('INS');
+    expect(screen.getByText('First gardeners.').tagName).toBe('P');
+    expect(screen.getByText('Balcony kits').tagName).toBe('INS');
+  });
+
+  it('saves only the brand sections that changed onto the draft, then offers Publish', async () => {
+    const book: Brand = { published: { n: 1, body: { name: 'Fieldkit', voice: [{ trait: 'Plain', do: '', dont: '', level: 'warn' } as never] } }, draft: null, versions: [{ n: 1 }], may_edit: true };
+    const sent: unknown[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const put = init?.method === 'PUT' && String(url).endsWith('/brand/draft');
+      if (put) sent.push(JSON.parse(String(init.body)));
+      const body = put ? { ...book, draft: { body: { ...book.published!.body, name: 'Fieldkit Co' }, revision: 1, changed: ['name'] } } : { detail: 'not_found' };
+      return new Response(JSON.stringify(body), { status: put ? 200 : 404, headers: { 'Content-Type': 'application/json' } });
+    });
+    queryClient.setQueryData(brandQuery.queryKey, book);
+    show(<StrategyPage tab="brand" search={{ edit: true }} />, '/company/strategy/brand?edit=true');
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), { target: { value: 'Fieldkit Co' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(sent).toEqual([{ sections: { name: 'Fieldkit Co' } }]));
+    expect(await screen.findByRole('button', { name: 'Publish' })).toBeTruthy();
   });
 });
 

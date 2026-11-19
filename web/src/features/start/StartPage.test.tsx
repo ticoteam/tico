@@ -65,7 +65,7 @@ describe('Start page', () => {
 });
 
 describe('First run @s1154 @s1171', () => {
-  it('opens from the address over the app, with "Have my agents set it up" chosen first', async () => {
+  it('opens from the address over the app, with "Have my agent set it up" chosen first', async () => {
     seed([]);
     show(
       <>
@@ -76,7 +76,7 @@ describe('First run @s1154 @s1171', () => {
     );
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: 'Set up your company' })).toBeTruthy();
-    expect(within(dialog).getByRole('radio', { name: /Have my agents set it up/ }).getAttribute('aria-checked')).toBe('true');
+    expect(within(dialog).getByRole('radio', { name: /Have my agent set it up/ }).getAttribute('aria-checked')).toBe('true');
     expect(within(dialog).getByRole('radio', { name: /Set it up myself/ }).getAttribute('aria-checked')).toBe('false');
     expect(within(dialog).getByRole('button', { name: 'Continue' })).toBeTruthy();
   });

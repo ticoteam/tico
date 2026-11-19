@@ -134,6 +134,38 @@ export const strategyQuery = queryOptions({
   ...quiet,
 });
 
+/** One row of the history: every save that changed something is a version (GET /api/v2/strategy/versions). */
+export interface VersionRow {
+  n: number;
+  note?: string | null;
+  published_at?: string | null;
+  published_by?: string | null;
+}
+export const strategyVersionsQuery = queryOptions({
+  queryKey: ['strategy', 'versions'],
+  queryFn: ({ signal }) => api.get<VersionRow[]>('/api/v2/strategy/versions?limit=50', { signal }),
+  ...quiet,
+});
+/** One version whole, with its bets as they were. A published version never changes. */
+export type StrategySnapshot = StrategyVersion & { bets: Bet[] };
+export const strategyVersionQuery = (n: number) =>
+  queryOptions({
+    queryKey: ['strategy', 'version', n],
+    queryFn: ({ signal }) => api.get<StrategySnapshot>(`/api/v2/strategy/versions/${n}`, { signal }),
+    staleTime: Infinity,
+  });
+/** What changed between two versions (backend/strategy.py diff): field keys are `summary`, `sections.<key>`, `sections.extra.<key>`. */
+export interface StrategyDiff {
+  fields: { key: string; from: unknown; to: unknown }[];
+  bets: { added: Bet[]; retired: Bet[]; changed: { id: string; from: Bet; to: Bet }[] };
+}
+export const strategyDiffQuery = (from: number, to: number) =>
+  queryOptions({
+    queryKey: ['strategy', 'diff', from, to],
+    queryFn: ({ signal }) => api.get<StrategyDiff>(`/api/v2/strategy/diff?from=${from}&to=${to}`, { signal }),
+    staleTime: Infinity,
+  });
+
 // Market: the latest briefing, the market's spend and players, and Listening's posts a day.
 export interface MarketItem {
   text: string;
@@ -188,19 +220,29 @@ export const groupsQuery = queryOptions({
   ...quiet,
 });
 
-// Brand: the published book (backend/brand.py view).
+// Brand: the published book, its versions, and for an owner or admin the draft (backend/brand.py view).
 export interface BrandBody {
   name?: string | null;
   positioning?: string | null;
   voice?: { trait: string; do?: string | null; dont?: string | null }[] | null;
   tone?: { situation: string; guide: string }[] | null;
-  words?: { use?: { word: string; not?: string | null }[] | null; avoid?: { word: string; why?: string | null }[] | null } | null;
-  naming?: { name: string; rule?: string | null }[] | null;
-  visual?: { colors?: { name?: string | null; hex?: string | null }[] | null; fonts?: string[] | null; imagery?: string | null } | null;
-  claims?: { allowed?: { claim: string; proof?: string | null }[] | null; never?: string[] | null } | null;
+  words?: { use?: { word: string; not?: string | null }[] | null; avoid?: { word: string; why?: string | null; level?: string }[] | null } | null;
+  naming?: { name: string; rule?: string | null; wrong?: string[] }[] | null;
+  visual?: { colors?: { name?: string | null; hex?: string | null }[] | null; fonts?: string[] | null; logo_files?: string[]; imagery?: string | null } | null;
+  claims?: { allowed?: { claim: string; proof?: string | null; check?: string; status?: string }[] | null; never?: string[] | null } | null;
+  examples?: { text: string; verdict: 'on' | 'off'; why?: string }[] | null;
+}
+export interface BrandVersion {
+  n: number;
+  body: BrandBody;
+  note?: string | null;
+  published_at?: string | null;
+  published_by?: string | null;
 }
 export interface Brand {
-  published: { n: number; body: BrandBody; published_at?: string | null; published_by?: string | null } | null;
+  published: BrandVersion | null;
+  draft?: { body: BrandBody; revision: number; changed: string[] } | null;
+  versions?: VersionRow[];
   may_edit?: boolean;
 }
 export const brandQuery = queryOptions({
@@ -208,6 +250,33 @@ export const brandQuery = queryOptions({
   queryFn: ({ signal }) => api.get<Brand>('/api/v2/brand', { signal }),
   ...quiet,
 });
+export const brandVersionQuery = (n: number) =>
+  queryOptions({
+    queryKey: ['brand', 'version', n],
+    queryFn: ({ signal }) => api.get<BrandVersion>(`/api/v2/brand/versions/${n}`, { signal }),
+    staleTime: Infinity,
+  });
+
+/** Sections onto the brand draft (null takes one out). `revision` is the draft's as read; a draft changed meanwhile
+    is refused (409) and read again. */
+export function saveBrandDraft(sections: Partial<Record<keyof BrandBody, unknown>>, revision?: number) {
+  return write<Brand>({
+    key: brandQuery.queryKey,
+    optimistic: (b: Brand | undefined) => b && { ...b, draft: { revision: revision ?? 0, changed: [], ...b.draft, body: { ...(b.draft?.body ?? b.published?.body), ...sections } as BrandBody } },
+    send: (idempotencyKey) => api.put<Brand>('/api/v2/brand/draft', { sections, ...(revision != null && { revision }) }, { idempotencyKey }),
+    settle: (_b: Brand | undefined, r) => r,
+  });
+}
+
+/** The draft becomes the next version. */
+export function publishBrand(note: string) {
+  return write<Brand>({
+    key: brandQuery.queryKey,
+    optimistic: (b: Brand | undefined) => b,
+    send: (idempotencyKey) => api.post<Brand>('/api/v2/brand/publish', { note }, { idempotencyKey }),
+    settle: (_b: Brand | undefined, r) => r,
+  });
+}
 
 // ---------------------------------------------------------------- Goals and KPIs
 

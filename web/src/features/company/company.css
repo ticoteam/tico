@@ -119,6 +119,26 @@
 .co .bet .pill{margin-top:calc(var(--s-0) / 2)}
 .co .brand-frame{margin-top:0}
 
+/* ---------- versions: the pick and the changes count in the head, the changes marked in place (files.css) ---------- */
+.co .chg-pick,.co .ver-pick{font-variant-numeric:tabular-nums}
+.co .ver-pick{gap:var(--s-1)}
+.co .ver-pick .ico{width:14px;height:14px;color:var(--muted)}
+.co .chg-pick[aria-pressed="true"]{background:var(--selected);color:var(--ink)}
+.co .chg{position:relative}
+.co .read .chg+p{margin-top:var(--s-3h)}
+.co .chg:not(.bet)::before,.co .bet.chg::after{content:"";position:absolute;left:calc(-1 * var(--s-3h));top:3px;bottom:3px;width:2px;background:var(--ink-2)}
+.co .read ins{text-decoration:none;background:var(--selected);color:var(--ink);border-radius:var(--r-key);padding:var(--s-0) 0;box-decoration-break:clone}
+.co .read del{color:var(--muted);text-decoration:line-through}
+.co .chg-by{display:flex;align-items:center;gap:var(--s-1h);margin-top:var(--s-1h);color:var(--muted);font-size:var(--t-xs);line-height:var(--lh-meta)}
+.co .chg-by time{font-variant-numeric:tabular-nums}
+
+/* ---------- Brand: the draft as fields ---------- */
+.co .brand-edit{display:flex;flex-direction:column;gap:var(--s-2)}
+.co .be-rows{display:flex;flex-direction:column;align-items:flex-start;gap:var(--s-2)}
+.co .be-row{display:grid;column-gap:var(--s-2);align-items:end;width:100%}
+.co .be-row.c2{grid-template-columns:minmax(0,1fr) minmax(0,2fr) auto}
+.co .be-row.c3{grid-template-columns:minmax(0,1fr) minmax(0,2fr) minmax(0,2fr) auto}
+
 /* ---------- Market ---------- */
 /* the frame the bar chart measures; the svg inside keeps no padding */
 .co div.chart{padding:0 var(--s-2) var(--s-1h)}

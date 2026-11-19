@@ -1,8 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { loadStrategy, panelSearch, StrategyPage } from '@/features/company/exports';
+import { loadStrategy, strategySearch, StrategyPage } from '@/features/company/exports';
 
 export const Route = createFileRoute('/company/strategy')({
-  validateSearch: panelSearch,
+  validateSearch: strategySearch,
   loader: ({ context: { queryClient } }) => loadStrategy(queryClient, 'strategy'),
   component: Strategy,
 });

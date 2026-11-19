@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
-import { directoryQuery, meQuery } from '@/data';
+import { directoryQuery, meQuery, useActor } from '@/data';
 import { Sparkline } from '@/kit/Chart';
 import { FlowMark } from '@/kit/FlowMark';
 import { FoldButton } from '@/kit/SectionHead';
@@ -91,6 +91,18 @@ function CompanyFigures() {
   return figures.length ? <FiguresStrip figures={figures} label="Company figures" /> : null;
 }
 
+/** A hall's manager is who you talk to about that hall: their face opens their chat beside the Floor (company.js
+    companyChat), and Back closes it. */
+function ManagerChat({ who }: { who: string }) {
+  const actor = who.includes(':') ? who : `bot:${who}`;
+  const name = useActor(actor)?.name ?? 'the manager';
+  return (
+    <Link to="." search={((prev: Record<string, unknown>) => ({ ...prev, chat: actor })) as never} className="crew-face" aria-label={`Chat with ${name}`} title={`Chat with ${name}`} data-target={`chat:${actor}`}>
+      <Face id={actor} />
+    </Link>
+  );
+}
+
 /** One team: its name (folds the hall), its crew's faces, then its pipelines. */
 function Hall({ hall, open }: { hall: Factory; open: { pipeline: string; stage: string } | null }) {
   const [shown, setShown] = useState(true);
@@ -103,11 +115,7 @@ function Hall({ hall, open }: { hall: Factory; open: { pipeline: string; stage: 
           <FoldButton name={hall.name} open={shown} onToggle={() => setShown(!shown)} />
         </h2>
         <div className="crew" aria-label={`${hall.name} team`}>
-          {hall.manager_id && (
-            <Link to={'/team/$who' as never} params={{ who: hall.manager_id.slice(hall.manager_id.indexOf(':') + 1) } as never} className="crew-face">
-              <Face id={hall.manager_id} />
-            </Link>
-          )}
+          {hall.manager_id && <ManagerChat who={hall.manager_id} />}
           {crew.slice(0, 8).map((a) => (
             <Face key={a.id} id={a.id} />
           ))}

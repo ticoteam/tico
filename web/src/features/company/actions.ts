@@ -9,6 +9,8 @@ import {
   createKpi,
   createProduct,
   createRisk,
+  publishBrand,
+  saveBrandDraft,
   updateGoal,
   updateKpi,
   updateProduct,
@@ -26,6 +28,7 @@ const goalOwner = s.string({ min: 1, max: 200, pattern: /^((human|bot):\S+|compa
 const day = s.string({ pattern: /^\d{4}-\d{2}-\d{2}$/, what: 'a date, 2026-12-31' });
 
 const GOALS = '/company/strategy/goals';
+const BRAND = '/company/strategy/brand';
 const go = (router: AnyRouter, to: string, search: Record<string, string> = {}) => router.navigate({ to, search });
 
 // ---------------------------------------------------------------- views
@@ -69,6 +72,17 @@ export const openTeammate = defineAction({
   run: ({ router }, { who }) => router.navigate({ to: `/team/${encodeURIComponent(who)}` }),
   did: () => 'Opened the teammate',
   target: ({ who }) => ({ kind: 'page', id: `/team/${who}` }),
+});
+
+/** A hall's manager's chat beside the Floor (company.js companyChat): who you talk to about that hall. */
+export const chatWith = defineAction({
+  id: 'company.chatWith',
+  title: "Open a hall manager's chat beside the Floor",
+  kind: 'view',
+  input: s.object({ who: actor }),
+  run: ({ router }, { who }) => router.navigate({ to: '/company', search: { chat: who } as never }),
+  did: () => 'Opened the chat',
+  target: ({ who }) => ({ kind: 'chat', id: who }),
 });
 
 export const openGoal = defineAction({
@@ -261,4 +275,113 @@ export const riskUpdate = defineAction({
   run: (_ctx, { risk, version, ...patch }) => updateRisk(risk, patch, version),
   did: () => 'Changed the risk',
   target: ({ risk }) => ({ kind: 'risk', id: risk }),
+});
+
+// ---------------------------------------------------------------- Strategy and Brand: versions and the brand draft
+
+const versionN = s.number({ int: true, min: 1 });
+const nav = (router: AnyRouter, to: string, search: Record<string, unknown> = {}) => router.navigate({ to, search });
+/** Sets one key of this page's address, keeping the rest. */
+const setSearch = (router: AnyRouter, patch: Record<string, unknown>) =>
+  router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, ...patch }) });
+
+export const strategyOpenVersion = defineAction({
+  id: 'strategy.openVersion',
+  title: 'Open a version of the strategy',
+  kind: 'view',
+  input: s.object({ v: s.optional(versionN) }),
+  run: ({ router }, { v }) => nav(router, '/company/strategy', v ? { v } : {}),
+  did: ({ v }) => (v ? `Opened v${v}` : 'Opened the latest version'),
+  target: () => ({ kind: 'page', id: '/company/strategy' }),
+});
+
+export const brandOpenVersion = defineAction({
+  id: 'brand.openVersion',
+  title: 'Open a version of the brand book',
+  kind: 'view',
+  input: s.object({ v: s.optional(versionN) }),
+  run: ({ router }, { v }) => nav(router, BRAND, v ? { v } : {}),
+  did: ({ v }) => (v ? `Opened v${v}` : 'Opened the latest version'),
+  target: () => ({ kind: 'page', id: BRAND }),
+});
+
+/** Strategy or the brand book: mark what changed from the version before, or show the clean page. */
+export const markChanges = defineAction({
+  id: 'strategy.markChanges',
+  title: 'Mark what changed from the version before',
+  kind: 'view',
+  input: s.object({ on: s.boolean() }),
+  run: ({ router }, { on }) => setSearch(router, { compare: on || undefined }),
+  did: ({ on }) => (on ? 'Marked the changes' : 'Cleared the marks'),
+});
+
+export const brandEdit = defineAction({
+  id: 'brand.edit',
+  title: 'Edit the brand book',
+  kind: 'view',
+  input: s.object({ on: s.boolean() }),
+  run: ({ router }, { on }) => nav(router, BRAND, on ? { edit: true } : {}),
+  did: ({ on }) => (on ? 'Opened the brand draft' : 'Closed the brand draft'),
+  target: () => ({ kind: 'page', id: BRAND }),
+});
+
+// The brand body's shapes (backend/models.py BrandBody); a row keeps the fields this form does not show.
+const text = (max: number) => s.string({ max });
+const brandSections = s.object({
+  name: s.optional(s.nullable(text(60))),
+  positioning: s.optional(s.nullable(text(120))),
+  voice: s.optional(s.nullable(s.array(s.object({ trait: text(80), do: s.optional(text(300)), dont: s.optional(text(300)) }), { max: 12 }))),
+  tone: s.optional(s.nullable(s.array(s.object({ situation: text(80), guide: s.optional(text(300)) }), { max: 20 }))),
+  words: s.optional(
+    s.nullable(
+      s.object({
+        use: s.optional(s.array(s.object({ word: text(80), not: s.optional(text(300)) }), { max: 100 })),
+        avoid: s.optional(s.array(s.object({ word: text(80), why: s.optional(text(300)), level: s.optional(s.oneOf(['warn', 'block'] as const)) }), { max: 200 })),
+      }),
+    ),
+  ),
+  naming: s.optional(s.nullable(s.array(s.object({ name: text(80), rule: s.optional(text(300)), wrong: s.optional(s.array(text(80), { max: 20 })) }), { max: 50 }))),
+  visual: s.optional(
+    s.nullable(
+      s.object({
+        colors: s.optional(s.array(s.object({ name: text(80), hex: s.string({ pattern: /^#[0-9A-Fa-f]{3,8}$/, what: 'a color, #2f5d3a' }) }), { max: 30 })),
+        fonts: s.optional(s.array(text(80), { max: 10 })),
+        logo_files: s.optional(s.array(text(300), { max: 20 })),
+        imagery: s.optional(text(1000)),
+      }),
+    ),
+  ),
+  claims: s.optional(
+    s.nullable(
+      s.object({
+        allowed: s.optional(s.array(s.object({ claim: text(300), proof: s.optional(text(1000)), check: s.optional(text(300)), status: s.optional(s.oneOf(['proven', 'due'] as const)) }), { max: 100 })),
+        never: s.optional(s.array(text(300), { max: 100 })),
+      }),
+    ),
+  ),
+  examples: s.optional(s.nullable(s.array(s.object({ text: text(1000), verdict: s.oneOf(['on', 'off'] as const), why: s.optional(text(300)) }), { max: 30 }))),
+});
+
+export const brandSave = defineAction({
+  id: 'brand.save',
+  title: 'Save sections of the brand draft',
+  kind: 'change',
+  input: s.object({ sections: brandSections, revision: s.optional(s.number({ int: true, min: 0 })) }),
+  run: (_ctx, { sections, revision }) => saveBrandDraft(sections, revision),
+  did: () => 'Saved the brand draft',
+  target: () => ({ kind: 'page', id: BRAND }),
+});
+
+export const brandPublish = defineAction({
+  id: 'brand.publish',
+  title: 'Publish the brand draft as the next version',
+  kind: 'change',
+  input: s.object({ note: s.string({ max: 500 }) }),
+  run: async ({ router }, { note }) => {
+    const out = await publishBrand(note);
+    await nav(router, BRAND);
+    return out;
+  },
+  did: () => 'Published the brand book',
+  target: () => ({ kind: 'page', id: BRAND }),
 });

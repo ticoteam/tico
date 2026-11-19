@@ -129,7 +129,7 @@ function PathStep() {
   return (
     <>
       <RadioGroup className="wl-list" value={path} onValueChange={(v) => setPath(v as 'agents' | 'self')} aria-label="Who sets it up">
-        <Choice value="agents" label="Have my agents set it up" on={path === 'agents'} />
+        <Choice value="agents" label="Have my agent set it up" on={path === 'agents'} />
         <Choice value="self" label="Set it up myself" on={path === 'self'} />
       </RadioGroup>
       <Foot
