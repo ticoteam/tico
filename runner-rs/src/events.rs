@@ -719,6 +719,24 @@ mod tests {
         assert!(!e.take("claim"));
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn a_voice_hint_wakes_the_session_before_its_backstop_from_every_server_that_sends_one() {
+        let e = pushing();
+        let mut inputs = e.voice_inputs();
+        inputs.wait("attempt", "call").await;
+        // The frame as the server's stream sends it (backend/events.py runner_read), and as the first servers to send
+        // hints did, with the attempt renamed run_id (wire.rs RunnerFrame): neither waits for the backstop read.
+        for key in ["attempt_id", "run_id"] {
+            let mut frame = serde_json::json!({
+                "seq": 17, "kind": "voice_inputs", "bots": [], "call_id": "call"
+            });
+            frame[key] = serde_json::json!("attempt");
+            e.dispatch("runner", Some("17".into()), &frame, false);
+            assert_eq!(next_read(&mut inputs).await, Duration::ZERO, "{key}");
+            assert_eq!(next_read(&mut inputs).await, VOICE_BACKUP, "{key}");
+        }
+    }
+
     /// How long the next read of the voice inputs waits, given nothing else wakes it.
     async fn next_read(inputs: &mut VoiceInputs) -> Duration {
         let before = tokio::time::Instant::now();
