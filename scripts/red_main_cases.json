@@ -3191,5 +3191,27 @@
     "suggested_fix": "pin",
     "pin_glob": "clients/commands/*.py",
     "hub_file": null
+  },
+  {
+    "fix_pr": null,
+    "breaking_prs": [
+      "#4489 (Growth read: when each source last pushed)"
+    ],
+    "failing_tests": [
+      "backend/tests/test_growth_page_fixtures.py::test_tidy_two_revenue_segments_with_paid_channels",
+      "backend/tests/test_growth_page_fixtures.py::test_tico_no_segments_and_no_spend",
+      "backend/tests/test_growth_page_fixtures.py::test_hotmic_a_retention_segment_with_promo_costs"
+    ],
+    "changed_files": [
+      "backend/growth_core.py",
+      "backend/tests/test_growth_core.py",
+      "docs/growth.md"
+    ],
+    "cause": "dynamic_ref",
+    "confidence": "high",
+    "evidence": "Release validation for v0.6.110 (run 44589462848, python-21) failed three test_growth_page_fixtures tests: #4489 added `sources` (with a wall-clock `pushed_at`) to the Growth read's health, and ui/tests/fixtures/growth-read-*.json were not written again. The test reaches backend/growth_core.py through the API and growth_computed, so the dependency map has no edge from growth_core.py to it; neither the PR nor the queue ran it.",
+    "suggested_fix": "pin",
+    "pin_glob": "backend/growth*.py",
+    "hub_file": null
   }
 ]

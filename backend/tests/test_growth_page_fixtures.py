@@ -7,14 +7,16 @@ company shapes, so the page's browser test (ui/tests/growth-page.cts) draws what
 
 A change to the read's shape fails here; TICO_WRITE_FIXTURES=1 writes the files again for the page test to follow."""
 
+import itertools
 import json
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from backend import growth_computed as GX
+from backend import hubdb
 from backend.tests.helpers.api import get, post
 from backend.tests.helpers.growth_computed import TODAY
 
@@ -26,7 +28,13 @@ DETAIL = "detail=series,retention"
 
 @pytest.fixture(autouse=True)
 def on_the_13th(monkeypatch):
+    """The read's day and every write's time are fixed, so the fixtures name a push time that does not move."""
     monkeypatch.setattr(GX, "today", lambda conf: TODAY)
+    start = datetime(TODAY.year, TODAY.month, TODAY.day, 9, tzinfo=timezone.utc)
+    ticks = itertools.count()  # one microsecond apart: writes still sort and never collide, as hubdb.now promises
+    monkeypatch.setattr(
+        hubdb, "now", lambda: (start + timedelta(microseconds=next(ticks))).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    )
 
 
 def _old_enough(month: str, days: int) -> bool:
