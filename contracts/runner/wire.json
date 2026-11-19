@@ -1,6 +1,6 @@
 {
   "title": "Tico runner wire contract",
-  "version": "1.2",
+  "version": "1.3",
   "x-note": "The core turn path between a runner and its server (docs/runner-wire-contract.md). Requests are the server's own models (requests.json, generated from backend/models.py); answers and errors are declared here from what the handlers send. An object with additionalProperties false is fully declared: the server sends nothing else. One with additionalProperties true is not contracted below that level yet: readers keep it as opaque JSON. x-open-enum marks a string whose readers must accept values not listed.",
   "endpoints": {
     "heartbeat": {"method": "POST", "path": "/api/v2/runners/heartbeat", "request": "Heartbeat", "answer": "HeartbeatAnswer"},
@@ -36,6 +36,7 @@
     "heartbeat.request.capabilities[]=\"push_hints_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes; without it no `pushed` event is sent to that computer, and its chat turns trust its own fetch for up to 5 minutes, as before",
     "heartbeat.request.capabilities[]=\"voice_sessions_v1\"": "runner-rs/src/lanes.rs refused_field drops it after an older server's 422; only an advertising runner can claim a resident voice session",
     "heartbeat.request.capabilities[]=\"voice_inputs_v1\"": "runner-rs/src/lanes.rs refused_field drops it after an older server's 422 for ten minutes; without it no voice input hint is pushed to that computer and the runner keeps polling voice inputs every 400 ms (events.rs)",
+    "heartbeat.request.capabilities: the reader's maxItems": "the hub takes 64 capabilities and the 0.6.0 hub 32; runner-rs sends at most 32 (lanes.rs a_new_runner_checks_in_with_every_supported_server asserts it per release), and an older hub's 422 on capabilities with no index makes lanes.rs refused_field drop the newest one",
     "heartbeat.request.capabilities[]=\"resident_threads_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes; the runner keeps a session's process between turns, and calls the resident routes (backend/residents.py), only where GET runners/desired lists features.resident_threads_v1",
     "heartbeat.request.capabilities[]=\"voice_session_resume_v1\"": "runner-rs/src/lanes.rs refused_field drops it after an older server's 422 for ten minutes; without it a harness that requires it (Codex, voice_session_runner) gets no resident call session on that computer",
     "heartbeat.request.capabilities[]=\"fork_session_v1\"": "runner-rs/src/lanes.rs refused_field drops it after an older server's 422 for ten minutes; without it that computer is handed no fork_thread, so such a job runs as an ordinary turn (backend/execution.py FORK_SESSION)",

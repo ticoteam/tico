@@ -1076,7 +1076,7 @@
       ],
       "type": "string"
      },
-     "maxItems": 32,
+     "maxItems": 64,
      "title": "Capabilities",
      "type": "array"
     },

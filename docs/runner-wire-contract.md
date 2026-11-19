@@ -104,8 +104,9 @@ With `voice_inputs_v1`, the runner stream's `voice_inputs` hint carries only `at
 A runner advertises `resident_threads_v1` to keep a session's provider process between its turns, only where
 `GET runners/desired` lists `features.resident_threads_v1`. Each turn is still an ordinary claim, start-place, started,
 events, renew and complete; only the process is reused. With this capability the runner's longest capability list is
-32 values, the cap of the current hub and of the 0.6.0 hub, so a further capability needs that cap raised first and
-must wait out the window (a 0.6.0 hub stays at 32). A hub without this capability refuses the value with 422, and the
+32 values, the 0.6.0 hub's cap. Today's hub takes 64 (`CAPABILITY_LIMIT`), so the room is there once 0.6.0 leaves
+the window; until then a 33rd value costs the runner its newest capability on a 0.6.0 hub, whose 422 on
+`capabilities` names no element (`lanes.rs` refused_field). A hub without this capability refuses the value with 422, and the
 runner drops it (`lanes.rs` refused_field) and runs every turn the ordinary way; its resident routes answer 404. The routes are outside the core contract, take the runner's
 credential, and answer 409 `resident_threads_off` to a runner that has not advertised the capability:
 
