@@ -2997,125 +2997,68 @@ def needs_baseline(c, auth, who, task_view):
     return {"marks": marks, "version": version}
 
 
-BASELINE_REUSE_SECONDS = 10.0  # a person's Needs-you baseline serves their streams that open this soon after it
-
-
 class _Baseline:
-    __slots__ = ("seq", "marks", "version", "at")
+    """One build of a person's Needs-you baseline for every stream of theirs that joined it before its snapshot began."""
 
-    def __init__(self, seq, held, at):
-        self.seq, self.marks, self.version, self.at = seq, held["marks"], held["version"], at
+    __slots__ = ("task", "begun", "seq", "held")
 
-    def held(self):
+    def __init__(self):
+        self.task = None
+        self.begun = False  # set on the lane just before the build's read snapshot begins
+        self.seq = self.held = None
+
+    def copy(self):
         """A stream's own copy: _needs_list moves it on for that stream alone."""
-        return {"marks": dict(self.marks), "version": self.version}
-
-
-# A change after a baseline's snapshot that may have moved that person's list: a `needs` row for them (what every
-# stream rebuilds on), or a page access change (which resets a stream reading across it).
-_BASELINE_MOVED_SQL = (
-    "SELECT 1 FROM changes WHERE topic='needs' AND seq>? AND seq<=? AND subject_id=? "
-    "UNION ALL SELECT 1 FROM changes WHERE topic='tasks' AND seq>? AND seq<=? AND kind='bulk' AND ref='page_access' "
-    "LIMIT 1"
-)
+        return {"marks": dict(self.held["marks"]), "version": self.held["version"]}
 
 
 class Baselines:
-    """The Needs-you baselines `needs=changes` streams start from (needs_baseline), built once per identity and Task
-    view however many of that person's streams open together: ten tabs waking at once, or every client reconnecting
-    after a release, build one list per person rather than one per stream. Each build takes its turn on Needs you's own
-    lane (backend/needs_lane.py), from one read snapshot that also gives the change number the stream starts at.
+    """The Needs-you baselines `needs=changes` streams start from (needs_baseline), built once for all of one person's
+    streams that open together: ten tabs waking at once, or every client reconnecting after a release, build one or two
+    lists per person rather than one per stream. Each build takes its turn on Needs you's own lane
+    (backend/needs_lane.py), from one read snapshot that also gives the change number its streams start at.
 
-    A stream that opens while a build of its identity is under way waits for it; one that opens at most
-    BASELINE_REUSE_SECONDS after a build takes it, when no change since that build's snapshot may have moved the list
-    (_BASELINE_MOVED_SQL), and starts at the newest change as before. Otherwise it builds its own. Keyed by the whole
-    identity (needs_cache.viewer), so two callers who may see different things never share one. Each stream is handed
-    its own copy of the marks."""
+    A stream joins the person's newest build while that build's snapshot has not begun, so the snapshot holds
+    everything committed before the stream asked, as a build of its own would. Once it has begun, the next stream
+    starts the next build, which the rest join. Nothing is kept after a build: a later stream builds again. Keyed by the
+    whole identity (needs_cache.viewer), so two callers who may see different things never share one, and by event
+    loop. A failed build fails each stream that joined it."""
 
     def __init__(self, store):
         self.store = store
-        self._building = {}  # key: the asyncio task building it
-        self._built = {}  # key: the newest _Baseline
+        self._open = {}  # (loop, identity, task view): the newest build streams may still join
 
     async def start(self, app, auth, who, task_view):
         """(the change number the stream starts at, its baseline)."""
         from . import needs_cache, needs_lane
 
-        key = (needs_cache.viewer(who), task_view)
         loop = asyncio.get_running_loop()
-        task = self._building.get(key)
-        if task is None or task.get_loop() is not loop:
-            held = self._recent(key)
-            if held is not None:
-                newest = await asyncio.to_thread(self._still, held, who)
-                if newest is not None:
-                    return newest, held.held()
-            task = self._building.get(key)  # another stream may have begun one meanwhile
-            if task is None or task.get_loop() is not loop:
-                task = loop.create_task(needs_lane.run(app, self._build, auth, who, task_view))
-                self._building[key] = task
-                task.add_done_callback(lambda done: self._finished(key, done))
-                # Its snapshot opens after this stream asked: nothing before the stream is missing from it.
-                built = await asyncio.shield(task)
-                return built.seq, built.held()
-        # A build that may have opened its snapshot before this stream asked.
-        try:
-            built = await asyncio.shield(task)
-        except asyncio.CancelledError:
-            if not task.cancelled():
-                raise  # this stream's own client left
-            built = None
-        except Exception:  # noqa: BLE001 - its own stream reports it; this one builds for itself
-            built = None
-        if built is not None:
-            newest = await asyncio.to_thread(self._still, built, who)
-            if newest is not None:
-                return newest, built.held()
-        built = await needs_lane.run(app, self._build, auth, who, task_view)
-        self._keep(key, built)
-        return built.seq, built.held()
+        key = (loop, needs_cache.viewer(who), task_view)
+        build = self._open.get(key)
+        if build is None or build.begun:
+            build = self._open[key] = _Baseline()
+            build.task = loop.create_task(needs_lane.run(app, self._build, build, auth, who, task_view))
+            build.task.add_done_callback(lambda done: self._finished(key, build, done))
+        # Shielded: one client leaving does not cancel the build the others wait on.
+        await asyncio.shield(build.task)
+        return build.seq, build.copy()
 
-    def _build(self, auth, who, task_view):
+    def _build(self, build, auth, who, task_view):
         with self.store.read() as c:
             c.execute("BEGIN")  # one snapshot: the baseline and the change number it stands at agree
             try:
-                at = _monotonic()
-                seq = latest(c)
-                return _Baseline(seq, needs_baseline(c, auth, who, task_view), at)
+                build.begun = True  # before its first read, when the snapshot begins
+                build.seq = latest(c)
+                build.held = needs_baseline(c, auth, who, task_view)
             finally:
                 if c.in_transaction:
                     c.rollback()
 
-    def _still(self, built, who):
-        """The newest change number when nothing since `built` may have moved the list, else None."""
-        with self.store.read() as c:
-            c.execute("BEGIN")
-            try:
-                newest = latest(c)
-                if newest == built.seq:
-                    return newest
-                moved = c.execute(_BASELINE_MOVED_SQL, (built.seq, newest, who.actor, built.seq, newest)).fetchone()
-                return None if moved else newest
-            finally:
-                if c.in_transaction:
-                    c.rollback()
-
-    def _recent(self, key):
-        now = _monotonic()
-        for gone in [k for k, held in self._built.items() if now - held.at > BASELINE_REUSE_SECONDS]:
-            del self._built[gone]
-        return self._built.get(key)
-
-    def _keep(self, key, built):
-        held = self._built.get(key)
-        if held is None or built.seq >= held.seq:
-            self._built[key] = built
-
-    def _finished(self, key, task):
-        if self._building.get(key) is task:
-            del self._building[key]
-        if not task.cancelled() and task.exception() is None:  # an exception is its streams' to report
-            self._keep(key, task.result())
+    def _finished(self, key, build, task):
+        if self._open.get(key) is build:
+            del self._open[key]
+        if not task.cancelled():
+            task.exception()  # retrieved here: each stream that joined raises it itself
 
 
 def baselines(store):
@@ -3837,6 +3780,10 @@ def install(app, store, auth, task_views, task_view):
             with store.read() as c:
                 return latest(c)
 
+        # Where a stream without a Needs-you baseline starts, read before its response as always. One with a baseline
+        # starts where its baseline's snapshot stands, which begins after it asked (Baselines).
+        opened_at = None if held is not None else await asyncio.to_thread(newest)
+
         async def generate():
             # The stream opens at once: its Needs-you baseline, the one costly part of starting, comes before `ready`,
             # built once for all of this person's streams that open together (Baselines).
@@ -3845,7 +3792,7 @@ def install(app, store, auth, task_views, task_view):
                 now_seq, baseline = await starting.start(request.app, auth, who, task_view)
                 held.update(baseline)
             else:
-                now_seq = await asyncio.to_thread(newest)
+                now_seq = opened_at
             doorbell.observe(now_seq)
             cursor = after if after is not None and after >= 0 else now_seq
             leave = doorbell.reader(store)

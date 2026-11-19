@@ -14,6 +14,7 @@ import http.client
 import importlib.util
 import json
 import os
+import re
 import statistics
 import sys
 import threading
@@ -172,22 +173,47 @@ def _serving(app):
     return serve()
 
 
+UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z?")
+
+
+def relabelled(text):
+    """A stream's text with each id named by its first appearance and every time alike: the app writes a few rows of
+    its own as it opens (a notice thread), with new ids and times in each run, which two runs cannot share."""
+    names = {}
+    text = UUID.sub(lambda m: names.setdefault(m.group(0), f"<id{len(names)}>"), text)
+    return STAMP.sub("<time>", text)
+
+
 def compare(old, new):
-    """Each probe's frames, old against new: the count alike, and every frame that differs."""
+    """Each probe's frames, old against new: alike byte for byte, alike once the app's own opening writes are
+    relabelled (`relabelled`), or different, with every frame that differs."""
     a, b = json.loads(Path(old).read_text()), json.loads(Path(new).read_text())
-    alike = 0
+    same = alike = 0
     for key in sorted(a):
-        left, right = a[key].split("\n\n"), b.get(key, "").split("\n\n")
+        frames = len(a[key].split("\n\n")) - 1
+        if a[key] == b.get(key):
+            same += 1
+            print(f"same      {key}: {frames} frames")
+            continue
+        left, right = relabelled(a[key]).split("\n\n"), relabelled(b.get(key, "")).split("\n\n")
         if left == right:
             alike += 1
-            print(f"same  {key}: {len(left) - 1} frames")
+            moved = [
+                x.split("\n")[0] for x, y in zip(a[key].split("\n\n"), b[key].split("\n\n"), strict=False) if x != y
+            ]
+            print(
+                f"relabel   {key}: {frames} frames, {len(moved)} differ only in ids and times ({moved[0]}..{moved[-1]})"
+            )
             continue
-        print(f"DIFF  {key}: {len(left) - 1} frames old, {len(right) - 1} new")
+        print(f"DIFF      {key}: {len(left) - 1} frames old, {len(right) - 1} new")
         for x, y in zip(left, right, strict=False):
             if x != y:
                 print("   old", x[:400].replace("\n", " | "))
                 print("   new", y[:400].replace("\n", " | "))
-    print(f"{alike} of {len(a)} probes alike")
+    print(
+        f"{same} of {len(a)} probes byte-identical, {alike} more identical once relabelled, {len(a) - same - alike} differ"
+    )
 
 
 B.report = report

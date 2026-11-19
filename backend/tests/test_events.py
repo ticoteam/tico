@@ -764,8 +764,8 @@ def test_a_run_output_naming_a_meeting_inside_its_payload_is_sent_as_the_run_pag
 @pytest.mark.slow
 def test_a_persons_streams_opening_together_start_at_once_and_build_one_needs_baseline(api, live, monkeypatch):
     """A `needs=changes` stream's response starts before its Needs-you baseline is built, ten of one person's streams
-    opening together build it once, and each `ready` names the list's version. A stream opening soon after takes that
-    baseline while nothing has moved the person's list, and builds its own once something may have."""
+    opening while the build waits for its turn build it once, and each `ready` names the list's version. A stream
+    opening after that build's snapshot began builds its own, so it misses nothing committed before it asked."""
     import threading
 
     built, gate, real = [], threading.Event(), E.needs_baseline
@@ -777,19 +777,21 @@ def test_a_persons_streams_opening_together_start_at_once_and_build_one_needs_ba
 
     monkeypatch.setattr(E, "needs_baseline", counted)
     post(api, "tasks", {"owner": "ben", "title": "OK the launch copy", "body": "Please."})
+    holding = threading.Event()
+
+    def lane_busy():  # the build waits for its turn on Needs you's lane, as behind other people's lists
+        holding.wait(20)
+
+    lane = api.app.state.needs_lane
+    busy = [lane.submit(lane_busy) for _ in range(2)] if lane is not None else []
     streams = [live("ana-test", "?topics=needs&needs=changes") for _ in range(10)]
     assert [s.status for s in streams] == [200] * 10  # every response began while the build waits
+    holding.set()
     gate.set()
+    for done in busy:
+        done.result(timeout=20)
     version = api.get("/api/v2/needs-you", headers=headers()).json()["version"]
     assert {s.until(topic("ready"))["data"]["needs_version"] for s in streams} == {version}
     assert built == ["human:ana"]
-    with api.app.state.store.transaction() as c:  # a change that moves no one's Needs you
-        c.execute("INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('setup','test','market',?)", (H.now(),))
-    assert live("ana-test", "?topics=needs&needs=changes").until(topic("ready"))["data"]["needs_version"] == version
-    assert built == ["human:ana"]
-    with api.app.state.store.transaction() as c:  # what any write that may move Ana's list logs
-        c.execute(
-            "INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('needs','test','human:ana',?)", (H.now(),)
-        )
     live("ana-test", "?topics=needs&needs=changes").until(topic("ready"))
     assert built == ["human:ana", "human:ana"]
