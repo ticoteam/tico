@@ -256,19 +256,14 @@ def _view(row: Any) -> Any:
 # ---- delivery
 
 
+KEY_TOOLS_SQL = "SELECT id, tool_id FROM credentials WHERE tool_id IS NOT NULL AND ciphertext IS NOT NULL"
+
+
 def held_tools(c: Any, held: Any) -> Any:
     """The tools whose keys `held` (credential ids a subject holds an effective grant to) include a stored one."""
     if not held:
         return []
-    return sorted(
-        {
-            r["tool_id"]
-            for r in c.execute(
-                "SELECT id, tool_id FROM credentials WHERE tool_id IS NOT NULL AND ciphertext IS NOT NULL"
-            )
-            if r["id"] in held
-        }
-    )
+    return sorted({r["tool_id"] for r in c.execute(KEY_TOOLS_SQL) if r["id"] in held})
 
 
 def _settings_of(c: Any, tool_ids: Any) -> list[Any]:
@@ -307,6 +302,18 @@ def runtime_items(c: Any, held: Any, taken: Any = ()) -> list[dict[str, Any]]:
 def names(c: Any, held: Any) -> Any:
     """The variable names a subject holding `held` gets from settings (runner-credential-grants, bot_tools.granted)."""
     return sorted({row["name"] for row in _settings_of(c, held_tools(c, held))})
+
+
+def names_each(c: Any, helds: Any) -> list[Any]:
+    """`names` for each of `helds` (one set of credential ids per subject), in order, reading every key's tool and every
+    held tool's settings once rather than once per subject (runner-credential-grants: a computer's ~20 bots)."""
+    helds = list(helds)
+    key_tool = {r["id"]: r["tool_id"] for r in c.execute(KEY_TOOLS_SQL)} if any(helds) else {}
+    tools = [sorted({key_tool[k] for k in held if k in key_tool}) for held in helds]
+    by_tool: dict[Any, set[Any]] = {}
+    for row in _settings_of(c, sorted({t for ids in tools for t in ids})):
+        by_tool.setdefault(row["tool_id"], set()).add(row["name"])
+    return [sorted({n for t in ids for n in by_tool.get(t, ())}) for ids in tools]
 
 
 # ---- a computer's files, and the keys stored before Settings
