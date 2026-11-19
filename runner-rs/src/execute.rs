@@ -1010,6 +1010,9 @@ pub(crate) struct Flags {
     pub(crate) harness_allocated: Arc<AtomicBool>,
     /// After the hub accepts /started, fallback admission checks only local memory.
     pub(crate) start_acknowledged: AtomicBool,
+    /// When the hub granted this turn the start place it still holds (at its claim, `start_reserved`, or a start-place
+    /// answer); None once it is given back or refused. A place kept this way is not asked for again (`keep_start_place`).
+    pub(crate) granted: Mutex<Option<Instant>>,
     pub(crate) done_notify: Notify,
     pub(crate) deadline: Mutex<Instant>,
 }
@@ -1106,6 +1109,30 @@ fn unstopped(flags: &Flags) -> Result<(), Fail> {
     Ok(())
 }
 
+/// How long a granted start place is kept without asking the hub again (`keep_start_place`). The hub holds it for
+/// start_reservation_seconds (180 s); a turn whose preparation took longer than this asks again, as before.
+const KEEP_GRANT_FOR: Duration = Duration::from_secs(30);
+
+/// Whether the turn holds a start place the hub granted it less than KEEP_GRANT_FOR ago and has not given back.
+fn grant_kept(flags: &Flags) -> bool {
+    flags
+        .granted
+        .lock()
+        .unwrap()
+        .is_some_and(|at| at.elapsed() < KEEP_GRANT_FOR)
+}
+
+/// The place is given back, refused or lost: the next ask goes to the hub.
+fn grant_gone(flags: &Flags) {
+    *flags.granted.lock().unwrap() = None;
+}
+
+/// A host that allocates nothing before the turn's `started` (Claude: no process until `start_turn` spawns it), so an
+/// ask before `started` learns nothing that `started`'s own admission (backend start_places.reserve) does not.
+fn allocates_at_spawn(runtime: &str, session_runtime: &str) -> bool {
+    runtime == "claude" && session_runtime == runtime
+}
+
 /// Whether a turn takes the cold sign-in path (one at a time on this computer, `claude_cold_start`): its runtime renews
 /// a stale login on its first call, and the login it reads (the profile's, else the computer's own) is stale. A turn
 /// that a company plan signs in (`plan_signs_in`: a setup-token in its environment, or a full login whose token the
@@ -1151,8 +1178,23 @@ impl Runner {
         Ok(())
     }
 
+    /// `wait_start_place` for a turn that may still hold the place the hub granted it moments ago (KEEP_GRANT_FOR):
+    /// only the local checks run (stop, lease, this computer's memory and turn limit), with no start-place round
+    /// trip. Used only where no harness is allocated before `started`, which asks the hub's same admission
+    /// (start_places.reserve) again; a place given back, refused or older asks the hub as before.
+    async fn keep_start_place(&self, attempt: &Value, flags: &Flags) -> Result<(), Fail> {
+        while !self.place(attempt, flags, true).await? {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        Ok(())
+    }
+
     /// One ask for a computer place: false while this computer is full or the server says wait.
     async fn try_start_place(&self, attempt: &Value, flags: &Flags) -> Result<bool, Fail> {
+        self.place(attempt, flags, false).await
+    }
+
+    async fn place(&self, attempt: &Value, flags: &Flags, keep: bool) -> Result<bool, Fail> {
         #[cfg(not(test))]
         let memory = if cfg!(target_os = "linux") && !flags.harness_allocated.load(Ordering::SeqCst)
         {
@@ -1175,16 +1217,29 @@ impl Runner {
                     }
                 }),
         );
-        self.start_place_with_memory(attempt, flags, memory, crate::runner::platform())
+        self.place_with_memory(attempt, flags, memory, crate::runner::platform(), keep)
             .await
     }
 
+    #[cfg(test)]
     async fn start_place_with_memory(
         &self,
         attempt: &Value,
         flags: &Flags,
         memory: Option<f64>,
         platform: &str,
+    ) -> Result<bool, Fail> {
+        self.place_with_memory(attempt, flags, memory, platform, false)
+            .await
+    }
+
+    async fn place_with_memory(
+        &self,
+        attempt: &Value,
+        flags: &Flags,
+        memory: Option<f64>,
+        platform: &str,
+        keep: bool,
     ) -> Result<bool, Fail> {
         let aid = text_of(&attempt["id"]);
         unstopped(flags)?;
@@ -1209,6 +1264,7 @@ impl Runner {
             if !flags.start_acknowledged.load(Ordering::SeqCst) {
                 self.wait_before_start(
                     attempt,
+                    flags,
                     &format!("computer busy: memory {:.0}%", memory.unwrap()),
                 )
                 .await?;
@@ -1233,30 +1289,40 @@ impl Runner {
         if !local_free {
             return Ok(false);
         }
+        if keep && grant_kept(flags) {
+            return Ok(true);
+        }
         let mut body = json!({});
         if flags.harness_allocated.load(Ordering::SeqCst) {
             body["harness_allocated"] = json!(true);
         }
+        mark("start_asked", &aid);
+        let asked = Instant::now();
         let place = self
             .post_allocated(&format!("attempts/{aid}/start-place"), &body, None)
             .await;
         let answer = match place.and_then(decode::<StartPlaceAnswer>) {
             Ok(answer) => answer,
             Err(e) => {
+                grant_gone(flags);
                 self.places.lock().unwrap().remove(&aid);
                 return Err(e.into());
             }
         };
         if answer.stop == Some(true) {
+            grant_gone(flags);
             self.places.lock().unwrap().remove(&aid);
             return Err(Fail::runtime(
                 "Execution interrupted after stop before the turn started",
             ));
         }
         if answer.reserved {
+            // Timed from the ask: never kept longer than the hub's own grant.
+            flags.granted.lock().unwrap().get_or_insert(asked);
             self.places.lock().unwrap().insert(aid.clone());
             return Ok(true);
         }
+        grant_gone(flags);
         self.places.lock().unwrap().remove(&aid);
         Ok(false)
     }
@@ -1298,7 +1364,13 @@ impl Runner {
         Ok(())
     }
 
-    async fn wait_before_start(&self, attempt: &Value, reason: &str) -> Result<(), Fail> {
+    async fn wait_before_start(
+        &self,
+        attempt: &Value,
+        flags: &Flags,
+        reason: &str,
+    ) -> Result<(), Fail> {
+        grant_gone(flags);
         if attempt.get("start_reservation_seconds").is_some() {
             let aid = text_of(&attempt["id"]);
             let path = format!("attempts/{aid}/start-place");
@@ -1355,6 +1427,7 @@ impl Runner {
                     return Ok(());
                 }
                 Err(e) if e.code == "start_wait" => {
+                    grant_gone(flags);
                     self.places.lock().unwrap().remove(&aid);
                     tries += 1;
                     self.after_start_wait(tries).await?;
@@ -1389,7 +1462,8 @@ impl Runner {
                 }
                 Err(_) => {}
             }
-            self.wait_before_start(attempt, "Docker turn user").await?;
+            self.wait_before_start(attempt, flags, "Docker turn user")
+                .await?;
             tokio::time::sleep(if cfg!(test) {
                 Duration::from_millis(5)
             } else {
@@ -1470,7 +1544,7 @@ impl Runner {
             std::task::Poll::Ready(result) => result,
             std::task::Poll::Pending => {
                 if let Err(error) = self
-                    .wait_before_start(attempt, "pre-start requirements")
+                    .wait_before_start(attempt, flags, "pre-start requirements")
                     .await
                 {
                     // The first poll may have started git; finish it with its locks before returning an API error.
@@ -1499,7 +1573,8 @@ impl Runner {
             if let Ok(guard) = claude_cold_start().try_lock() {
                 return Ok(guard);
             }
-            self.wait_before_start(attempt, "shared login").await?;
+            self.wait_before_start(attempt, flags, "shared login")
+                .await?;
             let lock = claude_cold_start().lock();
             tokio::pin!(lock);
             let guard = loop {
@@ -2196,6 +2271,7 @@ impl Runner {
             done: AtomicBool::new(false),
             harness_allocated: Arc::new(AtomicBool::new(false)),
             start_acknowledged: AtomicBool::new(false),
+            granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs_f64((lease - 15.0).max(0.0))),
         });
@@ -2287,8 +2363,17 @@ impl Runner {
         }
         crate::harness_tools::turn_runtimes(&aid, &uses);
 
+        // A hub that granted the turn its place at the claim says so (`start_reserved`, backend start_places.admit):
+        // the place is kept, not asked for again a moment later. An older hub omits it and is asked, as before.
+        if attempt.get("start_reservation_seconds").is_some()
+            && truthy(attempt.get("start_reserved"))
+        {
+            *flags.granted.lock().unwrap() = Some(Instant::now());
+        }
+        // Where no harness is allocated before `started` (Claude), an ask before it is kept too.
+        let late_allocation = allocates_at_spawn(&runtime, &session_runtime);
         let mut ran: Result<(), Fail> = async {
-            self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+            self.during_drain(&aid, self.keep_start_place(&attempt, &flags)).await?;
             // Pin the home before preparation: a server upgrade or a local edit cannot move a fallback to another account.
             selected = self.turn_profile(&attempt)?;
             // A lane runs one turn at a time. A main-lane turn holds the bot's checkout for the whole turn; a task
@@ -2298,7 +2383,8 @@ impl Runner {
             })).await?;
             let p = place.insert(lanes);
             execution_path = p.main_path.clone();
-            self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+            // Lanes taken within PRE_START_GRACE kept the place; a longer wait gave it back and asks again.
+            self.during_drain(&aid, self.keep_start_place(&attempt, &flags)).await?;
             // A turn that will run Claude or Codex reads its company skills while it is placed (company_skills::early);
             // dropped unused if it runs on anything else.
             let mut early_skills = (held.is_none() && session_runtime == runtime && matches!(runtime.as_str(), "claude" | "codex"))
@@ -2576,7 +2662,12 @@ impl Runner {
                 self.turn_git(&mut vault, &mut env, &paths)?;
                 crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
             }
-            self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+            // The ask before a harness is allocated. Claude allocates at its spawn, after `started`.
+            if late_allocation {
+                self.during_drain(&aid, self.keep_start_place(&attempt, &flags)).await?;
+            } else {
+                self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+            }
             if crate::turn_limits::active() {
                 // Names this attempt's harness scopes, so a kill at the limit is told as such (crate::turn_limits).
                 env.insert(crate::turn_limits::SCOPE_ENV.into(), crate::turn_limits::scope_key(&aid));
@@ -2640,7 +2731,7 @@ impl Runner {
                 let tried = if refused {
                     Err((false, crate::continuity::TRANSCRIPT_REFUSED.to_string()))
                 } else {
-                    self.resume_saved(h, prev, &settings, &attempt, &flags).await
+                    self.resume_saved(h, prev, &settings, &attempt, &flags, late_allocation).await
                 };
                 match tried {
                     Ok(t) => {
@@ -2684,7 +2775,11 @@ impl Runner {
                 session = Some(crate::continuity::Session::new(why, None));
             }
             if thread.is_none() {
-                self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+                if late_allocation {
+                    self.during_drain(&aid, self.keep_start_place(&attempt, &flags)).await?;
+                } else {
+                    self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+                }
                 // A capacity continuation must acknowledge its lost thread so the server holds it for review,
                 // without creating or saving a replacement session before that acknowledgement.
                 // A one-off thread the server named a session for starts on a fork of it.
@@ -2731,7 +2826,9 @@ impl Runner {
                 return Err(Fail::runtime("Lease expired while preparing runtime"));
             }
             unstopped(&flags)?;
-            if !cold { self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?; }
+            // `started` asks the hub's same admission (start_places.reserve): a place kept from moments ago is not asked
+            // for again just before it.
+            if !cold { self.during_drain(&aid, self.keep_start_place(&attempt, &flags)).await?; }
             // Acknowledge before execution. Any later crash is explicitly uncertain.
             let active = self.active.lock().unwrap().len();
             // The thread the task has until the new one is confirmed (Fresh::told).
@@ -2749,6 +2846,7 @@ impl Runner {
                         },
                         Err(e) if e.code == "start_wait" => {
                             drop(cold_guard.take());
+                            grant_gone(&flags);
                             self.places.lock().unwrap().remove(&aid);
                             self.after_start_wait(start_try + 1).await?;
                             if cold { cold_guard = Some(self.wait_cold_start(&attempt, &flags).await?); }
@@ -2760,6 +2858,7 @@ impl Runner {
                 }
                 Ok(())
             }).await?;
+            mark("acknowledged", &aid);
             // A rejected start can wait for another grant; it is still unstarted during that wait.
             if !self.drain.start(&aid) {
                 return Err(Fail::runtime(crate::drain::WAITING));
@@ -3240,7 +3339,7 @@ impl Runner {
                 };
                 // One that cannot be resumed (gone, or refused twice) is begun again, from the checkpoint and the replay.
                 let resumed_side = match &saved_side {
-                    Some(prev) => match self.resume_saved(h, prev, &settings, &attempt, &flags).await {
+                    Some(prev) => match self.resume_saved(h, prev, &settings, &attempt, &flags, false).await {
                         Ok(t) => Some(t),
                         Err((missing, error)) => {
                             let why = if missing { "is not on this computer" } else { "was refused" };
@@ -3983,12 +4082,19 @@ impl Runner {
         settings: &Settings,
         turn: &Value,
         flags: &Flags,
+        late_allocation: bool,
     ) -> Result<String, (bool, String)> {
         let mut last = String::new();
         for attempt in 0..2 {
-            self.during_drain(&text_of(&turn["id"]), self.wait_start_place(turn, flags))
-                .await
-                .map_err(|e| (false, e.text))?;
+            // A host that allocates at its spawn (Claude) resumes a thread without one: a kept place is not asked for.
+            let placed = if late_allocation && attempt == 0 {
+                self.during_drain(&text_of(&turn["id"]), self.keep_start_place(turn, flags))
+                    .await
+            } else {
+                self.during_drain(&text_of(&turn["id"]), self.wait_start_place(turn, flags))
+                    .await
+            };
+            placed.map_err(|e| (false, e.text))?;
             match h.resume_thread(thread, settings).await {
                 Ok(t) => return Ok(t),
                 Err(e) => {
@@ -4686,6 +4792,7 @@ mod tests {
             done: AtomicBool::new(false),
             harness_allocated: Arc::new(AtomicBool::new(false)),
             start_acknowledged: AtomicBool::new(false),
+            granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs(30)),
         };
@@ -4696,7 +4803,7 @@ mod tests {
             .extend(["a1".into(), "another-waiter".into()]);
         runner.places.lock().unwrap().insert("a1".into());
         runner
-            .wait_before_start(&turn, "shared login")
+            .wait_before_start(&turn, &flags, "shared login")
             .await
             .unwrap();
         assert_eq!(runner.active.lock().unwrap().len(), 2);
@@ -4707,7 +4814,7 @@ mod tests {
         runner.wait_start_place(&turn, &flags).await.unwrap();
         assert!(runner.places.lock().unwrap().contains("a1"));
         runner
-            .wait_before_start(&turn, "pre-start requirements")
+            .wait_before_start(&turn, &flags, "pre-start requirements")
             .await
             .unwrap();
         assert!(runner
@@ -4753,9 +4860,72 @@ mod tests {
             done: AtomicBool::new(false),
             harness_allocated: Arc::new(AtomicBool::new(false)),
             start_acknowledged: AtomicBool::new(false),
+            granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs(30)),
         }
+    }
+
+    #[tokio::test]
+    async fn a_kept_start_place_is_not_asked_for_again_until_it_is_given_back_or_old() {
+        let (url, seen) = crate::client::tests::serve(vec![
+            (200, r#"{"reserved":true}"#),
+            (200, r#"{"reserved":true}"#),
+            (200, r#"{"reserved":true}"#),
+            (200, r#"{"reserved":true}"#),
+            (200, r#"{"reserved":true}"#),
+        ])
+        .await;
+        let (runner, dir) = lease_runner(&url, "kept-place");
+        let turn = json!({"id": "a1", "start_reservation_seconds": 180});
+        let asks = || seen.lock().unwrap().len();
+        let flags = lease_flags();
+        // Granted at its claim (`start_reserved`): no ask, and the local place is taken.
+        *flags.granted.lock().unwrap() = Some(Instant::now());
+        runner.keep_start_place(&turn, &flags).await.unwrap();
+        assert_eq!(asks(), 0);
+        assert!(runner.places.lock().unwrap().contains("a1"));
+        // An ask before a harness allocation still asks.
+        runner.wait_start_place(&turn, &flags).await.unwrap();
+        assert_eq!(asks(), 1);
+        // Given back (a wait before start): the next keep asks, and its grant is then kept.
+        runner
+            .wait_before_start(&turn, &flags, "pre-start requirements")
+            .await
+            .unwrap();
+        assert_eq!(asks(), 2, "the wait is posted");
+        assert!(flags.granted.lock().unwrap().is_none());
+        runner.keep_start_place(&turn, &flags).await.unwrap();
+        assert_eq!(asks(), 3);
+        runner.keep_start_place(&turn, &flags).await.unwrap();
+        assert_eq!(asks(), 3);
+        // A grant older than KEEP_GRANT_FOR is asked for again.
+        *flags.granted.lock().unwrap() = Some(Instant::now() - KEEP_GRANT_FOR);
+        runner.keep_start_place(&turn, &flags).await.unwrap();
+        assert_eq!(asks(), 4);
+        // No grant at all (an older hub's claim): asked.
+        let fresh = lease_flags();
+        runner.keep_start_place(&turn, &fresh).await.unwrap();
+        assert_eq!(asks(), 5);
+        // A stop heard on the event stream ends the wait without an ask, kept place or not.
+        fresh.stopped.store(true, Ordering::SeqCst);
+        assert!(runner
+            .keep_start_place(&turn, &fresh)
+            .await
+            .unwrap_err()
+            .text
+            .contains("stop"));
+        assert_eq!(asks(), 5);
+        // A hub with no start places (no start_reservation_seconds) is never asked.
+        runner
+            .keep_start_place(&json!({"id": "a2"}), &lease_flags())
+            .await
+            .unwrap();
+        assert_eq!(asks(), 5);
+        assert!(allocates_at_spawn("claude", "claude"));
+        assert!(!allocates_at_spawn("claude", "antigravity"));
+        assert!(!allocates_at_spawn("codex", "codex"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[cfg(target_os = "linux")]
@@ -5270,6 +5440,7 @@ mod tests {
             done: AtomicBool::new(false),
             harness_allocated: Arc::new(AtomicBool::new(false)),
             start_acknowledged: AtomicBool::new(false),
+            granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs(30)),
         };
@@ -5885,6 +6056,16 @@ mod tests {
 
     #[tokio::test]
     async fn lazy_claude_spawn_failure_after_start_acknowledgement_runs_the_fallback() {
+        lazy_claude_fallback(false).await;
+    }
+
+    /// A hub that granted the place at the claim (`start_reserved`): a Claude turn asks for none up to `started`.
+    #[tokio::test]
+    async fn a_claude_turn_granted_at_its_claim_asks_for_no_start_place_before_started() {
+        lazy_claude_fallback(true).await;
+    }
+
+    async fn lazy_claude_fallback(start_reserved: bool) {
         let _home = PrivateHome::claude(true);
         let _controls = RunControls;
         hosts::TEST_STARTS.with(|starts| starts.set(0));
@@ -5922,6 +6103,10 @@ mod tests {
             // Disable the Linux reaper so the missing executable fails at spawn, before any process is allocated.
             "history": [], "config": {"runtime": "claude", "harness": "claude", "model": "synthetic-primary", "background_wait_s": 0,
                 "fallback": {"harness": "pi", "model": "synthetic-fallback"}}});
+        let mut attempt = attempt;
+        if start_reserved {
+            attempt["start_reserved"] = json!(true);
+        }
         tokio::time::timeout(Duration::from_secs(30), runner.clone().execute(attempt))
             .await
             .unwrap()
@@ -5943,6 +6128,22 @@ mod tests {
             hosts::TEST_STARTS.with(|starts| starts.get()),
             2,
             "both primary and fallback hosts were reached"
+        );
+        // An older hub's claim names no grant: the turn asks once, then keeps the place up to `started`, asking again
+        // only after it gave the place back.
+        let asks = |waiting: bool| {
+            requests[..started]
+                .iter()
+                .filter(|(_, path, body)| {
+                    path.ends_with("/start-place") && body.get("waiting").is_some() == waiting
+                })
+                .count()
+        };
+        // Granted at the claim, it asks only after giving the place back.
+        assert_eq!(
+            asks(false),
+            usize::from(!start_reserved) + asks(true),
+            "{requests:?}"
         );
         assert!(
             requests
@@ -8274,6 +8475,7 @@ for line in sys.stdin:
             done: AtomicBool::new(false),
             harness_allocated: Arc::new(AtomicBool::new(false)),
             start_acknowledged: AtomicBool::new(false),
+            granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs(60)),
         };

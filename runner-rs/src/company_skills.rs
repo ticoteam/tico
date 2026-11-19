@@ -608,14 +608,19 @@ async fn stage_and_report(
         "skills-receipt:{aid}:{}",
         &hex::encode(Sha256::digest(body.to_string().as_bytes()))[..16]
     );
-    if let Err(e) = client
-        .post(&format!("attempts/{aid}/skills/receipt"), &body, Some(&key))
-        .await
-    {
-        log(&format!(
-            "Tico runner: {bot}: could not report its staged company skills: {e}"
-        ));
-    }
+    // The receipt is the Skills page's record of what was staged, not something the turn needs: it goes beside the
+    // harness's start instead of before it. Its failure was only ever logged.
+    let (client, aid, bot) = (client.clone(), aid.to_string(), bot.to_string());
+    tokio::spawn(async move {
+        if let Err(e) = client
+            .post(&format!("attempts/{aid}/skills/receipt"), &body, Some(&key))
+            .await
+        {
+            log(&format!(
+                "Tico runner: {bot}: could not report its staged company skills: {e}"
+            ));
+        }
+    });
     Ok(Some(dir))
 }
 
@@ -891,7 +896,21 @@ mod tests {
         ])
         .await;
         let client = Client::new(&url, "runner-token", 5, 0).unwrap();
+        // The receipt goes in the background: wait for it, so the hub's replies stay in order.
+        let posted = |n: usize| {
+            let seen = seen.clone();
+            async move {
+                for _ in 0..500 {
+                    if seen.lock().unwrap().len() >= n {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                panic!("no receipt posted");
+            }
+        };
         let dir = prepare(&client, &state, "a-7", "ops").await.unwrap();
+        posted(3).await;
         assert!(dir.join(".claude/skills/acme-brief/SKILL.md").is_file());
         assert!(state
             .join("skill-bundles")
@@ -899,6 +918,7 @@ mod tests {
             .is_file());
         // The next turn reads the bundle from the cache: no second bundle fetch.
         let again = prepare(&client, &state, "a-8", "ops").await.unwrap();
+        posted(5).await;
         assert!(again.join(".claude/skills/acme-brief/SKILL.md").is_file());
         assert_eq!(again, dir, "the bot's next turn adds the same folder");
         let seen = seen.lock().unwrap();

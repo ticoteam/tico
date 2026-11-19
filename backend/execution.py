@@ -5181,10 +5181,11 @@ class Execution:
         aid = turn["id"]
         if self.refuse_unreadable(c, row, msg, aid):
             return {"attempt": None, "dropped": True}
+        admitted = {}
         if body.start_places:
             # Decided now, under this write lock: granted a place while the computer holds fewer than its turn limit. A turn
             # past the limit is leased (it counts toward live_limit) and holds no place until one frees.
-            start_places.admit(c, aid, runner, self.store.settings)
+            admitted = start_places.admit(c, aid, runner, self.store.settings)
         c.execute('DELETE FROM org_turn_waits WHERE job_id=?', (row['id'],))
         from . import run_diagnostics
 
@@ -5561,6 +5562,9 @@ class Execution:
                 "generation": row["generation"],
                 "lease_until": until,
                 **({"start_reservation_seconds": start_places.START_SECONDS} if body.start_places else {}),
+                # The claim granted the turn its start place (start_places.admit): its runner keeps it without asking
+                # start-place again a moment later. Omitted when not granted; an older runner ignores it.
+                **({"start_reserved": True} if admitted.get("reserved") else {}),
                 "lease_seconds": self.store.settings.lease_seconds,
                 "token": token,
                 # The thread's root and audience class key the turn's session (clients/sessions.py).
