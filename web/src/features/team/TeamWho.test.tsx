@@ -1,4 +1,4 @@
-import { QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider, QueryObserver } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
@@ -188,5 +188,27 @@ describe('Loading a teammate', () => {
   it('throws a failed read to the router, which draws the fault', async () => {
     serve(() => ({ status: 500, body: { detail: 'down' } }));
     await expect(loadWho(queryClient, 'ana', 'instructions')).rejects.toThrow();
+  });
+
+  it('opens a team when the shell detaches from the in-flight directory read', async () => {
+    queryClient.removeQueries({ queryKey: directoryQuery.queryKey });
+    const org = { status: 200, body: { org_groups: [], people: [], bots: [] } };
+    let finish: (reply: Reply) => void = () => {};
+    const first = new Promise<Reply>((resolve) => {
+      finish = resolve;
+    });
+    let reads = 0;
+    serve((url) => {
+      if (url !== '/api/v2/org') return undefined;
+      reads++;
+      return reads === 1 ? first : org;
+    });
+    const observer = new QueryObserver(queryClient, directoryQuery);
+    const unsubscribe = observer.subscribe(() => {});
+    const page = loadWho(queryClient, 'design', undefined);
+    unsubscribe();
+    finish(org);
+    await expect(page).resolves.toBeUndefined();
+    expect(reads).toBe(2);
   });
 });

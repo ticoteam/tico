@@ -102,7 +102,7 @@ export function googlePreview(href: string): string {
 export function FileGet({ url, link }: { url: string; link: string }) {
   const label = link ? (/^https:\/\/(docs|drive)\.google\.com\//.test(link) ? 'Open in Google' : 'Open where it lives') : 'Download';
   return (
-    <a className="ib" href={link || url} {...(link ? { target: '_blank', rel: 'noreferrer' } : { download: true })} aria-label={label} title={label}>
+    <a className="ib" data-phone href={link || url} {...(link ? { target: '_blank', rel: 'noreferrer' } : { download: true })} aria-label={label} title={label}>
       <Icon name={link ? 'popout' : 'download'} />
     </a>
   );
@@ -237,10 +237,12 @@ export function FileFrame(p: PreviewProps) {
 export function FilePreview({ file, version }: { file: string; version?: number }) {
   const f = useQuery(fileQuery(file));
   const versions = useQuery(fileVersionsQuery(file));
-  const shown = (version && versions.data?.find((v) => v.version === version)) || versions.data?.find((v) => v.current);
-  const n = shown?.version ?? f.data?.version;
+  const shown = versions.data?.find((v) => (version === undefined ? v.current : v.version === version));
   if (f.isError) return <Empty title="This file did not load" icon="alert" />;
   if (!f.data) return null;
+  if (version !== undefined && version !== f.data.version && !shown)
+    return versions.isPending ? null : <Empty title="This file did not load" icon="alert" />;
+  const n = version ?? shown?.version ?? f.data.version;
   return (
     <FileFrame
       id={file}

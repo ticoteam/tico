@@ -269,10 +269,10 @@ export const filesQuery = (kind: string) =>
     getNextPageParam: (last) => (last.has_more && last.next_cursor ? last.next_cursor : undefined),
   });
 
-export const fileSearchQuery = (text: string) =>
+export const fileSearchQuery = (text: string, kind = '') =>
   queryOptions({
-    queryKey: ['files', 'search', text],
-    queryFn: ({ signal }) => api.get<{ results: Array<{ id: string; title: string }> }>(`/api/v2/files/search${q({ q: text, limit: 50 })}`, { signal }),
+    queryKey: ['files', 'search', text, kind],
+    queryFn: ({ signal }) => api.get<{ results: Array<{ id: string; title: string }> }>(`/api/v2/files/search${q({ q: text, limit: 50, kind })}`, { signal }),
     enabled: text.trim().length > 1,
   });
 
