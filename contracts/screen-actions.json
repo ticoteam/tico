@@ -428,6 +428,50 @@
       }
     },
     {
+      "id": "agents.setCompact",
+      "title": "Change where an agent's conversation compacts",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "an agent's slug"
+          },
+          "at": {
+            "anyOf": [
+              {
+                "enum": [
+                  100000,
+                  150000,
+                  200000,
+                  250000,
+                  300000,
+                  400000,
+                  500000,
+                  600000,
+                  700000,
+                  800000,
+                  900000,
+                  1000000
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "slug",
+          "at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "agents.setModel",
       "title": "Change an agent's model",
       "kind": "change",
@@ -658,25 +702,6 @@
         "required": [
           "slug",
           "task"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "brand.check",
-      "title": "Check copy against the brand book",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "text": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 20000
-          }
-        },
-        "required": [
-          "text"
         ],
         "additionalProperties": false
       }
@@ -1104,16 +1129,6 @@
       }
     },
     {
-      "id": "budget.newRow",
-      "title": "Start a new budget",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "budget.openRow",
       "title": "Open a budget",
       "kind": "view",
@@ -1133,20 +1148,22 @@
       }
     },
     {
-      "id": "budget.setMonth",
-      "title": "Show budgets for a month",
+      "id": "budget.setPeriod",
+      "title": "Show budgets for this month, quarter or year",
       "kind": "view",
       "input": {
         "type": "object",
         "properties": {
-          "month": {
-            "type": "string",
-            "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
-            "description": "a month, 2026-11"
+          "period": {
+            "enum": [
+              "month",
+              "quarter",
+              "year"
+            ]
           }
         },
         "required": [
-          "month"
+          "period"
         ],
         "additionalProperties": false
       }
@@ -1209,40 +1226,6 @@
         "required": [
           "id",
           "with"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "calls.addItem",
-      "title": "Add to a meeting",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "meeting": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a meeting id"
-          },
-          "section": {
-            "enum": [
-              "doc",
-              "task",
-              "feature"
-            ]
-          },
-          "text": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 2000
-          }
-        },
-        "required": [
-          "meeting",
-          "section",
-          "text"
         ],
         "additionalProperties": false
       }
@@ -1568,33 +1551,6 @@
       }
     },
     {
-      "id": "calls.linkTask",
-      "title": "Link a task to a meeting",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "meeting": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a meeting id"
-          },
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500,
-            "description": "a task: #123, its id or its link"
-          }
-        },
-        "required": [
-          "meeting",
-          "task"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "calls.logMeeting",
       "title": "Log a meeting",
       "kind": "change",
@@ -1898,37 +1854,6 @@
       }
     },
     {
-      "id": "calls.reviewMany",
-      "title": "Share or put away several pending meetings",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "meetings": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 200,
-              "description": "a meeting id"
-            },
-            "maxItems": 200
-          },
-          "action": {
-            "enum": [
-              "approve",
-              "dismiss"
-            ]
-          }
-        },
-        "required": [
-          "meetings",
-          "action"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "calls.schedule",
       "title": "Book a voice call",
       "kind": "change",
@@ -2089,33 +2014,6 @@
       }
     },
     {
-      "id": "calls.showFile",
-      "title": "Show a Tico file to everyone on the call",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a call id"
-          },
-          "file": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a file id"
-          }
-        },
-        "required": [
-          "id",
-          "file"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "calls.stopShow",
       "title": "Stop showing on the call",
       "kind": "change",
@@ -2168,33 +2066,6 @@
         "required": [
           "id",
           "agent"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "calls.unlinkTask",
-      "title": "Unlink a task from a meeting",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "meeting": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a meeting id"
-          },
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a task id"
-          }
-        },
-        "required": [
-          "meeting",
-          "task"
         ],
         "additionalProperties": false
       }
@@ -2870,9 +2741,6 @@
             "minLength": 1,
             "maxLength": 200
           },
-          "edit": {
-            "type": "boolean"
-          },
           "version": {
             "type": "integer",
             "minimum": 1
@@ -2899,35 +2767,6 @@
         },
         "required": [
           "source"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "docs.research",
-      "title": "Have the Librarian research for a doc",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "doc": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "section": {
-            "type": "string",
-            "maxLength": 300
-          },
-          "instructions": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 4000
-          }
-        },
-        "required": [
-          "doc",
-          "instructions"
         ],
         "additionalProperties": false
       }
@@ -2991,63 +2830,6 @@
           "doc",
           "version"
         ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "files.filter",
-      "title": "Filter Files",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "q": {
-            "type": "string",
-            "maxLength": 200
-          },
-          "kind": {
-            "type": "string",
-            "maxLength": 40
-          },
-          "role": {
-            "type": "string",
-            "maxLength": 60
-          },
-          "agent": {
-            "type": "string",
-            "maxLength": 200
-          },
-          "writer": {
-            "type": "string",
-            "maxLength": 200
-          },
-          "linked": {
-            "type": "string",
-            "maxLength": 200
-          },
-          "team": {
-            "type": "string",
-            "maxLength": 200
-          },
-          "task": {
-            "type": "string",
-            "maxLength": 200
-          },
-          "days": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 3650
-          },
-          "pinned": {
-            "type": "boolean"
-          },
-          "archived": {
-            "type": "boolean"
-          },
-          "clear": {
-            "type": "boolean"
-          }
-        },
         "additionalProperties": false
       }
     },
@@ -3611,7 +3393,7 @@
     },
     {
       "id": "finance.openRecord",
-      "title": "Open a bill, an invoice, a card or a transaction beside its list",
+      "title": "Open a bill, an invoice or a card beside its list, or a transaction in place",
       "kind": "view",
       "input": {
         "type": "object",
@@ -3820,6 +3602,31 @@
         "required": [
           "card",
           "amount"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "finance.setLine",
+      "title": "Put a bank or card row on a line",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "tx": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "line": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "tx",
+          "line"
         ],
         "additionalProperties": false
       }
@@ -4727,7 +4534,7 @@
     },
     {
       "id": "listening.update",
-      "title": "Rename a listening watch, or change what it keeps, how many it sends and when",
+      "title": "Rename a listening watch, or change what it keeps",
       "kind": "change",
       "input": {
         "type": "object",
@@ -4770,44 +4577,48 @@
               "additionalProperties": false
             },
             "maxItems": 20
-          },
-          "limits": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "count": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 100
-                },
-                "per": {
-                  "enum": [
-                    "hour",
-                    "day",
-                    "week",
-                    "month"
-                  ]
-                }
-              },
-              "required": [
-                "count",
-                "per"
-              ],
-              "additionalProperties": false
-            },
-            "maxItems": 4
-          },
-          "at": {
-            "type": "string",
-            "minLength": 5,
-            "maxLength": 5,
-            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
-            "description": "a time, HH:MM"
           }
         },
         "required": [
           "watch"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "mail.archive",
+      "title": "Archive a mail",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "box": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a mailbox address"
+          },
+          "letter": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a mail thread id"
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "a letter id"
+            },
+            "maxItems": 500
+          }
+        },
+        "required": [
+          "box",
+          "letter",
+          "ids"
         ],
         "additionalProperties": false
       }
@@ -4829,16 +4640,35 @@
             "type": "string",
             "maxLength": 500,
             "description": "the words to find"
-          },
-          "label": {
-            "type": "string",
-            "maxLength": 200,
-            "description": "a Gmail label id, such as UNREAD or STARRED"
-          },
-          "attach": {
-            "type": "boolean"
           }
         },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "mail.markUnread",
+      "title": "Mark a mail unread",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "box": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a mailbox address"
+          },
+          "letter": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a letter id"
+          }
+        },
+        "required": [
+          "box",
+          "letter"
+        ],
         "additionalProperties": false
       }
     },
@@ -4910,6 +4740,39 @@
       }
     },
     {
+      "id": "mail.reply",
+      "title": "Reply to a mail",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "box": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a mailbox address"
+          },
+          "letter": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a mail thread id"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          }
+        },
+        "required": [
+          "box",
+          "letter",
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "market.acceptSize",
       "title": "Accept an estimate as its segment's size",
       "kind": "change",
@@ -4929,31 +4792,6 @@
       }
     },
     {
-      "id": "market.cite",
-      "title": "Cite a market segment in a bet",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "bet": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "segment": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "bet",
-          "segment"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "market.open",
       "title": "Open Market or one of its panels",
       "kind": "view",
@@ -4968,31 +4806,6 @@
             "description": "segment:<id>, player:<id>, definition or briefing"
           }
         },
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "market.research",
-      "title": "Ask the Librarian to research a market segment",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "segment": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "instructions": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 4000
-          }
-        },
-        "required": [
-          "segment",
-          "instructions"
-        ],
         "additionalProperties": false
       }
     },
@@ -5101,20 +4914,20 @@
     },
     {
       "id": "messaging.open",
-      "title": "Open a text",
+      "title": "Open a contact's texts",
       "kind": "view",
       "input": {
         "type": "object",
         "properties": {
-          "text": {
+          "contact": {
             "type": "string",
             "minLength": 1,
             "maxLength": 200,
-            "description": "a text id"
+            "description": "who the texts came from"
           }
         },
         "required": [
-          "text"
+          "contact"
         ],
         "additionalProperties": false
       }
@@ -5909,6 +5722,26 @@
       }
     },
     {
+      "id": "risk.view",
+      "title": "Show Risk as risks or as disputes",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "view": {
+            "enum": [
+              "risks",
+              "disputes"
+            ]
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "routines.applyTemplate",
       "title": "Move an inbox routine onto a template",
       "kind": "change",
@@ -5973,10 +5806,6 @@
             "maxLength": 100,
             "pattern": "^\\S+( \\S+){4}$",
             "description": "a five-part cron, like 0 9 * * 1-5"
-          },
-          "tz": {
-            "type": "string",
-            "maxLength": 64
           },
           "event": {
             "type": "string",
@@ -6589,23 +6418,6 @@
               "24h",
               "7d"
             ]
-          },
-          "trigger": {
-            "enum": [
-              "schedule",
-              "event",
-              "webhook",
-              "due",
-              "message",
-              "task_received",
-              "listening",
-              "system"
-            ]
-          },
-          "owner": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
           }
         },
         "additionalProperties": false
@@ -6670,16 +6482,12 @@
             "pattern": "^\\S+( \\S+){4}$",
             "description": "a five-part cron, like 0 9 * * 1-5"
           },
-          "tz": {
-            "type": "string",
-            "maxLength": 64
-          },
           "event": {
             "type": "string",
             "minLength": 1,
             "maxLength": 100,
             "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_*-]+)+$",
-            "description": "an event name, like task.created or custom.order_paid"
+            "description": "an event name, like task.created"
           }
         },
         "required": [
@@ -6722,16 +6530,6 @@
           "rule",
           "kind"
         ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "rules.acceptAll",
-      "title": "Add every suggested rule that says who follows it",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {},
         "additionalProperties": false
       }
     },
@@ -6780,21 +6578,6 @@
                   "description": "*, group:<id>, bot:<id> or human:<id>"
                 },
                 "maxItems": 100
-              },
-              "with": {
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 200,
-                  "pattern": "^(group|bot|human):\\S+$",
-                  "description": "group:<id>, bot:<id> or human:<id>"
-                },
-                "maxItems": 100
-              },
-              "description": {
-                "type": "string",
-                "maxLength": 2000
               },
               "outside": {
                 "type": "boolean"
@@ -6970,7 +6753,7 @@
     },
     {
       "id": "rules.list",
-      "title": "Search or filter the rules on a tab",
+      "title": "Search the rules on a tab",
       "kind": "view",
       "input": {
         "type": "object",
@@ -6990,18 +6773,6 @@
           "q": {
             "type": "string",
             "maxLength": 200
-          },
-          "from": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "status": {
-            "enum": [
-              "overdue",
-              "due_soon",
-              "upcoming"
-            ]
           }
         },
         "additionalProperties": false
@@ -7389,21 +7160,6 @@
                 },
                 "maxItems": 100
               },
-              "with": {
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 200,
-                  "pattern": "^(group|bot|human):\\S+$",
-                  "description": "group:<id>, bot:<id> or human:<id>"
-                },
-                "maxItems": 100
-              },
-              "description": {
-                "type": "string",
-                "maxLength": 2000
-              },
               "outside": {
                 "type": "boolean"
               },
@@ -7631,58 +7387,6 @@
       }
     },
     {
-      "id": "settings.addPerson",
-      "title": "Add a person without sending an email",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "email": {
-            "type": "string",
-            "minLength": 3,
-            "maxLength": 320,
-            "pattern": "^[^\\s@]+@[^\\s@]+$",
-            "description": "an email address"
-          },
-          "name": {
-            "type": "string",
-            "maxLength": 120
-          }
-        },
-        "required": [
-          "email"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.addPlace",
-      "title": "Add a place the company operates in",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "us": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "our company id"
-          },
-          "place": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a place id"
-          }
-        },
-        "required": [
-          "us",
-          "place"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "settings.agentLimit",
       "title": "Change how many agents a person may have",
       "kind": "change",
@@ -7721,25 +7425,6 @@
         "required": [
           "agent",
           "on"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.askReplay",
-      "title": "See what screening would have done with one past day",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "date": {
-            "type": "string",
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
-            "description": "a day, YYYY-MM-DD"
-          }
-        },
-        "required": [
-          "date"
         ],
         "additionalProperties": false
       }
@@ -7884,29 +7569,9 @@
       }
     },
     {
-      "id": "settings.checkGateway",
-      "title": "Check the Tico Gateway key now",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "settings.checkHealth",
       "title": "Check health now",
       "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.checkHosting",
-      "title": "Check Tico file hosting now",
-      "kind": "change",
       "input": {
         "type": "object",
         "properties": {},
@@ -7929,36 +7594,6 @@
         },
         "required": [
           "model"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.dropBucket",
-      "title": "Store new files on the server's storage again",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.dropPlace",
-      "title": "Remove a place the company operates in",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "link": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a link id"
-          }
-        },
-        "required": [
-          "link"
         ],
         "additionalProperties": false
       }
@@ -8015,30 +7650,6 @@
         },
         "required": [
           "email"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.mailFeed",
-      "title": "Add every sender of an inbox to Contacts",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "box": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a mailbox id"
-          },
-          "on": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "box",
-          "on"
         ],
         "additionalProperties": false
       }
@@ -8195,26 +7806,6 @@
       }
     },
     {
-      "id": "settings.openOutcome",
-      "title": "Open the outcome of a task in the changelog",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a task id"
-          }
-        },
-        "required": [
-          "task"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "settings.previewDirectory",
       "title": "See what a directory sync would change",
       "kind": "view",
@@ -8302,6 +7893,26 @@
       }
     },
     {
+      "id": "settings.renameCompany",
+      "title": "Rename the company",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "the company name"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "settings.repoSetup",
       "title": "Change a repository's setup command",
       "kind": "change",
@@ -8323,43 +7934,6 @@
         "required": [
           "repo",
           "command"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.reportFinding",
-      "title": "Report a Tico bug Check health found to Tico support",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "key": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a finding key"
-          }
-        },
-        "required": [
-          "key"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.reportRule",
-      "title": "Report Tico bugs to Tico support without asking",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "on": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "on"
         ],
         "additionalProperties": false
       }
@@ -8457,78 +8031,6 @@
         },
         "required": [
           "labels"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.roadmapLimits",
-      "title": "Change the public roadmap's visitor limits",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "action_limit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 10000
-          },
-          "suggestion_limit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 1000
-          }
-        },
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.roadmapSites",
-      "title": "Change the websites that can show the public roadmap",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "origins": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 2048,
-              "description": "an https origin"
-            },
-            "maxItems": 50
-          }
-        },
-        "required": [
-          "origins"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.roadmapSuggestions",
-      "title": "Choose the agent that takes visitors' suggestions",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "agent": {
-            "anyOf": [
-              {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 200,
-                "description": "an agent id or slug"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "agent"
         ],
         "additionalProperties": false
       }
@@ -8756,40 +8258,6 @@
       }
     },
     {
-      "id": "settings.setupCheck",
-      "title": "Run the installer's setup checks from the server",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.signIn",
-      "title": "Turn a person's sign-in on or off",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "person": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a person id"
-          },
-          "on": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "person",
-          "on"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "settings.sleepComputers",
       "title": "Let agents' computers sleep too",
       "kind": "change",
@@ -8827,30 +8295,6 @@
       }
     },
     {
-      "id": "settings.suggestionPrivacy",
-      "title": "Change what suggestions may share",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "field": {
-            "enum": [
-              "share_stats_for_suggestions",
-              "report_suggestion_outcomes"
-            ]
-          },
-          "on": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "field",
-          "on"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "settings.taskModel",
       "title": "Change the model an agent's tasks run on",
       "kind": "change",
@@ -8876,53 +8320,6 @@
         "required": [
           "agent",
           "model"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.testScreening",
-      "title": "Run the screening samples",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.undoChange",
-      "title": "Undo a change to an agent's settings",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "change": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a settings change id from History"
-          }
-        },
-        "required": [
-          "change"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.usageCount",
-      "title": "Send the anonymous usage count",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "on": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "on"
         ],
         "additionalProperties": false
       }
@@ -9190,37 +8587,6 @@
       }
     },
     {
-      "id": "skills.askSubmit",
-      "title": "Ask an agent to submit a skill",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "suggestion": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "skill": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 120
-          },
-          "agent": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "suggestion",
-          "skill",
-          "agent"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "skills.connect",
       "title": "Connect Claude Code to skills",
       "kind": "view",
@@ -9252,44 +8618,6 @@
           "proposal",
           "reason"
         ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "skills.dismissSuggestion",
-      "title": "Dismiss a skill suggestion",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "suggestion": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "suggestion"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "skills.filter",
-      "title": "Filter skills by function",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "function": {
-            "type": "string",
-            "maxLength": 80
-          },
-          "q": {
-            "type": "string",
-            "maxLength": 200
-          }
-        },
         "additionalProperties": false
       }
     },
@@ -9352,6 +8680,9 @@
           "q": {
             "type": "string",
             "maxLength": 200
+          },
+          "waiting": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -9457,25 +8788,6 @@
       }
     },
     {
-      "id": "skills.removeUnused",
-      "title": "Take off a skill nobody uses",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "suggestion": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "suggestion"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "skills.rescreen",
       "title": "Screen a skill change again",
       "kind": "change",
@@ -9509,33 +8821,6 @@
         },
         "required": [
           "proposal"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "start.open",
-      "title": "Open Start",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "strategy.markChanges",
-      "title": "Mark what changed from the version before",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "on": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "on"
         ],
         "additionalProperties": false
       }
@@ -9643,7 +8928,7 @@
     },
     {
       "id": "tags.create",
-      "title": "New tag or template",
+      "title": "New tag",
       "kind": "change",
       "input": {
         "type": "object",
@@ -9663,10 +8948,7 @@
           "notes": {
             "type": "string",
             "maxLength": 20000,
-            "description": "markdown; \"- [ ] step\" lines are its checklist"
-          },
-          "template": {
-            "type": "boolean"
+            "description": "markdown"
           }
         },
         "required": [
@@ -9755,39 +9037,6 @@
       }
     },
     {
-      "id": "tags.makeFromTemplate",
-      "title": "Make a tag from a template",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "template": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a tag's id or key"
-          },
-          "key": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 40,
-            "pattern": "^[a-z0-9][a-z0-9-]*$",
-            "description": "a tag key: lowercase words joined by hyphens"
-          },
-          "metadata": {
-            "type": "string",
-            "maxLength": 4000,
-            "description": "a JSON object of fields, such as {\"date\": \"2030-01-02\"}"
-          }
-        },
-        "required": [
-          "template",
-          "key"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "tags.moreTasks",
       "title": "Read the next 500 of a tag's tasks",
       "kind": "view",
@@ -9856,45 +9105,6 @@
           "key",
           "title",
           "pipeline"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tags.releaseChecklist",
-      "title": "Open the release checklist template, made if there is none",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tags.tick",
-      "title": "Tick or clear a box in a tag's checklist",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "tag": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a tag's id or key"
-          },
-          "line": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "done": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "tag",
-          "line",
-          "done"
         ],
         "additionalProperties": false
       }
@@ -10068,14 +9278,6 @@
           },
           "following": {
             "type": "boolean"
-          },
-          "notify": {
-            "enum": [
-              "live",
-              "mentions",
-              "digest",
-              "muted"
-            ]
           }
         },
         "required": [
@@ -10334,65 +9536,6 @@
         },
         "required": [
           "task"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "task.pageAudience",
-      "title": "Choose who can see a page",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "page": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "everyone": {
-            "type": "boolean"
-          },
-          "people": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 200
-            },
-            "maxItems": 500
-          },
-          "teams": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 200
-            },
-            "maxItems": 500
-          },
-          "agents": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 200
-            },
-            "maxItems": 500
-          }
-        },
-        "required": [
-          "task",
-          "page",
-          "everyone",
-          "people",
-          "teams",
-          "agents"
         ],
         "additionalProperties": false
       }
@@ -10997,33 +10140,6 @@
         "required": [
           "tasks",
           "owner"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tasks.chatWith",
-      "title": "Open the chat of one of a pipeline's agents",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "pipeline": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a pipeline id"
-          },
-          "who": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 120,
-            "description": "an actor id: human:<id> or bot:<slug>"
-          }
-        },
-        "required": [
-          "pipeline",
-          "who"
         ],
         "additionalProperties": false
       }
@@ -12001,29 +11117,6 @@
       }
     },
     {
-      "id": "threads.mute",
-      "title": "Mute a thread",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "thread": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a thread id"
-          },
-          "muted": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "thread"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "threads.new",
       "title": "Send a new message",
       "kind": "change",
@@ -12259,36 +11352,6 @@
       }
     },
     {
-      "id": "tico.closeEarlier",
-      "title": "Back to Tico's chat",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tico.openEarlier",
-      "title": "Read an earlier chat",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "room": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "an earlier chat's id"
-          }
-        },
-        "required": [
-          "room"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "tools.addApi",
       "title": "Add an API",
       "kind": "change",
@@ -12385,9 +11448,6 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 300
-          },
-          "central_only": {
-            "type": "boolean"
           }
         },
         "required": [
@@ -12600,6 +11660,45 @@
       }
     },
     {
+      "id": "tools.editWebhook",
+      "title": "Change an outgoing webhook",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "webhook": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "pattern": "^https?:\\/\\/"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "maxItems": 200
+          }
+        },
+        "required": [
+          "webhook"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "tools.editWebsite",
       "title": "Rename a website tool or change its sites",
       "kind": "change",
@@ -12624,9 +11723,6 @@
               "maxLength": 300
             },
             "maxItems": 50
-          },
-          "central_only": {
-            "type": "boolean"
           }
         },
         "required": [
@@ -12801,31 +11897,6 @@
       }
     },
     {
-      "id": "tools.retryWebhook",
-      "title": "Send an outgoing webhook’s failed sends again",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "webhook": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "since": {
-            "type": "string",
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
-            "description": "a day like 2026-11-12"
-          }
-        },
-        "required": [
-          "webhook",
-          "since"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "tools.revokeKey",
       "title": "Take a stored key away from someone",
       "kind": "change",
@@ -12883,31 +11954,6 @@
           "tool",
           "name",
           "value"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tools.sendMissed",
-      "title": "Send an outgoing webhook the events it missed",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "webhook": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "since": {
-            "type": "string",
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
-            "description": "a day like 2026-11-12"
-          }
-        },
-        "required": [
-          "webhook",
-          "since"
         ],
         "additionalProperties": false
       }
@@ -13017,53 +12063,6 @@
       }
     },
     {
-      "id": "tools.setAgentLetters",
-      "title": "Change one agent’s letter rule and monthly cap",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "bot": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "mode": {
-            "anyOf": [
-              {
-                "enum": [
-                  "ask_first",
-                  "on_their_own",
-                  "never"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "monthly_cap_micros": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 1000000000000
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "bot",
-          "mode",
-          "monthly_cap_micros"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "tools.setAgentSending",
       "title": "Change what one agent may send by email",
       "kind": "change",
@@ -13093,29 +12092,6 @@
         "required": [
           "bot",
           "mode"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tools.setEveryoneReads",
-      "title": "Let every agent read a tool",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "tool": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "on": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "tool",
-          "on"
         ],
         "additionalProperties": false
       }
@@ -13275,36 +12251,6 @@
       }
     },
     {
-      "id": "tools.setLetterSender",
-      "title": "Change who may send letters",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "enum": [
-              "person",
-              "bot"
-            ]
-          },
-          "who": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "send": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "type",
-          "who",
-          "send"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "tools.setLettersOut",
       "title": "Change how letters go out",
       "kind": "change",
@@ -13442,78 +12388,6 @@
       }
     },
     {
-      "id": "tools.setSeenBy",
-      "title": "Choose who can see a tool",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "enum": [
-              "api",
-              "website"
-            ]
-          },
-          "tool": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "audience": {
-            "anyOf": [
-              {
-                "type": "object",
-                "properties": {
-                  "people": {
-                    "type": "array",
-                    "items": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 220
-                    },
-                    "maxItems": 500
-                  },
-                  "teams": {
-                    "type": "array",
-                    "items": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 220
-                    },
-                    "maxItems": 500
-                  },
-                  "bots": {
-                    "type": "array",
-                    "items": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 220
-                    },
-                    "maxItems": 500
-                  }
-                },
-                "required": [
-                  "people",
-                  "teams",
-                  "bots"
-                ],
-                "additionalProperties": false
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "kind",
-          "tool",
-          "audience"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "tools.setSending",
       "title": "Change what agents may send by email",
       "kind": "change",
@@ -13635,25 +12509,6 @@
       }
     },
     {
-      "id": "tools.unlinkSlack",
-      "title": "Unlink a thread from Slack",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "link": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "link"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "updates.archive",
       "title": "Archive updates",
       "kind": "change",
@@ -13736,6 +12591,23 @@
       "input": {
         "type": "object",
         "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "usage.countPlanRuns",
+      "title": "Count plan runs against the limits",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "on"
+        ],
         "additionalProperties": false
       }
     },
@@ -13890,8 +12762,8 @@
       }
     },
     {
-      "id": "webhooks.recover",
-      "title": "Check a webhook's refused calls again under its current secret",
+      "id": "webhooks.update",
+      "title": "Rename a webhook",
       "kind": "change",
       "input": {
         "type": "object",
@@ -13901,160 +12773,15 @@
             "minLength": 1,
             "maxLength": 200
           },
-          "sinceHours": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 720
-          }
-        },
-        "required": [
-          "hook"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "webhooks.replay",
-      "title": "Run a webhook's kept call again",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "hook": {
+          "name": {
             "type": "string",
             "minLength": 1,
             "maxLength": 200
-          },
-          "delivery": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 300
           }
         },
         "required": [
           "hook",
-          "delivery"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "webhooks.update",
-      "title": "Change a webhook's name or settings",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "hook": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "typeFrom": {
-            "type": "string",
-            "maxLength": 120
-          },
-          "hourly": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 600
-          },
-          "keepDays": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 30
-          },
-          "unheard": {
-            "enum": [
-              "log",
-              "note"
-            ]
-          }
-        },
-        "required": [
-          "hook"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "webhooks.updateEndpoint",
-      "title": "Change an outgoing webhook",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "endpoint": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "url": {
-            "type": "string",
-            "minLength": 8,
-            "maxLength": 2000,
-            "pattern": "^https?:\\/\\/\\S+$",
-            "description": "an http(s) address"
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 100
-            },
-            "maxItems": 200
-          },
-          "allowHttp": {
-            "type": "boolean"
-          },
-          "headers": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "name": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 64
-                },
-                "value": {
-                  "type": "string",
-                  "maxLength": 1000
-                },
-                "secret": {
-                  "type": "boolean"
-                }
-              },
-              "required": [
-                "name"
-              ],
-              "additionalProperties": false
-            },
-            "maxItems": 10
-          },
-          "credentials": {
-            "enum": [
-              "keep",
-              "clear"
-            ]
-          }
-        },
-        "required": [
-          "endpoint",
-          "name",
-          "url",
-          "events"
+          "name"
         ],
         "additionalProperties": false
       }
