@@ -2034,7 +2034,8 @@ impl Runner {
             return Ok(self.published(bot, &repository, ("current", String::new())));
         }
         // A push cannot be taken back: the hub is asked first, never a place kept since the claim (keep_start_place).
-        self.wait_start_place(attempt, flags).await?;
+        // Boxed: the turn's future is deep enough already (a test's stack overflowed with it inline).
+        Box::pin(self.wait_start_place(attempt, flags)).await?;
         let result = self
             .pre_start_lock(attempt, flags, async {
                 let _one = self
@@ -2546,7 +2547,7 @@ impl Runner {
                         && (crate::product_files::unpushed(&bot)
                             || crate::product_files::refresh_due(&bot, &attempt["config"]))
                     {
-                        self.during_drain(&aid, self.wait_start_place(&start_attempt, &flags)).await?;
+                        Box::pin(self.during_drain(&aid, self.wait_start_place(&start_attempt, &flags))).await?;
                     }
                     let refresh = async {
                         self.refresh_checkout(p, &mut attempt, &env).await.map_err(Fail::runtime)?;
