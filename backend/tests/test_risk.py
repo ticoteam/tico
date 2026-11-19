@@ -332,6 +332,8 @@ def test_a_matter_that_waits_on_a_person_makes_its_risk_live_for_them_alone(api)
     ben = risk_of(api, "ben-test")
     assert (ben["level"], ben["waits"]) == ("open", False)
     assert get(api, "risks/" + RISK)["risk"]["waits"] is True
+    # A bot has no Needs you: nothing waits on it.
+    assert not any(r["waits"] for r in get(api, "risks", token=bot_token(api, "cpo"))["risks"])
     # A linked rule: shown to every teammate while active, and also on a risk with no matter at all.
     post(api, "risks", {"label": "Data breach"})
     with api.app.state.store.transaction() as c:
