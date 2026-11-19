@@ -1,5 +1,5 @@
 """Planner statistics (backend/planner_stats.py): a fresh file gets sqlite_stat1, reads after a refresh plan with it,
-and the hourly pass analyses only what changed."""
+the hourly pass analyses only what is stale, and no table holds the write lock past HOLD_MAX."""
 
 import sqlite3
 from contextlib import closing
@@ -47,19 +47,30 @@ def test_a_fresh_file_gets_statistics_and_every_read_after_plans_with_them(tmp_p
     s.close()
 
 
-def test_the_hourly_pass_analyses_only_tables_changed_tenfold(tmp_path):
+def test_the_hourly_pass_keeps_the_pool_when_nothing_is_stale(tmp_path):
     s = store(tmp_path)
     assert planner_stats.refresh(s, every=True, min_bytes=0) == 1
     with s.read() as kept:
         pass
     assert planner_stats.refresh(s, min_bytes=0) == 0
     with s.read() as c:
-        assert c is kept  # nothing analysed: the pool is kept
+        assert c is kept
+    s.close()
+
+
+def test_a_table_never_analysed_is_found_hourly_and_a_scan_past_its_deadline_lets_go_of_the_lock(tmp_path, monkeypatch):
+    s = store(tmp_path)
+    assert planner_stats.refresh(s, every=True, min_bytes=0) == 1
     with s.transaction() as c:
-        c.execute(
-            "INSERT INTO t SELECT x+50000*k, y FROM t, (SELECT value AS k FROM json_each('[1,2,3,4,5,6,7,8,9,10]'))"
-        )
-    assert planner_stats.refresh(s, min_bytes=0) == 1
+        c.execute("INSERT INTO empty VALUES(1)")
     with s.read() as c:
-        assert c.execute("SELECT stat FROM sqlite_stat1 WHERE idx='t_x'").fetchone()[0] == "550000 1"
+        assert planner_stats.stale(c) == ["empty"]
+    monkeypatch.setattr(planner_stats, "HOLD_MAX", 0.0)
+    monkeypatch.setattr(planner_stats, "STEPS", 1)
+    assert planner_stats.refresh(s, every=True, min_bytes=0) == 0  # each scan, full and sampled, is given up
+    with s.transaction() as c:  # the lock is free again
+        c.execute("INSERT INTO empty VALUES(2)")
+    with s.read() as c:
+        assert c.execute("SELECT stat FROM sqlite_stat1 WHERE idx='t_x'").fetchone()[0] == "50000 1"  # as it was
+        assert planner_stats.stale(c) == ["empty"]
     s.close()
