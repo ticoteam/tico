@@ -86,7 +86,11 @@ def test_other_routes_answer_while_needs_you_builds_wait_their_turn(api, monkeyp
     monkeypatch.setattr(needs_lane, "run", counted_run)
     readers = ThreadPoolExecutor(45)
     try:
-        waiting = [readers.submit(api.get, "/api/v2/needs-you", headers=headers("ben-test")) for _ in range(45)]
+        # Each its own page size, so each is its own build: identical reads share one (backend/shared_reads.py).
+        waiting = [
+            readers.submit(api.get, f"/api/v2/needs-you?limit={100 + n}", headers=headers("ben-test"))
+            for n in range(45)
+        ]
         assert all_arrived.wait(10), f"only {count[0]} of 45 Needs you requests reached the lane"
         with ThreadPoolExecutor(1) as one:
             me = one.submit(api.get, "/api/v2/me", headers=headers("ana-test"))

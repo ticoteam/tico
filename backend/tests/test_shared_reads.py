@@ -121,10 +121,10 @@ def test_ten_identical_reads_build_the_rail_once_and_callers_never_share(api, mo
     arrived = threading.Event()
     real_join = SR.SharedReads._join
 
-    async def join(self, task, compute):
+    async def join(self, task, compute, owner):
         if self.computed + self.joined + 1 == 12:
             arrived.set()
-        return await real_join(self, task, compute)
+        return await real_join(self, task, compute, owner)
 
     monkeypatch.setattr(SR.SharedReads, "_join", join)
     before = shared.computed
