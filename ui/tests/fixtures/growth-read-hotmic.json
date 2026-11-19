@@ -1,0 +1,283 @@
+{
+ "reads": {
+  "all": {
+   "as_of": "2026-11-13",
+   "channels": [
+    {
+     "budget": null,
+     "cac": null,
+     "cost": null,
+     "name": "Organic",
+     "new": 134,
+     "new_share": 0.56,
+     "over_budget": null,
+     "owner": null,
+     "slug": "organic",
+     "status": "no_spend"
+    },
+    {
+     "budget": null,
+     "cac": 15.67,
+     "cost": 1630.0,
+     "cost_share": 1.0,
+     "name": "Promotions",
+     "new": 104,
+     "new_share": 0.44,
+     "over_budget": null,
+     "owner": null,
+     "slug": "promotions",
+     "verdict": "flat"
+    }
+   ],
+   "headline": {
+    "activated_rate": {
+     "cohort": "2026-10",
+     "n": 714,
+     "status": "ok",
+     "value": 0.333
+    },
+    "cac": {
+     "n": 238,
+     "status": "ok",
+     "value": 6.85,
+     "verdict": "flat"
+    },
+    "cost": {
+     "retention": 250.0,
+     "value": 1630.0
+    },
+    "kept": {
+     "cohort": "2026-09",
+     "n": 230,
+     "status": "ok",
+     "value": 0.426,
+     "window": "d30"
+    },
+    "new_customers": {
+     "value": 238,
+     "verdict": "flat",
+     "vs_3mo": 222.0
+    },
+    "paid_rate": {
+     "status": "not_supplied",
+     "value": null
+    },
+    "signups": {
+     "value": 714,
+     "verdict": "flat",
+     "vs_3mo": 666.0
+    },
+    "value": {
+     "cost_per_retained": {
+      "cohort": "2026-09",
+      "n": 98,
+      "value": 16.33
+     },
+     "kept_d30": {
+      "cohort": "2026-09",
+      "n": 230,
+      "status": "ok",
+      "value": 0.426
+     }
+    }
+   },
+   "health": {
+    "mismatch": 0,
+    "no_segment": 0,
+    "reconciled": "not_reconciled",
+    "stale_sources": [],
+    "unknown_share": 0.0
+   },
+   "metrics": [
+    {
+     "channel": "organic",
+     "estimate": false,
+     "id": "kpi-1",
+     "name": "Day-7 viewers",
+     "owner": "human:ana",
+     "period_end": "2026-10-31",
+     "unit": "%",
+     "value": 44.0,
+     "vs_prior": 41.0
+    }
+   ],
+   "more": [
+    "campaigns"
+   ],
+   "period": "2026-10",
+   "retention": [
+    {
+     "cohort": "2026-10",
+     "entered": 238,
+     "kept_d30": {
+      "n": 0,
+      "status": "not_yet",
+      "value": null
+     }
+    },
+    {
+     "cohort": "2026-09",
+     "entered": 230,
+     "kept_d30": {
+      "n": 230,
+      "status": "ok",
+      "value": 0.426
+     }
+    },
+    {
+     "cohort": "2026-08",
+     "entered": 222,
+     "kept_d30": {
+      "n": 222,
+      "status": "ok",
+      "value": 0.423
+     }
+    },
+    {
+     "cohort": "2026-07",
+     "entered": 214,
+     "kept_d30": {
+      "n": 214,
+      "status": "ok",
+      "value": 0.425
+     }
+    },
+    {
+     "cohort": "2026-06",
+     "entered": 206,
+     "kept_d30": {
+      "n": 206,
+      "status": "ok",
+      "value": 0.422
+     }
+    },
+    {
+     "cohort": "2026-05",
+     "entered": 198,
+     "kept_d30": {
+      "n": 198,
+      "status": "ok",
+      "value": 0.424
+     }
+    }
+   ],
+   "scope": "all",
+   "series": [
+    {
+     "cac": 8.67,
+     "cost": 1300.0,
+     "kept": 0.427,
+     "new_customers": 150,
+     "period": "2025-11",
+     "signups": 450
+    },
+    {
+     "cac": 8.42,
+     "cost": 1330.0,
+     "kept": 0.424,
+     "new_customers": 158,
+     "period": "2025-12",
+     "signups": 474
+    },
+    {
+     "cac": 8.19,
+     "cost": 1360.0,
+     "kept": 0.428,
+     "new_customers": 166,
+     "period": "2026-01",
+     "signups": 498
+    },
+    {
+     "cac": 7.99,
+     "cost": 1390.0,
+     "kept": 0.425,
+     "new_customers": 174,
+     "period": "2026-02",
+     "signups": 522
+    },
+    {
+     "cac": 7.8,
+     "cost": 1420.0,
+     "kept": 0.429,
+     "new_customers": 182,
+     "period": "2026-03",
+     "signups": 546
+    },
+    {
+     "cac": 7.63,
+     "cost": 1450.0,
+     "kept": 0.426,
+     "new_customers": 190,
+     "period": "2026-04",
+     "signups": 570
+    },
+    {
+     "cac": 7.47,
+     "cost": 1480.0,
+     "kept": 0.424,
+     "new_customers": 198,
+     "period": "2026-05",
+     "signups": 594
+    },
+    {
+     "cac": 7.33,
+     "cost": 1510.0,
+     "kept": 0.422,
+     "new_customers": 206,
+     "period": "2026-06",
+     "signups": 618
+    },
+    {
+     "cac": 7.2,
+     "cost": 1540.0,
+     "kept": 0.425,
+     "new_customers": 214,
+     "period": "2026-07",
+     "signups": 642
+    },
+    {
+     "cac": 7.07,
+     "cost": 1570.0,
+     "kept": 0.423,
+     "new_customers": 222,
+     "period": "2026-08",
+     "signups": 666
+    },
+    {
+     "cac": 6.96,
+     "cost": 1600.0,
+     "kept": 0.426,
+     "new_customers": 230,
+     "period": "2026-09",
+     "signups": 690
+    },
+    {
+     "cac": 6.85,
+     "cost": 1630.0,
+     "kept": null,
+     "new_customers": 238,
+     "period": "2026-10",
+     "signups": 714
+    }
+   ]
+  }
+ },
+ "segments": [
+  {
+   "channels": [
+    "promotions"
+   ],
+   "churn_days": 0,
+   "customer_rule": "watched",
+   "margin_pct": null,
+   "min_cohort": 10,
+   "name": "Viewers",
+   "owner_ref": null,
+   "retired_at": null,
+   "revenue_month": null,
+   "slug": "viewers",
+   "sort": 0,
+   "value_kind": "retention"
+  }
+ ]
+}

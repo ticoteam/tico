@@ -1,5 +1,5 @@
-/* ui/app/growth-charts.ts — The Growth cards' small trend lines (ui/app/growth-page.ts), hand-written SVG in the app's
-   tokens. A null value is unknown: the line breaks there and is never drawn as 0.
+/* ui/app/growth-charts.ts — The Growth page's small trend lines and bars (ui/app/growth-page.ts), hand-written SVG in the app's
+   tokens. A null value is unknown: the line breaks there, a bar is left out, and neither is drawn as 0.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    TypeScript: npm run build:ui compiles it to build/ui/app/growth-charts.js, which the page runs in this file's place. */
 'use strict';
@@ -46,4 +46,17 @@ function grSpark(values: readonly GrValue[], pick: number = values.length - 1,
   return `<svg class="gr-spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">${runs.map(r => r.length > 1
     ? `<path d="${grPath(r)}"/>` : `<circle class="gr-spark-one" cx="${r[0][0].toFixed(1)}" cy="${r[0][1].toFixed(1)}" r="1.5"/>`).join('')}
     ${dot ? `<circle class="gr-spark-dot" cx="${dot[0].toFixed(1)}" cy="${dot[1].toFixed(1)}" r="${h < 30 ? 2.5 : 3.5}"/>` : ''}</svg>`;
+}
+// Bars: `values` oldest first, the bar at `pick` marked; a null leaves its slot empty, never a bar of 0. With no known
+// value, none.
+function grBars(values: readonly GrValue[], pick: number = values.length - 1,
+                {w = 120, h = 32}: {w?: number, h?: number} = {}): string {
+  const known = values.filter(v => v != null).map(Number);
+  if (!known.length) return '';
+  const top = Math.max(...known) || 1, slot = w / Math.max(1, values.length), bw = Math.max(1, slot - 2);
+  return `<svg class="gr-bars" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">${values.map((v, i) => {
+    if (v == null) return '';
+    const bh = Math.max(1, Math.max(0, Number(v)) / top * h);
+    return `<rect${i === pick ? ' class="gr-bar-on"' : ''} x="${(i * slot + 1).toFixed(1)}" y="${(h - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="1"/>`;
+  }).join('')}</svg>`;
 }

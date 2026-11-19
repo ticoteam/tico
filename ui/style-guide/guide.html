@@ -1966,27 +1966,12 @@
 
   <div class="rv-pair">
     <div class="rv-full">
-      <h3>Growth number card</h3>
-      <p class="rv-note">Three number cards from the Growth page. Each shows the picked month's value with its trend line, the change from the month before, and where the number came from. A null in the trend breaks the line.</p>
-      <div class="rv-states">
-        <div class="rv-full">
-          <p class="gr-k">New customers</p>
-          <div class="grc-num"><span class="grc-num-v">42</span><svg class="gr-spark" width="72" height="22" viewBox="0 0 72 22" aria-hidden="true"><path d="M3.0 19.0L14.0 13.7"/><path d="M36.0 8.3L47.0 4.3L58.0 7.0L69.0 3.0"/><circle class="gr-spark-dot" cx="69.0" cy="3.0" r="2.5"/></svg></div>
-          <div class="grc-num-d"><span class="gr-d gr-d-good" aria-label="Up 11%"><span aria-hidden="true">↑</span> 11%</span><span class="muted grc-origin">Computed</span></div>
-          <p class="muted gr-note">Counted from customer records, Nov 1 to 12.</p>
-        </div>
-        <div class="rv-full">
-          <p class="gr-k">Cost per customer</p>
-          <div class="grc-num"><span class="grc-num-v">$38</span><svg class="gr-spark" width="72" height="22" viewBox="0 0 72 22" aria-hidden="true"><path d="M3.0 3.0L14.0 6.4L25.0 8.7L36.0 12.1L47.0 9.9L58.0 15.6L69.0 19.0"/><circle class="gr-spark-dot" cx="69.0" cy="19.0" r="2.5"/></svg></div>
-          <div class="grc-num-d"><span class="gr-d gr-d-good" aria-label="Down 7%"><span aria-hidden="true">↓</span> 7%</span><span class="muted grc-origin">Typed</span></div>
-          <p class="muted gr-note">Typed by Ada, Nov 12. Actual.</p>
-        </div>
-        <div class="rv-full">
-          <p class="gr-k">LTV to CAC</p>
-          <div class="grc-num"><span class="grc-num-v">3.1×</span><svg class="gr-spark" width="72" height="22" viewBox="0 0 72 22" aria-hidden="true"><path d="M3.0 19.0L14.0 15.4L25.0 17.2L36.0 10.1L47.0 8.3L58.0 3.0L69.0 6.6"/><circle class="gr-spark-dot" cx="69.0" cy="6.6" r="2.5"/></svg></div>
-          <div class="grc-num-d"><span class="gr-d gr-d-bad" aria-label="Down 6%"><span aria-hidden="true">↓</span> 6%</span><span class="muted grc-origin">Computed</span></div>
-          <p class="muted gr-note">Needs 30 days of kept customers.</p>
-        </div>
+      <h3>Growth headline tiles</h3>
+      <p class="rv-note">Tiles from the Growth page's headline. Each shows the month's figure, its verdict against the three months before and what it rests on. A figure the data cannot give is a muted word, never 0.</p>
+      <div class="gp-tiles">
+        <div class="gp-tile"><span class="gr-k">New customers</span><span class="gp-v">140 <span class="gr-d gr-d-good" title="up"><span aria-hidden="true">↑</span><span class="sr-only">up</span></span></span></div>
+        <div class="gp-tile"><span class="gr-k">CAC</span><span class="gp-v">$36 <span class="gr-d" title="flat"><span aria-hidden="true">→</span><span class="sr-only">flat</span></span></span><span class="gp-s muted">n=140 · with effort $39</span></div>
+        <div class="gp-tile"><span class="gr-k">Kept</span><span class="gp-v"><span class="muted gp-word">too few</span></span><span class="gp-s muted">Jul 2026 · 90 days · n=16</span></div>
       </div>
     </div>
     <div class="rv-full">

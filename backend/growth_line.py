@@ -1,8 +1,8 @@
 # pyright: strict
-"""The Growth line: one month of Growth read left to right, source to KPI, joined (docs/growth.md "The Growth line").
+"""The Growth line: one month of Growth read left to right, source to KPI, joined.
 
-`line(c, month, hidden)` is what the Growth page draws above its cards and what `GET /api/v2/growth/numbers` returns as
-`line`, so an agent quotes what a person sees:
+`line(c, month, hidden)` is what `GET /api/v2/growth/numbers` returns as `line` (no page draws it: the Growth page is
+the one read, backend/growth_core.py):
 
 - `sources`: each live source (name, kind, health, the date of its last good sync, what it fills on this line), then
   "Typed by hand" when any number on the line was typed, and "Upload in Growth" when one was computed from customers

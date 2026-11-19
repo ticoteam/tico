@@ -332,7 +332,7 @@ const CP_ROUTE = '#/company-page';
 const cpAllowed = () => S.me?.role === 'owner' || S.me?.bot_admin === true;
 
 // app/growth-page.ts
-const GR_ROUTE = '#/growth', GR_SOURCES = GR_ROUTE + '/sources', BRAND_ROUTE = '#/strategy/brand', GR_GOALS = '#/strategy/goals';
+const GR_ROUTE = '#/growth', BRAND_ROUTE = '#/strategy/brand', GR_GOALS = '#/strategy/goals';
 // Where Growth and Go-to-market lived, under Strategy: redesignRoute sends them on.
 const GR_OLD_ROUTE = '#/strategy/growth', GTM_OLD_ROUTE = '#/strategy/gtm';
 

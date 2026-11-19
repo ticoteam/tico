@@ -135,6 +135,7 @@ def test_a_company_with_no_segments_and_no_paid_spend_reads_no_spend_with_effort
     assert outbound == {
         "slug": "outbound",
         "new": 4,
+        "name": "Outbound",
         "new_share": 0.33,
         "owner": None,
         "budget": None,
@@ -294,6 +295,7 @@ def test_each_channel_carries_its_owner_and_budget_and_mine_is_the_callers_chann
     assert mine["channels"][1] == {
         "slug": "events",
         "new": 0,
+        "name": "Events",
         "new_share": 0.0,
         "owner": "bot:5e0b0a7a",
         "budget": 200.0,

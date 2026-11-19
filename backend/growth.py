@@ -539,7 +539,7 @@ def typed_beside(c, computed_rows, actor, is_admin):
 def ask_owners(c, month=None):
     """Tell each channel's owner, once per month and figure, of the numbers typed as actual that differ from the ones
     computed from customers: after a customers load (every month) and after a number is typed as actual (its month).
-    Every such number is on the Growth page to choose. A channel with no owner (Unknown, or none set) is an admin's
+    Each is kept with tico growth cohort resolve. A channel with no owner (Unknown, or none set) is an admin's
     there and is not marked asked, so an owner set later is told at the next load. Returns how many numbers were asked
     about."""
     from . import growth_computed as GX
@@ -590,7 +590,7 @@ def ask_owners(c, month=None):
             H.TICO_ACTOR,
             ch["owner_ref"],
             f"Growth: numbers typed as actual for {ch['name']} differ from the ones computed from customers: {shown}. "
-            "Keep the typed number or the computed one on the Growth page.",
+            "Keep the typed number or the computed one: tico growth cohort resolve, or tell the Growth Manager.",
             refs={"growth_channel": slug},
         )
     return sum(len(lines) for lines in asked.values())

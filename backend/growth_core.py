@@ -507,7 +507,7 @@ class Data:
     conf: Row
     on: date
     slugs: set[str]  # the channels' slugs
-    lines: dict[str, Row]  # channel slug -> its owner_ref, budget_month and retired_at
+    lines: dict[str, Row]  # channel slug -> its name, owner_ref, budget_month and retired_at
 
 
 def load(c: sqlite3.Connection) -> Data:
@@ -516,7 +516,7 @@ def load(c: sqlite3.Connection) -> Data:
     segs = GX.segments(c)
     lines: dict[str, Row] = {
         str(r["slug"]): r
-        for r in H._rows(c.execute("SELECT slug, owner_ref, budget_month, retired_at FROM growth_channels"))
+        for r in H._rows(c.execute("SELECT slug, name, owner_ref, budget_month, retired_at FROM growth_channels"))
     }
     slugs = set(lines)
     rows: list[Row] = H._rows(c.execute("SELECT * FROM growth_cohort_rows"))
@@ -815,8 +815,8 @@ def _value(scope: Scope, month: str) -> Row:
 
 
 def channels(scope: Scope, month: str) -> list[Row]:
-    """Each channel's new customers, cost and CAC in the month, with its owner and monthly budget (cost over budget as
-    backend/growth_line.py has it); Unknown last. Scoped to mine, every live channel the caller owns."""
+    """Each channel's new customers, cost and CAC in the month, with its name, owner and monthly budget (cost over
+    budget as backend/growth_line.py has it); Unknown last. Scoped to mine, every live channel the caller owns."""
     data = scope.data
     new: dict[str, int] = {}
     for r in scope.at("customer", month):
@@ -836,7 +836,7 @@ def channels(scope: Scope, month: str) -> list[Row]:
             continue
         line = data.lines.get(slug) or {}
         budget = line.get("budget_month")
-        row.update(owner=line.get("owner_ref"), budget=budget, over_budget=None)
+        row.update(name=line.get("name") or slug, owner=line.get("owner_ref"), budget=budget, over_budget=None)
         if scope.kind == "segment" and data.segs.channels.get(slug) != scope.slug:
             # company-wide or another segment's spend: not split to this segment
             spends = any(k["channel"] == slug and k["period"] == month and k["kind"] in MONEY for k in data.costs)
@@ -983,7 +983,7 @@ def metrics(c: sqlite3.Connection, scope: Scope, month: str, hidden: Iterable[st
         k
         for k in H._rows(
             c.execute(
-                f"SELECT id, name, owner_id FROM kpis WHERE archived_at IS NULL AND (id IN ({marks}) OR owner_id=?) "
+                f"SELECT id, name, unit, owner_id FROM kpis WHERE archived_at IS NULL AND (id IN ({marks}) OR owner_id=?) "
                 "ORDER BY created_at",
                 [*linked, manager or ""],
             )
@@ -1015,6 +1015,7 @@ def metrics(c: sqlite3.Connection, scope: Scope, month: str, hidden: Iterable[st
             {
                 "id": kpi["id"],
                 "name": kpi["name"],
+                "unit": kpi["unit"] or "",
                 "owner": kpi["owner_id"],
                 "channel": linked.get(str(kpi["id"])),
                 "value": top["value"] if top else None,

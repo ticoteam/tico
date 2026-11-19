@@ -114,10 +114,9 @@ DEFAULTS = {
         ("updates", "medium"),
         ("latest_pages", "medium"),
     ],
-    # A default pin's third item is its card's settings beyond the template's own defaults. Growth's month numbers
-    # and channels are the Growth line's, drawn above the cards (backend/growth_line.py), and the Growth Manager asks
-    # for the rest by chat (ui/app/growth-start.ts), so only the board by default: no Number, Channels, Funnel or
-    # Retention card. A team that saved its Growth page keeps what it pinned.
+    # A default pin's third item is its card's settings beyond the template's own defaults. The Growth page draws
+    # the one read (backend/growth_core.py, ui/app/growth-page.ts), not this place; it stays for the cards API until
+    # the growth templates go.
     "growth": [("growth_board", "medium")],
 }
 WIDENING = ("dashboard", "team", "growth")
