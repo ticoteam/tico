@@ -1,0 +1,87 @@
+{
+  "$comment": "What Tico may do on a person's open app (backend/screen.py). The new web app generates this file from its action registry; until it does, this base set is kept by hand. Each input is a JSON Schema.",
+  "actions": [
+    {
+      "id": "shell.go",
+      "title": "Go to a page",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path"],
+        "properties": {
+          "path": {"type": "string", "pattern": "^/", "maxLength": 500, "description": "The page's address, such as /tasks/engineering"}
+        }
+      }
+    },
+    {
+      "id": "shell.openChat",
+      "title": "Open a second chat",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["chat"],
+        "properties": {
+          "chat": {"type": "string", "pattern": "^(agent|person|thread):.+", "maxLength": 200, "description": "agent:<slug>, person:<id> or thread:<id>"}
+        }
+      }
+    },
+    {
+      "id": "shell.closeChat",
+      "title": "Close the second chat",
+      "kind": "view",
+      "input": {"type": "object", "additionalProperties": false, "properties": {}}
+    },
+    {
+      "id": "shell.fold",
+      "title": "Fold a sheet",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sheet"],
+        "properties": {"sheet": {"type": "string", "enum": ["tico", "menu", "chat"]}}
+      }
+    },
+    {
+      "id": "shell.unfold",
+      "title": "Unfold a sheet",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sheet"],
+        "properties": {"sheet": {"type": "string", "enum": ["tico", "menu", "chat"]}}
+      }
+    },
+    {
+      "id": "tasks.open",
+      "title": "Open a task",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["task"],
+        "properties": {
+          "task": {"type": ["integer", "string"], "maxLength": 200, "description": "The task's number, such as 412, or its id"}
+        }
+      }
+    },
+    {
+      "id": "tasks.filter",
+      "title": "Set a page filter",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pipeline"],
+        "properties": {
+          "pipeline": {"type": "string", "minLength": 1, "maxLength": 200},
+          "q": {"type": "string", "maxLength": 200},
+          "owner": {"type": "string", "maxLength": 200}
+        }
+      }
+    }
+  ]
+}

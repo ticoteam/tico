@@ -252,6 +252,7 @@ AUDIENCE = {
     "tico_assistant_read": PEOPLE,
     "tico_assistant_send": PEOPLE,
     "tico_needs_you_show": HUMANS_AND_ASSISTANT,  # views.human_only: a person's own list
+    "tico_screen_show": HUMANS_AND_ASSISTANT,  # views.human_only: the person's own open app
     "tico_assistant_change_list": HUMANS_AND_ASSISTANT,  # what the person's Assistant did for them
     "tico_assistant_change_restore": HUMANS_AND_ASSISTANT,  # taking one back, as the person
     # A person's own layers (backend/learned.py): the person, or their own chat's turn; never a bot of its own.
