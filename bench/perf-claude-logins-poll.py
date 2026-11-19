@@ -280,26 +280,39 @@ def main():
                     f"write lock: {len(holds)} of {len(walls)} polls took it; held {sum(holds):.0f} ms in all, "
                     f"max {max(holds, default=0):.1f} ms"
                 )
-                print("handed (computer: kind, plan):", json.dumps(handed, sort_keys=True))
-            # Where one steady poll's SQL time goes, by statement (the flight recorder's per-request costs).
+                # Which computer of a person's set reads a plan goes by runner id (random per run): compare the plans.
+                print("handed (kind, plan):", sorted(x for v in handed.values() for x in v))
+            # The route's own work for a steady poll, outside HTTP (whose auth and middleware cost the same either way),
+            # and where its SQL time goes (the flight recorder's per-request costs).
             from backend import flight
 
-            for n in (0, 4, 9):
+            def handler(n, body):
+                if "write" in inspect.signature(CL.poll).parameters:
+                    with store.read_transaction() as c:
+                        return CL.poll(c, app.state.vault, computers[n]["runner_id"], body, write=False)
+                with store.transaction() as c:
+                    return CL.poll(c, app.state.vault, computers[n]["runner_id"], body)
+
+            for n in range(RUNNERS):
                 body = CL.Poll.model_validate({"live": live[n]})
+                handler(n, body)
+                times = []
+                for _ in range(20):
+                    started = time.perf_counter()
+                    handler(n, body)
+                    times.append((time.perf_counter() - started) * 1000)
                 cost, token = flight.request_started()
-                try:  # as the route answers a poll with nothing to write: this checkout's way
-                    if "write" in inspect.signature(CL.poll).parameters:
-                        with store.read_transaction() as c:
-                            CL.poll(c, app.state.vault, computers[n]["runner_id"], body, write=False)
-                    else:
-                        with store.transaction() as c:
-                            CL.poll(c, app.state.vault, computers[n]["runner_id"], body)
+                try:
+                    handler(n, body)
                 finally:
                     flight.request_finished(token)
-                shapes = sorted(cost[3].items(), key=lambda kv: -kv[1][1])
-                print(f"--- computer {n}: {cost[2]} statements, {cost[0]:.1f} ms SQL; costliest:")
-                for sql, (k, ms) in shapes[:8]:
-                    print(f"{ms:7.1f} ms {k:4d}x  {' '.join(sql.split())[:160]}")
+                print(
+                    f"--- computer {n}: handler median {statistics.median(times):.2f} ms, {cost[2]} statements, "
+                    f"{cost[0]:.2f} ms SQL"
+                )
+                if n in (0, 4):
+                    for sql, (k, ms) in sorted(cost[3].items(), key=lambda kv: -kv[1][1])[:6]:
+                        print(f"{ms:7.2f} ms {k:4d}x  {' '.join(sql.split())[:150]}")
 
 
 if __name__ == "__main__":
