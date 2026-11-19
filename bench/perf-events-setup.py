@@ -7,7 +7,7 @@ ten streams of one person opening at once, as after a release when every client 
 
 Env as bench/perf-hub-overload.py (OPEN, CLOSED, THREADS, DB), plus FRAMES=<file>: each probe's stream text, from the
 response's first byte through its catch-up to the change number `ready` names, as JSON, to compare two checkouts' on
-one DB (DB=..., seeded first with SEED_ONLY=1). Only fictional data. Never point it at a real hub.
+one DB (DB=..., seeded first with SEED_ONLY=1), and COMPARE=<old>,<new> to compare two. Only fictional data. Never point it at a real hub.
 """
 
 import http.client
@@ -172,7 +172,28 @@ def _serving(app):
     return serve()
 
 
+def compare(old, new):
+    """Each probe's frames, old against new: the count alike, and every frame that differs."""
+    a, b = json.loads(Path(old).read_text()), json.loads(Path(new).read_text())
+    alike = 0
+    for key in sorted(a):
+        left, right = a[key].split("\n\n"), b.get(key, "").split("\n\n")
+        if left == right:
+            alike += 1
+            print(f"same  {key}: {len(left) - 1} frames")
+            continue
+        print(f"DIFF  {key}: {len(left) - 1} frames old, {len(right) - 1} new")
+        for x, y in zip(left, right, strict=False):
+            if x != y:
+                print("   old", x[:400].replace("\n", " | "))
+                print("   new", y[:400].replace("\n", " | "))
+    print(f"{alike} of {len(a)} probes alike")
+
+
 B.report = report
 
 if __name__ == "__main__":
-    B.main()
+    if os.environ.get("COMPARE"):
+        compare(*os.environ["COMPARE"].split(","))
+    else:
+        B.main()
