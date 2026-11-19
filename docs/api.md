@@ -66,7 +66,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Events | The catalog of named events ([guide](routines.md)). |
 | Finance | Budgets, the P&L, expenses, bills, invoices, contacts, reports and the work inbox, as far as the caller sees; Finance actions, committed or sent to one person for approval. |
 | Automations | A trigger and a tree of steps (filter, decide, llm, find, bot_turn, paths, action), saved as versions; one permission rule for UI, CLI and MCP. |
-| Roadmaps | Company roadmap settings and internal requesters ([guide](roadmaps.md)). |
+| Roadmaps | The Roadmap's ranked Product tasks, company roadmap settings and internal requesters ([guide](roadmaps.md)). |
 | Support | Reports to Tico support ([guide](support.md)). |
 | Rules | Org rules: what teammates follow (internal) and what someone outside requires (external), with their due dates and sources. |
 | Risk | Risks: tags of kind risk that any task can carry, the matter facts of each tagged task, and the rules and documents linked to a risk. |

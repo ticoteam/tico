@@ -268,6 +268,23 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("withdrawAsk", "delete", "/api/v2/tasks/%s/asks/%s" % (task["id"], asked["requirement_id"]))
     call("snoozeTask", "post", "/api/v2/tasks/%s/snooze" % task["id"], json={"until": "2099-01-05", "why": "Later"})
     call("unsnoozeTask", "post", "/api/v2/tasks/%s/unsnooze" % task["id"], json={})
+    from backend import pipeline_settings as PS
+
+    with api.app.state.store.transaction() as c:
+        product = PS.add_preset(c, PS.SYSTEM, PS.PRODUCT)["id"]
+    feature = api.post(
+        "/api/v2/tasks", headers=headers(), json={"title": "Add exports", "owner": "human:ana", "pipeline": product}
+    ).json()["task"]
+    requesters = "/api/v2/tasks/%s/requesters" % feature["id"]
+    added = call("addTaskRequester", "post", requesters, json={"email": "a@acme.example", "organization": "Globex"})
+    call("addTaskRequester", "post", requesters, json={"actor": "human:ana"})
+    call("updateTaskRequester", "post", "%s/%s" % (requesters, added["id"]), json={"important": True})
+    assert call("listTaskRequesters", "get", requesters)["requester_count"] == 2
+    ranked = call("listRoadmapTasks", "get", "/api/v2/roadmap-tasks", params={"sort": "organization", "limit": "1"})
+    assert ranked["tasks"][0]["organization"] == "Globex"
+    call("deleteTaskRequester", "post", "%s/%s/delete" % (requesters, added["id"]), json={})
+    call("getRoadmapSettings", "get", "/api/v2/roadmaps/settings")
+    call("setRoadmapSettings", "post", "/api/v2/roadmaps/settings", json={"action_limit": 20})
     call("listPipelines", "get", "/api/v2/pipelines")
     call("getPipeline", "get", "/api/v2/pipelines/general")
     said = call("commentOnTask", "post", "/api/v2/tasks/" + task["id"] + "/comments", json={"text": "looks good"})
