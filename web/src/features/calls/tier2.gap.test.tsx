@@ -3,13 +3,13 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CalendarEvents } from '@/api/schema';
-import { ActionsRoot, run } from '@/actions';
+import { ActionsRoot } from '@/actions';
 import './actions';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { CalendarPage } from './CalendarPage';
 import { calendarSearch, parseDay } from './model';
-import { granolaQuery, itemsQuery, linkedTasksQuery, liveCallsQuery, meetingQuery, meetingsQuery, sourcesQuery, type MeetingMore } from './queries';
+import { granolaQuery, itemsQuery, liveCallsQuery, meetingQuery, meetingsQuery, sourcesQuery, type MeetingMore } from './queries';
 
 /* Tier 2 gaps: Pending's bulk Share N / Dismiss N and a row's own Share & send, Team or Private and an agent at
    sharing; Log a meeting's source, recording link, agent and outside names; Meeting sources' Close link, Remove's
@@ -78,7 +78,6 @@ function seedPending(...ms: MeetingMore[]) {
   for (const m of ms) {
     queryClient.setQueryData(meetingQuery(m.id).queryKey, m);
     queryClient.setQueryData(itemsQuery(m.id).queryKey, { id: m.id, can_send: true, can_push: true, sections: { doc: [], task: [], feature: [] } });
-    queryClient.setQueryData(linkedTasksQuery(m.id).queryKey, { next_cursor: null, tasks: [] });
   }
 }
 const pick = async (name: string, option: string | RegExp) => {
@@ -93,20 +92,6 @@ const more = async () => {
 };
 
 describe('Pending @s994', () => {
-  it('checks rows and shares them all at once with Share N; Tico may not @s994', async () => {
-    seedPending(meeting(), meeting({ id: 'mt2', title: 'Supplier call' }));
-    answer = (url, init) => (url.endsWith('/api/v2/meetings/review') && init?.method === 'POST' ? json({ meetings: [], count: 2, pending_count: 0 }) : undefined);
-    show('/calendar?view=list&review=pending');
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'Check Weekly sync' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Check Supplier call' }));
-    expect(screen.getByRole('button', { name: 'Dismiss 2' })).toBeTruthy();
-    expect(await run('calls.reviewMany', { meetings: ['mt1', 'mt2'], action: 'approve' }, { via: 'tico' })).toMatchObject({ ok: false });
-    fireEvent.click(screen.getByRole('button', { name: 'Share 2' }));
-    await waitFor(() => expect(writes()).toEqual([expect.objectContaining({ method: 'POST', body: { action: 'approve_all', ids: ['mt1', 'mt2'] } })]));
-    // They leave Pending at once.
-    await waitFor(() => expect(screen.queryByRole('link', { name: 'Weekly sync' })).toBeNull());
-  });
-
   it("a row's ⋯ shares and sends it to Tico, or dismisses it alone @s994", async () => {
     seedPending(meeting());
     answer = (url, init) =>

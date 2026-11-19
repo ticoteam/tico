@@ -1,5 +1,6 @@
 import { createFileRoute, notFound } from '@tanstack/react-router';
-import { loadStrategy, strategySearch, STRATEGY_TABS, StrategyPage, strategyTab } from '@/features/company/exports';
+import { StrategyPage } from '@/features/company/exports';
+import { loadStrategy, strategySearch, STRATEGY_TABS, strategyTab } from '@/features/company/routing';
 
 /* Strategy's other tabs: Market, Org, Goals, Budget, Brand. Strategy itself is /company/strategy. */
 export const Route = createFileRoute('/company/strategy_/$tab')({

@@ -316,3 +316,5 @@ button.add-pick:hover,button.add-person:hover,button.tpl:hover,button.tpl.is-on{
   .bv-type .btn,.bv .modal-row .btn{min-height:var(--s-12)}
   .bv .modal-row .btn{flex:1}
 }
+/* A task list past 100 rows (OwnRows): a scroller twelve rows high, only its rows on screen drawn. */
+.tm-long{max-height:calc(var(--row) * 12);overflow:auto;scrollbar-width:thin}

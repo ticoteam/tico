@@ -7,29 +7,19 @@ import { Count } from '@/kit/Count';
 import { Empty } from '@/kit/Empty';
 import { Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
-import { IconButton } from '@/kit/IconButton';
 import { Markdown } from '@/kit/Markdown';
-import { Menu, MenuItem } from '@/kit/Menu';
-import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { VirtualList } from '@/kit/VirtualList';
-import { FilterRow, ItemHead, ListAndItem, type FilterChip } from '@/pagekinds';
-import { MAIL_LABELS } from './actions';
+import { ItemHead, ListAndItem } from '@/pagekinds';
 import { letterAt, letterRows, letterUnread, senderName, type Letter, type LetterRow, type Text } from './model';
 import { press } from './people';
-import { letterQuery, mailboxesQuery, mailFindQuery, mailInstructionsQuery, textListQuery, textQuery, type MailFind } from './queries';
+import { letterQuery, mailboxesQuery, mailFindQuery, mailInstructionsQuery, textListQuery, textQuery } from './queries';
 import { NewButton, threadTabs } from './ThreadsPage';
 import './threads.css';
 
 const TABS = threadTabs('/threads');
 const q = (params: Record<string, string>) => `?${new URLSearchParams(params).toString()}`;
-/** The narrowing as address params, so an opened mail keeps the list it was picked from. */
-const findParams = (f: MailFind): Record<string, string> => ({
-  ...(f.q ? { q: f.q } : {}),
-  ...(f.label ? { label: f.label } : {}),
-  ...(f.attach ? { attach: 'true' } : {}),
-});
 
 export interface MailPageProps {
   /** The mailbox read; the first one when left out. */
@@ -40,28 +30,19 @@ export interface MailPageProps {
   view?: 'instructions';
   /** The words searched for (`?q=`). */
   q?: string;
-  /** Only mail with this Gmail label (`?label=`). */
-  label?: string;
-  /** Only mail with an attachment (`?attach=`). */
-  attach?: boolean;
 }
 
 /** Mail: the company's mailboxes, a row per conversation, the open one in full. Read only. */
-export function MailPage({ box, open, view, q: words, label, attach }: MailPageProps) {
+export function MailPage({ box, open, view, q: words }: MailPageProps) {
   const boxes = useQuery(mailboxesQuery);
   const current = box ?? boxes.data?.[0]?.address ?? '';
   const agent = !!boxes.data?.find((b) => b.address === current)?.agent_instructions;
   const reading = view === 'instructions' && agent;
-  const find: MailFind = { q: words, label, attach };
-  const narrowed = !!(words || label || attach);
-  const list = useInfiniteQuery(mailFindQuery(current, find));
+  const narrowed = !!words;
+  const list = useInfiniteQuery(mailFindQuery(current, words));
   const rows = letterRows(list.data?.pages.flatMap((p) => p.messages) ?? []);
-  const keep = findParams(find);
-  const narrow = (patch: MailFind) => void press('mail.find', { box, q: words, label, attach, ...patch });
-  const chips: FilterChip[] = [
-    ...(label ? [{ label: labelName(label) || label, onClear: () => narrow({ label: undefined }) }] : []),
-    ...(attach ? [{ label: 'Has attachment', onClear: () => narrow({ attach: undefined }) }] : []),
-  ];
+  // An opened mail keeps the words it was found by.
+  const keep: Record<string, string> = words ? { q: words } : {};
   const choices = (boxes.data ?? []).map((b) => ({ value: b.address, label: b.name || b.address }));
   // With more than one mailbox an empty one stays a list: the pick (only shown on a ready list) leads to the others.
   const pick = choices.length > 1;
@@ -81,22 +62,10 @@ export function MailPage({ box, open, view, q: words, label, attach }: MailPageP
       title="Threads"
       path="/threads/mail"
       className="is-mail"
-      actions={
-        <>
-          <Menu trigger={<IconButton icon="filter" label="Filter" on={!!label || !!attach} data-phone />}>
-            <MenuItem label="Any label" on={!label} onSelect={() => narrow({ label: undefined })} />
-            {MAIL_LABELS.map((l) => (
-              <MenuItem key={l.id} label={l.name} on={label === l.id} onSelect={() => narrow({ label: l.id })} />
-            ))}
-            <MenuItem label="Has attachment" on={!!attach} onSelect={() => narrow({ attach: !attach || undefined })} />
-          </Menu>
-          <NewButton />
-        </>
-      }
+      actions={<NewButton />}
       search={
         <>
-          <FindMail value={words ?? ''} onFind={(next) => narrow({ q: next || undefined })} />
-          <FilterRow filters={chips} />
+          <FindMail value={words ?? ''} onFind={(next) => void press('mail.find', { box, q: next || undefined })} />
           {pick && (
             <div className="ml-box">
               <Select label="Mailbox" labelHidden options={choices} value={current} onValueChange={(v) => void press('mail.pickBox', { box: v })} />
@@ -174,31 +143,10 @@ function FindMail({ value, onFind }: { value: string; onFind: (q: string) => voi
 
 const SEARCH_WAIT_MS = 250;
 
-// How a label reads as a pill (old mail.ts MAIL_LABEL); Gmail's categories say nothing a person would look for.
-const LABEL_NAMES: Record<string, string> = {
-  INBOX: 'Inbox',
-  UNREAD: 'Unread',
-  STARRED: 'Starred',
-  SENT: 'Sent',
-  IMPORTANT: 'Important',
-  DRAFT: 'Drafts',
-  SPAM: 'Spam',
-  TRASH: 'Trash',
-};
-function labelName(label: string): string {
-  if (LABEL_NAMES[label]) return LABEL_NAMES[label];
-  if (label.startsWith('CATEGORY_')) return '';
-  return label.startsWith('hub/') ? label.slice(4) : label;
-}
-/** A row's pills: what stands out. Inbox is on nearly every mail, and an unread row is already in bold. */
-const rowLabels = (labels: readonly string[] | undefined) =>
-  (labels ?? []).filter((l) => l !== 'INBOX' && l !== 'UNREAD').map(labelName).filter(Boolean);
-
 function MailRow({ r, box, keep, selected }: { r: LetterRow; box: string; keep: Record<string, string>; selected: boolean }) {
   const l = r.letter;
   const from = senderName(l);
   const subject = l.subject || '(no subject)';
-  const pills = rowLabels(l.labels);
   return (
     <Row
       className="ml-row"
@@ -213,14 +161,7 @@ function MailRow({ r, box, keep, selected }: { r: LetterRow; box: string; keep: 
         <span className="ml-from">{from}</span>
         {r.count > 1 && <Count n={r.count} label={`${r.count} letters`} />}
         <span className="ml-sub">{subject}</span>
-        {(pills.length > 0 || l.has_attachment) && (
-          <span className="ml-pills">
-            {pills.map((p) => (
-              <Pill key={p}>{p}</Pill>
-            ))}
-            {l.has_attachment && <Pill>Attachment</Pill>}
-          </span>
-        )}
+        {l.has_attachment && <Icon name="attach" label="Attachment" />}
       </span>
       <Ago at={letterAt(l)} className="row-age" />
       <span className="ml-mark" />

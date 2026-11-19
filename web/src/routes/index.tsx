@@ -1,5 +1,5 @@
 import { createFileRoute, redirect } from '@tanstack/react-router';
-import { landing } from '@/features/start/exports';
+import { landing } from '@/features/start/routing';
 
 // The landing address. Signed in: the start page, with the first run open over it while setup is owed. Not signed in,
 // nothing here: the root's gate sends the person to sign in and back to this address.

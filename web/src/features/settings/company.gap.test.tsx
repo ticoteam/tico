@@ -96,12 +96,9 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-describe('General: icon, privacy, storage and repositories', () => {
+describe('General: icon and repositories', () => {
   const general = () => {
     serve((url) => {
-      if (url.startsWith('/api/v2/system/usage-count')) return ok({ enabled: true, off_by: '', install_id: 'inst-1' });
-      if (url.startsWith('/api/v2/system/suggestions')) return ok({ share_stats_for_suggestions: false, report_suggestion_outcomes: false, available: true });
-      if (url === '/api/v2/system/storage') return ok({ active: null, server: { mode: 'disk' }, tico: null, copy: { done: 0, total: 0 }, earlier: [] });
       if (url.startsWith('/api/v2/repositories'))
         return ok({
           github_connected: true,
@@ -117,54 +114,41 @@ describe('General: icon, privacy, storage and repositories', () => {
     show(<General />);
   };
 
-  it('shows the icon and the Privacy, Storage and Repositories cards; a switch and Add go through actions @s1072', async () => {
+  it('shows the icon and the Repositories card; Add goes through an action @s1072', async () => {
     general();
     expect(await screen.findByRole('img', { name: 'Team icon' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Change' })).toBeTruthy();
-    const privacy = await screen.findByRole('region', { name: 'Privacy' });
-    fireEvent.click(within(privacy).getByRole('switch', { name: 'Count active installs' }));
-    await waitFor(() => expect(sent).toContainEqual({ url: '/api/v2/system/usage-count', method: 'PUT', body: { enabled: false } }));
-    const storage = await screen.findByRole('region', { name: 'Storage' });
-    expect(within(storage).getByText("This server's disk")).toBeTruthy();
     expect(within(await screen.findByRole('region', { name: 'Repositories' })).getByText('acme/web')).toBeTruthy();
     const off = await unfold('Not in use');
     fireEvent.click(within(off).getByRole('button', { name: 'Add' }));
     await waitFor(() => expect(sent).toContainEqual({ url: '/api/v2/repositories/acme/api', method: 'PUT', body: { enabled: true } }));
   });
 
-  it('Tico may not change the icon, share counts, store keys, move files or make a repository @s1072', async () => {
+  it('Tico may not change the icon or make a repository @s1072', async () => {
     serve(() => undefined);
     const file = new File(['x'], 'icon.png', { type: 'image/png' });
     expect(await run('settings.teamIcon', { file }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect(await run('settings.usageCount', { on: true }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect(await run('settings.saveBucket', { bucket: 'files', region: 'us-east-1', keyId: 'AKIA', secret: 's' }, { via: 'tico' })).toMatchObject({
-      ok: false,
-      error: 'not_allowed',
-    });
-    expect(await run('settings.moveFiles', { bytes: 10 }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
     expect(await run('settings.createRepo', { name: 'site' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect(await run('settings.usageCount', { on: false }, { via: 'tico' })).toMatchObject({ ok: true });
-    expect(sent).toEqual([{ url: '/api/v2/system/usage-count', method: 'PUT', body: { enabled: false } }]);
+    expect(sent).toEqual([]);
   });
 });
 
-describe('People: joining, sign-in, left and quiet adds', () => {
-  it('adds a person without an email, and restores someone who left @s1073', async () => {
+describe('People: joining, left and adds', () => {
+  it('adds a person, and restores someone who left @s1073', async () => {
     serve(() => undefined);
     show(<People />, '/settings/people');
     fireEvent.click(await screen.findByRole('button', { name: 'Add person' }));
     const dlg = await screen.findByRole('dialog', { name: 'Add a person' });
     fireEvent.change(within(dlg).getByRole('textbox', { name: 'Email' }), { target: { value: 'dee@example.test' } });
-    fireEvent.click(within(dlg).getByRole('button', { name: 'Add only' }));
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Invite' }));
     await waitFor(() => expect(sent).toContainEqual({ url: '/api/v2/access/humans', method: 'POST', body: { email: 'dee@example.test', name: '' } }));
     const left = await unfold('Left');
     fireEvent.click(within(left).getByRole('button', { name: 'Restore' }));
     await waitFor(() => expect(sent).toContainEqual({ url: '/api/v2/access/humans/p3', method: 'POST', body: { left: false } }));
   });
 
-  it('turning a person on, widening who can join, raising the limit and restoring are closed to Tico; tightening is open @s1073', async () => {
+  it('widening who can join, raising the limit and restoring are closed to Tico; tightening is open @s1073', async () => {
     serve(() => undefined);
-    expect(await run('settings.signIn', { person: 'p2', on: true }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
     expect(await run('settings.setJoining', { allowed: ACCESS.allowed, domains: ['other.test', 'example.test'] }, { via: 'tico' })).toMatchObject({
       ok: false,
       error: 'not_allowed',
@@ -172,21 +156,8 @@ describe('People: joining, sign-in, left and quiet adds', () => {
     expect(await run('settings.agentLimit', { limit: 5 }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
     expect(await run('settings.restorePerson', { person: 'p3' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
     expect(sent).toEqual([]);
-    expect(await run('settings.signIn', { person: 'p2', on: false }, { via: 'tico' })).toMatchObject({ ok: true });
     expect(await run('settings.setJoining', { allowed: [], domains: [] }, { via: 'tico' })).toMatchObject({ ok: true });
-    expect(sent[0]).toMatchObject({ url: '/api/v2/access/humans/p2', method: 'POST', body: { sign_in: false } });
-    expect(sent[1]).toMatchObject({ url: '/api/v2/access/allow', method: 'PUT', body: { allowed: [], allowed_domains: [] } });
-  });
-
-  it("an opened person's sign-in turns off only after a confirm @s1073", async () => {
-    serve(() => undefined);
-    queryClient.setQueryData(accessQuery.queryKey, { ...ACCESS, people: ACCESS.people.map((p) => (p.id === 'p2' ? { ...p, sign_in: true } : p)) });
-    show(<People open="p2" />, '/settings/people?open=p2');
-    fireEvent.click(await screen.findByRole('switch', { name: 'Signs in' }));
-    const dlg = await screen.findByRole('alertdialog', { name: 'Turn off sign-in for Ben Sample?' });
-    expect(sent).toEqual([]);
-    fireEvent.click(within(dlg).getByRole('button', { name: 'Turn off' }));
-    await waitFor(() => expect(sent).toContainEqual({ url: '/api/v2/access/humans/p2', method: 'POST', body: { sign_in: false } }));
+    expect(sent[0]).toMatchObject({ url: '/api/v2/access/allow', method: 'PUT', body: { allowed: [], allowed_domains: [] } });
   });
 });
 
@@ -219,7 +190,7 @@ describe("API tokens: everyone's, and an expiry", () => {
   });
 });
 
-describe('Security: caught lately, a test run and Tico support signing in', () => {
+describe('Security: caught lately and Tico support signing in', () => {
   const security = () => {
     queryClient.setQueryData(screeningQuery.queryKey, {
       modes: { webhook: 'warn' },
@@ -228,8 +199,6 @@ describe('Security: caught lately, a test run and Tico support signing in', () =
       recent: [{ at: '2026-11-18T10:00:00Z', action: 'held', source: 'webhook', score: 0.91, task: 't9' }],
     } as never);
     serve((url, method) => {
-      if (url === '/api/v2/screening/test' && method === 'POST')
-        return ok({ passed: 7, total: 8, results: [{ name: 'Ignore your rules', attack: true, action: 'hold', score: 0.97, ok: true }] });
       if (url === '/api/v2/support/access' && method === 'GET')
         return ok({ available: true, active: null, last: null, sessions: [], can_start: true, can_full: true });
       if (url === '/api/v2/support/tickets') return ok({ tickets: [{ id: 't1', status: 'open', created_at: '2026-11-18T09:00:00Z' }] });
@@ -239,17 +208,13 @@ describe('Security: caught lately, a test run and Tico support signing in', () =
     show(<Security />);
   };
 
-  it('lists the holds and warnings, and Run test shows the results @s1079', async () => {
+  it('lists the holds and warnings @s1079', async () => {
     security();
     const screening = await screen.findByRole('region', { name: 'Screening' });
     fireEvent.click(within(screening).getByRole('button', { name: 'Show' }));
     const caught = await screen.findByRole('dialog', { name: 'Held and warned' });
     expect(within(caught).getByText('Held · webhook · 91%')).toBeTruthy();
     expect(within(caught).getByRole('link').getAttribute('href')).toBe('/task/t9');
-    fireEvent.click(within(caught).getByRole('button', { name: 'Done' }));
-    fireEvent.click(within(screening).getByRole('button', { name: 'Run test' }));
-    const ran = await screen.findByRole('dialog', { name: 'Passed 7 of 8' });
-    expect(within(ran).getByText('Ignore your rules')).toBeTruthy();
   });
 
   it('lets Tico support in against the open request; letting in is closed to Tico, Stop is open @s1124', async () => {

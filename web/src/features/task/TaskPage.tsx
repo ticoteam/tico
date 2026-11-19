@@ -10,7 +10,7 @@ import { Link } from '@/kit/Link';
 import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
 import { Document, type PageState, type PageTab } from '@/pagekinds';
-import { whoHref } from '@/features/team/exports';
+import { whoHref } from '@/features/team/routing';
 import { Decision } from './Answer';
 import { AddMenu, Details, type Adding } from './Details';
 import type { TaskSearch } from './exports';

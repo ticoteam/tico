@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { loadRisk, RiskPage, riskSearch } from '@/features/company/exports';
+import { RiskPage } from '@/features/company/exports';
+import { loadRisk, riskSearch } from '@/features/company/routing';
 
 export const Route = createFileRoute('/company/risk')({
   validateSearch: riskSearch,

@@ -234,9 +234,8 @@
   .tools .tool .fact{grid-template-columns:112px minmax(0,1fr);height:44px}
 }
 
-/* ---------------------------------------------------------------- gap wave: a contact's rules, a place's marks */
+/* ---------------------------------------------------------------- gap wave: a place's rules */
 .pnl .rec-none{margin:0;padding:var(--s-1) 0;color:var(--muted)}
-.rec-pills{display:inline-flex;flex-wrap:wrap;gap:var(--s-1)}
 
 /* ---------- Tools: Messages across every address (ToolMessages.tsx) ---------- */
 .lib .msg-find{display:flex;flex-wrap:wrap;gap:var(--s-2);padding:var(--s-1) 0 var(--s-2)}

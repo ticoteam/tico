@@ -13,13 +13,10 @@ import {
   fillTemplate,
   RUN_RANGES,
   RUN_STATUSES,
-  RUN_TRIGGERS,
   setFlow,
   updateEndpoint,
   addStageRule,
   createHook,
-  recoverHook,
-  replayDelivery,
   updateHook,
   createRoutine,
   createWatch,
@@ -64,7 +61,7 @@ import {
   type StageRules,
 } from './queries';
 
-import type { Hook, ListenSource, OrgRule, Routine, StageRule, Trigger } from './types';
+import type { ListenSource, OrgRule, Routine, StageRule, Trigger } from './types';
 import { browserZone } from './words';
 
 /* Every change and every move a person makes on Routines, Rules and Listening. A tab is `?tab=` and one routine, rule
@@ -155,11 +152,8 @@ export const showRuns = defineAction({
   input: s.object({
     status: s.optional(s.oneOf(RUN_STATUSES)),
     range: s.optional(s.oneOf(RUN_RANGES)),
-    // what started them, and whose routine they are (`bot:<id>`, `human:<id>`)
-    trigger: s.optional(s.oneOf(RUN_TRIGGERS)),
-    owner: s.optional(s.string({ min: 1, max: 200 })),
   }),
-  run: ({ router }, i) => go(router, ROUTINES, { tab: 'runs', status: i.status, range: i.range === RUNS_RANGE ? undefined : i.range, trigger: i.trigger, owner: i.owner }),
+  run: ({ router }, i) => go(router, ROUTINES, { tab: 'runs', status: i.status, range: i.range === RUNS_RANGE ? undefined : i.range }),
   did: () => 'Opened the runs',
   target: () => ({ kind: 'tab', id: 'runs' }),
 });
@@ -170,13 +164,12 @@ const cached = (ctx: Ctx, rid: string): Routine | undefined =>
   ctx.queryClient.getQueryData<Routine>(routineQuery(rid).queryKey) ??
   ctx.queryClient.getQueryData<Routine[]>(routinesQuery.queryKey)?.find((r) => r.id === rid);
 
-/** The trigger an edit saves: a change to the same kind is merged into the one it has, so its filters (and anything
-   else the editor does not draw) stay; another kind starts fresh, as the old editor did (its filters test another
-   kind's fields). */
-const triggerOf = (i: { cron?: string; tz?: string; event?: string }, was?: Trigger): Trigger => {
-  if (i.cron) return was?.type === 'schedule' ? { ...was, cron: i.cron, tz: i.tz || was.tz || browserZone() } : { type: 'schedule', cron: i.cron, tz: i.tz || browserZone() };
+/** The trigger an edit saves: a change to the same kind is merged into the one it has, so its filters, its zone (and
+   anything else the editor does not draw) stay; another kind starts fresh, as the old editor did (its filters test
+   another kind's fields). A new schedule runs in the person's zone. */
+const triggerOf = (i: { cron?: string; event?: string }, was?: Trigger): Trigger => {
+  if (i.cron) return was?.type === 'schedule' ? { ...was, cron: i.cron, tz: was.tz || browserZone() } : { type: 'schedule', cron: i.cron, tz: browserZone() };
   if (i.event) return was?.type === 'event' ? { ...was, name: i.event } : { type: 'event', name: i.event };
-  if (i.tz && was?.type === 'schedule') return { ...was, tz: i.tz };
   return was ?? { type: 'schedule', cron: '0 9 * * 1-5', tz: browserZone() };
 };
 
@@ -189,7 +182,6 @@ export const createRoutineAction = defineAction({
     agent,
     instruction: s.string({ min: 1, max: 20_000 }),
     cron: s.optional(cron),
-    tz: s.optional(s.string({ max: 64 })),
     event: s.optional(s.string({ min: 1, max: 100 })),
   }),
   run: async ({ router }, i) => {
@@ -211,9 +203,7 @@ export const updateRoutineAction = defineAction({
     agent: s.optional(agent),
     instruction: s.optional(s.string({ min: 1, max: 20_000 })),
     cron: s.optional(cron),
-    tz: s.optional(s.string({ max: 64 })),
-    // a catalog event (task.created) or a custom one (custom.<name>)
-    event: s.optional(s.string({ min: 1, max: 100, pattern: /^[a-z][a-z0-9_]*(\.[a-z0-9_*-]+)+$/, what: 'an event name, like task.created or custom.order_paid' })),
+    event: s.optional(s.string({ min: 1, max: 100, pattern: /^[a-z][a-z0-9_]*(\.[a-z0-9_*-]+)+$/, what: 'an event name, like task.created' })),
   }),
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
   run: async (ctx, i) => {
@@ -556,35 +546,19 @@ export const openWebhook = defineAction({
 });
 
 const PRESETS = ['hmac', 'github', 'standard', 'stripe', 'slack'] as const;
-const hookSettings = {
-  // where a call's type is read: a header, or a /json/path; '' for the preset's own
-  typeFrom: s.optional(s.string({ max: 120 })),
-  hourly: s.optional(s.number({ int: true, min: 1, max: 600 })),
-  keepDays: s.optional(s.number({ int: true, min: 1, max: 30 })),
-  unheard: s.optional(s.oneOf(['log', 'note'] as const)),
-};
-const settingsBody = (i: { typeFrom?: string; hourly?: number; keepDays?: number; unheard?: 'log' | 'note' }) => ({
-  ...(i.typeFrom !== undefined ? { type_from: i.typeFrom.trim() } : {}),
-  ...(i.hourly !== undefined ? { hourly: i.hourly } : {}),
-  ...(i.keepDays !== undefined ? { keep_days: i.keepDays } : {}),
-  ...(i.unheard ? { unheard: i.unheard } : {}),
-});
-
 export const addWebhook = defineAction({
   id: 'webhooks.add',
   title: 'Add a webhook',
   kind: 'change',
   // Its address carries a secret shown once, and so may its signing secret: the person's own press.
   tico: false,
-  input: s.object({ name, preset: s.optional(s.oneOf(PRESETS)), secret: s.optional(s.string({ max: 300 })), ...hookSettings }),
+  input: s.object({ name, preset: s.optional(s.oneOf(PRESETS)), secret: s.optional(s.string({ max: 300 })) }),
   // The full address (secret included) and a made signing secret go back to the page that added it, held in its
-  // state: never cached. Making one is three calls, as the old app made it: create, signing, settings.
+  // state: never cached. Making one is two calls, as the old app made it: create, then signing.
   run: async ({ router }, i) => {
     const made = await said(createHook(i.name.trim()));
     await go(router, ROUTINES, { tab: 'webhooks', panel: `hook:${made.id}` });
     const signed = i.preset ? await said(signHook(made.id, i.preset, i.secret?.trim() || undefined)) : undefined;
-    const settings = settingsBody(i);
-    if (Object.keys(settings).length) await said(updateHook(made.id, settings));
     return { hook: made.id, url: made.url, ...(signed?.secret ? { signing: signed.secret } : {}) };
   },
   did: (i) => `Added ${i.name}`,
@@ -593,42 +567,11 @@ export const addWebhook = defineAction({
 
 export const updateWebhook = defineAction({
   id: 'webhooks.update',
-  title: "Change a webhook's name or settings",
+  title: "Rename a webhook",
   kind: 'change',
-  input: s.object({ hook: id, name: s.optional(name), ...hookSettings }),
-  // Tico may tighten it; taking more calls an hour raises a limit: the person's own press.
-  can: (ctx, i) => {
-    if (ctx.via !== 'tico' || i.hourly === undefined) return true;
-    const was = ctx.queryClient.getQueryData<Hook[]>(hooksQuery.queryKey)?.find((h) => h.id === i.hook);
-    return !!was && i.hourly <= (was.hourly ?? 60);
-  },
-  run: (_ctx, i) => said(updateHook(i.hook, { ...(i.name ? { name: i.name.trim() } : {}), ...settingsBody(i) })).then(() => undefined),
+  input: s.object({ hook: id, name }),
+  run: (_ctx, i) => said(updateHook(i.hook, { name: i.name.trim() })).then(() => undefined),
   did: () => 'Saved',
-  target: (i) => ({ kind: 'hook', id: i.hook }),
-});
-
-export const replayWebhook = defineAction({
-  id: 'webhooks.replay',
-  title: "Run a webhook's kept call again",
-  kind: 'change',
-  input: s.object({ hook: id, delivery: s.string({ min: 1, max: 300 }) }),
-  run: async (_ctx, i) => (await said(replayDelivery(i.hook, i.delivery))).replay,
-  did: (_i, out) => (out ? `Ran again: ${out.tasks} ${out.tasks === 1 ? 'task' : 'tasks'}` : 'Ran again'),
-  target: (i) => ({ kind: 'hook', id: i.hook }),
-});
-
-export const recoverWebhook = defineAction({
-  id: 'webhooks.recover',
-  title: "Check a webhook's refused calls again under its current secret",
-  kind: 'change',
-  // how far back, in hours (1 to 720); left out, as long as its calls are kept
-  input: s.object({ hook: id, sinceHours: s.optional(s.number({ int: true, min: 1, max: 720 })) }),
-  run: async (ctx, i) => {
-    const keep = ctx.queryClient.getQueryData<Hook[]>(hooksQuery.queryKey)?.find((h) => h.id === i.hook)?.keep_days ?? 7;
-    return (await said(recoverHook(i.hook, i.sinceHours ?? Math.min(720, keep * 24)))).recover;
-  },
-  did: (_i, r) =>
-    r ? [`Recovered ${r.recovered} of ${r.found}`, r.duplicate ? `${r.duplicate} already in` : '', r.still_refused ? `${r.still_refused} still refused` : '', r.more ? 'more wait' : ''].filter(Boolean).join(', ') : 'Recovered',
   target: (i) => ({ kind: 'hook', id: i.hook }),
 });
 
@@ -801,18 +744,15 @@ export const pickScope = defineAction({
 });
 
 /** Due dates by status, as the Due tab's filter names them. */
-export const DUE_STATUSES = ['overdue', 'due_soon', 'upcoming'] as const;
-
 export const listRules = defineAction({
   id: 'rules.list',
-  title: 'Search or filter the rules on a tab',
+  title: 'Search the rules on a tab',
   kind: 'view',
-  // `from`: Outside, one From's id; `status`: Due, late, soon or later
-  input: s.object({ tab: s.optional(s.oneOf(RULE_TABS)), q: s.optional(s.string({ max: 200 })), from: s.optional(id), status: s.optional(s.oneOf(DUE_STATUSES)) }),
+  input: s.object({ tab: s.optional(s.oneOf(RULE_TABS)), q: s.optional(s.string({ max: 200 })) }),
   run: ({ router }, i) => {
     // whose rules (Company) stay as they are
     const prev = router.state.location.search as { tab?: string; who?: string };
-    return go(router, RULES, { tab: i.tab === undefined ? prev.tab : i.tab || undefined, who: prev.who, q: i.q?.trim() || undefined, from: i.from, status: i.status });
+    return go(router, RULES, { tab: i.tab === undefined ? prev.tab : i.tab || undefined, who: prev.who, q: i.q?.trim() || undefined });
   },
   did: () => 'Listed the rules',
   target: (i) => ({ kind: 'tab', id: i.tab || 'company' }),
@@ -839,7 +779,6 @@ const stageRule = (ctx: Ctx, rid: string): StageRule | undefined =>
   );
 const missing = () => Object.assign(new Error('That rule is not loaded'), { code: 'not_found: That rule is not loaded' });
 
-const teammate = s.string({ min: 1, max: 200, pattern: /^(group|bot|human):\S+$/, what: 'group:<id>, bot:<id> or human:<id>' });
 const SOURCE_KINDS = ['vendor', 'customer', 'government', 'other'] as const;
 const orgFields = {
   text: s.string({ min: 1, max: 2000 }),
@@ -848,15 +787,12 @@ const orgFields = {
   reviewer: s.optional(party),
   // who follows it: ['*'] (Everyone, the default) or teams, agents and people
   who: s.optional(s.array(party, { max: 100 })),
-  // a company rule: the teammates it is about
-  with: s.optional(s.array(teammate, { max: 100 })),
-  description: s.optional(s.string({ max: 2000 })),
   outside: s.optional(s.boolean()),
   // an outside rule: who it is from, an existing From's id, or a new one by name and kind
   source: s.optional(id),
   newSource: s.optional(s.object({ name: s.string({ min: 1, max: 200 }), kind: s.oneOf(SOURCE_KINDS) })),
 };
-type OrgIn = { text: string; ifBroken: 'block' | 'escalate' | 'warn'; reviewer?: string; who?: string[]; with?: string[]; description?: string; outside?: boolean; source?: string; newSource?: { name: string; kind: string } };
+type OrgIn = { text: string; ifBroken: 'block' | 'escalate' | 'warn'; reviewer?: string; who?: string[]; outside?: boolean; source?: string; newSource?: { name: string; kind: string } };
 
 /** An outside rule's From: the one picked, or a new one made first. */
 async function sourceOf(o: OrgIn, was?: string): Promise<string | undefined> {
@@ -869,8 +805,6 @@ const orgOut = (o: OrgIn, kind: 'internal' | 'external', source?: string): OrgRu
   if_broken: o.ifBroken,
   reviewer: o.reviewer?.replace(/^human:/, '') || null,
   who: o.who?.length ? o.who : ['*'],
-  ...(kind === 'internal' ? { with: o.with ?? [] } : {}),
-  description: o.description?.trim() ?? '',
   ...(source ? { source_id: source } : {}),
 });
 const noFrom = () => Object.assign(new Error('Pick who it is from'), { code: 'bad_input: Pick who it is from' });
@@ -1010,23 +944,6 @@ export const acceptRule = defineAction({
 
 /** A suggestion names who follows it (Everyone, a team, an agent or a person). */
 export const hasWho = (r: Pick<OrgRule, 'who'>) => !!r.who && (!!r.who.everyone || !!r.who.all_bots || !!(r.who.groups?.length || r.who.bots?.length || r.who.people?.length));
-
-export const acceptAll = defineAction({
-  id: 'rules.acceptAll',
-  title: 'Add every suggested rule that says who follows it',
-  kind: 'change',
-  input: s.object({}),
-  run: async (ctx) => {
-    const orgs = (ctx.queryClient.getQueryData<OrgRule[]>(orgRulesQuery('suggested').queryKey) ?? []).filter(hasWho);
-    const stages = ctx.queryClient.getQueryData<StageRules>(stageRulesQuery('suggested').queryKey)?.items ?? [];
-    // one at a time, so a refusal stops before the rest
-    for (const r of orgs) await said(decideOrgRule(r, 'accept'));
-    for (const r of stages) await said(decideStageRule(r, 'accept'));
-    return orgs.length + stages.length;
-  },
-  did: (_i, n) => `Added ${n ?? 0} ${n === 1 ? 'rule' : 'rules'}`,
-  target: () => ({ kind: 'tab', id: 'suggested' }),
-});
 
 export const skipRule = defineAction({
   id: 'rules.skip',
@@ -1317,45 +1234,27 @@ export const addSource = defineAction({
   target: (i) => ({ kind: 'watch', id: i.watch }),
 });
 
-const LIMIT_UNITS = ['hour', 'day', 'week', 'month'] as const;
 const TAG = /^[a-z0-9][a-z0-9-]{0,23}$/;
 
 export const updateWatch = defineAction({
   id: 'listening.update',
-  title: "Rename a listening watch, or change what it keeps, how many it sends and when",
+  title: 'Rename a listening watch, or change what it keeps',
   kind: 'change',
   input: s.object({
     watch: id,
     name: s.optional(name),
     // keep (with a tag) or drop what a sentence describes
     rules: s.optional(s.array(s.object({ do: s.oneOf(['keep', 'drop'] as const), tag: s.optional(s.string({ max: 24 })), text: s.string({ min: 1, max: 300 }) }), { max: 20 })),
-    // at most `count` sent each hour, day, week or month
-    limits: s.optional(s.array(s.object({ count: s.number({ int: true, min: 1, max: 100 }), per: s.oneOf(LIMIT_UNITS) }), { max: 4 })),
-    // when a day's batch is sent (no hourly limit), HH:MM
-    at: s.optional(s.string({ min: 5, max: 5, pattern: /^([01]\d|2[0-3]):[0-5]\d$/, what: 'a time, HH:MM' })),
   }),
-  // Tico may tighten its limits; sending more is the person's own press.
-  can: (ctx, i) => {
-    if (ctx.via !== 'tico' || !i.limits) return true;
-    const was = watchOf(ctx, i.watch)?.trigger.limits ?? [];
-    return was.every((o) => {
-      const n = i.limits?.find((l) => l.per === o.per);
-      return !!n && n.count <= o.count;
-    });
-  },
   run: (ctx, i) => {
     const w = watchOf(ctx, i.watch);
     if (!w) throw Object.assign(new Error('That watch is not loaded'), { code: 'not_found: That watch is not loaded' });
-    if (i.limits && !i.limits.length) throw badSource('Add a limit');
-    if (i.limits && new Set(i.limits.map((l) => l.per)).size !== i.limits.length) throw badSource('One limit for each of hour, day, week and month');
     const tags = (i.rules ?? []).filter((r) => r.do === 'keep').map((r) => r.tag?.trim() ?? '');
     if (tags.some((t) => !TAG.test(t))) throw badSource('A tag is lowercase letters, numbers and dashes');
     if (new Set(tags).size !== tags.length) throw badSource('Each tag is used once');
     const trigger: Trigger = {
       ...w.trigger,
       ...(i.rules ? { rules: i.rules.map((r) => (r.do === 'drop' ? { do: 'drop', text: r.text.trim() } : { do: 'keep', tag: r.tag?.trim() ?? '', text: r.text.trim() })) } : {}),
-      ...(i.limits ? { limits: [...i.limits].sort((a, b) => LIMIT_UNITS.indexOf(a.per) - LIMIT_UNITS.indexOf(b.per)) } : {}),
-      ...(i.at ? { at: i.at } : {}),
     };
     return said(setWatchTrigger(w, trigger, i.name?.trim())).then(() => undefined);
   },

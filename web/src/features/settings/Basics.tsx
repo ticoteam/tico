@@ -17,10 +17,12 @@ import { toast } from '@/kit/Toast';
 import type { MotionChoice } from '@/motion';
 import { Section } from '@/pagekinds';
 import { THEME_KEY, usePref, type Theme } from '@/prefs';
-import { Privacy, Repositories, Storage, TeamIcon } from './Company';
+import { Repositories, TeamIcon } from './Company';
+import { CompanyName } from './CompanyName';
 import { AllTokens, EXPIRES } from './CompanyTokens';
 import { DesktopRows } from './Desktop';
-import { AddPerson, Joining, LeftPeople, SignInLine } from './People';
+import { NoticeSwitch } from './Notices';
+import { AddPerson, Joining, LeftPeople } from './People';
 import { ScreeningMore, SupportAccess } from './SecurityMore';
 import { Foot, Line, SwitchLine, Verb, Word, act } from './parts';
 import {
@@ -60,7 +62,7 @@ export function General() {
     <>
       <Section name="Company" target="setting:company">
         <Facts label="Company">
-          <LabelValue label="Name">{c?.company_name}</LabelValue>
+          {access.data?.you === 'owner' && c ? <CompanyName name={c.company_name} /> : <LabelValue label="Name">{c?.company_name}</LabelValue>}
           <LabelValue label="Owner">{c?.owner_email}</LabelValue>
           <LabelValue label="Version">{c?.version}</LabelValue>
           {access.data && <TeamIcon owner={access.data.you === 'owner'} />}
@@ -101,8 +103,6 @@ export function General() {
           </Facts>
         </Section>
       )}
-      {access.data?.you === 'owner' && <Privacy />}
-      {access.data?.you === 'owner' && <Storage />}
       {access.data && <Repositories admin={access.data.you === 'owner' || access.data.you === 'admin'} owner={access.data.you === 'owner'} />}
       <DesktopRows />
     </>
@@ -201,7 +201,7 @@ function EmailDialog({ p, onClose }: { p: AccessPerson; onClose: () => void }) {
   );
 }
 
-function PersonOpen({ p, mayEdit, youOwn, ownerName, mine }: { p: AccessPerson; mayEdit: boolean; youOwn: boolean; ownerName: string; mine: boolean }) {
+function PersonOpen({ p, mayEdit, youOwn, ownerName }: { p: AccessPerson; mayEdit: boolean; youOwn: boolean; ownerName: string }) {
   const [confirm, setConfirm] = useState(false);
   const [handing, setHanding] = useState<'owner' | 'email' | null>(null);
   // Only the owner sees these: hand the company over, or change their own sign-in address.
@@ -230,7 +230,7 @@ function PersonOpen({ p, mayEdit, youOwn, ownerName, mine }: { p: AccessPerson; 
             (ROLE[p.owner ? 'owner' : p.role] ?? p.role)
           )}
         </Line>
-        {mayEdit && !p.owner && !mine ? <SignInLine p={p} /> : <LabelValue label="Signs in">{p.sign_in ? 'Yes' : 'Not yet'}</LabelValue>}
+        <LabelValue label="Signs in">{p.sign_in ? 'Yes' : 'Not yet'}</LabelValue>
       </Facts>
       {((mayEdit && !p.owner) || mayHand || myEmail) && (
         <Foot open>
@@ -276,11 +276,9 @@ function PersonOpen({ p, mayEdit, youOwn, ownerName, mine }: { p: AccessPerson; 
 
 export function People({ open }: { open?: string }) {
   const access = useQuery(accessQuery);
-  const me = useQuery(meQuery);
   const v = access.data as AccessFull | undefined;
   if (!v || !Array.isArray(v.people)) return null;
   const people = v.people.filter((p) => !p.left);
-  const myId = me.data ? bare(me.data.id) : '';
   // `you` is the reader's company role; only owners and admins read this at all.
   const mayEdit = v.you === 'owner' || v.you === 'admin';
   const owner = v.people.find((p) => p.owner);
@@ -320,7 +318,7 @@ export function People({ open }: { open?: string }) {
             return open === p.id ? (
               <div key={p.id} className="open">
                 {row}
-                <PersonOpen p={p} mayEdit={mayEdit} youOwn={v.you === 'owner'} ownerName={owner?.name ?? 'yourself'} mine={p.id === myId} />
+                <PersonOpen p={p} mayEdit={mayEdit} youOwn={v.you === 'owner'} ownerName={owner?.name ?? 'yourself'} />
               </div>
             ) : (
               row
@@ -788,6 +786,7 @@ export function Account() {
               onChange={(on) => void act('settings.notify', { field: 'email_digest', on })}
             />
           )}
+          {mine && <NoticeSwitch on={mine.notify_browser === true} />}
         </Facts>
         <Foot>
           <Verb onClick={() => void run('settings.signOut', {}, { via: 'click' })}>Sign out</Verb>

@@ -92,8 +92,6 @@ const CARD: Record<string, [SectionId, string]> = {
   'settings-gateway-card': ['models', 'setting:gateway'],
   'wh-gateway': ['models', 'setting:gateway'],
   'settings-defaults': ['models', 'setting:defaults'],
-  'settings-privacy': ['general', 'setting:privacy'],
-  'settings-storage': ['general', 'setting:storage'],
   'settings-company': ['general', 'setting:company'],
   'settings-team': ['general', 'setting:reports'],
   'set-repos': ['general', 'setting:repositories'],

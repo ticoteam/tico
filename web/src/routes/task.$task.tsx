@@ -1,5 +1,6 @@
 import { createFileRoute, redirect } from '@tanstack/react-router';
-import { loadTask, TaskById, taskAddress } from '@/features/task/exports';
+import { TaskById } from '@/features/task/exports';
+import { loadTask, taskAddress } from '@/features/task/routing';
 
 /* `/task/<n>`: a task by its number alone. Once its pipeline is known, its own address replaces this one. */
 export const Route = createFileRoute('/task/$task')({

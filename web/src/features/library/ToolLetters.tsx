@@ -8,35 +8,21 @@ import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
-import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
-import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
-import { Row } from '@/kit/Row';
-import { Select } from '@/kit/Select';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
-import { Foot, useGo } from './AddTool';
 import { Face, More, press } from './parts';
 import { postalAddressesQuery, type PostalAddress } from './queries';
-import { ADDRESS_STATE, addressLine, KINDS, MODES, scopeOf, usd, words, type Postal } from './ToolSettings';
+import { ADDRESS_STATE, addressLine, KINDS, scopeOf, usd, type Postal } from './ToolSettings';
 import { KIND, SectionFault, Shell, stateOf, useAdmin } from './ToolShell';
-import {
-  addressGrantsQuery,
-  automationsQuery,
-  letterAccessQuery,
-  lettersInQuery,
-  letterSendersQuery,
-  olderLettersQuery,
-  type LetterIn,
-  type LetterSender,
-} from './toolMail';
+import { addressGrantsQuery, lettersInQuery, olderLettersQuery, type LetterIn } from './toolMail';
 
 /* A mailing address and its letters (old inboxes-letters.ts pmDetail, inboxes-outbox.ts): one address's own page
-   (`address:<id>`: its setup steps, who may read it, the routines its mail starts, its letters), the letters that came in
-   with their scan, task and Retry, and the letters sent with their details, proof, Review and Load more, who may send
-   letters and each agent's own rule and monthly cap. */
+   (`address:<id>`: its setup steps, who may read it, its letters), the letters that came in with their scan, task and
+   Retry, and the letters sent with their details, proof, Review and Load more. */
 
 const STATUS_WORD: Record<string, string> = {
   queued: 'Waiting',
@@ -150,7 +136,6 @@ function Setup({ status }: { status: string }) {
           <span className="row-ctx">{n < at ? 'Done' : n === at ? 'Now' : ''}</span>
         </div>
       ))}
-      {status === 'pending_1583' && <p className="t-read">Tico Gateway emails the Form 1583 to sign. Letters come once it is accepted.</p>}
     </Section>
   );
 }
@@ -197,7 +182,6 @@ export function AddressOne({ id }: { id: string }) {
         </Section>
       )}
       {a && admin && <AddressReaders scope={id} />}
-      {a?.address && <Automations address={a.address} />}
       {a && <LettersIn items={mine} />}
     </Shell>
   );
@@ -253,31 +237,6 @@ function AddressReaders({ scope }: { scope: string }) {
           </div>
         );
       })}
-    </Section>
-  );
-}
-
-/** The routines a message to this address starts, each opening in Routines. */
-export function Automations({ address }: { address: string }) {
-  const q = useQuery(automationsQuery);
-  if (q.isError && !q.data)
-    return (
-      <Section name="Automations">
-        <SectionFault name="Automations" error={q.error} onRetry={() => void q.refetch()} />
-      </Section>
-    );
-  if (!q.data) return null;
-  const want = address.toLowerCase();
-  const mine = q.data.filter((r) => r.trigger?.type === 'message' && String(r.trigger.inbox ?? '').toLowerCase() === want);
-  return (
-    <Section name="Automations" count={mine.length || undefined}>
-      {!mine.length && <Empty title="No automations" />}
-      {mine.map((r) => (
-        <Row key={r.id} className="urow" title={r.name || r.id} href={`/company/routines?panel=${encodeURIComponent(`routine:${r.id}`)}`} target={`routine:${r.id}`}>
-          <span className="row-title">{r.name || r.id}</span>
-          <span className="row-ctx">{r.enabled === false ? 'Off' : ''}</span>
-        </Row>
-      ))}
     </Section>
   );
 }
@@ -372,105 +331,6 @@ function LetterDetails({ l, onClose }: { l: LetterOutContents; onClose: () => vo
           Open task
         </Link>
       )}
-    </Dialog>
-  );
-}
-
-/* ---------------------------------------------------------------- who may send letters */
-
-const AGENT_MODES = [{ value: '', label: 'Company rule' }, ...words(MODES)];
-const ruleOf = (g: LetterSender) =>
-  [g.mode ? (MODES.find(([k]) => k === g.mode)?.[1] ?? g.mode) : 'Company rule', g.monthly_cap_micros != null ? `${usd(g.monthly_cap_micros)} a month` : '']
-    .filter(Boolean)
-    .join(', ');
-
-/** Owners and admins always send letters; an admin gives others send access, and sets an agent's own rule and cap.
-    Anyone else sees whether they may. */
-export function LetterSenders() {
-  const admin = useAdmin();
-  const access = useQuery({ ...letterAccessQuery, enabled: !admin });
-  const q = useQuery({ ...letterSendersQuery, enabled: admin });
-  const actors = useActors();
-  const [rules, setRules] = useState<{ bot: string; name: string; g: LetterSender } | null>(null);
-  if (!admin)
-    return access.data ? (
-      <Section name="Who can send letters" target="tool-set:letter-senders">
-        <Facts>
-          <LabelValue label="You">{access.data.send ? 'Can send' : 'Cannot send'}</LabelValue>
-        </Facts>
-      </Section>
-    ) : null;
-  if (q.isError && !q.data)
-    return (
-      <Section name="Who can send letters" target="tool-set:letter-senders">
-        <SectionFault name="Who can send letters" error={q.error} onRetry={() => void q.refetch()} />
-      </Section>
-    );
-  if (!q.data) return null;
-  const taken = new Set(q.data.map((g) => subject(g.grantee_type, g.grantee_id)));
-  const free = actors.filter((x) => !taken.has(subject(x.kind === 'agent' ? 'bot' : 'person', short(x.id))));
-  return (
-    <Section
-      name="Who can send letters"
-      count={q.data.length}
-      target="tool-set:letter-senders"
-      actions={
-        free.length > 0 && (
-          <Menu trigger={<IconButton icon="plus" label="Let someone send letters" size="sm" />}>
-            {free.map((x) => (
-              <MenuItem
-                key={x.id}
-                label={x.name}
-                lead={<Face actor={x.id} />}
-                onSelect={() => void press('tools.setLetterSender', { type: x.kind === 'agent' ? 'bot' : 'person', who: short(x.id), send: true }, 'Not added')}
-              />
-            ))}
-          </Menu>
-        )
-      }
-    >
-      {q.data.map((g) => {
-        const name = actorOf(actors, g.grantee_type, g.grantee_id)?.name ?? g.grantee_id;
-        const bot = g.grantee_type === 'bot';
-        return (
-          <div key={`${g.grantee_type}:${g.grantee_id}`} className="row wrow" title={name} data-target={`tool-set:letter-senders:${g.grantee_id}`}>
-            <Face actor={subject(g.grantee_type, g.grantee_id)} name={name} />
-            <span className="row-title">{name}</span>
-            {bot && <span className="row-ctx">{ruleOf(g)}</span>}
-            <Menu trigger={<IconButton icon="more" label={`${name} options`} size="sm" />}>
-              {bot && <MenuItem label="Letter rules" onSelect={() => setRules({ bot: g.grantee_id, name, g })} />}
-              {bot && <MenuRule />}
-              <MenuItem
-                label="Remove"
-                onSelect={() => void press('tools.setLetterSender', { type: bot ? 'bot' : 'person', who: g.grantee_id, send: false }, 'Not removed')}
-              />
-            </Menu>
-          </div>
-        );
-      })}
-      {rules && <AgentLettersDialog {...rules} onClose={() => setRules(null)} />}
-    </Section>
-  );
-}
-
-/** An agent's own rule (never looser than the company's: the server refuses that) and its monthly cap. */
-function AgentLettersDialog({ bot, name, g, onClose }: { bot: string; name: string; g: LetterSender; onClose: () => void }) {
-  const [mode, setMode] = useState(g.mode ?? '');
-  const [cap, setCap] = useState(g.monthly_cap_micros == null ? '' : String(g.monthly_cap_micros / 1_000_000));
-  const [busy, go] = useGo(onClose);
-  const capMicros = cap.trim() === '' ? null : Math.round(Number(cap) * 1_000_000);
-  const ready = capMicros === null || (Number.isFinite(capMicros) && capMicros >= 0 && capMicros <= 1_000_000_000_000);
-  return (
-    <Dialog
-      open
-      onOpenChange={(o) => !o && onClose()}
-      title={name}
-      actions={
-        <Foot onClose={onClose} label="Save" busy={busy} ready={ready} onGo={() => void go('tools.setAgentLetters', { bot, mode: mode || null, monthly_cap_micros: capMicros }, 'Not saved')} />
-      }
-    >
-      <Select label="Sends letters" options={AGENT_MODES} value={mode} onValueChange={setMode} />
-      <Field label="A month ($)" type="number" value={cap} onValueChange={setCap} placeholder="No cap" />
     </Dialog>
   );
 }

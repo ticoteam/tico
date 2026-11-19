@@ -1,4 +1,4 @@
-import { infiniteQueryOptions, queryOptions, type InfiniteData } from '@tanstack/react-query';
+import { infiniteQueryOptions, keepPreviousData, queryOptions, type InfiniteData } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import { sendMessage, timelineQuery, type ChatMessage } from '@/conversation';
 import { keys, queryClient, quietRoot, write } from '@/data';
@@ -243,16 +243,6 @@ export const mailboxesQuery = queryOptions({
   queryFn: async ({ signal }) => (await api.get<{ mailboxes: Mailbox[] }>('/api/v2/mail/mailboxes', { signal })).mailboxes,
 });
 
-export const mailListQuery = (box: string) =>
-  infiniteQueryOptions({
-    queryKey: mailKeys.list(box),
-    queryFn: ({ pageParam, signal }) =>
-      api.get<{ messages: Letter[]; next_cursor?: string | null }>(`/api/v2/mail/messages${qs({ mailbox: box, limit: PAGE, cursor: pageParam })}`, { signal }),
-    initialPageParam: null as string | null,
-    getNextPageParam: (last) => last.next_cursor ?? undefined,
-    enabled: !!box,
-  });
-
 export const letterQuery = (box: string, id: string) =>
   queryOptions({
     queryKey: mailKeys.letter(box, id),
@@ -457,6 +447,8 @@ export const browseQuery = (q: string) =>
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.next_cursor ?? undefined,
     staleTime: 30_000,
+    // new words keep the last rows on screen until the answer comes, rather than a skeleton per key press
+    placeholderData: keepPreviousData,
   });
 
 /** Archived threads the viewer manages. */
@@ -594,26 +586,14 @@ export function removeViewer(bot: string) {
   });
 }
 
-/* ---------------------------------------------------------------- finding mail (search, label, attachments) */
+/* ---------------------------------------------------------------- the Mail list, or the mail with some words in it */
 
-/** What the Mail list is narrowed to, as the address holds it. The server turns these into one Gmail query. */
-export interface MailFind {
-  q?: string;
-  /** A Gmail label id ("UNREAD", "STARRED", ...). */
-  label?: string;
-  /** Only mail with an attachment. */
-  attach?: boolean;
-}
-
-/** The Mail list, narrowed. While a new narrowing loads, the rows already shown stay (the search field keeps focus). */
-export const mailFindQuery = (box: string, find: MailFind) =>
+/** While new words load, the rows already shown stay (the search field keeps focus). */
+export const mailFindQuery = (box: string, q?: string) =>
   infiniteQueryOptions({
-    queryKey: [...mailKeys.list(box), { q: find.q ?? '', label: find.label ?? '', attach: !!find.attach }] as const,
+    queryKey: [...mailKeys.list(box), { q: q ?? '' }] as const,
     queryFn: ({ pageParam, signal }) =>
-      api.get<{ messages: Letter[]; next_cursor?: string | null }>(
-        `/api/v2/mail/messages${qs({ mailbox: box, q: find.q, label: find.label, has_attachment: find.attach ? 'true' : undefined, limit: PAGE, cursor: pageParam })}`,
-        { signal },
-      ),
+      api.get<{ messages: Letter[]; next_cursor?: string | null }>(`/api/v2/mail/messages${qs({ mailbox: box, q, limit: PAGE, cursor: pageParam })}`, { signal }),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.next_cursor ?? undefined,
     // Only within one mailbox: another mailbox's rows never stand in for this one's.

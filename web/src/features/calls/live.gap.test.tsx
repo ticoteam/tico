@@ -259,15 +259,6 @@ describe('Show and take out @s1046', () => {
     await waitFor(() => expect(sent.find((x) => x.method === 'POST' && x.url.endsWith(`/calls/${ROOM}/bots`))?.body).toEqual({ bots: ['gm'] }));
   });
 
-  it('Show a Tico file puts it on the stage for everyone @s1046', async () => {
-    const router = show();
-    await joinThenGo(router);
-    const r = await run('calls.showFile', { id: ROOM, file: 'f1' }, { via: 'tico' });
-    expect(r.ok).toBe(true);
-    expect(sent.find((x) => x.method === 'PUT' && x.url.endsWith(`/calls/${ROOM}/stage`))?.body).toEqual({ kind: 'file', file_id: 'f1' });
-    expect(queryClient.getQueryData<Call>(callQuery(ROOM).queryKey)?.stage).toMatchObject({ kind: 'file', file_id: 'f1' });
-  });
-
   it('sharing my screen stays my own press: Tico may not start it @s1046', async () => {
     const router = show();
     await joinThenGo(router);

@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { loadTask, TaskPage, taskSearch } from '@/features/task/exports';
+import { TaskPage } from '@/features/task/exports';
+import { loadTask, taskSearch } from '@/features/task/routing';
 
 /* `/tasks/<pipeline>/<n>/<tab>`: one of the task's pages, or Details (with `?file=` for a file opened from it). */
 export const Route = createFileRoute('/tasks/$pipeline/$task/$tab')({

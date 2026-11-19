@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { loadTools, ToolsPage, toolsSearch } from '@/features/library/exports';
+import { ToolsPage } from '@/features/library/exports';
+import { loadTools, toolsSearch } from '@/features/library/routing';
 
 export const Route = createFileRoute('/library/tools')({
   validateSearch: toolsSearch,

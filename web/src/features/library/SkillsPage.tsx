@@ -16,7 +16,7 @@ import { Link } from '@/kit/Link';
 import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
-import { Document, FilterRow, List, PageMore, Section, type PageState } from '@/pagekinds';
+import { Document, List, PageMore, Section, type PageState } from '@/pagekinds';
 import { Markdown } from '@/kit/Markdown';
 import { Menu, MenuItem, MenuSub } from '@/kit/Menu';
 import { Foot, useGo } from './AddTool';
@@ -31,11 +31,9 @@ import {
   skillsQuery,
   skillTextQuery,
   skillUsageQuery,
-  functionGroup,
   skillDetailUsageQuery,
   skillsElsewhereQuery,
   skillSuggestionsQuery,
-  SKILL_FUNCTIONS,
   type SkillCoverage,
   type SkillSuggestion,
   type Proposal,
@@ -102,9 +100,7 @@ function SkillsList({ search }: { search: SkillsSearch }) {
   const used = new Map((usage.data ?? []).map((u) => [u.name, u]));
   const byName = new Map((skills.data ?? []).map((s) => [s.name, s]));
   const pending = (asks.data ?? []).filter(match);
-  const found = (skills.data ?? []).filter(match);
-  const fn = search.function;
-  const rows = fn ? found.filter((s) => inFunction(s, fn)) : found;
+  const rows = (skills.data ?? []).filter(match);
   const [making, setMaking] = useState(false);
   const decider = useDecider();
 
@@ -118,11 +114,9 @@ function SkillsList({ search }: { search: SkillsSearch }) {
       title="Skills"
       path="/library/skills"
       className="lib"
-      search={<Find label="Search skills" value={search.q} onFind={(q) => void press(fn ? 'skills.filter' : 'skills.list', fn ? { q, function: fn } : { q })} />}
-      filter={fn && <FilterRow filters={[{ label: fnLabel(fn), onClear: () => void press('skills.filter', { q: search.q }) }]} />}
+      search={<Find label="Search skills" value={search.q} onFind={(q) => void press('skills.list', { q })} />}
       actions={
         <>
-          <FunctionFilter rows={found} on={fn} q={search.q} />
           <OwnerButton page="skills" phone />
           <Button variant="primary" icon="plus" onClick={() => setMaking(true)} data-target="skills:new">
             New skill
@@ -164,33 +158,6 @@ function SkillsList({ search }: { search: SkillsSearch }) {
         )
       }
     />
-  );
-}
-
-/* ---------------------------------------------------------------- the function filter (old skills.ts skillsFilterMenu) */
-
-/** A row's job function as SKILL.md names it (backend/skills.py skills_list). */
-const fnOf = (s: SkillRow) => (s as SkillRow & { function?: string | null }).function;
-const fnLabel = (f: string) => f.charAt(0).toUpperCase() + f.slice(1);
-/** A known function or Other by the row's group; any other value only the rows that name it (as the API does). */
-function inFunction(s: SkillRow, fn: string) {
-  if (fn === 'other' || (SKILL_FUNCTIONS as readonly string[]).includes(fn)) return functionGroup(fnOf(s)) === fn;
-  return (fnOf(s) ?? '').trim().toLowerCase() === fn;
-}
-
-/** The head's Filter: All, then each function the searched rows have, with its count. Choosing it again takes it off. */
-function FunctionFilter({ rows, on, q }: { rows: SkillRow[]; on: string | undefined; q: string | undefined }) {
-  const counts = new Map<string, number>();
-  for (const s of rows) counts.set(functionGroup(fnOf(s)), (counts.get(functionGroup(fnOf(s))) ?? 0) + 1);
-  const shown = [...SKILL_FUNCTIONS, 'other'].filter((f) => counts.get(f) || f === on);
-  const pick = (f: string | undefined) => void press('skills.filter', { function: f, q }, 'Not filtered');
-  return (
-    <Menu trigger={<IconButton icon="filter" label="Filter" on={!!on} data-target="skills:filter" data-phone />}>
-      <MenuItem label="All" on={!on} onSelect={() => pick(undefined)} />
-      {shown.map((f) => (
-        <MenuItem key={f} label={fnLabel(f)} meta={String(counts.get(f) ?? 0)} on={on === f} onSelect={() => pick(on === f ? undefined : f)} />
-      ))}
-    </Menu>
   );
 }
 
@@ -240,9 +207,8 @@ function Idea({ x }: { x: SkillSuggestion }) {
       <span className="lead" />
       <span className="skill-name">
         <span className="row-title">{x.name}</span>
-        <span className="skill-does">{x.kind === 'remove' ? `Not used in 30 days by ${who}` : `Not in the directory, run by ${who}`}</span>
       </span>
-      <span className="row-ctx" />
+      <span className="row-ctx">{x.kind === 'remove' ? 'Unused' : 'Unlisted'}</span>
       <span className="avs">{x.target && <Face actor={actorOf(x.target)} name={x.target.name} />}</span>
       <span className="row-fig">{x.kind === 'promote' ? x.uses_30d : ''}</span>
       <Menu trigger={<IconButton icon="more" label={`More on ${x.name}`} size="sm" />}>
@@ -266,7 +232,6 @@ function RemoveDialog({ who, id, input, onClose }: { who: string; id: string; in
       open
       onOpenChange={(o) => !o && onClose()}
       title={`Remove from ${who}`}
-      description="It leaves on the next session."
       actions={<Foot onClose={onClose} label="Remove" busy={busy} ready onGo={() => void go(id, input, 'Not removed')} />}
     />
   );

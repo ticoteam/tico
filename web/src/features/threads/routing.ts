@@ -4,6 +4,20 @@ import { catchUpQuery, learnedQuery, viewersQuery, threadListQuery, threadQuery,
 /* What the routes read before they draw, and their search params. A read that fails shows the page's own fault
    state, so a loader never throws. */
 
+// The reads the routes and the shell's counts use. No components here: the first load imports this file (through
+// the routes and the root), and a page comes through exports.ts with its route.
+export {
+  threadListQuery,
+  threadQuery,
+  catchUpQuery,
+  chatQuery,
+  mailboxesQuery,
+  textListQuery,
+  updateListQuery,
+  updateQuery,
+  type UpdateTab,
+} from './queries';
+
 const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined);
 
 export interface ThreadsSearch {

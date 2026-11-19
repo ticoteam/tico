@@ -21,7 +21,7 @@ import {
   postalAddressesQuery,
   toolsQuery,
 } from './queries';
-import { addressGrantsQuery, automationsQuery, lettersInQuery, letterSendersQuery } from './toolMail';
+import { addressGrantsQuery, lettersInQuery } from './toolMail';
 import { ToolsPage } from './ToolsPage';
 
 /* The tier-2 Tools gaps: an outgoing webhook's Delete, New secret and catch-up sends (s515); one mailing address's
@@ -91,7 +91,6 @@ const toolMore = async (name: string) => {
   const tool = await screen.findByRole('region', { name });
   fireEvent.click(await within(tool).findByRole('button', { name: 'More' }));
 };
-const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 /* ---------------------------------------------------------------- an outgoing webhook */
 
@@ -150,24 +149,14 @@ describe('an outgoing webhook’s ⋯', () => {
     expect(await tico('tools.deleteWebhook', { webhook: 'wh1' })).toMatchObject({ ok: false, error: 'not_allowed' });
   });
 
-  it('Retry failed and Send missed go since a day (a week back to start); a failed send retries from its row; Tico may pause, never restart @s515', async () => {
+  it('a failed send retries from its row; Tico may pause, never restart @s515', async () => {
     const sent = serve(hookServer);
     openHook();
-    const week = iso(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
-    await toolMore('Order feed');
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Retry failed' }));
-    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Retry failed' })).getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/webhooks/wh1/recover', method: 'POST', body: { since: week } }]));
-    await toolMore('Order feed');
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Send missed' }));
-    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Send missed' })).getByRole('button', { name: 'Send' }));
-    await waitFor(() => expect(writes(sent).at(-1)).toEqual({ url: '/api/v2/webhooks/wh1/replay', method: 'POST', body: { since: week } }));
     const failed = (await screen.findByText('Failed (500)')).closest('.row') as HTMLElement;
     fireEvent.click(within(failed).getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(writes(sent).at(-1)).toEqual({ url: '/api/v2/webhooks/wh1/sends/x1/retry', method: 'POST', body: {} }));
+    await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/webhooks/wh1/sends/x1/retry', method: 'POST', body: {} }]));
     expect(await tico('tools.pauseWebhook', { webhook: 'wh1', on: true })).toMatchObject({ ok: false, error: 'not_allowed' });
     expect((await tico('tools.pauseWebhook', { webhook: 'wh1', on: false })).ok).toBe(true);
-    expect((await tico('tools.retryWebhook', { webhook: 'wh1', since: week })).ok).toBe(true);
   });
 });
 
@@ -190,15 +179,11 @@ const LETTER_IN = {
 const addresses = () => {
   queryClient.setQueryData(postalAddressesQuery.queryKey, { addresses: [ACTIVE, PENDING], orders: [] } as never);
   queryClient.setQueryData(lettersInQuery.queryKey, [LETTER_IN] as never);
-  queryClient.setQueryData(automationsQuery.queryKey, [
-    { id: 'r1', name: 'File the mail', enabled: true, trigger: { type: 'message', inbox: ACTIVE.address } },
-    { id: 'r2', name: 'Elsewhere', enabled: true, trigger: { type: 'message', inbox: 'other@example.test' } },
-  ]);
   queryClient.setQueryData(addressGrantsQuery('as1').queryKey, [{ id: 'g1', address_id: 'as1', grantee_type: 'bot', grantee_id: 'b1', level: 'read' }] as never);
 };
 
 describe('one mailing address', () => {
-  it('opens on its own page: who can read it (give, remove), the routines its mail starts, and Check connection @s868', async () => {
+  it('opens on its own page: who can read it (give, remove) and Check connection @s868', async () => {
     as('owner');
     const sent = serve((url) => (url === '/api/v2/postal/addresses' ? { addresses: [ACTIVE, PENDING], orders: [] } : undefined));
     addresses();
@@ -211,9 +196,6 @@ describe('one mailing address', () => {
     fireEvent.click(within(readers).getByRole('button', { name: 'Add someone' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: /Pat Sample/ }));
     await waitFor(() => expect(writes(sent).at(-1)).toEqual({ url: '/api/v2/postal/addresses/as1/grants/person/p2', method: 'PUT', body: { level: 'read' } }));
-    const autos = within(page).getByRole('region', { name: 'Automations' });
-    expect(within(autos).getByRole('link', { name: /File the mail/ }).getAttribute('href')).toBe('/company/routines?panel=routine%3Ar1');
-    expect(within(autos).queryByText('Elsewhere')).toBeNull();
     const before = reads(sent).filter((u) => u === '/api/v2/postal/addresses').length;
     fireEvent.click(within(page).getByRole('button', { name: 'Check connection' }));
     await waitFor(() => expect(reads(sent).filter((u) => u === '/api/v2/postal/addresses').length).toBe(before + 1));
@@ -247,7 +229,6 @@ describe('one mailing address', () => {
     const pending = await screen.findByRole('region', { name: 'TX, Private' });
     const steps = within(pending).getByRole('region', { name: 'Setup' });
     expect(within(steps).getByText('Form 1583').closest('.row')?.getAttribute('aria-current')).toBe('step');
-    expect(within(steps).getByText(/emails the Form 1583 to sign/)).toBeTruthy();
   });
 
   it('the mailing address lists each address as a link to its page @s868', async () => {
@@ -304,9 +285,7 @@ describe('letters out', () => {
     const sent = serve((url) =>
       url === '/api/v2/letters?limit=20&before=R18'
         ? { items: [{ id: 'O1', redacted: false, status: 'delivered', can_cancel: false, created_at: '2026-10-01T00:00:00Z', recipient: { name: 'Old Friend' }, page_count: 1, proof: null, tracking: [] }], next_before: null }
-        : url === '/api/v2/letters/access'
-          ? { send: true, outbox_id: 'company' }
-          : undefined,
+        : undefined,
     );
     const router = openLetters();
     const options = async () => fireEvent.click(await screen.findByRole('button', { name: 'Sam Sample, Dover options' }));
@@ -326,39 +305,9 @@ describe('letters out', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
     expect(await screen.findByText('Old Friend')).toBeTruthy();
     expect(reads(sent)).toContain('/api/v2/letters?limit=20&before=R18');
-    expect(await screen.findByText('Can send')).toBeTruthy();
     await options();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Review' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/flow'));
-  });
-
-  it('an admin gives and takes send access and sets an agent’s rule and cap; Tico may only take away and tighten @s869', async () => {
-    as('owner');
-    const sent = serve();
-    queryClient.setQueryData(letterSendersQuery.queryKey, [
-      { id: 'lg1', outbox_id: 'company', grantee_type: 'bot', grantee_id: 'b1', level: 'send', created_at: '', granted_by_id: 'human:me', mode: 'ask_first', monthly_cap_micros: 50_000_000 },
-    ]);
-    openLetters();
-    const senders = await screen.findByRole('region', { name: 'Who can send letters' });
-    expect(within(senders).getByText('Ask first, $50.00 a month')).toBeTruthy();
-    fireEvent.click(within(senders).getByRole('button', { name: 'Clerk options' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Letter rules' }));
-    const rules = await screen.findByRole('dialog', { name: 'Clerk' });
-    fireEvent.change(within(rules).getByLabelText('A month ($)'), { target: { value: '20' } });
-    fireEvent.click(within(rules).getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/letters/bots/b1/settings', method: 'PUT', body: { mode: 'ask_first', monthly_cap_micros: 20_000_000 } }]));
-    fireEvent.click(within(senders).getByRole('button', { name: 'Let someone send letters' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: /Pat Sample/ }));
-    await waitFor(() => expect(writes(sent).at(-1)).toEqual({ url: '/api/v2/letters/outboxes/company/grants/person/p2', method: 'PUT', body: { level: 'send' } }));
-    expect(await tico('tools.setLetterSender', { type: 'person', who: 'p2', send: true })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect((await tico('tools.setLetterSender', { type: 'person', who: 'p2', send: false })).ok).toBe(true);
-    queryClient.setQueryData(letterSendersQuery.queryKey, [
-      { id: 'lg1', outbox_id: 'company', grantee_type: 'bot', grantee_id: 'b1', level: 'send', created_at: '', granted_by_id: 'human:me', mode: 'ask_first', monthly_cap_micros: 50_000_000 },
-    ]);
-    expect(await tico('tools.setAgentLetters', { bot: 'b1', mode: 'on_their_own', monthly_cap_micros: 10_000_000 })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect(await tico('tools.setAgentLetters', { bot: 'b1', mode: 'ask_first', monthly_cap_micros: 90_000_000 })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect(await tico('tools.setAgentLetters', { bot: 'b1', mode: null, monthly_cap_micros: 10_000_000 })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect((await tico('tools.setAgentLetters', { bot: 'b1', mode: 'never', monthly_cap_micros: 10_000_000 })).ok).toBe(true);
   });
 });
 

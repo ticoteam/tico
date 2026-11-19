@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { loadTask, TaskPage, taskSearch } from '@/features/task/exports';
+import { TaskPage } from '@/features/task/exports';
+import { loadTask, taskSearch } from '@/features/task/routing';
 
 /* `/flow/<n>`: the task inside Flow, with Flow's previous and next. The tab is in the search: `?tab=details`. */
 export const Route = createFileRoute('/flow/$task')({

@@ -138,7 +138,7 @@ describe('Skills for an admin', () => {
     queryClient.setQueryData(skillsElsewhereQuery.queryKey, elsewhere as never);
     at('/library/skills', <SkillsPage search={{}} />);
     expect(await screen.findByText('Suggestions')).toBeTruthy();
-    expect(screen.getByText('Not used in 30 days by Mail helper')).toBeTruthy();
+    expect(screen.getByText('Unused')).toBeTruthy();
     expect(screen.getByText('Not in directory')).toBeTruthy();
     expect(screen.getByText('label-printer')).toBeTruthy();
 
@@ -224,33 +224,6 @@ describe('a proposed change', () => {
     at('/library/skills');
     expect(await tico('skills.decline', { proposal: 'skp_1', reason: 'Keep the old first step' })).toMatchObject({ ok: true });
     expect(writes(sent)).toEqual([{ url: '/api/v2/skills/proposals/skp_1/decline', method: 'POST', body: { reason: 'Keep the old first step' } }]);
-  });
-});
-
-describe('the Function filter', () => {
-  it('narrows the list to one function from the head’s Filter, kept in the address with the words @s781', async () => {
-    serve();
-    list([skill('triage', 'operations'), skill('nda-check', 'legal'), skill('odd-one', 'adtech')]);
-    const router = at('/library/skills?q=e', <SkillsPage search={{ q: 'e' }} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Filter' }));
-    expect(await screen.findByRole('menuitem', { name: /^Other/ })).toBeTruthy();
-    expect(screen.queryByRole('menuitem', { name: /^Finance/ })).toBeNull();
-    fireEvent.click(screen.getByRole('menuitem', { name: /^Legal/ }));
-    await waitFor(() => expect(router.state.location.search).toEqual({ q: 'e', function: 'legal' }));
-  });
-
-  it('shows only that function’s skills, with a chip that clears it @s781', async () => {
-    serve();
-    list([skill('triage', 'operations'), skill('nda-check', 'Legal'), skill('odd-one', 'adtech')]);
-    const router = at('/library/skills?function=legal', <SkillsPage search={{ function: 'legal' }} />);
-    expect(await screen.findByText('nda-check')).toBeTruthy();
-    expect(screen.queryByText('triage')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Clear Legal' }));
-    await waitFor(() => expect(router.state.location.search).toEqual({}));
-    cleanup();
-    at('/library/skills?function=other', <SkillsPage search={{ function: 'other' }} />);
-    expect(await screen.findByText('odd-one')).toBeTruthy();
-    expect(screen.queryByText('nda-check')).toBeNull();
   });
 });
 

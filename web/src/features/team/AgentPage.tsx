@@ -23,7 +23,7 @@ import { FilesSection } from './Files';
 import { LastRun } from './LastRun';
 import { DecisionsSection, DreamSection } from './Learnings';
 import { ListEditor, ListSections, useLists } from './Lists';
-import { AllTasks, EditDialog, Foot, Fold, OwnRow, PickDialog, waitsOn } from './parts';
+import { AllTasks, EditDialog, Foot, Fold, OwnRow, OwnRows, PickDialog, waitsOn } from './parts';
 import {
   agentFilesQuery,
   agentQuery,
@@ -266,12 +266,10 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
           )}
           <DreamSection slug={slug} actorId={actor.id} />
           <Section name="Tasks" actions={<AllTasks owner={actor.id} />}>
-            {rest.map((t) => (
-              <OwnRow key={t.id} task={t} me={me?.id} />
-            ))}
+            <OwnRows tasks={rest} me={me?.id} label="Open tasks" />
             {doneN > 0 && (
               <Fold label="Done" text={`${doneN} this week`}>
-                {done.data?.tasks.map((t) => <OwnRow key={t.id} task={t} me={me?.id} />)}
+                <OwnRows tasks={done.data?.tasks ?? []} me={me?.id} label="Done tasks" />
               </Fold>
             )}
           </Section>

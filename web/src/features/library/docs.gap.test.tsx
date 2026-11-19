@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider, useSearch } from '@tanstack/react-router';
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,9 +11,7 @@ import { Toasts } from '@/kit/Toast';
 import { ContactsPage } from './ContactsPage';
 import { DocPage } from './DocPage';
 import { DocsPage } from './DocsPage';
-import { FilesPage } from './FilesPage';
 import { archivedDocsQuery, attributesQuery, cardQuery, contactsQuery, countsQuery, docQuery, docsListQuery, docVersionsQuery, sourcesQuery, typesQuery, type Card } from './queries';
-import { filesSearch } from './search';
 
 /* The gap wave: Docs' full-text search, a doc's Research, its Path and the unsaved-changes guard, Files' filters, and a
    contact's Rules and a place. Sample rows only. */
@@ -158,42 +156,6 @@ describe('a doc', () => {
   });
 });
 
-describe('Files filters', () => {
-  const Live = () => <FilesPage search={filesSearch(useSearch({ strict: false }))} />;
-  const empty = { files: [], has_more: false, next_cursor: null };
-
-  it('puts each choice of the one Filter menu in the address @s779', async () => {
-    serve((url) => (url.startsWith('/api/v2/groups') ? [{ id: 'g1', name: 'Garden', bot_slugs: [], bots: [], order: 0, parent: '', people: [] }] : empty));
-    const router = at('/library/files', <Live />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Filter' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Role' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Spec' }));
-    await waitFor(() => expect(router.state.location.search).toEqual({ role: 'Spec' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Filter' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Agent' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Fern' }));
-    await waitFor(() => expect(router.state.location.search).toEqual({ role: 'Spec', agent: 'bot:fern' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Filter' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Pinned' }));
-    await waitFor(() => expect(router.state.location.search).toEqual({ role: 'Spec', agent: 'bot:fern', pinned: 1 }));
-  });
-
-  it('reads the files by every filter, shows a chip for each, and clears them @s779', async () => {
-    const sent = serve(() => empty);
-    const router = at('/library/files?role=Spec&agent=bot%3Afern&days=7&task=t-5&archived=1', <Live />);
-    expect(await screen.findByText('Spec')).toBeTruthy();
-    for (const chip of ['Fern', 'Past week', 'One task', 'Archived']) expect(screen.getByText(chip)).toBeTruthy();
-    await waitFor(() => expect(sent.some((x) => x.url.startsWith('/api/v2/files?'))).toBe(true));
-    const read = new URL(sent.find((x) => x.url.startsWith('/api/v2/files?'))!.url, 'http://x').searchParams;
-    expect(Object.fromEntries([...read].filter(([k]) => k !== 'since'))).toEqual({ limit: '100', role: 'Spec', bot: 'bot:fern', task: 't-5', archived: 'true' });
-    expect(read.get('since')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Clear Spec' }));
-    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('role'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Clear' }));
-    await waitFor(() => expect(router.state.location.search).toEqual({}));
-  });
-});
-
 describe('a contact', () => {
   const card = (o: Partial<Card> & Record<string, unknown>): Card => ({
     id: 'c1',
@@ -217,13 +179,25 @@ describe('a contact', () => {
     queryClient.setQueryData(attributesQuery(type).queryKey, []);
   };
 
-  it('shows the rules that apply, with their effect, or None apply @s786', async () => {
-    serve((url) => (url.startsWith('/api/v2/entities/rules') ? { rules: [{ text: 'Price lists go to Finance', effect: 'escalate', path: ['Ada Sample', 'Supplier'] }] } : { rows: [], next: null }));
+  it('shows the rules that apply to a place, a pill only for Block @s786', async () => {
+    const rules = [
+      { text: 'Price lists go to Finance', effect: 'escalate' },
+      { text: 'No signs on the green', effect: 'block' },
+    ];
+    serve((url) => (url.startsWith('/api/v2/entities/rules') ? { rules } : url.startsWith('/api/v2/entities/self') ? { id: 'us', name: 'Sample Co', operates_in: [] } : { rows: [], next: null }));
+    seed('place', card({ type: 'place', place: { kind: 'county', governing_body: '', shared: false } }));
+    at('/library/contacts?type=place&panel=c1', <ContactsPage search={{ type: 'place', panel: 'c1' }} />);
+    expect(await screen.findByText('Price lists go to Finance')).toBeTruthy();
+    expect(screen.getByText('Ask').closest('.pill')).toBeNull();
+    expect(screen.getByText('Block').closest('.pill')).toBeTruthy();
+  });
+
+  it('a person has no Rules section @s786', async () => {
+    serve(() => ({ rows: [], next: null }));
     seed('person', card({}));
     at('/library/contacts?panel=c1', <ContactsPage search={{ panel: 'c1' }} />);
-    expect(await screen.findByText('Price lists go to Finance')).toBeTruthy();
-    expect(screen.getByText('Ask')).toBeTruthy();
-    expect(screen.getByText('Rules')).toBeTruthy();
+    expect((await screen.findAllByText('Ada Sample')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Rules')).toBeNull();
   });
 
   it('shows a place’s kind, what it is in, its bodies, what sits in it, and why its rules bind us @s786 @s810', async () => {
@@ -264,8 +238,7 @@ describe('a contact', () => {
     expect(await screen.findByText('County')).toBeTruthy();
     expect(screen.getByText('Sample State').closest('a')).toBeTruthy();
     expect(screen.getByText('Fern County Board')).toBeTruthy();
-    expect(screen.getByText('Shared')).toBeTruthy();
-    expect(await screen.findByText('We operate here')).toBeTruthy();
+    expect(await screen.findByText('We operate here, Shared')).toBeTruthy();
     expect(screen.getByText('Located in')).toBeTruthy();
     for (const name of ['Bodies', 'Places inside', 'Located here', 'Why it applies']) expect(screen.getByText(name)).toBeTruthy();
     expect(screen.getByText('Water Office')).toBeTruthy();

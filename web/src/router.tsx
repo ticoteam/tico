@@ -1,6 +1,6 @@
 import { createRouter } from '@tanstack/react-router';
 import { queryClient } from '@/data/query-client';
-import { takeHelperCode } from '@/features/library/exports';
+import { takeHelperCode } from '@/features/library/routing';
 import { newAddressFor } from '@/oldAddress/map';
 import { routeTree } from '@/routeTree.gen';
 import { PageFault } from '@/shell/PageFault';

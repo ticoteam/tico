@@ -355,13 +355,13 @@ export const setReaders = defineAction({
   target: (i) => ({ kind: 'task-visible', id: i.task }),
 });
 
-/** Follow, unfollow or set how closely: the person, or `actor` (someone who already sees the task). */
+/** Follow or unfollow: the person, or `actor` (someone who already sees the task). */
 export const follow = defineAction({
   id: 'task.follow',
   title: 'Follow a task',
   kind: 'change',
-  input: s.object({ task, actor: s.optional(actor), following: s.boolean(), notify: s.optional(s.oneOf(['live', 'mentions', 'digest', 'muted'] as const)) }),
-  run: (_ctx, i) => said(followTask(i.task, { ...(i.actor && { actor: i.actor }), following: i.following, ...(i.notify && { notify: i.notify }) })),
+  input: s.object({ task, actor: s.optional(actor), following: s.boolean() }),
+  run: (_ctx, i) => said(followTask(i.task, { ...(i.actor && { actor: i.actor }), following: i.following })),
   did: (i) => (i.following ? 'Following' : 'Unfollowed'),
   target: (i) => ({ kind: 'task-followers', id: i.task }),
 });
@@ -412,10 +412,9 @@ export const remove = defineAction({
 /* ---------------------------------------------------------------- a task's files and pages */
 
 import type { Schema } from '@/actions';
-import { archivePage, archiveTaskFile, deletePage, linkTaskPage, setPageAudience, uploadTaskFile } from './queries';
+import { archivePage, archiveTaskFile, deletePage, linkTaskPage, uploadTaskFile } from './queries';
 
 const fileId = s.string({ min: 1, max: 100 });
-const ids = s.array(s.string({ min: 1, max: 200 }), { max: 500 });
 
 /** A file from the person's disk: only a click or a drop has one. */
 const picked: Schema<File> = {
@@ -471,18 +470,6 @@ export const archiveTaskPage = defineAction({
   run: (_ctx, i) => said(archivePage(i.task, i.page, i.archived)),
   did: (i) => (i.archived ? 'Archived the page' : 'Restored the page'),
   target: (i) => ({ kind: 'task-files', id: i.task }),
-});
-
-/* Opening a page to everyone is the person's own press; choosing people, teams or agents is open. */
-export const pageAudience = defineAction({
-  id: 'task.pageAudience',
-  title: 'Choose who can see a page',
-  kind: 'change',
-  input: s.object({ task, page: fileId, everyone: s.boolean(), people: ids, teams: ids, agents: ids }),
-  can: ({ via }, { everyone }) => !(via === 'tico' && everyone),
-  run: (_ctx, i) => said(setPageAudience(i.task, i.page, i.everyone ? null : { everyone: false, people: i.people, teams: i.teams, bots: i.agents })),
-  did: () => 'Saved who can see it',
-  target: (i) => ({ kind: 'task-page-more', id: i.page }),
 });
 
 /* Every version goes for good and cannot be brought back: the person's own press, after they confirm. */

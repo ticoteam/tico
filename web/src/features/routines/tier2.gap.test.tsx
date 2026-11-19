@@ -8,7 +8,6 @@ import { pipelinesQuery } from '@/features/tasks/exports';
 import { ListeningPage } from './ListeningPage';
 import { validateListeningSearch, validateRoutinesSearch, validateRulesSearch } from './load';
 import {
-  allRunsQuery,
   deliveriesQuery,
   dueQuery,
   holdsQuery,
@@ -134,7 +133,7 @@ describe('Rules: adding and editing a rule', () => {
     expect(sent[1]!.body).toMatchObject({ kind: 'external', text: 'File by Jan 31', source_id: 'src9', who: { everyone: true } });
   });
 
-  it('Who takes several teammates, With names whom it is about, Ask first defaults to the manager @s546', async () => {
+  it('Who takes several teammates, Ask first defaults to the manager @s546', async () => {
     const sent = record((url, method) => (method === 'POST' && url.endsWith('/api/v2/rules') ? ok(org({ id: 'o5' })) : nothing()));
     queryClient.setQueryData(orgRulesQuery('active').queryKey, []);
     queryClient.setQueryData(reachQuery.queryKey, reach);
@@ -143,22 +142,19 @@ describe('Rules: adding and editing a rule', () => {
     fireEvent.change(within(panel).getByRole('textbox', { name: 'Rule' }), { target: { value: 'Ask before a refund' } });
     await pick('Who', 'Engineering', panel);
     await pick('Who', 'Ann Lee', panel);
-    await pick('With', 'Release', panel);
     fireEvent.click(within(within(panel).getByRole('group', { name: 'If broken' })).getByRole('button', { name: 'Ask first' }));
     expect(within(panel).getByRole('combobox', { name: 'Ask' }).textContent).toContain('Manager');
     fireEvent.click(within(panel).getByRole('button', { name: 'Add rule' }));
     await waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0]!.body).toEqual({ kind: 'internal', text: 'Ask before a refund', if_broken: 'escalate', reviewer: null, who: { groups: ['g1'], people: ['ann'] }, with: { bots: ['rel'] } });
+    expect(sent[0]!.body).toEqual({ kind: 'internal', text: 'Ask before a refund', if_broken: 'escalate', reviewer: null, who: { groups: ['g1'], people: ['ann'] } });
   });
 
-  it('a company rule shows its description, With, due dates and quote; an edit keeps every Who @s548', async () => {
+  it('a company rule shows its due dates and quote; an edit keeps every Who @s548', async () => {
     const sent = record((url, method) => (method === 'POST' && url.endsWith('/api/v2/rules/o3') ? ok(org({ id: 'o3' })) : nothing()));
     const rule = org({
       id: 'o3',
       text: 'Ship only from main',
-      description: 'Hotfixes too',
       who: { groups: [{ id: 'g1' }], people: [{ id: 'ann' }] },
-      with: { bots: [{ id: 'rel' }] },
       cite: { file_id: 'f1', section: 'Section 2', quote: 'All releases leave from main.' },
       due: [{ id: 'd1', due_on: '2026-12-01', status: 'upcoming', repeats: 'yearly', task_days: 7 }],
       version: 4,
@@ -167,9 +163,7 @@ describe('Rules: adding and editing a rule', () => {
     queryClient.setQueryData(reachQuery.queryKey, reach);
     const router = show('/company/rules?panel=org:o3');
     const panel = await screen.findByRole('complementary', { name: 'Rule' });
-    expect(within(panel).getByText('Hotfixes too')).toBeTruthy();
     expect(within(panel).getByText('Engineering, Ann Lee')).toBeTruthy();
-    expect(within(panel).getByText('Release')).toBeTruthy();
     expect(within(panel).getByText(/All releases leave from main/)).toBeTruthy();
     expect(within(panel).getByTitle('Every year, task 7 days before')).toBeTruthy();
     fireEvent.click(within(panel).getByRole('button', { name: 'Add date' }));
@@ -180,12 +174,14 @@ describe('Rules: adding and editing a rule', () => {
     fireEvent.change(within(editor).getByRole('textbox', { name: 'Rule' }), { target: { value: 'Ship only from main, always' } });
     fireEvent.click(within(editor).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0]!.body).toMatchObject({ version: 4, text: 'Ship only from main, always', who: { groups: ['g1'], people: ['ann'] }, with: { bots: ['rel'], groups: [], people: [] }, description: 'Hotfixes too' });
+    expect(sent[0]!.body).toMatchObject({ version: 4, text: 'Ship only from main, always', who: { groups: ['g1'], people: ['ann'] } });
+    expect(sent[0]!.body).not.toHaveProperty('with');
+    expect(sent[0]!.body).not.toHaveProperty('description');
   });
 });
 
 describe('Rules: suggestions, search and filters', () => {
-  it('a suggestion with no Who asks who follows it; Add all takes the rest @s524', async () => {
+  it('a suggestion with no Who asks who follows it @s524', async () => {
     const sent = record((url, method) => (method === 'POST' && /\/rules\/o\d\/accept$/.test(url) ? ok({}) : nothing()));
     queryClient.setQueryData(orgRulesQuery('suggested').queryKey, [
       org({ id: 'o7', status: 'suggested', version: 2, text: 'Refunds wait for an OK', who: {} }),
@@ -201,9 +197,6 @@ describe('Rules: suggestions, search and filters', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]).toMatchObject({ url: expect.stringContaining('/rules/o7/accept'), body: { version: 2, who: { groups: ['g1'] } } });
-    fireEvent.click(await screen.findByRole('button', { name: 'Add all' }));
-    await waitFor(() => expect(sent).toHaveLength(3));
-    expect(sent.slice(1).map((x) => x.url.replace(/.*\/rules\//, ''))).toEqual(['o8/accept', 'o9/accept']);
   });
 
   it('a suggested change to a stage rule says what it changes @s524', async () => {
@@ -226,7 +219,7 @@ describe('Rules: suggestions, search and filters', () => {
     expect(within(changes).getByText('Tests first')).toBeTruthy();
   });
 
-  it('every tab can be searched, and Outside filtered by its From, both in the address @s562', async () => {
+  it('every tab can be searched, in the address @s562', async () => {
     record();
     queryClient.setQueryData(orgRulesQuery('active').queryKey, [
       org({ id: 'x1', kind: 'external', text: 'File the yearly forms', source: { id: 's1', name: 'Tax office' } }),
@@ -237,32 +230,24 @@ describe('Rules: suggestions, search and filters', () => {
       { id: 's1', name: 'Tax office' },
       { id: 's2', name: 'Made Up Supply' },
     ]);
-    const router = show('/company/rules?tab=outside&q=invoices');
+    show('/company/rules?tab=outside&q=invoices');
     expect(await screen.findByTitle('Pay invoices in 30 days, Stop')).toBeTruthy();
     expect(screen.queryByTitle('File the yearly forms, Stop')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Filter' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Tax office' }));
-    await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: 'outside', q: 'invoices', from: 's1' }));
-    expect(validateRulesSearch({ tab: 'due', status: 'overdue', from: 's1' })).toEqual({ tab: 'due', status: 'overdue' });
+    expect(validateRulesSearch({ tab: 'outside', q: 'invoices' })).toEqual({ tab: 'outside', q: 'invoices' });
   });
 });
 
 describe('Routines', () => {
-  it('an edit keeps its trigger’s filters; a custom event is typed; a schedule has a time zone @s564', async () => {
+  it('an edit keeps its trigger’s filters and zone @s564', async () => {
     const filters = [{ field: 'task.pipeline', op: 'is', value: 'p1' }];
     const sent = record((url, method) => (method === 'PATCH' && url.endsWith('/automations/r1') ? ok(routine()) : nothing()));
     queryClient.setQueryData(routinesQuery.queryKey, [routine({ trigger: { type: 'schedule', cron: '0 7 * * *', tz: 'UTC', filters } as Routine['trigger'] })]);
     show('/company/routines?panel=routine:r1');
     await menu(await screen.findByRole('complementary', { name: 'Morning numbers' }), 'Edit');
     await pick('Every', 'Weekdays');
-    fireEvent.change(screen.getByRole('textbox', { name: 'Time zone' }), { target: { value: 'Europe/Lisbon' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(sent).toHaveLength(1));
-    expect((sent[0]!.body as { trigger: unknown }).trigger).toEqual({ type: 'schedule', cron: '0 7 * * 1-5', tz: 'Europe/Lisbon', filters });
-
-    const done = await run('routines.update', { routine: 'r1', event: 'custom.order_paid' }, { via: 'click' });
-    expect(done.ok).toBe(true);
-    expect((sent[1]!.body as { trigger: unknown }).trigger).toEqual({ type: 'event', name: 'custom.order_paid' });
+    expect((sent[0]!.body as { trigger: unknown }).trigger).toEqual({ type: 'schedule', cron: '0 7 * * 1-5', tz: 'UTC', filters });
   });
 
   it('a due routine’s test run uses its next due day and names its due date @s566', async () => {
@@ -292,78 +277,32 @@ describe('Routines', () => {
     expect(within(diff).getByText('+ Agent turn bot:rel: Post the numbers and the trend.')).toBeTruthy();
   });
 
-  it('Runs: filtered by what started them and whose they are, in the address @s526', async () => {
-    record();
-    const at = new Date().toISOString();
-    queryClient.setQueryData(allRunsQuery('1h').queryKey, {
-      pages: [
-        {
-          next: null,
-          since: at,
-          runs: [
-            { id: 'u1', automation_id: 'r1', automation_name: 'Morning numbers', status: 'done', started_at: at, trigger: 'schedule', owner_id: 'bot:rel' },
-            { id: 'u2', automation_id: 'r4', automation_name: 'Ship hook', status: 'done', started_at: at, trigger: 'webhook', owner_id: 'human:ann' },
-          ],
-        },
-      ],
-      pageParams: [''],
-    } as never);
-    const router = show('/company/routines?tab=runs&trigger=webhook');
-    expect(await screen.findByTitle('Ship hook')).toBeTruthy();
-    expect(screen.queryByTitle('Morning numbers')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Filter runs' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Release' }));
-    await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: 'runs', trigger: 'webhook', owner: 'bot:rel' }));
-  });
 });
 
 describe('Webhooks', () => {
   const hook: Hook = { id: 'h1', name: 'Shop orders', url: 'https://in.example/hooks/h1', signed: false, received_24h: 5, refused_24h: 2, hourly: 60, keep_days: 7, unheard: 'log', type_from: '', automations: [] };
 
-  it('one webhook: its settings changed, a kept call run again, refused ones recovered, New secret asked first @s536', async () => {
-    const sent = record((url, method) =>
-      method !== 'POST'
-        ? nothing()
-        : url.endsWith('/triggers/h1')
-          ? ok({ trigger: { ...hook, hourly: 30 } })
-          : url.endsWith('/replay')
-            ? ok({ replay: { delivery: 'd1:replay:1', tasks: 2 } })
-            : url.endsWith('/recover')
-              ? ok({ recover: { found: 1, recovered: 1 } })
-              : nothing(),
-    );
+  it('one webhook: renamed, New secret asked first @s536', async () => {
+    const sent = record((url, method) => (method === 'POST' && url.endsWith('/triggers/h1') ? ok({ trigger: { ...hook, name: 'Store orders' } }) : nothing()));
     queryClient.setQueryData(hooksQuery.queryKey, [hook]);
-    queryClient.setQueryData(deliveriesQuery('h1').queryKey, [
-      { delivery: 'd1', received_at: '2026-11-18T07:00:00Z', outcome: 'accepted', tasks: 1, stored: true },
-      { delivery: 'd2', received_at: '2026-11-18T06:00:00Z', outcome: 'refused', reason: 'Bad signature', stored: true },
-    ] as never);
+    queryClient.setQueryData(deliveriesQuery('h1').queryKey, [{ delivery: 'd1', received_at: '2026-11-18T07:00:00Z', outcome: 'accepted', tasks: 1, stored: true }] as never);
     show('/company/routines?tab=webhooks&panel=hook:h1');
     const panel = await screen.findByRole('complementary', { name: 'Shop orders' });
     expect(within(panel).getByText('5 calls, 2 refused')).toBeTruthy();
 
     await menu(panel, 'Edit');
     const dialog = await screen.findByRole('dialog', { name: 'Edit webhook' });
-    fireEvent.change(within(dialog).getByRole('spinbutton', { name: 'Per hour' }), { target: { value: '30' } });
-    await pick('If nothing listens', 'Tell the maker', dialog);
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Name' }), { target: { value: 'Store orders' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0]!.body).toEqual({ name: 'Shop orders', type_from: '', hourly: 30, keep_days: 7, unheard: 'note' });
-
-    fireEvent.click(within(within(panel).getByTitle('Started 1 task')).getByRole('button', { name: 'Run again' }));
-    await waitFor(() => expect(sent).toHaveLength(2));
-    expect(sent[1]!.url).toContain('/triggers/h1/deliveries/d1/replay');
-    fireEvent.click(within(panel).getByRole('button', { name: 'Recover refused' }));
-    await waitFor(() => expect(sent).toHaveLength(3));
-    expect(sent[2]).toMatchObject({ url: expect.stringContaining('/triggers/h1/recover'), body: { since_hours: 168 } });
+    expect(sent[0]!.body).toEqual({ name: 'Store orders' });
 
     await menu(panel, 'New secret');
     expect(await screen.findByRole('alertdialog', { name: 'Make a new address?' })).toBeTruthy();
-    expect(sent).toHaveLength(3);
-    // more calls an hour is a raised limit: not Tico's
-    expect((await run('webhooks.update', { hook: 'h1', hourly: 600 }, { via: 'tico' })).ok).toBe(false);
+    expect(sent).toHaveLength(1);
   });
 
-  it('Add webhook asks how it is signed and its settings, as the old app did @s577', async () => {
+  it('Add webhook asks how it is signed, as the old app did @s577', async () => {
     const sent = record((url, method) =>
       method !== 'POST'
         ? url.endsWith('/deliveries')
@@ -385,13 +324,10 @@ describe('Webhooks', () => {
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Name' }), { target: { value: 'Repo events' } });
     await pick('Signing', 'GitHub', dialog);
     fireEvent.change(within(dialog).getByLabelText('Signing secret'), { target: { value: 'typed-made-up' } });
-    expect((within(dialog).getByRole('textbox', { name: 'Type from' }) as HTMLInputElement).value).toBe('X-GitHub-Event');
-    fireEvent.change(within(dialog).getByRole('spinbutton', { name: 'Keep days' }), { target: { value: '14' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
-    await waitFor(() => expect(sent).toHaveLength(3));
+    await waitFor(() => expect(sent).toHaveLength(2));
     expect(sent[0]!.body).toEqual({ name: 'Repo events' });
     expect(sent[1]!.body).toEqual({ preset: 'github', secret: 'typed-made-up' });
-    expect(sent[2]!.body).toEqual({ keep_days: 14 });
   });
 });
 
@@ -415,7 +351,7 @@ describe('Listening', () => {
     expect(validateListeningSearch({ q: 'raised' })).toEqual({ q: 'raised' });
   });
 
-  it('one watch: renamed, its rules and limits changed, and a GitHub source added; a push source is not Tico’s @s540', async () => {
+  it('one watch: renamed, its rules changed, and a GitHub source added; a push source is not Tico’s @s540', async () => {
     const sent = record((url, method) => (method === 'PATCH' && url.endsWith('/automations/w1') ? ok(watch()) : nothing()));
     queryClient.setQueryData(watchQuery('w1').queryKey, watch());
     show('/company/listening?watch=w1&tab=sources');
@@ -428,13 +364,11 @@ describe('Listening', () => {
     const rule = within(dialog).getByRole('group', { name: 'Rule 1' });
     fireEvent.change(within(rule).getByRole('textbox', { name: 'Tag' }), { target: { value: 'asks' } });
     fireEvent.change(within(rule).getByRole('textbox', { name: 'Sentence' }), { target: { value: 'Someone asks for a kit' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Add limit' }));
-    fireEvent.change(within(within(dialog).getByRole('group', { name: 'Limit 2' })).getByRole('spinbutton', { name: 'How many' }), { target: { value: '3' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]!.body).toMatchObject({
       name: 'Brand mentions',
-      trigger: { type: 'listening', rules: [{ do: 'keep', tag: 'asks', text: 'Someone asks for a kit' }], limits: [{ count: 3, per: 'hour' }, { count: 10, per: 'day' }] },
+      trigger: { type: 'listening', rules: [{ do: 'keep', tag: 'asks', text: 'Someone asks for a kit' }], limits: [{ count: 10, per: 'day' }] },
     });
 
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit watch' })).toBeNull());

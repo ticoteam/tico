@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { loadSection, SettingsPage } from '@/features/settings/exports';
+import { SettingsPage } from '@/features/settings/exports';
+import { loadSection } from '@/features/settings/routing';
 
 /* `/settings`: a phone shows the section list; a wide screen lands on the first section, General. */
 export const Route = createFileRoute('/settings/')({

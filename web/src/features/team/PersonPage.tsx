@@ -14,7 +14,7 @@ import { Facts, LabelValue } from '@/kit/LabelValue';
 import { FiguresStrip, Record as RecordPage, Section, type PageState } from '@/pagekinds';
 import { bareId, slackTitle, startOfMonth, teamOf } from './model';
 import { AccessDialog, GiveTaskDialog, PasswordDialog } from './dialogs';
-import { AllTasks, ConfirmDialog, EditDialog, Foot, Fold, MateRow, OwnRow, PickDialog, SecLink, waitsOn } from './parts';
+import { AllTasks, ConfirmDialog, EditDialog, Foot, Fold, MateRow, OwnRow, OwnRows, PickDialog, SecLink, waitsOn } from './parts';
 import {
   accessQuery,
   agentsQuery,
@@ -143,12 +143,10 @@ function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: He
               </>
             }
           >
-            {rest.map((t) => (
-              <OwnRow key={t.id} task={t} me={me?.id} />
-            ))}
+            <OwnRows tasks={rest} me={me?.id} label="Open tasks" />
             {doneN > 0 && (
               <Fold label="Done" text={`${doneN} this month`}>
-                {done.data?.tasks.map((t) => <OwnRow key={t.id} task={t} me={me?.id} />)}
+                <OwnRows tasks={done.data?.tasks ?? []} me={me?.id} label="Done tasks" />
               </Fold>
             )}
             <GiveTaskDialog open={giving} onOpenChange={setGiving} person={id} name={actor.name} />

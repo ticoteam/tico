@@ -3,15 +3,14 @@ import { useState, type ReactNode } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
-import { IconButton } from '@/kit/IconButton';
-import { Menu, MenuItem } from '@/kit/Menu';
-import { pipelinesQuery, type Pipeline } from '@/features/tasks/exports';
-import { FilterRow, List, PageMore, Section, type PageTab } from '@/pagekinds';
-import { DUE_STATUSES, hasWho, ROUTINES, RULES, type RuleTab } from './actions';
+import { MenuItem } from '@/kit/Menu';
+import { pipelinesQuery, type Pipeline } from '@/features/tasks/routing';
+import { List, PageMore, Section, type PageTab } from '@/pagekinds';
+import { hasWho, ROUTINES, RULES, type RuleTab } from './actions';
 import { CompanyRules, holdsOf, OrgRuleRow, partiesOf, PartyPick } from './CompanyRules';
-import { Find, press, RemoveItem, RuleRow, useConfirmRemove, useName, Verb } from './parts';
+import { Find, press, RemoveItem, RuleRow, useConfirmRemove, useName } from './parts';
 import { ReadDocument } from './ReadDocument';
-import { dueQuery, holdsQuery, orgRulesQuery, routinesQuery, ruleGroupsQuery, ruleSourcesQuery, stageRulesQuery, teamsQuery } from './queries';
+import { dueQuery, holdsQuery, orgRulesQuery, routinesQuery, ruleGroupsQuery, stageRulesQuery, teamsQuery } from './queries';
 import { RulePanel } from './RulePanel';
 import { runnerOf } from './RoutinesPage';
 import type { DueDate, Group, OrgRule, Routine, StageRule } from './types';
@@ -30,13 +29,8 @@ export interface RulesSearch {
   who?: string;
   /** Any tab: the words searched for. */
   q?: string;
-  /** Outside: one From's id. */
-  from?: string;
-  /** Due: late, soon or later. */
-  status?: (typeof DUE_STATUSES)[number];
 }
 
-const DUE_WORDS: Record<(typeof DUE_STATUSES)[number], string> = { overdue: 'Late', due_soon: 'Due soon', upcoming: 'Later' };
 /** Every word searched for is in the text, in any order. */
 export const hasWords = (text: string, q: string | undefined) => !q || q.toLowerCase().split(/\s+/).every((w) => text.toLowerCase().includes(w));
 
@@ -83,30 +77,7 @@ export function RulesPage({ search }: { search: RulesSearch }) {
   const [whoFor, setWhoFor] = useState<OrgRule | null>(null);
   const body = useTab(t, search, remove.confirm, setWhoFor);
   const [reading, setReading] = useState(false);
-  const sources = useQuery({ ...ruleSourcesQuery, enabled: t === 'outside' }).data ?? [];
-  const list = (to: Omit<RulesSearch, 'tab' | 'panel' | 'who'>) => void press('rules.list', { tab: t, ...to });
-  const { q, from, status } = search;
-  const fromName = sources.find((x) => x.id === from)?.name ?? 'One From';
-  const chips = [
-    ...(from ? [{ label: fromName, onClear: () => list({ q }) }] : []),
-    ...(status ? [{ label: DUE_WORDS[status], onClear: () => list({ q }) }] : []),
-  ];
-  const filter =
-    t === 'outside' && sources.length ? (
-      <Menu trigger={<IconButton icon="filter" label="Filter" on={!!from} data-phone />}>
-        <MenuItem label="Every From" on={!from} onSelect={() => list({ q })} />
-        {sources.map((x) => (
-          <MenuItem key={x.id} label={x.name} on={x.id === from} onSelect={() => list({ q, from: x.id })} />
-        ))}
-      </Menu>
-    ) : t === 'due' ? (
-      <Menu trigger={<IconButton icon="filter" label="Filter" on={!!status} data-phone />}>
-        <MenuItem label="All" on={!status} onSelect={() => list({ q })} />
-        {DUE_STATUSES.map((x) => (
-          <MenuItem key={x} label={DUE_WORDS[x]} on={x === status} onSelect={() => list({ q, status: x })} />
-        ))}
-      </Menu>
-    ) : null;
+  const { q } = search;
   const more = (
     <PageMore>
       <MenuItem label="Add due date" icon="calendar" onSelect={() => void press('rules.newDue', {})} />
@@ -119,11 +90,9 @@ export function RulesPage({ search }: { search: RulesSearch }) {
       path={RULES}
       tabs={rulesTabs}
       className="rr"
-      search={<Find label="Search rules" value={q} onFind={(words) => list({ q: words, from, status })} />}
-      filter={chips.length > 0 && <FilterRow filters={chips} />}
+      search={<Find label="Search rules" value={q} onFind={(words) => void press('rules.list', { tab: t, q: words })} />}
       actions={
         <>
-          {filter}
           {add}
           {remove.node}
           {reading && <ReadDocument onClose={() => setReading(false)} />}
@@ -206,7 +175,7 @@ function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () 
     }
     case 'outside': {
       const list = (org.data ?? []).filter(
-        (r) => r.kind === 'external' && (!search.from || r.source?.id === search.from) && hasWords(`${r.text} ${r.description ?? ''} ${r.source?.name ?? ''}`, q),
+        (r) => r.kind === 'external' && hasWords(`${r.text} ${r.description ?? ''} ${r.source?.name ?? ''}`, q),
       );
       const dueOf = (id: string) => due.data?.find((d) => d.rule.id === id);
       return {
@@ -234,7 +203,7 @@ function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () 
       };
     }
     case 'due': {
-      const list = (due.data ?? []).filter((d) => (!search.status || d.status === search.status) && hasWords(d.rule.text, q));
+      const list = (due.data ?? []).filter((d) => hasWords(d.rule.text, q));
       const soon = dayIn(30);
       const when = (d: DueDate) => (d.status === 'overdue' ? 'Late' : d.due_on <= soon ? 'Next 30 days' : 'Later');
       return {
@@ -295,19 +264,12 @@ function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () 
       const both = { isPending: orgSugg.isPending && stageSugg.isPending, isError: orgSugg.isError && stageSugg.isError };
       const cols = { who: true, at: true };
       const live = stage.data?.items ?? [];
-      // Add all takes the ones that say who follows them; the rest wait for a Who
-      const ready = orgs.filter(hasWho).length + stages.length;
       return {
         state: stateOf(both, n),
         retry: () => void Promise.all([orgSugg.refetch(), stageSugg.refetch()]),
         empty: 'No suggestions',
         sections: (
-          <Section
-            name="Suggested"
-            count={n}
-            target="section:suggested"
-            actions={ready > 1 ? <Verb onClick={() => void press('rules.acceptAll', {})}>Add all</Verb> : undefined}
-          >
+          <Section name="Suggested" count={n} target="section:suggested">
             {orgs.map((r) => (
               <RuleRow
                 key={r.id}

@@ -2,27 +2,25 @@ import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { run } from '@/actions/run';
 import { refusal } from '@/actions';
-import { useActors } from '@/data';
 import { Button } from '@/kit/Button';
 import { DatePick } from '@/kit/DatePick';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Field } from '@/kit/Field';
 import { IconButton } from '@/kit/IconButton';
-import { Facts } from '@/kit/LabelValue';
+import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Segmented } from '@/kit/Segmented';
-import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
 import { Foot, Line, SwitchLine, Verb, act } from './parts';
-import { askQuery, type AskRules, type ReplayRow, type RoadmapView } from './queries';
+import { askQuery, type AskRules, type ReplayRow } from './queries';
 
 /* Settings › Tasks, the parts the old app had beside the roadmap labels: what agents may put on a person (their own
-   rules, or the team default for an owner or admin), the lines they want to be asked about, a replay of one past day,
-   and the roadmap's websites, who takes visitors' suggestions, and its limits. */
+   rules, or the team default for an owner or admin), the lines they want to be asked about, and a replay of one past
+   day. */
 
-/** One short line typed into a small dialog: a criterion, a website. */
+/** One short line typed into a small dialog: a criterion. */
 function AddLine({ label, title, field, onAdd }: { label: string; title: string; field: string; onAdd: (line: string) => Promise<boolean> }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState('');
@@ -97,7 +95,9 @@ function Replay() {
       </Line>
       {rows && (
         <>
-          <p className="fact-dim" role="status">{`${rows.length} asks; On would have kept ${off.length} off your plate`}</p>
+          <LabelValue label="Kept off" num>
+            {`${off.length} of ${rows.length}`}
+          </LabelValue>
           <ul className="cl-list">
             {[...off, ...rows.filter((x) => !off.includes(x))].map((x, i) => (
               <li key={i} className="cl-act">
@@ -146,7 +146,7 @@ export function AskSection() {
         </Facts>
         {!team && v.settings.own && (
           <Foot>
-            <Verb onClick={() => void act('settings.askReset', {})}>Use team default</Verb>
+            <Verb onClick={() => void act('settings.askReset', {})}>Reset</Verb>
           </Foot>
         )}
       </Section>
@@ -178,67 +178,6 @@ export function AskSection() {
           ))
         )}
       </Section>
-    </>
-  );
-}
-
-/** The roadmap's other settings, under its labels: where it may show, who takes suggestions, and visitors' limits. */
-export function RoadmapMore({ r }: { r: RoadmapView }) {
-  const sites = r.cors_origins ?? [];
-  const actors = useActors();
-  const agents = actors.filter((a) => a.kind === 'agent').sort((a, b) => a.name.localeCompare(b.name));
-  // 'auto' stands for none chosen: the server then picks (suggestions_receiver says whom).
-  const chosen = r.suggestions_bot ? (agents.find((a) => a.id === `bot:${r.suggestions_bot}` || a.slug === r.suggestions_bot)?.id.slice(4) ?? r.suggestions_bot) : 'auto';
-  const receiver = r.suggestions_receiver;
-  const auto = receiver?.source === 'automatic' && receiver.name ? `Automatic: ${receiver.name}` : 'Automatic';
-  const options = [
-    { value: 'auto', label: auto },
-    ...(chosen !== 'auto' && !agents.some((a) => a.id === `bot:${chosen}`) ? [{ value: chosen, label: receiver?.name ?? chosen }] : []),
-    ...agents.map((a) => ({ value: a.id.slice(4), label: a.name })),
-  ];
-  return (
-    <>
-      <Line label="Websites" target="setting:roadmap-sites">
-        <AddLine
-          label="Add a website"
-          title="A website that can show the roadmap"
-          field="Address"
-          onAdd={(o) => act('settings.roadmapSites', { origins: [...sites.filter((x) => x !== o), o] })}
-        />
-      </Line>
-      {sites.map((o) => (
-        <div key={o} className="row g-line" title={o}>
-          <code className="row-title fs-code">{o}</code>
-          <IconButton icon="close" label={`Take ${o} off`} size="sm" quiet onClick={() => void act('settings.roadmapSites', { origins: sites.filter((x) => x !== o) })} />
-        </div>
-      ))}
-      <Line label="Suggestions go to" target="setting:roadmap-suggestions">
-        <Select
-          label="Suggestions go to"
-          labelHidden
-          look="quiet"
-          value={chosen}
-          options={options}
-          onValueChange={(slug) => void act('settings.roadmapSuggestions', { agent: slug === 'auto' ? null : slug })}
-        />
-      </Line>
-      <NumberLine
-        key={`a-${r.action_limit}`}
-        label="Visitor requests a day"
-        target="setting:roadmap-limits"
-        value={r.action_limit}
-        min={1}
-        max={10000}
-        onSave={(n) => void act('settings.roadmapLimits', { action_limit: n })}
-      />
-      <NumberLine
-        key={`s-${r.suggestion_limit}`}
-        label="Suggestions waiting"
-        value={r.suggestion_limit ?? 20}
-        min={1}
-        max={1000}
-        onSave={(n) => void act('settings.roadmapLimits', { suggestion_limit: n })}
-      />
     </>
   );
 }

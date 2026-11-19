@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { refusal, run } from '@/actions';
-import type { AccessAudience, Group, ToolIndexRow, WebsiteTool } from '@/api/schema';
+import type { Group, ToolIndexRow, WebsiteTool } from '@/api/schema';
 import { directoryQuery, type Directory } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Dialog } from '@/kit/Dialog';
@@ -13,9 +13,6 @@ import { Markdown } from '@/kit/Markdown';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
-import { Segmented } from '@/kit/Segmented';
-import { Select } from '@/kit/Select';
-import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { PageMore, Section } from '@/pagekinds';
 import { Foot, useGo } from './AddTool';
@@ -29,20 +26,17 @@ import {
   mailboxSendsQuery,
   servicePageQuery,
   servicesQuery,
-  slackLinksQuery,
   teamsQuery,
-  threadPicksQuery,
   vaultQuery,
-  type SeenList,
   type StoredKey,
   type Vault,
 } from './toolKeys';
 import { bad, Code, KIND, LEVEL, Shell, stateOf, toolHref, Who } from './ToolShell';
 import { MayDo, SendingSection } from './ToolSettings';
 
-/* The Tools gap rows' parts: a stored key no tool holds (s788 s909), a declared tool's own page (s787), Slack's linked
-   threads, a mailbox you can change (s866), who reads a Tico address (s867), a website's accounts (s865), who sees a
-   tool (s926) and Tools' Who has access filter (s908). A secret is typed into a dialog's state and only sent. */
+/* The Tools gap rows' parts: a stored key no tool holds (s788 s909), a declared tool's own page (s787), a mailbox you
+   can change (s866), who reads a Tico address (s867), a website's accounts (s865) and Tools'
+   Who has access filter (s908). A secret is typed into a dialog's state and only sent. */
 
 /** "Are you sure": for what cannot be undone. */
 export function Confirm({ title, description, label, onGo, onClose }: { title: string; description?: string; label: string; onGo: () => Promise<boolean>; onClose: () => void }) {
@@ -344,75 +338,6 @@ export function ServiceView({ row }: { row: ToolIndexRow }) {
       )}
       {storing && <StoreKeyDialog env={storing} name={s?.title || row.name} service={service} onClose={() => setStoring(null)} />}
     </Shell>
-  );
-}
-
-/* ---------------------------------------------------------------- Slack: linked threads */
-
-const LINK_STATE: Record<string, string> = { requested: 'Asked', active: 'Linked', suspended: 'Paused', refused: 'Refused', unlinked: 'Unlinked' };
-
-/** Threads linked to Slack channels. Admins only: anyone else gets nothing here. */
-export function SlackLinks() {
-  const q = useQuery(slackLinksQuery);
-  const [linking, setLinking] = useState(false);
-  if (!q.data) return null;
-  const links = q.data.links;
-  return (
-    <Section
-      name="Linked threads"
-      count={links.length || undefined}
-      target="tool-slack:links"
-      actions={q.data.available !== false && <IconButton icon="plus" label="Link a thread" size="sm" onClick={() => setLinking(true)} />}
-    >
-      {links.map((l) => {
-        const channel = `#${l.channel.name || l.channel.id}`;
-        return (
-          <div key={l.id} className="row urow" title={l.reason || channel}>
-            <span className="row-title">{channel}</span>
-            <span className="row-ctx">{LINK_STATE[l.state] ?? l.state}</span>
-            <Menu trigger={<IconButton icon="more" label={`${channel} options`} size="sm" />}>
-              {(l.state === 'suspended' || l.state === 'refused') && (
-                <MenuItem label="Check again" onSelect={() => void press('tools.resumeSlack', { link: l.id }, 'Not checked')} />
-              )}
-              <MenuRule />
-              <MenuItem label="Unlink" onSelect={() => void press('tools.unlinkSlack', { link: l.id }, 'Not unlinked')} />
-            </Menu>
-            <Ago at={l.updated_at} className="row-age" />
-          </div>
-        );
-      })}
-      {linking && <LinkDialog onClose={() => setLinking(false)} />}
-    </Section>
-  );
-}
-
-function LinkDialog({ onClose }: { onClose: () => void }) {
-  const threads = useQuery(threadPicksQuery);
-  const [thread, setThread] = useState('');
-  const [channel, setChannel] = useState('');
-  const [history, setHistory] = useState(false);
-  const [busy, go] = useGo(onClose);
-  const options = (threads.data ?? []).map((t) => ({ value: t.id, label: t.title || t.name || 'Thread' }));
-  const picked = thread || options[0]?.value || '';
-  return (
-    <Dialog
-      open
-      onOpenChange={(o) => !o && onClose()}
-      title="Link a thread"
-      actions={
-        <Foot
-          onClose={onClose}
-          label="Link"
-          busy={busy}
-          ready={!!picked && !!channel.trim()}
-          onGo={() => void go('tools.linkSlack', { thread: picked, channel: channel.trim(), history }, 'Not linked')}
-        />
-      }
-    >
-      {options.length ? <Select label="Thread" options={options} value={picked} onValueChange={setThread} /> : threads.data && <Empty title="No threads to link" />}
-      <Field label="Channel" value={channel} onValueChange={setChannel} placeholder="#channel" autoComplete="off" />
-      <Switch label="Copy history" checked={history} onCheckedChange={setHistory} />
-    </Dialog>
   );
 }
 
@@ -729,117 +654,6 @@ export function DeleteWebsiteConfirm({ tool, name, onClose }: { tool: string; na
       onGo={() => press('tools.deleteWebsite', { tool }, 'Not deleted')}
       onClose={onClose}
     />
-  );
-}
-
-/** Central only: its sign-ins happen on Tico's computer, never on an agent's own. */
-export function CentralOnly({ tool, on, can }: { tool: string; on: boolean; can: boolean }) {
-  return (
-    <LabelValue label="Central only">
-      <Switch label="Central only" labelHidden checked={on} disabled={!can} onCheckedChange={(next) => void press('tools.editWebsite', { tool, central_only: next }, 'Not saved')} />
-    </LabelValue>
-  );
-}
-
-/* ---------------------------------------------------------------- who sees an API tool or a website */
-
-/** "Everyone can read": every agent reads the tool with no grant while it is on. */
-export function EveryoneReads({ tool, on, can }: { tool: string; on: boolean; can: boolean }) {
-  return <Switch label="Everyone can read" checked={on} disabled={!can} onCheckedChange={(next) => void press('tools.setEveryoneReads', { tool, on: next }, 'Not saved')} />;
-}
-
-interface Seen {
-  id: string;
-  kind: 'person' | 'group' | 'bot' | 'finance';
-  name: string;
-  subject: string;
-  why: 'Owner' | 'Listed' | 'Can use it';
-}
-const LISTS: Partial<Record<Seen['kind'], keyof SeenList>> = { person: 'people', group: 'teams', bot: 'bots' };
-
-/** Who can see it: Everyone, or Only listed (the owner, the list and whoever can use it). */
-export function SeenBy({
-  kind,
-  tool,
-  t,
-}: {
-  kind: 'api' | 'website';
-  tool: string;
-  t: { private: boolean; audience?: AccessAudience | null; seen_by?: Seen[]; can_set_audience: boolean };
-}) {
-  const dir = useQuery(directoryQuery).data;
-  const teams = useQuery(teamsQuery).data ?? [];
-  if (!t.can_set_audience) return null;
-  const list = (): SeenList => ({ people: [...(t.audience?.people ?? [])], teams: [...(t.audience?.teams ?? [])], bots: [...(t.audience?.bots ?? [])] });
-  const send = (audience: SeenList | null) => void press('tools.setSeenBy', { kind, tool, audience }, 'Not saved');
-  const listed = list();
-  const add = (into: keyof SeenList, id: string) => {
-    const a = list();
-    a[into] = [...a[into], id];
-    send(a);
-  };
-  const people = (dir?.actors ?? []).filter((x) => {
-    const [k, id = ''] = x.id.split(':');
-    return k === 'human' ? !listed.people.includes(id) : !listed.bots.includes(id);
-  });
-  const freeTeams = teams.filter((g: Group) => !listed.teams.includes(g.id));
-  return (
-    <Section
-      name="Who can see it"
-      target={`tool-seen:${tool}`}
-      actions={
-        t.private &&
-        people.length + freeTeams.length > 0 && (
-          <Menu trigger={addTrigger}>
-            {freeTeams.map((g) => (
-              <MenuItem key={g.id} label={g.name} onSelect={() => add('teams', g.id)} />
-            ))}
-            {people.map((x) => {
-              const [k, id = ''] = x.id.split(':');
-              return <MenuItem key={x.id} label={x.name} onSelect={() => add(k === 'human' ? 'people' : 'bots', id)} />;
-            })}
-          </Menu>
-        )
-      }
-    >
-      <Segmented
-        label="Who can see it"
-        options={[
-          { value: 'everyone', label: 'Everyone' },
-          { value: 'only', label: 'Only listed' },
-        ]}
-        value={t.private ? 'only' : 'everyone'}
-        onValueChange={(v) => send(v === 'only' ? list() : null)}
-      />
-      {t.private &&
-        (t.seen_by ?? []).map((r) => {
-          const into = LISTS[r.kind];
-          return (
-            <Who
-              key={r.subject}
-              actor={r.kind === 'person' || r.kind === 'bot' ? r.subject : null}
-              name={r.name || r.id}
-              right={
-                <>
-                  <span className="row-ctx">{r.why}</span>
-                  {r.why === 'Listed' && into && (
-                    <IconButton
-                      icon="close"
-                      label={`Remove ${r.name || r.id}`}
-                      size="sm"
-                      onClick={() => {
-                        const a = list();
-                        a[into] = a[into].filter((x) => x !== r.id);
-                        send(a);
-                      }}
-                    />
-                  )}
-                </>
-              }
-            />
-          );
-        })}
-    </Section>
   );
 }
 

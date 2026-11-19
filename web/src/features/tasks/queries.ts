@@ -1,6 +1,5 @@
 import { infiniteQueryOptions, keepPreviousData, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import { ApiError } from '@/api/client';
 import type { TagCreate, TagResult, TagUpdate } from '@/api/schema';
 import type {
   FactoryMap,
@@ -865,14 +864,6 @@ export async function removeRequester(task: string, id: string): Promise<void> {
 
 /* ---------------------------------------------------------------- tags: making and changing them (ui/app/tags.ts) */
 
-/** The templates a tag is made from (`is_template=true`). Read when someone looks for one, not with the Tags list. */
-export const templatesQuery = queryOptions({
-  queryKey: ['tags', { templates: true }] as const,
-  queryFn: async ({ signal }): Promise<Tag[]> =>
-    (await api.get<TagList>('/api/v2/tags?is_template=true', { signal })).tags.filter((t) => t.is_template),
-  staleTime: QUIET_STALE_MS,
-});
-
 const tagsAgain = () => void queryClient.invalidateQueries({ queryKey: ['tags'] });
 
 /** A key as the old form made it from a name: lowercase words joined by hyphens, cut at 40 (hubdb cuts there). */
@@ -885,33 +876,11 @@ export const tagKeyOf = (name: string) =>
     .slice(0, 40)
     .replace(/-+$/, '');
 
-/** A new tag or template (POST /api/v2/tags). */
+/** A new tag (POST /api/v2/tags). */
 export async function createTag(body: TagCreate): Promise<Tag> {
   const { tag } = await api.post<TagResult>('/api/v2/tags', body);
   tagsAgain();
   return tag;
-}
-
-/** A tag made from a template: the template's notes, under its own key (POST /api/v2/tags/{id}/instances). */
-export async function makeTagFrom(template: string, body: Pick<TagCreate, 'key' | 'metadata'>): Promise<Tag> {
-  const { tag } = await api.post<TagResult>(`/api/v2/tags/${encodeURIComponent(template)}/instances`, body);
-  tagsAgain();
-  return tag;
-}
-
-export const RELEASE_KEY = 'release-checklist';
-const RELEASE_NOTES = '- [ ] Run release scripts and migrations\n- [ ] Deploy\n- [ ] Run smoke checks\n- [ ] Tell the team';
-
-/** The release checklist starter: the template when it is there, made when it is not (someone may make it meanwhile). */
-export async function releaseChecklist(): Promise<Tag> {
-  const there = (await queryClient.fetchQuery(templatesQuery)).find((t) => t.key === RELEASE_KEY);
-  if (there) return there;
-  try {
-    return await createTag({ key: RELEASE_KEY, label: 'release', is_template: true, markdown: RELEASE_NOTES });
-  } catch (e) {
-    if (!(e instanceof ApiError && e.code === 'duplicate')) throw e;
-    return (await api.get<TagDetail>(`/api/v2/tags/${RELEASE_KEY}`)).tag;
-  }
 }
 
 /** A tag's name, notes or metadata, against the version on screen (409 when someone changed it): shown at once. */

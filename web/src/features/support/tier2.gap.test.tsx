@@ -42,15 +42,13 @@ describe('Tico support › Diagnostics @s1125', () => {
       </QueryClientProvider>,
     );
 
-  it('a section unticked leaves the attachment; Refresh captures again @s1125', async () => {
+  it('an edit stays in the text; Refresh captures again @s1125', async () => {
     serve((url) => (url.startsWith('/api/v2/support/diagnostics') ? ok(bundle) : undefined));
     open();
-    const logs = await screen.findByRole('checkbox', { name: 'logs' });
-    expect(screen.queryByRole('checkbox', { name: 'format' })).toBeNull();
-    fireEvent.click(logs);
-    const text = screen.getByRole('textbox', { name: 'Diagnostics' }) as HTMLTextAreaElement;
-    await waitFor(() => expect(JSON.parse(text.value)).not.toHaveProperty('logs'));
-    expect(JSON.parse(text.value)).toHaveProperty('computers');
+    const text = (await screen.findByRole('textbox', { name: 'Diagnostics' })) as HTMLTextAreaElement;
+    await waitFor(() => expect(JSON.parse(text.value)).toHaveProperty('logs'));
+    fireEvent.change(text, { target: { value: JSON.stringify({ format: 1, computers: { a: 1 } }) } });
+    expect(JSON.parse(text.value)).not.toHaveProperty('logs');
     read = [];
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await waitFor(() => expect(read.some((u) => u.startsWith('/api/v2/support/diagnostics'))).toBe(true));

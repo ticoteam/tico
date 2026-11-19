@@ -13,7 +13,9 @@ const SERVER_FILES = ['src/api/**', 'src/data/**', 'src/live/**', 'src/*/queries
 const SHARED = [
   { regex: '^\\.\\./', message: 'Import through the @/ alias, not ../' },
   { regex: '(^|/)ui/(app|styles)(/|$)', message: 'web/ imports nothing from ui/' },
-  { regex: '^@/features/[^/]+/(?!exports$)', message: 'Use a feature only through its exports.ts' },
+  // routing.ts: what loads before a page's code (address checks, first reads, the shell's counts), never a component;
+  // exports.ts: the rest. The first load carries only the routing files, so a page's code comes with its route.
+  { regex: '^@/features/[^/]+/(?!exports$|routing$)', message: 'Use a feature only through its exports.ts or routing.ts' },
 ];
 const ban = (...rules) => ({
   'no-restricted-imports': ['error', { patterns: [...SHARED, ...rules.map(([regex, message]) => ({ regex, message }))] }],

@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { MessagingPage, textListQuery } from '@/features/threads/exports';
+import { MessagingPage } from '@/features/threads/exports';
+import { textListQuery } from '@/features/threads/routing';
 
 interface MessagingSearch {
   /** The open text. */

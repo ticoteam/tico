@@ -1,5 +1,6 @@
 import { createFileRoute, notFound } from '@tanstack/react-router';
-import { UpdatesPage, loadUpdates, updatesSearch, type UpdateTab } from '@/features/threads/exports';
+import { UpdatesPage } from '@/features/threads/exports';
+import { loadUpdates, updatesSearch, type UpdateTab } from '@/features/threads/routing';
 
 const TABS: readonly string[] = ['daily', 'weekly', 'archive'] satisfies UpdateTab[];
 

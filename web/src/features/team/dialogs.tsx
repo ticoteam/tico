@@ -274,7 +274,6 @@ export function ArchiveDialog({ open, onOpenChange, slug, name, row }: Open & { 
     { value: OPERATOR, label: operator },
     ...(roster.data ?? []).filter((r) => r.slug !== slug && r.state !== 'archived').map((r) => ({ value: r.id, label: r.display_name || r.slug })),
   ];
-  const to = heir === OPERATOR ? operator : (options.find((o) => o.value === heir)?.label ?? operator);
   return (
     <Dialog
       open={open}
@@ -283,7 +282,6 @@ export function ArchiveDialog({ open, onOpenChange, slug, name, row }: Open & { 
         onOpenChange(o);
       }}
       title={`Archive ${name}?`}
-      description={`It stops taking work. Its open tasks go to ${to}; its history stays.`}
       alert
       actions={
         <>

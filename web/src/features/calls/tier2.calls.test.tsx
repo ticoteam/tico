@@ -9,7 +9,7 @@ import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { CalendarPage } from './CalendarPage';
 import { calendarSearch, parseDay, rangeOf } from './model';
-import { eventsQuery, granolaQuery, importersQuery, itemsQuery, linkedTasksQuery, liveCallsQuery, meetingQuery, meetingSettingsQuery, meetingsQuery, sourcesQuery, type MeetingMore, type Review } from './queries';
+import { eventsQuery, granolaQuery, importersQuery, itemsQuery, liveCallsQuery, meetingQuery, meetingSettingsQuery, meetingsQuery, sourcesQuery, type MeetingMore, type Review } from './queries';
 
 /* Tier 2 checks: the 3-day view, List's Shared / Pending / Dismissed filters (the old Meetings tabs), and the ⋯'s
    Log a meeting, Calendar settings, Meeting sources, Connect Granola and the owner's importers. */
@@ -124,7 +124,6 @@ function seedList(review: Review, m: MeetingMore) {
   queryClient.setQueryData(meetingsQuery(review).queryKey, { meetings: [m], count: 1, pending_count: m.review_state === 'pending' ? 1 : 0 });
   queryClient.setQueryData(meetingQuery('mt1').queryKey, m);
   queryClient.setQueryData(itemsQuery('mt1').queryKey, { id: 'mt1', can_send: true, can_push: true, sections: { doc: [], task: [], feature: [] } });
-  queryClient.setQueryData(linkedTasksQuery('mt1').queryKey, { next_cursor: null, tasks: [] });
 }
 
 describe('Meetings in List', () => {
@@ -151,7 +150,7 @@ describe('Meetings in List', () => {
     fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
     fireEvent.click(await screen.findByRole('link', { name: 'Weekly sync' }));
     const panel = await screen.findByRole('complementary', { name: 'Weekly sync' });
-    expect(within(panel).getByText('Only you see this')).toBeTruthy();
+    expect(within(panel).getByRole('button', { name: 'Share' })).toBeTruthy();
     expect(await run('calls.review', { meeting: 'mt1', action: 'approve' }, { via: 'tico' })).toMatchObject({ ok: false });
     expect(writes()).toHaveLength(0);
     fireEvent.click(within(panel).getByRole('button', { name: 'Share' }));

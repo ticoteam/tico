@@ -1,12 +1,11 @@
 import { infiniteQueryOptions, keepPreviousData, queryOptions } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import type { LetterOutPage, LettersAccess, LettersGrants, PostalMailGrants, WebhookRecovered, WebhookReplayed } from '@/api/schema';
-import { QUIET_STALE_MS, queryClient, write } from '@/data';
+import type { LetterOutPage, PostalMailGrants } from '@/api/schema';
+import { QUIET_STALE_MS, queryClient } from '@/data';
 import { mailQuery, postalAddressesQuery, toolsQuery, type MailItem } from './queries';
 
-/* The Tools calls the tier-2 gap rows need (s515 s868 s869 s870 s932): an outgoing webhook's delete, new secret and
-   catch-up sends; a mailing address's Read grants, automations, letters in and their retry; who may send letters and
-   each agent's letter rules; every Tico address's messages; a message's code. A secret (a signing secret, a code) is
+/* The Tools calls the tier-2 gap rows need (s515 s868 s869 s870 s932): an outgoing webhook's delete and new secret; a
+   mailing address's Read grants, letters in and their retry; every Tico address's messages; a message's code. A secret (a signing secret, a code) is
    only ever returned to the caller here, never put in the cache. */
 
 const enc = encodeURIComponent;
@@ -37,28 +36,6 @@ export async function rotateWebhookSecret(id: string): Promise<string> {
   const secret = r.webhook?.secret;
   if (!secret) throw new Error('The new secret was lost on the way');
   return secret;
-}
-
-/** Every send that gave up since a day, sent again. */
-export async function recoverWebhook(id: string, since: string) {
-  const r = await api.post<WebhookRecovered>(`/api/v2/webhooks/${enc(id)}/recover`, { since });
-  await reread(hookKey(id));
-  return { count: r.recovered, more: r.more };
-}
-
-type Replayed = WebhookReplayed & { next_since?: string | null; next_after?: string | null };
-
-/** The events since a day the endpoint never got: a few rounds of 500 at most, as the old page did. */
-export async function replayWebhook(id: string, since: string) {
-  const path = `/api/v2/webhooks/${enc(id)}/replay` as const;
-  let r = await api.post<Replayed>(path, { since });
-  let count = r.queued;
-  for (let round = 1; r.more && r.next_since && round < 10; round++) {
-    r = await api.post<Replayed>(path, { since: r.next_since, after: r.next_after ?? '' });
-    count += r.queued;
-  }
-  await reread(hookKey(id));
-  return { count, more: r.more };
 }
 
 export async function retryWebhookSend(id: string, send: string) {
@@ -108,19 +85,6 @@ export async function setAddressGrant(scope: string, type: 'person' | 'bot', who
 /** The addresses read again now, as the Gateway has them. */
 export const checkAddresses = () => queryClient.fetchQuery({ ...postalAddressesQuery, staleTime: 0 });
 
-/** A routine as Tools needs it: which address's messages start it. */
-export interface Automation {
-  id: string;
-  name?: string | null;
-  enabled?: boolean;
-  trigger?: { type?: string; inbox?: string | null } | null;
-}
-export const automationsQuery = queryOptions({
-  queryKey: ['tools', 'automations'],
-  queryFn: () => api.get<{ automations?: Automation[] | null }>('/api/v2/automations?limit=500').then((r) => r.automations ?? []),
-  ...quiet,
-});
-
 // ---------------------------------------------------------------- letters out
 
 /** Letters older than the first page (`lettersQuery`), a page at a time. The `letters` topic marks them stale too. */
@@ -131,36 +95,6 @@ export const olderLettersQuery = (before: string) =>
     initialPageParam: before,
     getNextPageParam: (p) => p.next_before ?? undefined,
     staleTime: QUIET_STALE_MS,
-  });
-
-export type LetterSender = LettersGrants['grants'][number] & { mode?: string | null; monthly_cap_micros?: number | null };
-
-/** Who may send letters (owners and admins always may), with each agent's own rule and monthly cap. */
-export const letterSendersQuery = queryOptions({
-  queryKey: ['tools', 'letters', 'senders'],
-  queryFn: () => api.get<LettersGrants>('/api/v2/letters/outboxes/company/grants').then((r) => r.grants as LetterSender[]),
-  ...quiet,
-});
-
-/** Whether the reader may send letters (anyone who is not an admin sees only this). */
-export const letterAccessQuery = queryOptions({
-  queryKey: ['tools', 'letters', 'access'],
-  queryFn: () => api.get<LettersAccess>('/api/v2/letters/access'),
-  ...quiet,
-});
-
-export async function setLetterSender(type: 'person' | 'bot', who: string, on: boolean) {
-  const path = `/api/v2/letters/outboxes/company/grants/${type}/${enc(who)}` as const;
-  await (on ? api.put<unknown>(path, { level: 'send' }) : api.delete<unknown>(path));
-  await reread(letterSendersQuery.queryKey);
-}
-
-/** One agent's own letter rule (null: the company's) and monthly cap (null: none). It can never loosen the company's. */
-export const setAgentLetters = (bot: string, change: { mode: string | null; monthly_cap_micros: number | null }) =>
-  write<unknown>({
-    key: letterSendersQuery.queryKey,
-    optimistic: (cur: LetterSender[] | undefined) => cur?.map((g) => (g.grantee_type === 'bot' && g.grantee_id === bot ? { ...g, ...change } : g)),
-    send: (idempotencyKey) => api.put(`/api/v2/letters/bots/${enc(bot)}/settings`, change, { idempotencyKey }),
   });
 
 // ---------------------------------------------------------------- messages to every Tico address and number

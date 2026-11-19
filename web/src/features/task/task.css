@@ -129,8 +129,6 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .tv-pages .row{width:100%;border:0;background:none;text-align:left;color:inherit;font:inherit}
 .tv-drop{display:grid;justify-items:center;gap:var(--s-3);padding:var(--s-6) var(--s-4);border:1.5px dashed var(--line-strong);border-radius:var(--r-card)}
 .tv-drop.is-over{background:var(--hover)}
-.tv-who{display:grid;gap:var(--s-2);margin:0;padding:0;border:0;min-width:0}
-.tv-who legend{padding:0;margin-bottom:var(--s-2);font-size:var(--t-sm);color:var(--muted)}
 
 /* ---------- the answer card, over the message box in the task's chat ---------- */
 .an-err{margin:var(--s-2) var(--s-1h) 0 0;font-size:var(--t-sm);line-height:var(--lh);color:var(--ink-2);text-wrap:pretty}

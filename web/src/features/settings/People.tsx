@@ -8,38 +8,30 @@ import { Facts } from '@/kit/LabelValue';
 import { Segmented } from '@/kit/Segmented';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
-import { Line, SwitchLine, Verb, act } from './parts';
+import { Line, Verb, act } from './parts';
 import type { AccessFull, AccessPerson } from './queries';
 
 /* What People could do in the old app (ui/app/settings-people.ts) and the first pass left out: who can join, the
-   agents a person may have, each person's sign-in, the people who left, and adding someone without an email. */
+   agents a person may have, and the people who left. */
 
-const asDomain = (typed: string) => {
-  const d = typed.trim().toLowerCase().replace(/^\*?@/, '');
-  return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(d) ? d : '';
-};
-
-/** Add a person. Add sends no email; Invite mails them a sign-in link. A bare domain lets anyone at it in (owner). */
+/** Add a person; the server mails them a sign-in link when it can (Invite), else they are only added (Add). */
 export function AddPerson({ v }: { v: AccessFull }) {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
-  const domain = v.you === 'owner' && !email.includes('@') ? asDomain(email) : '';
-  const ready = !!domain || /^[^\s@]+@[^\s@]+$/.test(email.trim());
-  const add = async (invite: boolean) => {
+  const ready = /^[^\s@]+@[^\s@]+$/.test(email.trim());
+  const invites = !!v.invite_email;
+  const add = async () => {
     setBusy(true);
-    const r = domain
-      ? await run('settings.setJoining', { allowed: v.allowed, domains: [...new Set([...v.allowed_domains, domain])] }, { via: 'click' })
-      : await run(invite ? 'settings.invite' : 'settings.addPerson', { email: email.trim(), ...(name.trim() ? { name: name.trim() } : {}) }, { via: 'click' });
+    const r = await run('settings.invite', { email: email.trim(), ...(name.trim() ? { name: name.trim() } : {}) }, { via: 'click' });
     setBusy(false);
     if (!r.ok) return toast(refusal(r, "Couldn't add"));
-    toast({ text: domain ? `Anyone at ${domain} can sign in` : invite ? 'Invite sent' : 'Added, no email sent', kind: 'done' });
+    toast({ text: invites ? 'Invite sent' : 'Added', kind: 'done' });
     setOpen(false);
     setEmail('');
     setName('');
   };
-  const invites = v.invite_email && !domain;
   return (
     <Dialog
       open={open}
@@ -55,81 +47,31 @@ export function AddPerson({ v }: { v: AccessFull }) {
           <Button variant="quiet" onClick={() => setOpen(false)}>
             Cancel
           </Button>
-          {invites && (
-            <Button variant="quiet" busy={busy} disabled={!ready} onClick={() => void add(false)}>
-              Add only
-            </Button>
-          )}
-          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void add(invites)}>
-            {invites ? 'Invite' : domain ? 'Let in' : 'Add'}
+          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void add()}>
+            {invites ? 'Invite' : 'Add'}
           </Button>
         </>
       }
     >
       <div className="set-add">
         <Field label="Email" value={email} onValueChange={setEmail} autoFocus autoComplete="off" />
-        {!domain && <Field label="Name" value={name} onValueChange={setName} />}
+        <Field label="Name" value={name} onValueChange={setName} />
       </div>
     </Dialog>
   );
 }
 
-/** A person's sign-in: off asks first and signs their open browsers out; on is the person's own press. */
-export function SignInLine({ p }: { p: AccessPerson }) {
-  const [asking, setAsking] = useState(false);
-  return (
-    <>
-      <SwitchLine
-        label="Signs in"
-        target={`person-sign-in:${p.id}`}
-        checked={p.sign_in}
-        onChange={(on) => (on ? void act('settings.signIn', { person: p.id, on }) : setAsking(true))}
-      />
-      <Dialog
-        open={asking}
-        onOpenChange={setAsking}
-        alert
-        title={`Turn off sign-in for ${p.name}?`}
-        description="They are signed out now. Their tasks, agents and history stay."
-        actions={
-          <>
-            <Button variant="quiet" onClick={() => setAsking(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => {
-                setAsking(false);
-                void act('settings.signIn', { person: p.id, on: false });
-              }}
-            >
-              Turn off
-            </Button>
-          </>
-        }
-      />
-    </>
-  );
-}
-
-/** Who can join, the addresses and domains also let in, and how many agents a person may have. */
+/** Who can join, and how many agents a person may have. */
 export function Joining({ v }: { v: AccessFull }) {
   const owner = v.you === 'owner';
   const home = v.home_domain ?? '';
-  const [asking, setAsking] = useState<{ title: string; text: string; allowed: string[]; domains: string[] } | null>(null);
+  const [asking, setAsking] = useState(false);
   const [limit, setLimit] = useState(String(v.member_bot_limit ?? ''));
-  const onRoster = new Set(v.people.map((p) => p.email).filter(Boolean));
-  const extras = [...v.allowed_domains.filter((d) => d !== home), ...v.allowed.filter((e) => !onRoster.has(e))];
   const join = v.join === 'domain' ? 'domain' : 'admin';
   const setJoin = (to: string) => {
     if (to === join) return;
     if (to === 'domain') return void act('settings.setJoining', { allowed: v.allowed, domains: [...v.allowed_domains, home] });
-    setAsking({
-      title: `Stop sign-in for everyone at ${home}?`,
-      text: `Only people added here keep signing in.`,
-      allowed: v.allowed,
-      domains: v.allowed_domains.filter((d) => d !== home),
-    });
+    setAsking(true);
   };
   const n = Number(limit);
   const badLimit = limit.trim() === '' || !Number.isInteger(n) || n < 0 || n > 1000;
@@ -156,32 +98,6 @@ export function Joining({ v }: { v: AccessFull }) {
             'Invited'
           )}
         </Line>
-        {extras.length > 0 && (
-          <Line label="Also allowed" target="setting:allowed">
-            <span className="set-picks">
-              {extras.map((x) => (
-                <span key={x} className="fs-chip">
-                  {x}
-                  {owner && (
-                    <Verb
-                      quiet
-                      onClick={() =>
-                        setAsking({
-                          title: `Remove ${x}?`,
-                          text: x.includes('@') ? `${x} can no longer sign in.` : `People at ${x} who are not added here can no longer sign in.`,
-                          allowed: v.allowed.filter((e) => e !== x),
-                          domains: v.allowed_domains.filter((d) => d !== x),
-                        })
-                      }
-                    >
-                      Remove
-                    </Verb>
-                  )}
-                </span>
-              ))}
-            </span>
-          </Line>
-        )}
         {v.member_bot_limit != null && (
           <Line label="Agents a person" target="setting:agent-limit">
             <Field
@@ -198,24 +114,24 @@ export function Joining({ v }: { v: AccessFull }) {
         )}
       </Facts>
       <Dialog
-        open={asking != null}
-        onOpenChange={(o) => !o && setAsking(null)}
+        open={asking}
+        onOpenChange={setAsking}
         alert
-        title={asking?.title ?? ''}
-        description={asking?.text}
+        title={`Stop sign-in for everyone at ${home}?`}
+        description="Only people added here keep signing in."
         actions={
           <>
-            <Button variant="quiet" onClick={() => setAsking(null)}>
+            <Button variant="quiet" onClick={() => setAsking(false)}>
               Cancel
             </Button>
             <Button
               variant="primary"
               onClick={() => {
-                if (asking) void act('settings.setJoining', { allowed: asking.allowed, domains: asking.domains });
-                setAsking(null);
+                setAsking(false);
+                void act('settings.setJoining', { allowed: v.allowed, domains: v.allowed_domains.filter((d) => d !== home) });
               }}
             >
-              Remove
+              Stop
             </Button>
           </>
         }

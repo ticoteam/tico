@@ -1,8 +1,8 @@
 import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import { api, type ApiPath } from '@/api/client';
-import type { AccessAudience, EmailSendList, Group, InboundInboxes, MailboxDetail, SlackLink, SlackLinkList, WebsiteAccountAccessSet } from '@/api/schema';
+import type { EmailSendList, Group, InboundInboxes, MailboxDetail, WebsiteAccountAccessSet } from '@/api/schema';
 import { QUIET_STALE_MS, queryClient } from '@/data';
-import { apiToolQuery, inboxesQuery, mailboxQuery, toolsQuery, websiteToolQuery, type Inbox } from './queries';
+import { inboxesQuery, mailboxQuery, toolsQuery, websiteToolQuery, type Inbox } from './queries';
 
 /* The Tools calls the gap rows need (s787 s788 s866 s865 s926 s867 s908 s909): stored keys no tool holds, a declared
    tool's own page, a mailbox's access and mail, who reads a Tico address, a website's accounts, who sees a tool, the
@@ -219,50 +219,6 @@ export const deleteWebsite = (tool: string) => api.delete<unknown>(site(tool)).t
 export const setAccountAccess = (tool: string, account: string, subject: string, on: boolean) =>
   api.put<WebsiteAccountAccessSet>(`${site(tool)}/accounts/${enc(account)}/access/${enc(subject)}`, { on }).then(() => reread(websiteToolQuery(tool).queryKey));
 
-// ---------------------------------------------------------------- who sees an API tool or a website
-
-/** Every agent reads the tool with no grant while it is on. */
-export const setEveryoneReads = (tool: string, on: boolean) =>
-  api.patch<unknown>(`/api/v2/api-tools/${enc(tool)}`, { everyone_reads: on }).then(() => reread(apiToolQuery(tool).queryKey));
-
-export type SeenList = Required<Pick<AccessAudience, 'people' | 'teams' | 'bots'>>;
-/** null: Everyone. A list: Only listed (the owner, the list and whoever can use it). */
-export const setSeenBy = (kind: 'api' | 'website', tool: string, audience: SeenList | null) =>
-  api
-    .patch<unknown>(kind === 'api' ? `/api/v2/api-tools/${enc(tool)}` : site(tool), { audience })
-    .then(() => reread(kind === 'api' ? apiToolQuery(tool).queryKey : websiteToolQuery(tool).queryKey));
-
-// ---------------------------------------------------------------- Slack's linked threads
-
-/** Admins only: everyone else gets a 403, and the section is left out. */
-export const slackLinksQuery = queryOptions({
-  queryKey: ['tools', 'slack-links'],
-  queryFn: () => api.get<SlackLinkList>('/api/v2/slack/links?limit=50'),
-  retry: false,
-  ...quiet,
-});
-export interface ThreadPick {
-  id: string;
-  title?: string | null;
-  name?: string | null;
-  archived_at?: string | null;
-}
-/** The threads a channel can be linked to. */
-export const threadPicksQuery = queryOptions({
-  queryKey: ['tools', 'slack-threads'],
-  queryFn: () =>
-    api.get<{ threads?: ThreadPick[]; attention?: ThreadPick[] }>('/api/v2/threads?limit=50').then((r) => {
-      const seen = new Set<string>();
-      return [...(r.attention ?? []), ...(r.threads ?? [])].filter((t) => !t.archived_at && !seen.has(t.id) && !!seen.add(t.id));
-    }),
-  ...quiet,
-});
-const linksChanged = () => queryClient.invalidateQueries({ queryKey: slackLinksQuery.queryKey });
-export const linkSlack = (thread_id: string, channel: string, history: boolean) =>
-  api.post<SlackLink>('/api/v2/slack/links', { thread_id, channel, history }).then(linksChanged);
-export const unlinkSlack = (link: string) => api.delete<SlackLink>(`/api/v2/slack/links/${enc(link)}`).then(linksChanged);
-export const resumeSlack = (link: string) => api.post<SlackLink>(`/api/v2/slack/links/${enc(link)}/resume`, {}).then(linksChanged);
-
 // ---------------------------------------------------------------- what the screen holds, for an action's `can`
 
 type Client = typeof queryClient;
@@ -271,6 +227,4 @@ export const was = {
   vault: (qc: Client) => qc.getQueryData(vaultQuery.queryKey),
   mailbox: (qc: Client, id: string) => qc.getQueryData(mailboxQuery(id).queryKey),
   inbox: (qc: Client, id: string) => qc.getQueryData<Inbox[]>(inboxesQuery.queryKey)?.find((b) => b.inbox_id === id) as (Inbox & { group_id?: string | null }) | undefined,
-  api: (qc: Client, id: string) => qc.getQueryData(apiToolQuery(id).queryKey),
-  website: (qc: Client, id: string) => qc.getQueryData(websiteToolQuery(id).queryKey),
 };

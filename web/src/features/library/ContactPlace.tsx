@@ -7,7 +7,7 @@ import { Pill } from '@/kit/Pill';
 import { Section } from '@/pagekinds';
 import { contactRulesQuery, usQuery, type Card, type CardLink, type PlaceInfo, type Us } from './queries';
 
-/* A contact's Rules (the mock's first section; old directory-entity.ts rules card), and what a place adds: its kind,
+/* A place's Rules (the mock's first section; old directory-entity.ts rules card), and what a place adds: its kind,
    what it is inside, who governs it, the bodies over it, what sits in it, and why its rules bind us. */
 
 type Href = (id: string, type?: string) => string;
@@ -30,7 +30,7 @@ export function ContactRules({ id }: { id: string }) {
               <Icon name="rules" />
             </span>
             <span className="row-title">{r.text}</span>
-            <span className="row-ctx">{r.effect && <Pill flag={r.effect === 'block'}>{EFFECTS[r.effect] ?? r.effect}</Pill>}</span>
+            <span className="row-ctx">{r.effect === 'block' ? <Pill flag>{EFFECTS.block}</Pill> : r.effect && (EFFECTS[r.effect] ?? r.effect)}</span>
           </div>
         );
       })}
@@ -63,14 +63,7 @@ export function PlaceFacts({ c, us, href }: { c: Card; us: Us | null | undefined
         </LabelValue>
       )}
       {governor && <LabelValue label="Governed by">{governor}</LabelValue>}
-      {(operate || place.shared) && (
-        <LabelValue label="Here">
-          <span className="rec-pills">
-            {operate && <Pill>We operate here</Pill>}
-            {place.shared && <Pill>Shared</Pill>}
-          </span>
-        </LabelValue>
-      )}
+      {(operate || place.shared) && <LabelValue label="Here">{[operate && 'We operate here', place.shared && 'Shared'].filter(Boolean).join(', ')}</LabelValue>}
     </>
   );
 }

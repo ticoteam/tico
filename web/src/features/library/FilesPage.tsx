@@ -6,19 +6,29 @@ import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
+import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Link } from '@/kit/Link';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { Row } from '@/kit/Row';
-import { Document, List, Section, type PageState } from '@/pagekinds';
-import { FilesChips, FilesFilter, filtered, KINDS } from './FilesFilter';
+import { Document, FilterRow, List, Section, type PageState } from '@/pagekinds';
 import { FileGet, linkOf, Preview } from './FileViewer';
 import { ChatWith, Face, Find, KindGlyph, More, press, size, when, Who } from './parts';
-import { fileQuery, filesFindQuery, filesListQuery, fileUrl, fileVersionsQuery, type FileRow } from './queries';
+import { fileQuery, fileSearchQuery, filesQuery, fileUrl, fileVersionsQuery, type FileRow } from './queries';
 import type { FilesSearch } from './search';
 import './library.css';
 
 /* Files (files.js filesPage, filePage): every file teammates made or added, newest first in Today, This week and
    Earlier. A file opens in the page as a framed preview with its facts and versions beside it. */
+
+const KINDS = [
+  ['page', 'Pages'],
+  ['document', 'Documents'],
+  ['image', 'Images'],
+  ['data', 'Data'],
+  ['media', 'Media'],
+  ['other', 'Other'],
+] as const;
 
 const DAY = 86_400_000;
 
@@ -27,10 +37,10 @@ function bucket(at: string, now: number): 'Today' | 'This week' | 'Earlier' {
   return age < DAY ? 'Today' : age < 7 * DAY ? 'This week' : 'Earlier';
 }
 
-/** A file in the page, keeping the filters and the words searched for (so Back comes to the same list). */
 const fileHref = (search: FilesSearch, id: string, v?: number) => {
   const p = new URLSearchParams();
-  for (const [k, val] of Object.entries(search)) if (val !== undefined && k !== 'file' && k !== 'v') p.set(k, String(val));
+  if (search.kind) p.set('kind', search.kind);
+  if (search.q) p.set('q', search.q);
   p.set('file', id);
   if (v) p.set('v', String(v));
   return `/library/files?${p.toString()}`;
@@ -43,9 +53,8 @@ export function FilesPage({ search }: { search: FilesSearch }) {
 
 function FilesList({ search }: { search: FilesSearch }) {
   const kind = search.kind ?? '';
-  // `task` both narrows the list and is where an upload lands.
-  const files = useInfiniteQuery(filesListQuery(search));
-  const found = useQuery(filesFindQuery(search.q ?? '', search));
+  const files = useInfiniteQuery(filesQuery(kind));
+  const found = useQuery(fileSearchQuery(search.q ?? ''));
   const [chosen, setChosen] = useState<File[] | null>(null);
   const [over, setOver] = useState(false);
   const input = useRef<HTMLInputElement>(null);
@@ -61,7 +70,7 @@ function FilesList({ search }: { search: FilesSearch }) {
   let state: PageState = 'ready';
   if (files.isError) state = 'fault';
   else if (!files.data) state = 'loading';
-  else if (!rows.length && !filtered(search) && !searching) state = 'empty';
+  else if (!rows.length && !kind && !searching) state = 'empty';
 
   const take = (list: FileList | null | undefined) => {
     const picked = list ? Array.from(list) : [];
@@ -91,17 +100,22 @@ function FilesList({ search }: { search: FilesSearch }) {
         title="Files"
         path="/library/files"
         className="lib"
-        search={<Find label="Search files" value={search.q} onFind={(q) => void press('files.filter', { q: q ?? '' })} />}
+        search={<Find label="Search files" value={search.q} onFind={(q) => void press('files.list', { kind: search.kind, q })} />}
         actions={
           <>
-            <FilesFilter search={search} />
+            <Menu trigger={<IconButton icon="filter" label="Filter by kind" on={!!kind} data-phone />}>
+              <MenuItem label="All files" on={!kind} onSelect={() => void press('files.list', { q: search.q })} />
+              {KINDS.map(([k, label]) => (
+                <MenuItem key={k} label={label} on={k === kind} onSelect={() => void press('files.list', { kind: k, q: search.q })} />
+              ))}
+            </Menu>
             <Button variant="primary" icon="plus" onClick={() => input.current?.click()} data-target="files:add">
               Add
             </Button>
             <input ref={input} type="file" multiple hidden aria-label="Choose files" onChange={(e) => take(e.target.files)} />
           </>
         }
-        filter={filtered(search) && <FilesChips search={search} />}
+        filter={kindName && <FilterRow filters={[{ label: kindName, onClear: () => void press('files.list', { q: search.q }) }]} />}
         state={state}
         empty={{ title: 'No files yet' }}
         onRetry={() => void files.refetch()}
@@ -133,7 +147,7 @@ function FilesList({ search }: { search: FilesSearch }) {
               {files.hasNextPage && <More onClick={() => void files.fetchNextPage()}>More files</More>}
             </>
           ) : (
-            <Empty title={filtered(search) && !(kindName && Object.keys(search).length === 1) ? 'Nothing matches' : `No ${kindName?.toLowerCase() ?? 'files'}`} />
+            <Empty title={`No ${kindName?.toLowerCase() ?? 'files'}`} />
           )
         }
       />

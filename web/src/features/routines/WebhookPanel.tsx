@@ -13,7 +13,6 @@ import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { fmtDate } from '@/lib';
 import { SidePanel } from '@/pagekinds';
-import { refusal, run } from '@/actions';
 import { press, pressOut, RemoveItem, useConfirmRemove, Verb, Word } from './parts';
 import { deliveriesQuery, hooksQuery, payloadQuery } from './queries';
 import type { Delivery, Hook } from './types';
@@ -75,16 +74,14 @@ export function WebhookPanel({ id, shown, signing: made, onShown, onClose }: { i
       target={`hook:${h.id}`}
       onClose={onClose}
       actions={
-        <Menu trigger={<IconButton icon="more" label="More" quiet disabled={tmp} />}>
-          <MenuItem label="Edit" icon="edit" onSelect={() => setEditing(true)} />
-          {!h.builtin && (
-            <>
-              <MenuItem label="New secret" icon="keys" onSelect={() => setRotating(true)} />
-              <MenuItem label="Signing" icon="lock" onSelect={() => setSigning(true)} />
-              <RemoveItem onSelect={() => remove.confirm(h.name, () => void press('webhooks.remove', { hook: h.id }))} />
-            </>
-          )}
-        </Menu>
+        !h.builtin && (
+          <Menu trigger={<IconButton icon="more" label="More" quiet disabled={tmp} />}>
+            <MenuItem label="Edit" icon="edit" onSelect={() => setEditing(true)} />
+            <MenuItem label="New secret" icon="keys" onSelect={() => setRotating(true)} />
+            <MenuItem label="Signing" icon="lock" onSelect={() => setSigning(true)} />
+            <RemoveItem onSelect={() => remove.confirm(h.name, () => void press('webhooks.remove', { hook: h.id }))} />
+          </Menu>
+        )
       }
     >
       {shown && (
@@ -113,10 +110,6 @@ export function WebhookPanel({ id, shown, signing: made, onShown, onClose }: { i
           <LabelValue label="Signed">{h.builtin ? 'Built in' : h.signed === false ? 'No' : (PRESETS.find((p) => p.value === h.preset)?.label ?? 'Yes')}</LabelValue>
           <LabelValue label="Last call">{h.last_received ? <Ago at={h.last_received} /> : 'Never'}</LabelValue>
           <LabelValue label="24 h">{`${h.received_24h ?? 0} calls${h.refused_24h ? `, ${h.refused_24h} refused` : ''}`}</LabelValue>
-          {!h.builtin && h.type_from && <LabelValue label="Type from">{h.type_from}</LabelValue>}
-          {!h.builtin && h.hourly != null && <LabelValue label="Per hour">{String(h.hourly)}</LabelValue>}
-          {h.keep_days != null && <LabelValue label="Keep">{`${h.keep_days} ${h.keep_days === 1 ? 'day' : 'days'}`}</LabelValue>}
-          {!h.builtin && <LabelValue label="If nothing listens">{UNHEARD.find((u) => u.value === h.unheard)?.label ?? 'Log it'}</LabelValue>}
           {!shown && h.url && (
             <LabelValue label="Address">
               <span className="rr-addr">{`${h.url}/…`}</span>
@@ -133,7 +126,6 @@ export function WebhookPanel({ id, shown, signing: made, onShown, onClose }: { i
         onOpenChange={setRotating}
         alert
         title="Make a new address?"
-        description="The current one stops working at once."
         actions={
           <>
             <Button variant="quiet" onClick={() => setRotating(false)}>
@@ -244,25 +236,14 @@ function Signing({ hook, onSecret, onClose }: { hook: Hook; onSecret: (s: string
   );
 }
 
-const refused = (d: Delivery) => d.outcome === 'refused' || d.outcome === 'rate_limited';
-
 function Deliveries({ hook }: { hook: Hook }) {
   const id = hook.id;
   const q = useQuery(deliveriesQuery(id));
   const list = q.data ?? [];
   const [open, setOpen] = useState<string | null>(null);
-  // a refused call still kept can be checked again under the current secret (not one already recovered)
-  const recoverable = !hook.builtin && list.some((d) => refused(d) && d.stored && !/\(recovered\)$/.test(d.reason ?? ''));
   return (
     <section className="rail-sec">
-      <h3>
-        Recent calls
-        {recoverable && (
-          <Verb onClick={() => void pressSaid('webhooks.recover', { hook: id })} target={`hook-recover:${id}`}>
-            Recover refused
-          </Verb>
-        )}
-      </h3>
+      <h3>Recent calls</h3>
       {q.isError && <Word>Calls did not load</Word>}
       {list.map((d) => (
         <Row key={d.delivery} className="prun" title={deliveryWords(d)}>
@@ -271,7 +252,6 @@ function Deliveries({ hook }: { hook: Hook }) {
           <span className="rr-field">
             {d.outcome === 'accepted' ? <span className="row-age">{OUTCOME.accepted}</span> : <Word>{OUTCOME[d.outcome] ?? 'Refused'}</Word>}
             {d.stored && <Verb onClick={() => setOpen(d.delivery)}>Payload</Verb>}
-            {d.stored && !hook.builtin && !refused(d) && <Verb onClick={() => void pressSaid('webhooks.replay', { hook: id, delivery: d.delivery })}>Run again</Verb>}
           </span>
         </Row>
       ))}
@@ -280,55 +260,22 @@ function Deliveries({ hook }: { hook: Hook }) {
   );
 }
 
-/** A press whose result is worth saying (how many calls were recovered, how many tasks a rerun started). */
-async function pressSaid(action: string, input: unknown) {
-  const r = await run(action, input, { via: 'click' });
-  toast(r.ok ? { text: r.did ?? 'Done', kind: 'done' } : refusal(r, "Couldn't do that"));
-}
-
-export const UNHEARD = [
-  { value: 'log', label: 'Log it' },
-  { value: 'note', label: 'Tell the maker' },
-] as const;
-type Unheard = (typeof UNHEARD)[number]['value'];
-/** The type a preset reads by default (settings-webhooks.ts WH_TYPE_FROM). */
-const TYPE_FROM: Record<string, string> = { github: 'X-GitHub-Event', stripe: '/type', standard: '/type', slack: '/event/type|/type' };
 const NONE = 'none';
 
-/** Its settings, or a new one's (with how its calls are signed): name, where its type is read, calls an hour, days a
-   call is kept, and what a call nothing listens for does. A built-in one changes only how long calls are kept. */
+/** Its name, or a new one's with how its calls are signed. */
 export function HookDialog({ hook, onMade, onClose }: { hook?: Hook; onMade?: (m: { hook: string; url: string; signing?: string }) => void; onClose: () => void }) {
-  const builtin = !!hook?.builtin;
   const [name, setName] = useState(hook?.name ?? '');
   const [preset, setPreset] = useState<string>(NONE);
   const [secret, setSecret] = useState('');
-  const [typeFrom, setTypeFrom] = useState(hook?.type_from ?? '');
-  const [hourly, setHourly] = useState(String(hook?.hourly ?? 60));
-  const [keep, setKeep] = useState(String(hook?.keep_days ?? 7));
-  const [unheard, setUnheard] = useState<Unheard>(hook?.unheard === 'note' ? 'note' : 'log');
   const [busy, setBusy] = useState(false);
-  const perHour = Number(hourly);
-  const keepDays = Number(keep);
-  const badHour = !(Number.isInteger(perHour) && perHour >= 1 && perHour <= 600);
-  const badKeep = !(Number.isInteger(keepDays) && keepDays >= 1 && keepDays <= 30);
-  const ready = (builtin || !!name.trim()) && !badKeep && (builtin || !badHour);
-  const pickPreset = (p: string) => {
-    // the type follows the preset unless one was typed
-    if (!typeFrom || Object.values(TYPE_FROM).includes(typeFrom)) setTypeFrom(TYPE_FROM[p] ?? '');
-    setPreset(p);
-  };
+  const ready = !!name.trim();
   const save = async () => {
     if (!ready) return;
     setBusy(true);
     if (!hook) {
-      // only what differs from a new webhook's own settings is sent
       const r = await pressOut<{ hook: string; url: string; signing?: string }>('webhooks.add', {
         name: name.trim(),
         ...(preset !== NONE ? { preset, ...(secret.trim() ? { secret: secret.trim() } : {}) } : {}),
-        ...(typeFrom.trim() && typeFrom.trim() !== (TYPE_FROM[preset] ?? '') ? { typeFrom: typeFrom.trim() } : {}),
-        ...(perHour !== 60 ? { hourly: perHour } : {}),
-        ...(keepDays !== 7 ? { keepDays } : {}),
-        ...(unheard !== 'log' ? { unheard } : {}),
       });
       setBusy(false);
       setSecret('');
@@ -338,10 +285,7 @@ export function HookDialog({ hook, onMade, onClose }: { hook?: Hook; onMade?: (m
       }
       return;
     }
-    const ok = await press(
-      'webhooks.update',
-      builtin ? { hook: hook.id, keepDays } : { hook: hook.id, name: name.trim(), typeFrom: typeFrom.trim(), hourly: perHour, keepDays, unheard },
-    );
+    const ok = await press('webhooks.update', { hook: hook.id, name: name.trim() });
     setBusy(false);
     if (ok) onClose();
   };
@@ -349,8 +293,7 @@ export function HookDialog({ hook, onMade, onClose }: { hook?: Hook; onMade?: (m
     <Dialog
       open
       onOpenChange={(o) => !o && onClose()}
-      title={hook ? (builtin ? hook.name : 'Edit webhook') : 'Add webhook'}
-      description={hook ? undefined : 'Its address is shown once, after you add it.'}
+      title={hook ? 'Edit webhook' : 'Add webhook'}
       actions={
         <>
           <Button variant="quiet" onClick={onClose}>
@@ -363,13 +306,9 @@ export function HookDialog({ hook, onMade, onClose }: { hook?: Hook; onMade?: (m
       }
     >
       <div className="rr-form">
-        {!builtin && <Field label="Name" value={name} onValueChange={setName} placeholder="Shipping" autoFocus />}
-        {!hook && <Select label="Signing" options={[{ value: NONE, label: 'None' }, ...PRESETS]} value={preset} onValueChange={pickPreset} />}
+        <Field label="Name" value={name} onValueChange={setName} placeholder="Shipping" autoFocus />
+        {!hook && <Select label="Signing" options={[{ value: NONE, label: 'None' }, ...PRESETS]} value={preset} onValueChange={setPreset} />}
         {!hook && preset !== NONE && <Field label="Signing secret" type="password" autoComplete="off" value={secret} onValueChange={setSecret} placeholder="Leave empty to make one" />}
-        {!builtin && <Field label="Type from" value={typeFrom} onValueChange={setTypeFrom} placeholder="Header or /json/path" />}
-        {!builtin && <Field label="Per hour" type="number" value={hourly} onValueChange={setHourly} error={badHour ? '1 to 600' : undefined} />}
-        <Field label="Keep days" type="number" value={keep} onValueChange={setKeep} error={badKeep ? '1 to 30' : undefined} />
-        {!builtin && <Select label="If nothing listens" options={UNHEARD} value={unheard} onValueChange={setUnheard} />}
       </div>
     </Dialog>
   );

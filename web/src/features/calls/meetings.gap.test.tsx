@@ -9,7 +9,7 @@ import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { CalendarPage } from './CalendarPage';
 import { calendarSearch, parseDay, rangeOf } from './model';
-import { eventsQuery, itemsQuery, linkedTasksQuery, liveCallsQuery, meetingQuery, meetingsQuery, transcriptQuery, upcomingCallsQuery, type MeetingMore } from './queries';
+import { eventsQuery, itemsQuery, liveCallsQuery, meetingQuery, meetingsQuery, transcriptQuery, upcomingCallsQuery, type MeetingMore } from './queries';
 
 vi.mock('@/tico/dot', () => ({
   Dot: () => <span className="dot" />,
@@ -70,23 +70,19 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 const meeting = (p: Partial<MeetingMore> = {}): MeetingMore => ({ id: 'mt1', title: 'Weekly sync', review_state: 'live', started: at(9), can_edit: true, version: 3, private: false, ...p });
-function seedMeeting(m: MeetingMore, tasks: { task_id: string; title: string }[] = []) {
+function seedMeeting(m: MeetingMore) {
   const items = { id: 'mt1', can_send: true, can_push: true, sections: { doc: [], task: [], feature: [] } };
-  const links = { next_cursor: null, tasks: tasks.map((t) => ({ ...t, created_by: 'human:me', kind: 'linked' as const, number: 7, status: 'open' })) };
   queryClient.setQueryData(meetingQuery('mt1').queryKey, m);
   queryClient.setQueryData(itemsQuery('mt1').queryKey, items);
   queryClient.setQueryData(meetingsQuery().queryKey, { meetings: [m], count: 1, pending_count: 0 });
-  queryClient.setQueryData(linkedTasksQuery('mt1').queryKey, links);
   stored = (url) =>
     url.endsWith('/api/v2/meetings/mt1')
       ? json(queryClient.getQueryData(meetingQuery('mt1').queryKey) ?? m)
       : url.endsWith('/meetings/mt1/items')
         ? json(items)
-        : url.includes('/meetings/mt1/tasks')
-          ? json(queryClient.getQueryData(linkedTasksQuery('mt1').queryKey) ?? links)
-          : url.includes('/api/v2/meetings?')
-            ? json({ meetings: [], count: 0, pending_count: 0 })
-            : undefined;
+        : url.includes('/api/v2/meetings?')
+          ? json({ meetings: [], count: 0, pending_count: 0 })
+          : undefined;
 }
 const openMeeting = async () => {
   show('/calendar?view=list&panel=meeting%3Amt1');
@@ -120,23 +116,6 @@ describe('Meeting details', () => {
     const confirm = await screen.findByRole('alertdialog', { name: 'Delete Weekly sync?' });
     fireEvent.click(within(confirm).getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(sent.find((r) => r.url.endsWith('/meetings/mt1/delete'))).toMatchObject({ method: 'POST' }));
-  });
-
-  it('links a task by its number and unlinks it @s1012', async () => {
-    seedMeeting(meeting(), [{ task_id: 'tk1', title: 'Draft the price note' }]);
-    answer = (url, init) =>
-      url.endsWith('/meetings/mt1/tasks') && init?.method === 'POST'
-        ? json({ next_cursor: null, results: [{ status: 200 }], tasks: [{ task_id: 'tk2', title: 'Tell customers', created_by: 'human:me', kind: 'linked', number: 12, status: 'open' }] })
-        : url.endsWith('/meetings/mt1/tasks/tk1') && init?.method === 'DELETE'
-          ? json({ ok: true })
-          : undefined;
-    const panel = await openMeeting();
-    fireEvent.change(within(panel).getByRole('textbox', { name: 'Link a task' }), { target: { value: '#12' } });
-    fireEvent.submit(within(panel).getByRole('textbox', { name: 'Link a task' }).closest('form') as HTMLFormElement);
-    await waitFor(() => expect(within(panel).getByText('Tell customers')).toBeTruthy());
-    expect(sent.find((r) => r.url.endsWith('/meetings/mt1/tasks') && r.method === 'POST')?.body).toEqual({ task_ids: ['12'] });
-    expect(await run('calls.unlinkTask', { meeting: 'mt1', task: 'tk1' }, { via: 'tico' })).toMatchObject({ ok: true });
-    expect(sent.find((r) => r.method === 'DELETE')?.url).toMatch(/\/api\/v2\/meetings\/mt1\/tasks\/tk1$/);
   });
 });
 

@@ -614,23 +614,17 @@ export async function saveTabs(slug: string, change: (tabs: TaskTab[]) => TaskTa
 export type AgentFile = BotFileList['files'][number];
 const FILE_PAGE = 20;
 
-/** What narrows its files: words (every one, in the name, text or path) and a Library kind (page, document, image…). */
-export interface FilesNarrow {
-  q?: string;
-  kind?: string;
-}
-
-/** The files it made or keeps, newest first (GET /api/v2/bots/{bot}/files), 20 a page; `narrow` is the server's q and kind. */
-export const agentFilesQuery = (slug: string, narrow: FilesNarrow = {}) =>
+/** The files it made or keeps, newest first (GET /api/v2/bots/{bot}/files), 20 a page; `find` is the server's q (every
+    word, in the name, text or path). */
+export const agentFilesQuery = (slug: string, find = '') =>
   infiniteQueryOptions({
-    queryKey: narrow.q || narrow.kind ? (['team', 'files', slug, { q: narrow.q ?? '', kind: narrow.kind ?? '' }] as const) : (['team', 'files', slug] as const),
+    queryKey: find ? (['team', 'files', slug, { q: find }] as const) : (['team', 'files', slug] as const),
     queryFn: ({ signal, pageParam }) =>
       api.get<BotFileList>(
         `/api/v2/bots/${at(slug)}/files?${q({
           limit: FILE_PAGE,
           ...(pageParam ? { cursor: pageParam } : {}),
-          ...(narrow.q ? { q: narrow.q } : {}),
-          ...(narrow.kind ? { kind: narrow.kind } : {}),
+          ...(find ? { q: find } : {}),
         })}`,
         { signal },
       ),

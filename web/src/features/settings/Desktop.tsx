@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { refusal, run } from '@/actions';
 import { desktopApp, useCallWindow, type UpdateState } from '@/desktop';
-import { isCallActive, useCall } from '@/features/calls/exports';
+import { isCallActive, useCall } from '@/features/calls/routing';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';

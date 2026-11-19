@@ -9,7 +9,6 @@ import { Field } from '@/kit/Field';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
-import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { press, ToolGlyph } from './parts';
 import { ConnectMailboxDialog, MailingAddressDialog, NewAddressDialog, RequestNumberDialog } from './ToolDialogs';
@@ -309,7 +308,6 @@ function useLogin() {
 
 function AddWebsite({ onClose }: { onClose: () => void }) {
   const [site, setSite] = useState('');
-  const [central, setCentral] = useState(false);
   const [login, setLogin, body] = useLogin();
   const [busy, go] = useGo(onClose);
   return (
@@ -326,7 +324,6 @@ function AddWebsite({ onClose }: { onClose: () => void }) {
           onGo={() =>
             void go('tools.addWebsiteWithLogin', {
               site: site.trim(),
-              central_only: central,
               ...body(),
             })
           }
@@ -335,7 +332,6 @@ function AddWebsite({ onClose }: { onClose: () => void }) {
     >
       <Field label="Site" value={site} onValueChange={setSite} placeholder="app.example.com" autoComplete="off" autoFocus />
       <LoginFields login={login} onChange={setLogin} />
-      <Switch label="Central only" checked={central} onCheckedChange={setCentral} />
     </Dialog>
   );
 }

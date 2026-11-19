@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { DocPage, docSearch, loadDoc } from '@/features/library/exports';
+import { DocPage } from '@/features/library/exports';
+import { docSearch, loadDoc } from '@/features/library/routing';
 
 // One doc by id; `sources` is External sources and `ext:<id>` a doc read from one of them.
 export const Route = createFileRoute('/library/$doc')({

@@ -1,7 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { DUE_STATUSES, ROUTINE_STATES, RULE_TABS, RUNS_RANGE } from './actions';
+import { ROUTINE_STATES, RULE_TABS, RUNS_RANGE } from './actions';
 import type { ListeningSearch } from './ListeningPage';
-import { allRunsQuery, dueQuery, endpointsQuery, hooksQuery, matchesQuery, orgRulesQuery, reachQuery, routinesQuery, ruleGroupsQuery, RUN_RANGES, RUN_STATUSES, RUN_TRIGGERS, stageRulesQuery, teamsQuery, watchesQuery, watchQuery } from './queries';
+import { allRunsQuery, dueQuery, endpointsQuery, hooksQuery, matchesQuery, orgRulesQuery, reachQuery, routinesQuery, ruleGroupsQuery, RUN_RANGES, RUN_STATUSES, stageRulesQuery, teamsQuery, watchesQuery, watchQuery } from './queries';
 import type { RoutinesSearch } from './RoutinesPage';
 import type { RulesSearch } from './RulesPage';
 
@@ -23,10 +23,6 @@ export function validateRoutinesSearch(raw: Record<string, unknown>): RoutinesSe
     if (status) out.status = status;
     const range = RUN_RANGES.find((x) => x === raw.range);
     if (range) out.range = range;
-    const trigger = RUN_TRIGGERS.find((x) => x === raw.trigger);
-    if (trigger) out.trigger = trigger;
-    const owner = text(raw.owner);
-    if (owner && /^(bot|human|person):\S+$/.test(owner)) out.owner = owner;
   }
   const panel = text(raw.panel);
   if (panel && PANEL.test(panel)) out.panel = panel;
@@ -49,10 +45,6 @@ export function validateRulesSearch(raw: Record<string, unknown>): RulesSearch {
   if (who && PARTY.test(who)) out.who = who;
   const q = text(raw.q);
   if (q) out.q = q;
-  const from = text(raw.from);
-  if (from && tab === 'outside') out.from = from;
-  const status = DUE_STATUSES.find((x) => x === raw.status);
-  if (status && tab === 'due') out.status = status;
   return out;
 }
 

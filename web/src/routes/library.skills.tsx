@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { loadSkills, SkillsPage, skillsSearch } from '@/features/library/exports';
+import { SkillsPage } from '@/features/library/exports';
+import { loadSkills, skillsSearch } from '@/features/library/routing';
 
 export const Route = createFileRoute('/library/skills')({
   validateSearch: skillsSearch,

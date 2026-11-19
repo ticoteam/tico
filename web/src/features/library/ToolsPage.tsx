@@ -48,25 +48,21 @@ import { GoogleSection, LettersInSettings, LettersOutSection, MayDo, NumberReque
 import { useGithubReturn } from './githubReturn';
 import {
   AccountAccess,
-  CentralOnly,
   CheckInbox,
   DeleteWebsiteConfirm,
-  EveryoneReads,
   hasWho,
   InboxReaders,
   KeyView,
   MailboxView,
   RemoveAccountConfirm,
-  SeenBy,
   ServiceView,
-  SlackLinks,
   subjectOf,
   WhoMenu,
 } from './ToolMore';
 import { teamsQuery, vaultQuery, type StoredKey } from './toolKeys';
 import type { ToolsSearch } from './search';
 import { bad, Code, Dim, KIND, LEVEL, Shell, stateOf, toolHref, useAdmin, Who } from './ToolShell';
-import { AddressOne, Automations, LetterSenders, LettersIn, LettersOut } from './ToolLetters';
+import { AddressOne, LettersIn, LettersOut } from './ToolLetters';
 import { MessagesView } from './ToolMessages';
 import type { LetterIn } from './toolMail';
 import { WebhookView } from './ToolWebhook';
@@ -453,7 +449,6 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
               target={`tool-who:${id}`}
               actions={t.can_manage && <AddWho tool={id} taken={t.access.map((a) => a.subject)} />}
             >
-              {t.everyone_reads?.enforceable && <EveryoneReads tool={id} on={t.everyone_reads.on} can={t.can_manage} />}
               {t.access.map((a) => (
                 <Who
                   key={a.subject}
@@ -484,7 +479,6 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
               ))}
             </Section>
           )}
-          <SeenBy kind="api" tool={id} t={t} />
           {mcp && mcp.names.length > 0 && <McpNames names={mcp.names} />}
           {t.recent.length > 0 && (
             <Section name="Recent use" target={`tool-recent:${id}`}>
@@ -641,7 +635,6 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
               <LabelValue label={t.tool.sites.length > 1 ? 'Sites' : 'Site'} onEdit={t.can_manage ? () => setDialog({ is: 'sites' }) : undefined}>
                 <Code>{t.tool.sites.join(', ')}</Code>
               </LabelValue>
-              <CentralOnly tool={id} on={t.tool.central_only} can={t.can_manage} />
             </Facts>
           </Section>
           <Section name="How it connects" actions={<IconButton icon="plus" label="Add account" onClick={() => setAdding(true)} />}>
@@ -689,7 +682,6 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
             </Facts>
           </Section>
           <AccountAccess tool={id} t={t} />
-          <SeenBy kind="website" tool={id} t={t} />
           {adding && <AddAccountDialog tool={id} onClose={() => setAdding(false)} />}
           {replacing && <ReplaceLoginDialog tool={id} account={replacing} onClose={() => setReplacing(null)} />}
           {dialog?.is === 'sites' && <SitesDialog tool={id} sites={t.tool.sites} onClose={() => setDialog(null)} />}
@@ -814,7 +806,6 @@ function InboxView({ inbox, row, number }: { inbox: string; row: ToolIndexRow | 
         </Facts>
         <CheckInbox />
       </Section>
-      {box?.address && <Automations address={box.address} />}
       {(messages.data?.length ?? 0) > 0 && (
         <Section name="Recent use">
           {messages.data?.map((m) => {
@@ -875,7 +866,6 @@ function AddressView({ row }: { row: ToolIndexRow | undefined }) {
       </Section>
       <PostalAddresses />
       <LettersOutSection />
-      <LetterSenders />
       <LettersInSettings />
       <LettersOut letters={letters.data ?? []} />
       {(inbound.data?.length ?? 0) > 0 && <LettersIn items={(inbound.data ?? []) as LetterIn[]} />}
@@ -935,7 +925,6 @@ function PlainView({ row, kind, problem }: { row: ToolIndexRow | undefined; kind
           <SendingSection />
         </>
       )}
-      {row.kind === 'slack' && <SlackLinks />}
     </Shell>
   );
 }

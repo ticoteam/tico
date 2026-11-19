@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { directoryQuery } from '@/data';
-import { StartPage, needsQuery, todayQuery } from '@/features/start/exports';
+import { StartPage } from '@/features/start/exports';
+import { needsQuery, todayQuery } from '@/features/start/routing';
 
 // `setup` is the first run's step, open over this page (or any other); the root's FirstRun reads it.
 export const Route = createFileRoute('/start')({

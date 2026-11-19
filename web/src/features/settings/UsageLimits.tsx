@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { run } from '@/actions/run';
 import type { UsageLimitView, UsageLimits } from '@/api/schema';
 import { directoryQuery } from '@/data';
-import { agentsQuery } from '@/features/team/exports';
+import { agentsQuery } from '@/features/team/routing';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';

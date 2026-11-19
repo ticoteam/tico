@@ -311,12 +311,12 @@ function FactLine({ label, value, onSave }: { label: string; value: string; onSa
   );
 }
 
-/** The summary, the rules that apply, then the links: as one list, or a place's own (Bodies, Inside, Located here). */
+/** The summary, a place's rules, then the links: as one list, or a place's own (Bodies, Inside, Located here). */
 function CardSections({ c, search, place }: { c: Card; search: ContactsSearch; place?: ReactNode }) {
   return (
     <>
       {c.summary && <p className="rec-summary t-read">{c.summary}</p>}
-      <ContactRules id={c.id} />
+      {place && <ContactRules id={c.id} />}
       {place}
       {!place && c.links.length > 0 && (
         <Section name="Links" count={c.links.length}>

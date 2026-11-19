@@ -4,7 +4,6 @@ import { refusal, run } from '@/actions';
 import type { ToolIndexRow } from '@/api/schema';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
-import { DatePick } from '@/kit/DatePick';
 import { Dialog } from '@/kit/Dialog';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
@@ -19,7 +18,7 @@ import { Confirm } from './ToolMore';
 import { bad, Shell, stateOf } from './ToolShell';
 
 /* An outgoing webhook under Tools (old settings-webhooks.ts whHookDetail): where it sends, how its sends went, and in
-   its ⋯ Send test, Pause, Retry failed, Send missed, New secret and Delete; a failed send retries from its row. Adding
+   its ⋯ Send test, Pause, New secret and Delete; a failed send retries from its row. Adding
    and editing one stay in Routines › Webhooks. A new signing secret lives in its dialog's state only. */
 
 const SENT: Record<string, string> = {
@@ -31,7 +30,7 @@ const SENT: Record<string, string> = {
   withheld: 'Held back',
 };
 
-type HookDialog = 'secret' | 'delete' | 'retry' | 'missed';
+type HookDialog = 'secret' | 'delete';
 
 export function WebhookView({ id, row }: { id: string; row: ToolIndexRow | undefined }) {
   const hook = useQuery(webhookQuery(id));
@@ -48,13 +47,6 @@ export function WebhookView({ id, row }: { id: string; row: ToolIndexRow | undef
         label={paused ? 'Send again' : 'Pause'}
         onSelect={() => void press('tools.pauseWebhook', { webhook: id, on: paused }, paused ? 'It did not restart' : 'It did not pause')}
       />
-      {/* The server catches up only an endpoint that is on. */}
-      {w.enabled && !paused && (
-        <>
-          <MenuItem label="Retry failed" onSelect={() => setDialog('retry')} />
-          <MenuItem label="Send missed" onSelect={() => setDialog('missed')} />
-        </>
-      )}
       <MenuItem label="New secret" onSelect={() => setDialog('secret')} />
       <MenuRule />
       <MenuItem label="Delete" onSelect={() => setDialog('delete')} />
@@ -97,7 +89,6 @@ export function WebhookView({ id, row }: { id: string; row: ToolIndexRow | undef
         </Section>
       )}
       {dialog === 'secret' && <NewSecretDialog webhook={id} onClose={() => setDialog(null)} />}
-      {(dialog === 'retry' || dialog === 'missed') && <CatchUpDialog webhook={id} missed={dialog === 'missed'} onClose={() => setDialog(null)} />}
       {dialog === 'delete' && (
         <Confirm
           title={`Delete ${name}?`}
@@ -136,34 +127,6 @@ function NewSecretDialog({ webhook, onClose }: { webhook: string; onClose: () =>
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title="Signing secret" description="Shown once." className="connect" actions={<Button onClick={onClose}>Done</Button>}>
       <Secret label="Signing secret" value={secret} onHide={onClose} />
-    </Dialog>
-  );
-}
-
-const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-
-/** Retry failed (what gave up) or Send missed (what it never got), since a day: a week back to start, as the old page. */
-function CatchUpDialog({ webhook, missed, onClose }: { webhook: string; missed: boolean; onClose: () => void }) {
-  const [day, setDay] = useState<Date | null>(() => new Date(Date.now() - WEEK_MS));
-  const [busy, setBusy] = useState(false);
-  const go = async () => {
-    if (!day) return;
-    setBusy(true);
-    const r = await run(missed ? 'tools.sendMissed' : 'tools.retryWebhook', { webhook, since: iso(day) }, { via: 'click' });
-    setBusy(false);
-    if (!r.ok) return toast(refusal(r, 'Not sent'));
-    toast({ text: r.did ?? 'Sending' });
-    onClose();
-  };
-  return (
-    <Dialog
-      open
-      onOpenChange={(o) => !o && onClose()}
-      title={missed ? 'Send missed' : 'Retry failed'}
-      actions={<Foot onClose={onClose} label={missed ? 'Send' : 'Retry'} busy={busy} ready={!!day} onGo={() => void go()} />}
-    >
-      <DatePick label="Since" value={day} onValueChange={setDay} withTime={false} />
     </Dialog>
   );
 }

@@ -1,18 +1,18 @@
 import { useInfiniteQuery, useQuery, type QueryClient } from '@tanstack/react-query';
 import { Outlet, createRootRouteWithContext, useLocation, useRouter } from '@tanstack/react-router';
-import { Suspense, lazy, useEffect, type ReactNode } from 'react';
+import { Suspense, lazy, useEffect, useState, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
-import { reportCallToDesktop } from '@/desktop';
+import { reportCallToDesktop, useCallWindow } from '@/desktop';
 import { ticoRoomQuery } from '@/conversation';
 import { configQuery, directoryQuery, meQuery, recordVisit, useHeldCount, type Actor, type Directory } from '@/data';
-import { CallBar, CallSide, RingCard, TOGGLE_MUTE, isCallActive, useCall } from '@/features/calls/exports';
-import { FileViewerHost } from '@/features/library/exports';
+import { TOGGLE_MUTE, isCallActive, ringingQuery, useCall } from '@/features/calls/routing';
+import { useFileOpen } from '@/features/library/routing';
 import { AssetRecovery, PlanLock } from '@/features/notices/exports';
-import { FirstRun, StartScreen, useStartGate } from '@/features/start/exports';
-import { SUPPORT_CHAT, SupportChat, supportUnreadQuery } from '@/features/support/exports';
-import { flowQuery, pipelinesQuery, roadmapPipeline } from '@/features/tasks/exports';
-import { TeammateChat, teamSlug, whoHref } from '@/features/team/exports';
-import { ChatSheet, catchUpQuery, updateListQuery } from '@/features/threads/exports';
+import { StartScreen, useStartGate } from '@/features/start/routing';
+import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
+import { flowQuery, pipelinesQuery, roadmapPipeline } from '@/features/tasks/routing';
+import { teamSlug, whoHref } from '@/features/team/routing';
+import { catchUpQuery, updateListQuery } from '@/features/threads/routing';
 import { Avatar } from '@/kit/Avatar';
 import { IconButton } from '@/kit/IconButton';
 import { MenuItem, MenuRule } from '@/kit/Menu';
@@ -72,8 +72,25 @@ export const Route = createRootRouteWithContext<RouterContext>()({
   notFoundComponent: () => <Placeholder title="Not found" />,
 });
 
-/* An open task's chat comes with the task's own code: the first load carries the shell only. */
+/* An open task's chat comes with the task's own code: the first load carries the shell only. So does every part the
+   root mounts over a page: each loads the first time it has something to show (Later), never before the first paint. */
 const TaskChat = lazy(() => import('@/features/task/exports').then((m) => ({ default: m.TaskChat })));
+const CallBar = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.CallBar })));
+const CallSide = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.CallSide })));
+const RingCard = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.RingCard })));
+const FileViewerHost = lazy(() => import('@/features/library/exports').then((m) => ({ default: m.FileViewerHost })));
+const FirstRun = lazy(() => import('@/features/start/exports').then((m) => ({ default: m.FirstRun })));
+const SupportChat = lazy(() => import('@/features/support/exports').then((m) => ({ default: m.SupportChat })));
+const TeammateChat = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.TeammateChat })));
+const ChatSheet = lazy(() => import('@/features/threads/exports').then((m) => ({ default: m.ChatSheet })));
+
+/** Mounted from the first time `on` holds, and kept after: its code loads only once it is needed, and what it shows
+    can still close in its own way (a dialog's last step stays drawn while it closes). */
+function Later({ on, children }: { on: boolean; children: ReactNode }) {
+  const [seen, setSeen] = useState(on);
+  if (on && !seen) setSeen(true);
+  return seen ? <Suspense fallback={null}>{children}</Suspense> : null;
+}
 
 const dotEl = () => dot.el();
 const closeChat = () => void run('shell.closeChat', {}, { via: 'click' });
@@ -176,7 +193,9 @@ function App() {
   let chat: ReactNode =
     at.chat === SUPPORT_CHAT ? (
       <Sheet kind="chat" label="Tico support">
-        <SupportChat />
+        <Suspense fallback={null}>
+          <SupportChat />
+        </Suspense>
       </Sheet>
     ) : at.chat ? (
       <SecondChat chat={at.chat} />
@@ -193,7 +212,11 @@ function App() {
       </Sheet>
     ) : undefined;
   } else if (arrangement === 'call' && a) {
-    side = <CallSide room={decodeURIComponent(a)} />;
+    side = (
+      <Suspense fallback={null}>
+        <CallSide room={decodeURIComponent(a)} />
+      </Suspense>
+    );
   } else if (arrangement === 'agent' && a) {
     widgets = page;
     page = <TeammateSheet who={decodeURIComponent(a)} />;
@@ -204,12 +227,18 @@ function App() {
   const callChat = arrangement === 'page' && !chat && isCallActive(callNow) ? (callNow.chat ?? null) : null;
   if (callChat) chat = <SecondChat chat={callChat} />;
   const hideCallChat = () => void run('calls.hideChat', {}, { via: 'click' });
+  const callOut = useCallWindow().open;
+  const ringing = (useQuery(ringingQuery).data?.calls ?? []).some((c) => c.ring && c.state === 'live');
+  const setupOpen = useLocation({ select: (l) => !!(l.search as { setup?: unknown }).setup });
+  const fileOpen = useFileOpen();
 
   return (
     <>
       {/* a call on another page shows its bar over the frame; the frame takes the rest of the window */}
       <div className="shell-col">
-        <CallBar />
+        <Later on={isCallActive(callNow) || callOut}>
+          <CallBar />
+        </Later>
         <Frame
           arrangement={callChat ? 'chat' : arrangement}
           tico={<TicoSheet />}
@@ -225,12 +254,20 @@ function App() {
           onClosePanel={closePanel}
         />
       </div>
-      {signedIn ? <FirstRun /> : null}
+      {signedIn ? (
+        <Later on={setupOpen}>
+          <FirstRun />
+        </Later>
+      ) : null}
       <ActionsRoot dot={dotEl} fold={foldSheet} />
       <Toasts />
       {/* the file `files.view` opens, over any page */}
-      <FileViewerHost />
-      <RingCard />
+      <Later on={fileOpen}>
+        <FileViewerHost />
+      </Later>
+      <Later on={ringing}>
+        <RingCard />
+      </Later>
       {/* over every page: a locked plan; the app's own files failing to load after a release */}
       <PlanLock />
       <AssetRecovery />
@@ -389,7 +426,9 @@ function SecondChat({ chat }: { chat: string }) {
   const who = dir?.byId[bare(chat)];
   return (
     <Sheet kind="chat" label={`Chat with ${who?.name ?? 'teammate'}`}>
-      <ChatSheet chat={chat} />
+      <Suspense fallback={null}>
+        <ChatSheet chat={chat} />
+      </Suspense>
     </Sheet>
   );
 }
@@ -406,7 +445,9 @@ function TeammateSheet({ who }: { who: string }) {
         title={name}
         lead={actor ? <Avatar decorative kind={actor.kind} name={actor.name} initials={short(actor.name)} hue={actor.hue ?? 0} size={28} live={actor.working} /> : null}
       />
-      <TeammateChat who={who} />
+      <Suspense fallback={null}>
+        <TeammateChat who={who} />
+      </Suspense>
     </Sheet>
   );
 }

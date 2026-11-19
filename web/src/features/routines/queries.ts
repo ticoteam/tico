@@ -236,8 +236,6 @@ export const RUN_RANGES = ['5m', '1h', '24h', '7d'] as const;
 export type RunRange = (typeof RUN_RANGES)[number];
 export const RUN_STATUSES = ['failed', 'waiting', 'running', 'done'] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
-export const RUN_TRIGGERS = ['schedule', 'event', 'webhook', 'due', 'message', 'task_received', 'listening', 'system'] as const;
-export type RunTrigger = (typeof RUN_TRIGGERS)[number];
 export type AnyRun = AutomationOverviewRuns['runs'][number];
 
 /** Runs across every routine the person may see, newest first, fifty a page; `next` is the next page's `before`. */
@@ -443,45 +441,13 @@ export function signHookOff(id: string) {
   });
 }
 
-/** A webhook's settings (POST /triggers/{id}): what is left out stays. `type_from` '' goes back to the preset's own. */
-export interface HookSettings {
-  name?: string;
-  type_from?: string;
-  hourly?: number;
-  keep_days?: number;
-  unheard?: 'log' | 'note';
-}
-export function updateHook(id: string, body: HookSettings) {
+/** A webhook's name (POST /triggers/{id}): its other settings stay. */
+export function updateHook(id: string, body: { name: string }) {
   return write<{ trigger: Hook }>({
     key: hooksQuery.queryKey,
     optimistic: (list: Hook[] | undefined) => list?.map((h) => (h.id === id ? { ...h, ...body } : h)),
     send: (idempotencyKey) => api.post<{ trigger: Hook }>(`/api/v2/triggers/${enc(id)}`, body, { idempotencyKey }),
     settle: (list: Hook[] | undefined, r) => list?.map((h) => (h.id === id && r?.trigger ? { ...h, ...r.trigger } : h)),
-  });
-}
-
-/** Run a kept call again, as a new occurrence (a refused one is recovered instead). */
-export function replayDelivery(hook: string, delivery: string) {
-  return write<{ replay: { delivery: string; tasks: number } }>({
-    key: deliveriesQuery(hook).queryKey,
-    optimistic: (list: Delivery[] | undefined) => list,
-    send: (idempotencyKey) => api.post(`/api/v2/triggers/${enc(hook)}/deliveries/${enc(delivery)}/replay`, {}, { idempotencyKey }),
-  });
-}
-
-export interface Recovered {
-  found: number;
-  recovered: number;
-  duplicate?: number;
-  still_refused?: number;
-  more?: boolean;
-}
-/** Check again, under the current secret and preset, the refused calls of the last `since` hours still kept. */
-export function recoverHook(hook: string, since: number) {
-  return write<{ recover: Recovered }>({
-    key: [deliveriesQuery(hook).queryKey, hooksQuery.queryKey],
-    optimistic: (cur: unknown) => cur,
-    send: (idempotencyKey) => api.post(`/api/v2/triggers/${enc(hook)}/recover`, { since_hours: since }, { idempotencyKey }),
   });
 }
 
@@ -697,9 +663,6 @@ export interface OrgRuleFields {
   reviewer?: string | null;
   /** Who follows it: Everyone (`*`), or teams, agents and people (`group:<id>`, `bot:<id>`, `human:<id>`). */
   who: string[];
-  /** Internal: the teammates it is about, if any. */
-  with?: string[];
-  description?: string;
   /** External: who it is from (a From's id). */
   source_id?: string;
 }
@@ -711,9 +674,7 @@ export function partiesOf(s: Scope | null | undefined): string[] {
   const out = [...(s.groups ?? []).map((g) => `group:${sid(g)}`), ...(s.bots ?? []).map((b) => `bot:${sid(b)}`), ...(s.people ?? []).map((p) => `human:${sid(p)}`)];
   return out.length ? out : ['*'];
 }
-/** A With as parties: none is no one. */
-export const withOf = (s: Scope | null | undefined): string[] => (s ? partiesOf({ ...s, everyone: false, all_bots: false }).filter((p) => p !== '*') : []);
-/** Parties as the server's Who or With. */
+/** Parties as the server's Who. */
 export function scopeOf(parties: readonly string[]): ScopeBody {
   if (parties.includes('*')) return { everyone: true };
   const ids = (p: string) => parties.filter((x) => x.startsWith(p)).map((x) => x.slice(p.length));
@@ -727,20 +688,16 @@ const orgBody = (f: OrgRuleFields) => ({
   if_broken: f.if_broken,
   reviewer: f.if_broken === 'escalate' ? (f.reviewer ?? null) : null,
   who: someone(scopeOf(f.who)),
-  ...(f.kind === 'internal' && f.with?.length ? { with: someone(scopeOf(f.with)) } : {}),
-  ...(f.description ? { description: f.description } : {}),
   ...(f.kind === 'external' && f.source_id ? { source_id: f.source_id } : {}),
 });
 
-/** An edit sends every field the editor shows: the whole Who (every team, agent and person, not only the first), the
-   With, the description and the From. Under Ask first an empty reviewer is the manager (''). */
+/** An edit sends every field the editor shows: the whole Who (every team, agent and person, not only the first) and the
+   From. Under Ask first an empty reviewer is the manager (''). */
 const orgEdit = (f: OrgRuleFields) => ({
   text: f.text,
   if_broken: f.if_broken,
   ...(f.if_broken === 'escalate' ? { reviewer: f.reviewer ?? '' } : {}),
   who: someone(scopeOf(f.who)),
-  ...(f.kind === 'internal' ? { with: scopeOf(f.with ?? []) } : {}),
-  description: f.description ?? '',
   ...(f.kind === 'external' && f.source_id ? { source_id: f.source_id } : {}),
 });
 
@@ -759,7 +716,7 @@ export function addOrgRule(f: OrgRuleFields) {
 export function updateOrgRule(rule: Pick<OrgRule, 'id' | 'version'>, f: OrgRuleFields) {
   return write<OrgRule>({
     key: orgRulesQuery('active').queryKey,
-    optimistic: (list: OrgRule[] | undefined) => list?.map((r) => (r.id === rule.id ? { ...r, text: f.text, if_broken: f.if_broken, description: f.description ?? r.description } : r)),
+    optimistic: (list: OrgRule[] | undefined) => list?.map((r) => (r.id === rule.id ? { ...r, text: f.text, if_broken: f.if_broken } : r)),
     send: (idempotencyKey) => api.post<OrgRule>(`/api/v2/rules/${enc(rule.id)}`, { version: rule.version, ...orgEdit(f) }, { idempotencyKey }),
     settle: (list: OrgRule[] | undefined, made) => list?.map((r) => (r.id === rule.id ? made : r)),
   });

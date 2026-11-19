@@ -34,6 +34,7 @@ import {
   type StrategyVersion,
   type VersionRow,
 } from './queries';
+import { STRATEGY_TABS, type StrategyTab } from './routing';
 import './company.css';
 
 /* Strategy and its tabs, in the mock's order (pages/3-company/company.js strategyPage). Each tab is its own address
@@ -41,8 +42,7 @@ import './company.css';
    budgetBody, old #/strategy/budget): its tab opens Usage's Limits, where a limit is changed. Strategy and Brand keep versions: `?v=` reads a past one, `?compare` marks what changed from the one
    before (files.js docPage: the version pick and the changes count in the head). */
 
-export const STRATEGY_TABS = ['strategy', 'market', 'org', 'goals', 'brand'] as const;
-export type StrategyTab = (typeof STRATEGY_TABS)[number];
+export { STRATEGY_TABS, type StrategyTab };
 export type StrategySearch = GoalsSearch & { v?: number; compare?: boolean; edit?: boolean };
 const BASE = '/company/strategy';
 const tab = (t: StrategyTab, label: string): PageTab => ({ label, to: t === 'strategy' ? BASE : `${BASE}/${t}`, target: `tab:${t}` });

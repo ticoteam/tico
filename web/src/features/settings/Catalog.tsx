@@ -13,11 +13,10 @@ import { Select } from '@/kit/Select';
 import { Section } from '@/pagekinds';
 import { SwitchLine, act } from './parts';
 import { FIELD_KINDS, contactTypeQuery, contactTypesQuery, labelsQuery, roadmapQuery, type FieldKind } from './queries';
-import { AskSection, RoadmapMore } from './TasksMore';
-import { MailFeeds, Operate } from './ContactsMore';
+import { AskSection } from './TasksMore';
 
-/* Tasks (what agents may ask, the public roadmap) and Contacts (the types and their fields, where we operate, which
-   inboxes add their senders): the two catalogs Settings edits. What the mock draws that the server cannot keep yet
+/* Tasks (what agents may ask, the public roadmap) and Contacts (the types and their fields): the two catalogs
+   Settings edits. What the mock draws that the server cannot keep yet
    (new task defaults, sharing) is left out. */
 
 const KIND_NAME: Record<string, string> = {
@@ -88,7 +87,6 @@ export function Tasks() {
             checked={r.bot_public_approval}
             onChange={(on) => void act('settings.roadmapApproval', { on })}
           />
-          <RoadmapMore r={r} />
         </Facts>
       </Section>
     </>
@@ -201,8 +199,6 @@ export function Contacts({ open }: { open?: string }) {
         )}
       </Section>
       {opened && <Fields type={opened.key} typeName={opened.name} />}
-      <Operate />
-      <MailFeeds />
     </>
   );
 }

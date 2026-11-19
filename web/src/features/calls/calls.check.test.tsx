@@ -147,9 +147,8 @@ describe('A meeting beside List', () => {
             : undefined;
     show('/calendar?view=list&panel=meeting%3Amt1');
     const panel = await screen.findByRole('complementary', { name: 'Weekly sync' });
-    expect(within(panel).getByText('Only you see this')).toBeTruthy();
     fireEvent.click(within(panel).getByRole('button', { name: 'Share' }));
-    await waitFor(() => expect(within(panel).queryByText('Only you see this')).toBeNull());
+    await waitFor(() => expect(within(panel).queryByRole('button', { name: 'Share' })).toBeNull());
     expect(sent.find((r) => r.url.endsWith('/meetings/mt1/review'))).toMatchObject({ method: 'POST', body: { action: 'approve' } });
   });
 

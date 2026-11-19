@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { LearnedPage, loadLearned } from '@/features/threads/exports';
+import { LearnedPage } from '@/features/threads/exports';
+import { loadLearned } from '@/features/threads/routing';
 
 /* What Tico has learned: the page Tico opens. */
 export const Route = createFileRoute('/learned')({

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link, useLocation, useNavigate } from '@tanstack/react-router';
+import { Link, useLocation } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { useAction } from '@/actions';
 import { meQuery, useActors } from '@/data';
@@ -7,18 +7,16 @@ import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
-import { Checkbox } from '@/kit/Checkbox';
 import { Dialog } from '@/kit/Dialog';
 import { Field, Search } from '@/kit/Field';
 import { IconButton } from '@/kit/IconButton';
-import { Markdown } from '@/kit/Markdown';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { TaskRow } from '@/kit/Row';
 import { Table, Td, Th } from '@/kit/Table';
 import { FilterRow, List, PageMore, Section, type FilterChip, type PageState } from '@/pagekinds';
 import { NewTask } from './NewTask';
 import { Face, markOf, taskHref } from './parts';
-import { pipelinesQuery, tagKeyOf, tagQuery, tagsQuery, templatesQuery, type Pipeline, type TaskItem } from './queries';
+import { pipelinesQuery, tagKeyOf, tagQuery, tagsQuery, type Pipeline, type TaskItem } from './queries';
 import type { Tag } from '@/api/schema';
 import './tasks.css';
 
@@ -83,7 +81,6 @@ export function TagsPage() {
         className="tasks-page"
         search={<Find label="Search tags" q={q} />}
         actions={<IconButton icon="plus" label="New tag" data-phone onClick={() => setMaking(true)} data-target="tags:new" />}
-        more={<TagsMore />}
         sections={
           <Table label="Tags">
             <thead>
@@ -116,40 +113,17 @@ export function TagsPage() {
   );
 }
 
-/** Tags' "⋯": the templates (read only when opened) and the release checklist starter (ui tags.ts renderTags). */
-function TagsMore() {
-  const start = useAction('tags.releaseChecklist');
-  return (
-    <PageMore target="tags:more">
-      <MenuSub label="Templates" icon="copy">
-        <Templates />
-      </MenuSub>
-      <MenuItem icon="check" label="Release checklist" onSelect={() => void start.run({})} />
-    </PageMore>
-  );
-}
-
-function Templates() {
-  const q = useQuery(templatesQuery);
-  const go = useNavigate();
-  if (!q.data) return <MenuItem label={q.isError ? "Didn't load" : 'Loading'} disabled onSelect={() => {}} />;
-  if (!q.data.length) return <MenuItem label="None yet" disabled onSelect={() => {}} />;
-  return q.data.map((t) => <MenuItem key={t.id} label={nameOf(t)} onSelect={() => void go({ to: '/tags/$tag', params: { tag: t.id } })} />);
-}
-
-/** A new tag: its name, notes (a "- [ ] step" line is a box to tick) and whether it is a template; its key comes from the name. */
+/** A new tag: its name; its key comes from the name. */
 function NewTagDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const make = useAction('tags.create');
   const [name, setName] = useState('');
-  const [notes, setNotes] = useState('');
   const [key, setKey] = useState('');
-  const [template, setTemplate] = useState(false);
   // Drawn only while open, so each opening starts empty.
   const madeKey = tagKeyOf(key) || tagKeyOf(name);
   const send = () => {
     if (!madeKey) return;
     onOpenChange(false);
-    void make.run({ name: name.trim(), key: madeKey, notes, template });
+    void make.run({ name: name.trim(), key: madeKey });
   };
   return (
     <Dialog
@@ -166,9 +140,7 @@ function NewTagDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (op
       }
     >
       <Field label="Name" value={name} onValueChange={setName} placeholder="bug" autoFocus />
-      <Field label="Notes" value={notes} onValueChange={setNotes} area placeholder="- [ ] Check the result" />
       <Field label="Key" value={key} onValueChange={setKey} placeholder={tagKeyOf(name) || 'Made from the name'} />
-      <Checkbox label="Template" checked={template} onCheckedChange={setTemplate} />
     </Dialog>
   );
 }
@@ -179,8 +151,8 @@ interface Group {
 }
 
 /**
- * One tag: its notes as a checklist to tick, then its tasks grouped by pipeline, each with its stage; Done is a section
- * drawn shut (more.js tagPage, ui tags.ts pageTag). Search, Filter and New task in the head; Edit and Make a tag in "⋯".
+ * One tag: its tasks grouped by pipeline, each with its stage; Done is a section drawn shut (more.js tagPage, ui tags.ts
+ * pageTag). Search, Filter and New task in the head; Edit in "⋯".
  */
 export function TagPage({ tag }: { tag: string }) {
   useFollow({ allTasks: true });
@@ -191,7 +163,6 @@ export function TagPage({ tag }: { tag: string }) {
   const filter = useAction('tags.filter');
   const more = useAction('tags.moreTasks');
   const [editing, setEditing] = useState(false);
-  const [making, setMaking] = useState(false);
   const [filing, setFiling] = useState(false);
   const t = detail.data?.tag;
   const name = t ? nameOf(t) : 'Tag';
@@ -227,9 +198,8 @@ export function TagPage({ tag }: { tag: string }) {
       />
     );
   };
-  const notes = t?.markdown.trim() ? t : null;
   const narrowed = !!(narrow.q || narrow.owner || narrow.late);
-  const state: PageState = detail.isError ? 'fault' : !detail.data ? 'loading' : !tasks.length && !notes ? 'empty' : 'ready';
+  const state: PageState = detail.isError ? 'fault' : !detail.data ? 'loading' : !tasks.length ? 'empty' : 'ready';
   return (
     <>
       <List
@@ -249,25 +219,15 @@ export function TagPage({ tag }: { tag: string }) {
         }
         more={
           t &&
-          (editable || t.is_template) && (
+          editable && (
             <PageMore target="tag:more">
-              {editable && <MenuItem icon="edit" label="Edit" onSelect={() => setEditing(true)} />}
-              {t.is_template && <MenuItem icon="plus" label="Make a tag" onSelect={() => setMaking(true)} />}
+              <MenuItem icon="edit" label="Edit" onSelect={() => setEditing(true)} />
             </PageMore>
           )
         }
         filter={<TagChips owner={narrow.owner} late={narrow.late} onClearAll={() => void filter.run({ owner: null, late: null, q: null })} />}
         sections={
           <>
-            {notes && (
-              <Section
-                name={notes.is_template ? 'Template' : 'Checklist'}
-                target={`tag-notes:${notes.id}`}
-                actions={editable && <IconButton icon="edit" size="sm" quiet label="Edit" onClick={() => setEditing(true)} />}
-              >
-                <Notes tag={notes} editable={editable} />
-              </Section>
-            )}
             {groups.map((g) => (
               <Section key={g.pipe?.id ?? 'none'} name={g.pipe?.name ?? 'Tasks'} count={g.rows.length}>
                 {g.rows.map(row)}
@@ -288,7 +248,6 @@ export function TagPage({ tag }: { tag: string }) {
         }
       />
       {t && editable && editing && <EditTagDialog open onOpenChange={setEditing} tag={t} />}
-      {t?.is_template && making && <MakeTagDialog open onOpenChange={setMaking} template={t} />}
       {t && pipes.data && filing && (
         <NewTask
           open
@@ -335,56 +294,6 @@ function TagChips({ owner, late, onClearAll }: { owner: string; late: boolean; o
   return <FilterRow filters={chips} onClearAll={onClearAll} />;
 }
 
-type Part = { kind: 'text'; text: string } | { kind: 'box'; line: number; done: boolean; text: string };
-
-const BOX = /^\s*(?:[-*+]|\d+\.)\s+\[([ xX])\]\s+(.*)$/;
-
-/** A tag's notes in parts: each "- [ ] step" line (outside a code fence) is a box; the lines between are text. */
-function notesParts(markdown: string): Part[] {
-  const parts: Part[] = [];
-  let fence = '';
-  let text: string[] = [];
-  const flush = () => {
-    if (text.join('').trim()) parts.push({ kind: 'text', text: text.join('\n') });
-    text = [];
-  };
-  markdown.split('\n').forEach((l, line) => {
-    const mark = /^\s{0,3}(`{3,}|~{3,})/.exec(l)?.[1];
-    if (mark) {
-      if (!fence) fence = mark;
-      else if (mark[0] === fence[0] && mark.length >= fence.length) fence = '';
-    }
-    const box = !fence && !mark ? BOX.exec(l) : null;
-    if (!box) return void text.push(l);
-    flush();
-    parts.push({ kind: 'box', line, done: box[1] !== ' ', text: box[2] ?? '' });
-  });
-  flush();
-  return parts;
-}
-
-/** The notes, each box ticked in place by whoever may edit the tag (ui tags.ts tagChecklist). */
-function Notes({ tag, editable }: { tag: Tag; editable: boolean }) {
-  const tick = useAction('tags.tick');
-  return (
-    <div className="tag-notes">
-      {notesParts(tag.markdown).map((p, i) =>
-        p.kind === 'text' ? (
-          <Markdown key={i} text={p.text} compact />
-        ) : (
-          <Checkbox
-            key={i}
-            label={p.text || 'Checklist item'}
-            checked={p.done}
-            disabled={!editable || tick.pending}
-            onCheckedChange={(done) => void tick.run({ tag: tag.id, line: p.line, done })}
-          />
-        ),
-      )}
-    </div>
-  );
-}
-
 /** A tag's name, notes and metadata (ui tags.ts tagEditForm), saved against the version it opened on. */
 function EditTagDialog({ open, onOpenChange, tag }: { open: boolean; onOpenChange: (open: boolean) => void; tag: Tag }) {
   const save = useAction('tags.edit');
@@ -412,39 +321,6 @@ function EditTagDialog({ open, onOpenChange, tag }: { open: boolean; onOpenChang
       <Field label="Name" value={draft.name} onValueChange={(v) => setDraft((d) => ({ ...d, name: v }))} autoFocus />
       <Field label="Notes" value={draft.notes} onValueChange={(v) => setDraft((d) => ({ ...d, notes: v }))} area />
       <Field label="Metadata" value={draft.metadata} onValueChange={(v) => setDraft((d) => ({ ...d, metadata: v }))} area />
-    </Dialog>
-  );
-}
-
-/** A tag from a template: its own key (release-2030-01-02) and metadata; the notes come from the template. */
-function MakeTagDialog({ open, onOpenChange, template }: { open: boolean; onOpenChange: (open: boolean) => void; template: Tag }) {
-  const make = useAction('tags.makeFromTemplate');
-  const [key, setKey] = useState('');
-  const [metadata, setMetadata] = useState(() => JSON.stringify(template.metadata ?? {}, null, 2));
-  const madeKey = tagKeyOf(key);
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title="Make a tag"
-      actions={
-        <>
-          <Button onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button
-            variant="primary"
-            disabled={!madeKey}
-            onClick={() => {
-              onOpenChange(false);
-              void make.run({ template: template.id, key: madeKey, metadata });
-            }}
-          >
-            Create
-          </Button>
-        </>
-      }
-    >
-      <Field label="Key" value={key} onValueChange={setKey} placeholder={`${template.key}-2030-01-02`} autoFocus />
-      <Field label="Metadata" value={metadata} onValueChange={setMetadata} area />
     </Dialog>
   );
 }

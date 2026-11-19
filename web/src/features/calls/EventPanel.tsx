@@ -21,7 +21,6 @@ import { clock, dl, isLive, joinOf, kindWords, lengthWords, minutes, parseDay, r
 import { joinNow, LiveMark, press, refsOf, useNameOf } from './parts';
 import {
   itemsQuery,
-  linkedTasksQuery,
   meetingQuery,
   transcriptQuery,
   upcomingCallsQuery,
@@ -226,35 +225,20 @@ function Guest({ actor }: { actor: string }) {
   );
 }
 
-/* ---------------------------------------------------------------- a meeting: its agenda, notes, summary and tasks */
+/* ---------------------------------------------------------------- a meeting: its notes, summary and tasks */
 
 export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void }) {
   useFollow({ meeting: id });
   const m = useQuery(meetingQuery(id));
   const items = useQuery(itemsQuery(id));
-  const linked = useQuery({ ...linkedTasksQuery(id), enabled: !!m.data });
   const liveId = m.data?.live_meeting_id ?? '';
   const chat = useQuery({ ...transcriptQuery(liveId), enabled: !!liveId, select: (d: LiveTranscript) => (d as LiveTranscript & { chat?: MeetChat[] }).chat ?? [] });
   const [tab, setTab] = useState<'summary' | 'transcript' | 'chat'>('summary');
   const [deleting, setDeleting] = useState(false);
-  const [text, setText] = useState('');
-  const [ref, setRef] = useState('');
   const summary = m.data?.outcome?.summary;
   const lines = Array.isArray(summary) ? summary : summary ? summary.split('\n').filter((l) => l.trim()) : [];
   const made = m.data?.outcome?.tasks ?? [];
-  const doc = items.data?.sections.doc ?? [];
   const todo = items.data?.sections.task ?? [];
-  const add = () => {
-    const t = text.trim();
-    if (!t) return;
-    setText('');
-    void press('calls.addItem', { meeting: id, section: 'doc', text: t });
-  };
-  const link = async () => {
-    const t = ref.trim();
-    if (!t) return;
-    if (await press('calls.linkTask', { meeting: id, task: t })) setRef('');
-  };
   if (m.isError)
     return (
       <SidePanel title="Meeting" target={`meeting:${id}`} onClose={onClose}>
@@ -274,8 +258,6 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
     ...(talk.length ? [{ value: 'chat' as const, label: 'Chat' }] : []),
   ];
   const on = tabs.some((t) => t.value === tab) ? tab : 'summary';
-  const madeIds = new Set(made.map((t) => t.id));
-  const links = (linked.data?.tasks ?? []).filter((t) => !madeIds.has(t.task_id));
   return (
     <SidePanel
       title={mm?.title ?? ''}
@@ -294,7 +276,7 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
         <>
           {(state === 'pending' || state === 'dismissed') && (
             <section className="rail-sec">
-              <p className="mv-notes">{state === 'pending' ? 'Only you see this' : 'Dismissed'}</p>
+              {state === 'dismissed' && <p className="mv-notes">Dismissed</p>}
               {state === 'pending' && mm ? (
                 <ShareBox m={mm} />
               ) : (
@@ -329,25 +311,6 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
               </ul>
             </section>
           )}
-          <section className="rail-sec">
-            <h3>Agenda</h3>
-            {doc.length > 0 && (
-              <ul className="acts">
-                {doc.map((it) => (
-                  <Item key={it.id} meeting={id} it={it} canEdit={canEdit} />
-                ))}
-              </ul>
-            )}
-            <form
-              className="mv-add"
-              onSubmit={(e) => {
-                e.preventDefault();
-                add();
-              }}
-            >
-              <Field label="Add to the agenda" labelHidden placeholder="Add to the agenda" value={text} onValueChange={setText} lead="plus" />
-            </form>
-          </section>
           {todo.length > 0 && (
             <section className="rail-sec">
               <h3>Action items</h3>
@@ -358,7 +321,7 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
               </ul>
             </section>
           )}
-          {(made.length > 0 || links.length > 0 || (canEdit && state === 'live')) && (
+          {made.length > 0 && (
             <section className="rail-sec">
               <h3>Tasks</h3>
               {made.map((t) => (
@@ -367,31 +330,6 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
                   <span>{t.title}</span>
                 </Link>
               ))}
-              {links.length > 0 && (
-                <ul className="acts">
-                  {links.map((t) => (
-                    <li key={t.task_id} className="act">
-                      <span />
-                      <Link to="/task/$task" params={{ task: t.task_id }} className="act-text">
-                        {t.title}
-                      </Link>
-                      <span />
-                      {canEdit ? <IconButton icon="close" label="Unlink" size="sm" quiet onClick={() => void press('calls.unlinkTask', { meeting: id, task: t.task_id })} /> : <span />}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {canEdit && state === 'live' && (
-                <form
-                  className="mv-add"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void link();
-                  }}
-                >
-                  <Field label="Link a task" labelHidden placeholder="Link a task" value={ref} onValueChange={setRef} lead="link" />
-                </form>
-              )}
             </section>
           )}
           {mm && (mm.can_edit || mm.note || mm.notes) && (

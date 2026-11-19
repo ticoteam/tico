@@ -42,8 +42,10 @@ vi.mock('@/data', async (orig) => ({
   recordVisit: vi.fn(),
   useHeldCount: () => 0,
 }));
-vi.mock('@/features/start/exports', () => ({
-  FirstRun: () => null,
+// A feature's routing.ts is what the first load carries (the gate, counts, reads); its exports.ts the parts the root
+// loads when they first have something to show.
+vi.mock('@/features/start/exports', () => ({ FirstRun: () => null }));
+vi.mock('@/features/start/routing', () => ({
   StartScreen: ({ screen }: { screen: string }) => <p>start: {screen}</p>,
   useStartGate: () => ({ screen: gate.screen, error: null, retry: () => {}, busy: false, firstRun: false }),
 }));
@@ -52,18 +54,24 @@ vi.mock('@/features/calls/exports', () => ({
   CallBar: () => <div>call bar</div>,
   CallSide: () => null,
   RingCard: () => null,
+}));
+vi.mock('@/features/calls/routing', () => ({
+  ringingQuery: q('ringing', { calls: [] }),
   TOGGLE_MUTE: 'calls.toggleMute',
   useCall: () => ({ muted: false, phase: call.phase }),
   isCallActive: (c: { phase: string }) => c.phase === 'live',
 }));
-vi.mock('@/features/tasks/exports', () => ({ flowQuery: q('flow', { count: 4, items: [] }), pipelinesQuery: q('pipelines', []), roadmapPipeline: () => null }));
-vi.mock('@/features/team/exports', () => ({ TeammateChat: () => null, teamSlug: (t: string) => t, whoHref: () => '/' }));
-vi.mock('@/features/threads/exports', () => ({
-  ChatSheet: () => <p>a teammate chat</p>,
+vi.mock('@/features/library/routing', () => ({ useFileOpen: () => false }));
+vi.mock('@/features/tasks/routing', () => ({ flowQuery: q('flow', { count: 4, items: [] }), pipelinesQuery: q('pipelines', []), roadmapPipeline: () => null }));
+vi.mock('@/features/team/exports', () => ({ TeammateChat: () => null }));
+vi.mock('@/features/team/routing', () => ({ teamSlug: (t: string) => t, whoHref: () => '/' }));
+vi.mock('@/features/threads/exports', () => ({ ChatSheet: () => <p>a teammate chat</p> }));
+vi.mock('@/features/threads/routing', () => ({
   catchUpQuery: q('catch-up', { count: 0 }),
   updateListQuery: () => ({ queryKey: ['updates'], queryFn: async () => ({ unread: 0 }), initialPageParam: '', getNextPageParam: () => undefined }),
 }));
-vi.mock('@/features/support/exports', () => ({ SUPPORT_CHAT: 'support', SupportChat: () => <p>support chat</p>, supportUnreadQuery: q('support-unread', 2) }));
+vi.mock('@/features/support/exports', () => ({ SupportChat: () => <p>support chat</p> }));
+vi.mock('@/features/support/routing', () => ({ SUPPORT_CHAT: 'support', supportUnreadQuery: q('support-unread', 2) }));
 vi.mock('@/pagekinds', async (orig) => ({
   ...(await orig<object>()),
    PanelHost: () => null, usePagePanelOpen: () => false }));
@@ -129,7 +137,7 @@ describe('the root', () => {
   it('draws Tico support as the second chat for ?chat=support, and the menu shows its unread count', async () => {
     show('/?chat=support');
     const sheet = await screen.findByRole('complementary', { name: 'Tico support' });
-    expect(sheet.textContent).toContain('support chat');
+    expect(await within(sheet).findByText('support chat')).toBeTruthy();
     expect(document.querySelector('.shell-frame')?.getAttribute('data-arrangement')).toBe('chat');
     expect(await screen.findByRole('button', { name: 'Tico support, 2 unread' })).toBeTruthy();
   });
@@ -148,7 +156,7 @@ describe('the root', () => {
     people(MAYA, QA);
     show('/?chat=bot:qa');
     const sheet = await screen.findByRole('complementary', { name: 'Chat with QA Owner' });
-    expect(sheet.textContent).toContain('a teammate chat');
+    expect(await within(sheet).findByText('a teammate chat')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Home' })).toBeTruthy();
     expect(document.querySelector('.shell-frame')?.getAttribute('data-arrangement')).toBe('chat');
   });
@@ -203,6 +211,19 @@ describe('the desktop app', () => {
     try {
       show('/');
       await waitFor(() => expect(t.reportCall).toHaveBeenCalledWith(true));
+    } finally {
+      call.phase = 'idle';
+    }
+  });
+
+  it('loads the call bar only while a call is on: the first load carries the shell alone', async () => {
+    show('/');
+    await screen.findByRole('navigation', { name: 'Main' });
+    expect(screen.queryByText('call bar')).toBeNull();
+    call.phase = 'live';
+    try {
+      show('/');
+      expect(await screen.findByText('call bar')).toBeTruthy();
     } finally {
       call.phase = 'idle';
     }

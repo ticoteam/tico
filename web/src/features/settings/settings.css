@@ -106,7 +106,6 @@ div.row{cursor:default}
 /* Add computer: a command, its note above, its copy button at the right */
 .set-cmd{display:grid;gap:var(--s-1)}
 .set-cmd-note{font-size:var(--t-sm);color:var(--ink-2)}
-.set-pre{white-space:pre-wrap;overflow-wrap:anywhere}
 .set-cmd-row{display:flex;align-items:flex-start;gap:var(--s-2)}
 .set-cmd-row .fs-code{flex:1;min-width:0}
 .set-more{display:grid;gap:var(--s-3)}
@@ -257,12 +256,6 @@ html[data-layout="cards"] .g-fleet>.fl-more{margin-right:calc(var(--s-3) * -1)}
 .set-link .set-out{display:grid;margin-left:auto;color:var(--faint)}
 .set-link .set-out .ico{width:13px;height:13px;stroke-width:2}
 /* gap wave (Usage, History, Billing): runs, changes, billing days, the limit panel's figure and lines, the filter */
-.g-run{--g:var(--av-sm) minmax(0,1fr) 136px 52px 64px 72px 36px}
-.g-set{--g:var(--av-sm) minmax(0,1fr) auto 160px}
-.g-bday{--g:minmax(0,1fr) 96px}
-button.row.g-bday{width:100%;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer}
-.row.g-bday.is-line{padding-left:var(--s-4)}
-.row.g-bday.is-line .row-title{color:var(--muted)}
 .u-fig p{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--s-2);margin:0}
 .u-fig b{font-size:var(--t-lg);font-weight:var(--w-strong)}
 .u-fig span{color:var(--muted)}
@@ -270,12 +263,4 @@ button.row.g-bday{width:100%;border:0;background:none;font:inherit;color:inherit
 .u-line .row-title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .u-more{margin:0;padding:var(--s-1) 0;color:var(--muted);font-size:var(--t-sm)}
 .u-filter{display:grid;gap:var(--s-2);min-width:220px;max-width:calc(100vw - 32px)}
-html[data-layout="cards"] .g-run{--g:var(--av-sm) minmax(0,1fr) auto}
-html[data-layout="cards"] .g-run>:nth-child(n+3):not(.row-fig.r-cost){display:none}
-html[data-layout="cards"] .g-set{--g:var(--av-sm) minmax(0,1fr) auto;grid-template-areas:"av title act" ". date date"}
-html[data-layout="cards"] .g-set>:first-child{grid-area:av;align-self:start}
-html[data-layout="cards"] .g-set .row-title{grid-area:title;white-space:normal;line-height:1.35}
-html[data-layout="cards"] .g-set .row-act{grid-area:act}
-html[data-layout="cards"] .g-set .row-age{grid-area:date;text-align:left}
-html[data-layout="cards"] .g-bday{--g:minmax(0,1fr) auto}
 html[data-layout="cards"] .g-line .row-title{white-space:normal;line-height:1.35}

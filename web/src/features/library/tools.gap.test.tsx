@@ -11,7 +11,7 @@ import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { newAddressFor } from '@/oldAddress/map';
 import { apiToolQuery, inboxesQuery, mailboxQuery, toolsQuery, websiteToolQuery } from './queries';
-import { mailboxMailQuery, mailboxSendsQuery, servicePageQuery, servicesQuery, slackLinksQuery, teamsQuery, vaultQuery } from './toolKeys';
+import { mailboxMailQuery, mailboxSendsQuery, servicePageQuery, servicesQuery, teamsQuery, vaultQuery } from './toolKeys';
 import { ToolsPage } from './ToolsPage';
 
 /* The Tools gap rows: a stored key's own page, a declared tool, Slack's links, a mailbox, who reads an address, a
@@ -43,7 +43,6 @@ const READS: [string, () => readonly unknown[]][] = [
   ['/api/v2/api-tools/t1', () => apiToolQuery('t1').queryKey],
   ['/api/v2/website-tools/w1', () => websiteToolQuery('w1').queryKey],
   ['/api/v2/mailboxes/m1', () => mailboxQuery('m1').queryKey],
-  ['/api/v2/slack/links', () => slackLinksQuery.queryKey],
 ];
 /** Each write answers `reply` (or `{}`); each read what the cache holds for it, else `reply`, else `{}`. */
 function serve(reply: (url: string, method: string) => unknown = () => undefined) {
@@ -208,23 +207,6 @@ describe('a declared tool', () => {
       error: 'not_allowed',
     });
   });
-
-  it("Slack lists its linked threads; Check again and Unlink; linking is the person's @s787", async () => {
-    const sent = serve();
-    queryClient.setQueryData(toolsQuery.queryKey, { rows: [indexRow({ id: 'slack', kind: 'slack', name: 'Slack' })] } as never);
-    queryClient.setQueryData(slackLinksQuery.queryKey, {
-      available: true,
-      next_cursor: null,
-      links: [{ id: 'l1', thread_id: 'th1', channel: { id: 'C1', name: 'general', private: false }, state: 'suspended', reason: '', updated_at: '2026-11-18T00:00:00Z' }],
-    } as never);
-    at('/library/tools?tool=slack', <ToolsPage search={{ tool: 'slack' }} />);
-    expect(await screen.findByText('#general')).toBeTruthy();
-    expect(screen.getByText('Paused')).toBeTruthy();
-    await pick('#general options', 'Check again');
-    await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/slack/links/l1/resume', method: 'POST', body: {} }]));
-    expect(await run('tools.linkSlack', { thread: 'th1', channel: '#general', history: false }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect(await run('tools.unlinkSlack', { link: 'l1' }, { via: 'tico' })).toMatchObject({ ok: true });
-  });
 });
 
 /* ---------------------------------------------------------------- a mailbox */
@@ -319,10 +301,10 @@ describe('a Tico address', () => {
   });
 });
 
-/* ---------------------------------------------------------------- a website, and who sees a tool */
+/* ---------------------------------------------------------------- a website */
 
 const website = (o: Record<string, unknown> = {}) => ({
-  tool: { id: 'w1', name: 'Sample site', sites: ['app.example.com'], central_only: false, kind: 'website' },
+  tool: { id: 'w1', name: 'Sample site', sites: ['app.example.com'], kind: 'website' },
   accounts: [
     {
       id: 'a1',
@@ -349,7 +331,7 @@ const website = (o: Record<string, unknown> = {}) => ({
 });
 
 describe('a website', () => {
-  it('gives and takes an account, removes it, deletes the website and turns on Central only @s865', async () => {
+  it('gives and takes an account, removes it and deletes the website @s865', async () => {
     const sent = serve();
     queryClient.setQueryData(toolsQuery.queryKey, { rows: [indexRow({ id: 'website:w1', kind: 'website', name: 'Sample site' })] } as never);
     queryClient.setQueryData(websiteToolQuery('w1').queryKey, website() as never);
@@ -357,12 +339,10 @@ describe('a website', () => {
     const site = await page('Sample site');
     await pick('Add someone', 'Support');
     fireEvent.click(screen.getByRole('button', { name: 'Remove Pat Sample' }));
-    fireEvent.click(screen.getByRole('switch', { name: 'Central only' }));
     await waitFor(() =>
       expect(writes(sent)).toEqual([
         { url: '/api/v2/website-tools/w1/accounts/a1/access/group%3Ag1', method: 'PUT', body: { on: true } },
         { url: '/api/v2/website-tools/w1/accounts/a1/access/human%3Ap1', method: 'PUT', body: { on: false } },
-        { url: '/api/v2/website-tools/w1', method: 'PATCH', body: { central_only: true } },
       ]),
     );
     expect(await run('tools.setAccountAccess', { tool: 'w1', account: 'a1', subject: 'bots', on: true }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
@@ -376,51 +356,6 @@ describe('a website', () => {
     fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Delete Sample site?' })).getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(writes(sent).at(-1)).toEqual({ url: '/api/v2/website-tools/w1', method: 'DELETE', body: null }));
     await waitFor(() => expect(router.state.location.search).toEqual({}));
-  });
-});
-
-const apiTool = (o: Record<string, unknown> = {}) => ({
-  tool: { id: 't1', name: 'Sample API', base_url: 'https://api.example.com', auth_scheme: 'bearer', delivery: 'proxy', check_path: '/v1/me', everyone_reads: false, private: false },
-  keys: [],
-  access: [],
-  checks: [],
-  recent: [],
-  settings: [],
-  status: { tone: 'ok', text: 'Working' },
-  can_manage: true,
-  can_set_audience: true,
-  everyone_reads: { enforceable: true, on: false },
-  private: false,
-  audience: null,
-  seen_by: [],
-  mcp: null,
-  ...o,
-});
-
-describe('who sees an API tool', () => {
-  it('turns Everyone can read on and makes it Only listed; Tico may only close it @s926', async () => {
-    const sent = serve();
-    queryClient.setQueryData(toolsQuery.queryKey, { rows: [indexRow({ id: 'api:t1', name: 'Sample API' })] } as never);
-    queryClient.setQueryData(apiToolQuery('t1').queryKey, apiTool() as never);
-    at('/library/tools?tool=api%3At1', <ToolsPage search={{ tool: 'api:t1' }} />);
-    await page('Sample API');
-    fireEvent.click(screen.getByRole('switch', { name: 'Everyone can read' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Only listed' }));
-    await waitFor(() =>
-      expect(writes(sent)).toEqual([
-        { url: '/api/v2/api-tools/t1', method: 'PATCH', body: { everyone_reads: true } },
-        { url: '/api/v2/api-tools/t1', method: 'PATCH', body: { audience: { people: [], teams: [], bots: [] } } },
-      ]),
-    );
-    expect(await run('tools.setEveryoneReads', { tool: 't1', on: true }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect(await run('tools.setEveryoneReads', { tool: 't1', on: false }, { via: 'tico' })).toMatchObject({ ok: true });
-    expect(await run('tools.setSeenBy', { kind: 'api', tool: 't1', audience: null }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    queryClient.setQueryData(apiToolQuery('t1').queryKey, apiTool({ private: true, audience: { people: ['p1'], teams: [], bots: [] } }) as never);
-    expect(await run('tools.setSeenBy', { kind: 'api', tool: 't1', audience: { people: ['p1', 'p2'], teams: [], bots: [] } }, { via: 'tico' })).toMatchObject({
-      ok: false,
-      error: 'not_allowed',
-    });
-    expect(await run('tools.setSeenBy', { kind: 'api', tool: 't1', audience: { people: [], teams: [], bots: [] } }, { via: 'tico' })).toMatchObject({ ok: true });
   });
 });
 

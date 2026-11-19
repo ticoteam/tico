@@ -1,4 +1,4 @@
-import { queryOptions, type QueryClient } from '@tanstack/react-query';
+import { keepPreviousData, queryOptions, type QueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '@/api/client';
 import type {
   FinanceAction,
@@ -887,6 +887,8 @@ export const txFilteredQuery = (f: TxFilter, as?: string) =>
     queryFn: ({ signal }) =>
       api.get<FinanceTransactions>(viewAs(`${TRANSACTIONS_URL}&${qs({ source: f.src, status: f.status, account_id: f.line })}`, as), { signal }),
     ...quiet,
+    // another filter keeps the last rows on screen until the answer comes, rather than the list's loading state
+    placeholderData: keepPreviousData,
   });
 
 /** Customers, as vendorsQuery reads vendors. */

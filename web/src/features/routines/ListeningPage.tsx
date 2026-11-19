@@ -19,7 +19,7 @@ import { Face, Find, HeadSwitch, press, pressOut, RemoveItem, RuleRow, useConfir
 import { matchesQuery, runsQuery, sourcesQuery, watchesQuery, watchQuery } from './queries';
 import { runLink } from './RoutinePanel';
 import type { ListenSource, Match, Routine, WatchSource } from './types';
-import { agentWords, cap, limitsWords, timeChoices } from './words';
+import { agentWords, cap, limitsWords } from './words';
 import './routines.css';
 
 /* Listening (rules.js listeningScreen, watchScreen): the watches as a List; one watch as a Record with two tabs, its
@@ -411,29 +411,17 @@ function AddSource({ watch, open, onOpenChange }: { watch: string; open: boolean
   );
 }
 
-const UNITS = [
-  { value: 'hour', label: 'Hour' },
-  { value: 'day', label: 'Day' },
-  { value: 'week', label: 'Week' },
-  { value: 'month', label: 'Month' },
-] as const;
-type Unit = (typeof UNITS)[number]['value'];
 type KeepRule = { do: 'keep' | 'drop'; tag: string; text: string };
 
-/** A watch's name and what it keeps: its keep and drop sentences, how many it sends each hour, day, week or month,
-   and when a day's batch goes (listening.ts lstFields). Duplicates are always removed. */
+/** A watch's name and what it keeps: its keep and drop sentences (listening.ts lstFields). Duplicates are always
+   removed. */
 function WatchSettings({ w, onClose }: { w: Routine; onClose: () => void }) {
   const t = w.trigger;
   const [name, setName] = useState(w.name ?? '');
   const [rules, setRules] = useState<KeepRule[]>((t.rules ?? []).map((r) => ({ do: r.do === 'drop' ? 'drop' : 'keep', tag: r.tag ?? '', text: r.text })));
-  const [limits, setLimits] = useState<{ count: string; per: Unit }[]>((t.limits ?? [{ count: 10, per: 'day' }]).map((l) => ({ count: String(l.count), per: (UNITS.find((u) => u.value === l.per)?.value ?? 'day') as Unit })));
-  const [at, setAt] = useState(t.at ?? '08:00');
   const [busy, setBusy] = useState(false);
-  const hourly = limits.some((l) => l.per === 'hour');
-  const badLimit = limits.some((l) => !(Number.isInteger(Number(l.count)) && Number(l.count) >= 1 && Number(l.count) <= 100));
-  const ready = !!name.trim() && !!limits.length && !badLimit && rules.every((r) => r.text.trim() && (r.do === 'drop' || r.tag.trim()));
+  const ready = !!name.trim() && rules.every((r) => r.text.trim() && (r.do === 'drop' || r.tag.trim()));
   const setRule = (i: number, patch: Partial<KeepRule>) => setRules(rules.map((r, j) => (j === i ? { ...r, ...patch } : r)));
-  const setLimit = (i: number, patch: Partial<{ count: string; per: Unit }>) => setLimits(limits.map((l, j) => (j === i ? { ...l, ...patch } : l)));
   const save = async () => {
     if (!ready) return;
     setBusy(true);
@@ -441,8 +429,6 @@ function WatchSettings({ w, onClose }: { w: Routine; onClose: () => void }) {
       watch: w.id,
       name: name.trim(),
       rules: rules.map((r) => (r.do === 'drop' ? { do: 'drop', text: r.text.trim() } : { do: 'keep', tag: r.tag.trim(), text: r.text.trim() })),
-      limits: limits.map((l) => ({ count: Number(l.count), per: l.per })),
-      ...(hourly ? {} : { at }),
     });
     setBusy(false);
     if (ok) onClose();
@@ -488,28 +474,6 @@ function WatchSettings({ w, onClose }: { w: Routine; onClose: () => void }) {
             </div>
           ))}
         </fieldset>
-        <fieldset className="rr-list">
-          <legend>
-            Rate limits
-            {limits.length < UNITS.length && (
-              <Verb onClick={() => setLimits([...limits, { count: '10', per: UNITS.find((u) => !limits.some((l) => l.per === u.value))?.value ?? 'day' }])}>Add limit</Verb>
-            )}
-          </legend>
-          {limits.map((l, i) => (
-            <div key={i} className="rr-line" role="group" aria-label={`Limit ${i + 1}`}>
-              <Field label="How many" labelHidden type="number" value={l.count} onValueChange={(v) => setLimit(i, { count: v })} />
-              <Select
-                label="Each"
-                labelHidden
-                options={UNITS.filter((u) => u.value === l.per || !limits.some((x) => x.per === u.value))}
-                value={l.per}
-                onValueChange={(v: Unit) => setLimit(i, { per: v })}
-              />
-              {limits.length > 1 && <IconButton icon="close" label="Remove limit" size="sm" quiet onClick={() => setLimits(limits.filter((_, j) => j !== i))} />}
-            </div>
-          ))}
-        </fieldset>
-        {!hourly && <Select label="At" options={timeChoices(at)} value={at} onValueChange={setAt} />}
       </div>
     </Dialog>
   );

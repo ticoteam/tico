@@ -3,7 +3,7 @@ import { useLocation } from '@tanstack/react-router';
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { useAction } from '@/actions';
 import { useActor, type Actor } from '@/data';
-import { firstPipeline, pipelinesQuery } from '@/features/tasks/exports';
+import { firstPipeline, pipelinesQuery } from '@/features/tasks/routing';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -14,6 +14,7 @@ import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
 import { Pill } from '@/kit/Pill';
 import { Row, TaskRow } from '@/kit/Row';
 import { Select, type SelectOption } from '@/kit/Select';
+import { VirtualList } from '@/kit/VirtualList';
 import { whoHref } from './model';
 import type { OwnTask } from './queries';
 import { chatAddress } from '@/lib';
@@ -44,6 +45,27 @@ export function OwnRow({ task, me, sub }: { task: OwnTask; me: string | undefine
       late={task.status === 'open' && !!task.late}
       pills={sub ? <span className="row-stage">{sub}</span> : undefined}
       at={task.updated_at ?? new Date(0).toISOString()}
+    />
+  );
+}
+
+/** Past this many rows a task list draws only what is on screen (builder rules: lists past 100 rows are virtual). */
+export const LONG_LIST = 100;
+
+/** A teammate's tasks as OwnRows. Past LONG_LIST rows, only those on screen are drawn, in a scroller twelve rows high;
+    `onEnd` reads the next page when its last row comes into view. */
+export function OwnRows({ tasks, me, label, onEnd }: { tasks: readonly OwnTask[]; me: string | undefined; label: string; onEnd?: () => void }) {
+  if (tasks.length <= LONG_LIST) return tasks.map((t) => <OwnRow key={t.id} task={t} me={me} />);
+  return (
+    <VirtualList
+      className="tm-long"
+      label={label}
+      items={tasks}
+      getKey={(t) => t.id}
+      estimateSize={34}
+      measure
+      onReachEnd={onEnd}
+      renderItem={(t) => <OwnRow task={t} me={me} />}
     />
   );
 }

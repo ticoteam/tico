@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { FinancePage, loadFinance, validateFinanceSearch } from '@/features/money/exports';
+import { FinancePage } from '@/features/money/exports';
+import { loadFinance, validateFinanceSearch } from '@/features/money/routing';
 
 /** Finance: `?tab=` picks the page, `?panel=line:<account>` or `?panel=budget:<id>` opens a row beside. */
 export const Route = createFileRoute('/company/finance')({

@@ -1,5 +1,6 @@
 import { createFileRoute, redirect } from '@tanstack/react-router';
-import { isSection, loadSection, SettingsPage } from '@/features/settings/exports';
+import { SettingsPage } from '@/features/settings/exports';
+import { isSection, loadSection } from '@/features/settings/routing';
 
 /* `/settings/<section>`: one section of Settings. `?open=<id>` is the row opened in it (a person, a computer, a
    subscription); `?who=<actor>` filters History. An unknown section goes to the list. */

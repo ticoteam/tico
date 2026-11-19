@@ -23,7 +23,7 @@ import type {
   UsageFigures,
   UsageLimits,
 } from '@/api/schema';
-import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
+import { QUIET_STALE_MS, configQuery, queryClient, quietRoot, write } from '@/data';
 import type { TaskCaps } from '@/api/schema';
 import type { ProductRepositoryPreview, ProductRepositoryResult, Repository, RepositoryList } from '@/api/schema';
 
@@ -987,13 +987,8 @@ export const purgeQueue = (scope: string) =>
 export interface RoadmapView {
   /** The labels (tag keys) whose tasks show on a public page at /public/roadmaps/<label>. */
   labels: string[];
-  cors_origins: string[];
-  action_limit: number;
-  suggestion_limit: number;
   /** An agent's public words wait for a person's OK. */
   bot_public_approval: boolean;
-  suggestions_bot: string | null;
-  suggestions_receiver?: { bot: string | null; name: string | null; source: string };
 }
 
 export const roadmapQuery = queryOptions({
@@ -1084,7 +1079,7 @@ export const addContactField = (type: string, name: string, kind: FieldKind, des
 
 // ---- company gaps (anchor: General, People, tokens, Security and Tico support add their calls below) ----
 
-// People: who can join, the agents a person may have, sign-in, and the people who left.
+// People: who can join, the agents a person may have, and the people who left.
 
 /** What GET /api/v2/access also says (backend/access.py view) that AccessView leaves out. */
 export interface AccessJoin {
@@ -1121,15 +1116,6 @@ export const setAgentLimit = (limit: number) =>
     send: (idempotencyKey) => api.put('/api/v2/access/limits', { member_bot_limit: limit }, { idempotencyKey }),
   });
 
-/** Whether a person may sign in; off signs their open browsers out at once (POST /api/v2/access/humans/{id}). */
-export const setSignIn = (pid: string, on: boolean) =>
-  write({
-    key: accessQuery.queryKey,
-    optimistic: patchPerson(pid, { sign_in: on }),
-    send: (idempotencyKey) => api.post(`/api/v2/access/humans/${enc(pid)}`, { sign_in: on }, { idempotencyKey }),
-  });
-
-/** Bring back someone who left. */
 export const restorePerson = (pid: string) =>
   write({
     key: accessQuery.queryKey,
@@ -1146,7 +1132,6 @@ export const forgetPerson = (pid: string) =>
   });
 
 /** Add a person and send no email: the old app's plain Add. */
-export const addPersonQuietly = (email: string, name: string) => api.post<{ person: string }>('/api/v2/access/humans', { email, name });
 
 // Tokens: everyone's, for owners and admins (GET /api/v2/access/tokens), revoked with the same call as your own.
 
@@ -1172,7 +1157,7 @@ export const revokeAnyToken = (id: string) => {
   });
 };
 
-// Screening: what it caught lately (on GET /api/v2/screening) and the built-in samples run on demand.
+// Screening: what it caught lately (on GET /api/v2/screening).
 
 export interface ScreeningCaught {
   at?: string;
@@ -1182,16 +1167,6 @@ export interface ScreeningCaught {
   task?: string | null;
 }
 export type ScreeningFull = ScreeningView & { recent?: ScreeningCaught[] };
-
-export interface ScreeningTestRun {
-  passed: number;
-  total: number;
-  model?: string | null;
-  results: { name: string; attack?: boolean; action: string; score?: number | null; ok?: boolean }[];
-}
-
-/** Four attacks and four lookalikes through the check; nothing is held or kept (POST /api/v2/screening/test). */
-export const testScreening = () => api.post<ScreeningTestRun>('/api/v2/screening/test', {});
 
 // Tico support signs in for a while, from one of the person's own open requests (backend/support_access.py).
 
@@ -1260,134 +1235,10 @@ export const stopSupportAccess = (sid: string) =>
     send: (idempotencyKey) => api.post(`/api/v2/support/access/${enc(sid)}/stop`, {}, { idempotencyKey }),
   });
 
-// General: the team icon, privacy, storage and repositories.
+// General: the team icon and repositories.
 
 /** PNG, JPEG or WebP up to 1 MB, sent as the file itself (owner; backend/team_icon.py). */
 export const setTeamIcon = (file: Blob) => api.post<{ url: string }>('/api/v2/team/icon', file);
-
-export interface UsageCountView {
-  enabled: boolean;
-  /** Why nothing is sent: "setting" when it was turned off here, else the server's own reason. */
-  off_by: string;
-  install_id: string;
-  doc?: string;
-}
-
-export const usageCountQuery = queryOptions({
-  queryKey: ['settings', 'usage-count'],
-  queryFn: ({ signal }) => api.get<UsageCountView>('/api/v2/system/usage-count', { signal }),
-  ...quiet,
-});
-
-export const setUsageCount = (enabled: boolean) =>
-  write({
-    key: usageCountQuery.queryKey,
-    optimistic: (v: UsageCountView | undefined) => v && { ...v, enabled, off_by: enabled ? '' : 'setting' },
-    send: (idempotencyKey) => api.put('/api/v2/system/usage-count', { enabled }, { idempotencyKey }),
-  });
-
-export const resetInstallId = () =>
-  write({
-    key: usageCountQuery.queryKey,
-    optimistic: (v: UsageCountView | undefined) => v,
-    send: (idempotencyKey) => api.post('/api/v2/system/usage-count/reset', {}, { idempotencyKey }),
-  });
-
-export interface SuggestionPrivacy {
-  share_stats_for_suggestions: boolean;
-  report_suggestion_outcomes: boolean;
-  /** Sharing needs Tico Gateway. */
-  available: boolean;
-}
-
-export const suggestionsQuery = queryOptions({
-  queryKey: ['settings', 'suggestions'],
-  queryFn: ({ signal }) => api.get<SuggestionPrivacy>('/api/v2/system/suggestions', { signal }),
-  ...quiet,
-});
-
-export const setSuggestionPrivacy = (field: 'share_stats_for_suggestions' | 'report_suggestion_outcomes', on: boolean) =>
-  write({
-    key: suggestionsQuery.queryKey,
-    optimistic: (v: SuggestionPrivacy | undefined) => v && { ...v, [field]: on },
-    send: (idempotencyKey) => api.put('/api/v2/system/suggestions', { [field]: on }, { idempotencyKey }),
-  });
-
-export interface StorageBucket {
-  location: string;
-  region: string;
-  bucket: string;
-  prefix?: string | null;
-  access_key_id: string;
-  retired_at?: string;
-}
-
-/** Where the company's files go (backend/company_storage.py, tico_storage.py). */
-export interface StorageView {
-  active: StorageBucket | null;
-  server: { mode: string; location?: string };
-  tico?: { state: string; label?: string; address?: string; error?: string; keep_until?: string | null } | null;
-  copy: { running?: boolean; failed?: number; done: number; total: number };
-  earlier: StorageBucket[];
-  doc?: string;
-}
-
-export interface StorageMoveView {
-  estimate: { files?: number; bytes: number };
-  move?: { state: string; moved_files: number; estimate_files: number; moved_bytes: number; estimate_bytes: number; error?: string | null } | null;
-}
-
-export const storageQuery = queryOptions({
-  queryKey: ['settings', 'storage'],
-  queryFn: ({ signal }) => api.get<StorageView>('/api/v2/system/storage', { signal }),
-  ...quiet,
-});
-
-export const storageMoveQuery = queryOptions({
-  queryKey: ['settings', 'storage', 'move'],
-  queryFn: ({ signal }) => api.get<StorageMoveView>('/api/v2/system/storage/move', { signal }),
-  ...quiet,
-});
-
-export interface BucketForm {
-  bucket: string;
-  region: string;
-  prefix: string;
-  access_key_id: string;
-  /** Sent once and sealed on the server; empty keeps the saved one for the same key id. */
-  secret_access_key: string;
-}
-
-/** The server writes and reads back a small object before it takes the bucket. */
-export const saveBucket = (b: BucketForm) =>
-  write({
-    key: storageQuery.queryKey,
-    optimistic: (v: StorageView | undefined) => v,
-    send: (idempotencyKey) => api.put('/api/v2/system/storage', b, { idempotencyKey }),
-  });
-
-/** New files go to the server's own storage again; files already in the bucket keep opening from it. */
-export const dropBucket = () =>
-  write({
-    key: storageQuery.queryKey,
-    optimistic: (v: StorageView | undefined) => v && { ...v, active: null },
-    send: (idempotencyKey) => api.delete('/api/v2/system/storage', { idempotencyKey }),
-  });
-
-export const checkHosting = () =>
-  write({
-    key: storageQuery.queryKey,
-    optimistic: (v: StorageView | undefined) => v,
-    send: (idempotencyKey) => api.post('/api/v2/system/storage/tico/check', {}, { idempotencyKey }),
-  });
-
-/** Copy every file, every version, to where new files go now; each copy is checked, nothing is deleted. */
-export const moveFiles = (bytes: number) =>
-  write({
-    key: storageMoveQuery.queryKey,
-    optimistic: (v: StorageMoveView | undefined) => v,
-    send: (idempotencyKey) => api.post('/api/v2/system/storage/move', { expect_bytes: bytes }, { idempotencyKey }),
-  });
 
 export type Repo = Repository & { archived?: boolean };
 export type ProductRepoPreview = ProductRepositoryPreview;
@@ -1437,24 +1288,20 @@ export const createRepo = (p: ProductRepositoryPreview) =>
     confirmed: true,
   });
 
-// ---- gap wave: usage filters, pools and task caps; history pages, runs and changes; billing months; Gateway checks ----
+// ---- gap wave: usage filters, pools and task caps; history pages; billing months; Gateway checks ----
 
-/** Spend over a range, or two UTC days of one's own (`from`/`to`), narrowed by team (`department`) and by the
-    dimensions the server keeps (harness, model, effort, subscription). Not narrowed, it is the range's own read. */
+/** Spend over a range, narrowed by team (`department`) or model. Not narrowed, it is the range's own read. */
 export interface UsageWhere {
   range: UsageRange;
-  from?: string;
-  to?: string;
   filter?: Record<string, string>;
 }
 
-export const USAGE_FILTERS = ['department', 'harness', 'model', 'effort', 'subscription'] as const;
+export const USAGE_FILTERS = ['department', 'model'] as const;
 
-const narrowed = (w: UsageWhere) => !!(w.from && w.to) || Object.values(w.filter ?? {}).some(Boolean);
+const narrowed = (w: UsageWhere) => Object.values(w.filter ?? {}).some(Boolean);
 
 function whereParams(w: UsageWhere): URLSearchParams {
-  const span = w.from && w.to ? { from: w.from, to: w.to } : rangeDays(w.range);
-  const q = new URLSearchParams(span);
+  const q = new URLSearchParams(rangeDays(w.range));
   for (const k of USAGE_FILTERS) if (w.filter?.[k]) q.set(k, w.filter[k]);
   return q;
 }
@@ -1508,14 +1355,6 @@ export const usageChoicesQuery = (w: UsageWhere) =>
     },
     ...quiet,
   });
-
-/** One agent's days over the span, for its CSV (the old app's Export CSV). */
-export const agentDays = async (w: UsageWhere, bot: string) => {
-  const q = whereParams(w);
-  q.set('bot', bot);
-  const u = await api.get<Usage>(`/api/v2/usage?${q}`);
-  return { from: u.from, to: u.to, daily: (u.daily ?? []) as Record<string, unknown>[] };
-};
 
 /** A combined limit: the whole company's, or a team's (its spend counts every agent under it). */
 export interface UsagePool {
@@ -1581,93 +1420,29 @@ export const setTaskCap = (sender: string, receiver: string, perDay: number | nu
         : api.put('/api/v2/task-caps', { sender, receiver, per_day: perDay }, { idempotencyKey }),
   });
 
-/** The history read's filters as the server takes them: who, kind (one of HISTORY_KINDS), and the page before. */
-export function historyParams(who?: string, kind = '', before = ''): string {
+/** The history read's filters as the server takes them: who, and the page before. */
+export function historyParams(who?: string, before = ''): string {
   const q = new URLSearchParams(historyFilter(who).slice(1));
-  if (kind) q.set('kind', kind);
   if (before) q.set('before', before);
   const s = q.toString();
   return s ? `?${s}` : '';
 }
 
-/** One page of the log; the first page with no kind is `historyFor(who)`. `before`: the page's `next` cursor. */
-export const historyPage = (who?: string, kind = '', before = '') =>
-  !kind && !before
+/** One page of the log; the first page is `historyFor(who)`. `before`: the page's `next` cursor. */
+export const historyPage = (who?: string, before = '') =>
+  !before
     ? historyFor(who)
     : queryOptions({
-        queryKey: ['settings', 'history', who ?? '', kind, before],
+        queryKey: ['settings', 'history', who ?? '', before],
         queryFn: ({ signal }) =>
-          api.get<{ items: HistoryItem[]; names: Record<string, string>; next?: string | null }>(`/api/v2/history${historyParams(who, kind, before)}`, { signal }),
+          api.get<{ items: HistoryItem[]; names: Record<string, string>; next?: string | null }>(`/api/v2/history${historyParams(who, before)}`, { signal }),
         ...quiet,
       });
 
-/** A run as GET /api/runs lists it (backend/views.py run_view). */
-export interface RunRow {
-  id?: string | null;
-  employee: string;
-  state: string;
-  exit: number | null;
-  outcome?: string | null;
-  failure_reason?: string | null;
-  didnt_start?: boolean;
-  cost_usd?: number | null;
-  output_tokens?: number | null;
-  ran_on?: { segments?: { model?: string | null; effort?: string | null }[] } | null;
-  fallback?: string | null;
-  resumed?: boolean;
-  duration_s?: number | null;
-  finished_at?: string | null;
-}
-
-/** The newest runs this person may read; `failed`: only the day's failed ones, as Health counts them. */
-export const runsQuery = (failed: boolean) =>
-  queryOptions({
-    queryKey: ['settings', 'runs', failed ? 'failed' : 'all'],
-    queryFn: ({ signal }) => api.get<RunRow[]>(failed ? '/api/runs?failed=true' : '/api/runs', { signal }),
-    ...quiet,
-  });
-
-/** One change to an agent's settings (backend/settings_admin.py history); the owner's list. */
-export interface SettingsChange {
-  id: string;
-  bot: string;
-  field: string;
-  actor: string;
-  via?: string | null;
-  created_at: string;
-  undone_at?: string | null;
-  can_undo?: boolean;
-  truncated?: boolean;
-  before?: unknown;
-  after?: unknown;
-}
-
-export const changesQuery = (before = '') =>
-  queryOptions({
-    queryKey: ['settings', 'changes', before],
-    queryFn: ({ signal }) =>
-      api.get<{ changes: SettingsChange[]; next_before?: string | null }>(`/api/v2/settings/history?limit=50${before ? `&before=${enc(before)}` : ''}`, {
-        signal,
-      }),
-    ...quiet,
-  });
-
-/** Undo records the reverse change against the agent's settings revision; a model or computer move comes back as a
-    transition (`id`) that finishes on its own. */
-export const undoChange = (change: string, revision: number) =>
-  api.post<{ undone?: boolean; bot?: string; field?: string; id?: string }>(`/api/v2/settings/history/${enc(change)}/undo`, { expected_revision: revision });
-
-/** One day's (or hour's) charges, split by product and model. */
-export interface BillingLine {
-  product: string;
-  sku?: string | null;
-  amount_micros: number;
-}
-
+/** One day's charges. */
 export interface BillingBucket {
   period: string;
   total_micros: number;
-  lines?: BillingLine[];
 }
 
 /** The billing read in full: a month's days, its statement, and where credit is added. */
@@ -1689,20 +1464,10 @@ export const billingFor = (month = '') =>
       })
     : billingQuery;
 
-/** One day's hours; `state` other than ok: Tico HQ gave none. */
-export const billingDayQuery = (day: string) =>
-  queryOptions({
-    queryKey: ['settings', 'billing-day', day],
-    queryFn: ({ signal }) => api.get<{ state: string; hours?: BillingBucket[] }>(`/api/v2/billing/usage?day=${enc(day)}`, { signal }),
-    ...quiet,
-  });
-
 /** What the owner sees of the Gateway connection besides the key's preview: the last check's word. */
 export interface GatewayStatus extends GatewayView {
   source?: string;
   automatic?: boolean;
-  /** The install's automatic key was cleared: it may connect automatically again. */
-  auto_off?: boolean;
   state?: string;
   working?: boolean;
   message?: string;
@@ -1715,8 +1480,6 @@ const gatewayAnswer = async (p: Promise<GatewayView>) => {
 };
 
 export const checkGateway = () => gatewayAnswer(api.post<GatewayView>('/api/v2/providers/gateway/check', {}));
-export const clearGateway = () => gatewayAnswer(api.delete<GatewayView>('/api/v2/providers/gateway'));
-export const connectGatewayAutomatically = () => gatewayAnswer(api.post<GatewayView>('/api/v2/providers/gateway/automatic', {}));
 
 // ---- tier 2 gaps (Tasks, Health, Changelog, Contacts, stopped runs, search): this builder's calls below ----
 
@@ -1785,16 +1548,6 @@ export async function replayDay(person: string, date: string): Promise<ReplayRow
   return rows;
 }
 
-/** The rest of the public roadmap's settings: the websites that may show it, who takes visitors' suggestions, limits. */
-export type RoadmapChange = Partial<Pick<RoadmapView, 'cors_origins' | 'action_limit' | 'suggestion_limit' | 'suggestions_bot'>>;
-
-export const setRoadmapMore = (change: RoadmapChange) =>
-  write({
-    key: roadmapQuery.queryKey,
-    optimistic: (v: RoadmapView | undefined) => v && { ...v, ...change },
-    send: (idempotencyKey) => api.post<RoadmapView>('/api/v2/roadmaps/settings', change, { idempotencyKey }),
-  });
-
 /** An agent with queued work that is not starting, or left in setup (backend/health.py `_stuck`). */
 export interface StuckAgent {
   bot: string;
@@ -1804,49 +1557,7 @@ export interface StuckAgent {
   oldest?: string | null;
 }
 
-/** What Check health still has open (GET /api/v2/health/findings): a setup problem BotOps fixes, or a Tico bug. */
-export interface Finding {
-  key: string;
-  kind: string;
-  title: string;
-  task_id?: string | null;
-  ticket_id?: string | null;
-  approval_id?: string | null;
-  occurrences?: number;
-  last_seen_at?: string | null;
-}
-
 export const stuckOf = (h: { stuck?: unknown } | undefined): StuckAgent[] => (Array.isArray(h?.stuck) ? (h.stuck as StuckAgent[]) : []);
-
-export const findingsQuery = queryOptions({
-  queryKey: ['settings', 'health', 'findings'],
-  queryFn: ({ signal }) =>
-    api.get<{ findings: Finding[]; botops?: boolean; reports_without_asking?: boolean }>('/api/v2/health/findings', { signal }),
-  ...quiet,
-});
-
-/** The team rule: Check health reports a Tico bug to Tico support without a person's yes first (owner). */
-export const setReportRule = (on: boolean) =>
-  write({
-    key: findingsQuery.queryKey,
-    optimistic: (v: { reports_without_asking?: boolean } | undefined) => v && { ...v, reports_without_asking: on },
-    send: (idempotencyKey) => api.put('/api/v2/access/rules', { health_monitor_reports: on }, { idempotencyKey }),
-  });
-
-export const reportFinding = async (key: string) => {
-  await api.post(`/api/v2/health/findings/${enc(key)}/report`, {});
-  await queryClient.invalidateQueries({ queryKey: findingsQuery.queryKey });
-};
-
-/** The installer's checks run by the server against its own address (POST /api/v2/support/setup-check). */
-export interface SetupCheckRow {
-  name: string;
-  status: 'ok' | 'warn' | 'bad' | 'info' | string;
-  detail: string;
-  fix?: string;
-}
-
-export const runSetupCheck = () => api.post<{ checks?: SetupCheckRow[]; doctor_only?: string }>('/api/v2/support/setup-check', {});
 
 /** The changelog a page at a time (60 entries), from `offset`. */
 export const changelogPage = (offset: number) =>
@@ -1861,68 +1572,26 @@ export const changelogPage = (offset: number) =>
 /** Acknowledge product entries for this person. The list is not read again: what was New stays marked for this visit. */
 export const markChangelogRead = (ids: string[]) => api.post<{ unread_count: number }>('/api/v2/changelog/read', { ids });
 
-/** Our company in Contacts and where it operates; null while it is not in Contacts (a 404). */
-export interface OurCompany {
-  id: string;
-  name: string;
-  operates_in: { id: string; name: string; link_id?: string }[];
+// ---------------------------------------------------------------- company name (GET/PUT /api/v2/setup, owner)
+
+/** What GET /api/v2/setup answers that PUT takes back (backend/onboarding.py view/save; the rest is read-only). */
+interface SetupRecord {
+  names: Record<string, string>;
+  answers: Record<string, unknown>;
+  selected: Record<string, unknown>;
 }
 
-export const operateQuery = queryOptions({
-  queryKey: ['settings', 'operate'],
-  queryFn: ({ signal }) =>
-    api.get<OurCompany>('/api/v2/entities/self', { signal }).catch((e: unknown) => {
-      if ((e as { status?: number } | null)?.status === 404) return null;
-      throw e;
-    }),
-  ...quiet,
-});
-
-export const findPlaces = (q: string) =>
-  queryOptions({
-    queryKey: ['settings', 'operate', 'find', q],
-    queryFn: async ({ signal }) =>
-      (await api.get<{ rows: { id: string; name: string }[] }>(`/api/v2/entities/find/place?name=${enc(q.slice(0, 200))}&limit=8`, { signal })).rows,
-    ...quiet,
-  });
-
-export const addPlace = async (us: string, place: string) => {
-  await api.post('/api/v2/entities/links', { from_ref: us, link_key: 'operates_in', to_ref: place });
-  await queryClient.invalidateQueries({ queryKey: operateQuery.queryKey });
-};
-
-export const dropPlace = (link: string) =>
+/** Rename the company. The server has no narrower route: PUT /api/v2/setup rewrites the whole setup record (names,
+    answers, chosen agents), so the record is read first and sent back with only the name changed. `owner_name` goes
+    blank: on that PUT a name there renames the owner on the roster (blank leaves it), and the record's copy is from
+    setup, older than any rename since. GET /api/v2/config then reads the new name. */
+export const renameCompany = (name: string) =>
   write({
-    key: operateQuery.queryKey,
-    optimistic: (v: OurCompany | null | undefined) => v && { ...v, operates_in: v.operates_in.filter((p) => p.link_id !== link) },
-    send: (idempotencyKey) => api.post('/api/v2/entities/unlink', { link_id: link }, { idempotencyKey }),
-  });
-
-/** An inbox whose mail may add every sender to Contacts; the switch shows only where the listing says (`feeds_directory`). */
-export interface FeedBox {
-  id: string;
-  address: string;
-  kind: string;
-  person_name?: string | null;
-  feeds_directory?: boolean;
-}
-
-/** The inboxes this person may switch: their own, and for an admin every shared one. */
-export const feedsQuery = queryOptions({
-  queryKey: ['settings', 'mail-feeds'],
-  queryFn: async ({ signal }) => {
-    const m = await api.get<{ admin: boolean; mine: FeedBox | null; mailboxes?: FeedBox[] }>('/api/v2/mailboxes', { signal });
-    const rows = new Map<string, FeedBox>();
-    for (const b of [m.mine, ...(m.admin ? (m.mailboxes ?? []).filter((x) => x.kind === 'shared') : [])])
-      if (b && typeof b.feeds_directory === 'boolean') rows.set(b.id, b);
-    return [...rows.values()];
-  },
-  ...quiet,
-});
-
-export const setFeed = (box: string, on: boolean) =>
-  write({
-    key: feedsQuery.queryKey,
-    optimistic: (v: FeedBox[] | undefined) => v?.map((b) => (b.id === box ? { ...b, feeds_directory: on } : b)),
-    send: (idempotencyKey) => api.patch(`/api/v2/mailboxes/${enc(box)}/contacts`, { on }, { idempotencyKey }),
+    key: configQuery.queryKey,
+    optimistic: (v) => v && { ...v, company_name: name },
+    send: async (idempotencyKey) => {
+      const r = await api.get<SetupRecord>('/api/v2/setup');
+      const names = { ...r.names, company_name: name, owner_name: '' };
+      return api.put('/api/v2/setup', { names, answers: r.answers, selected: r.selected }, { idempotencyKey });
+    },
   });

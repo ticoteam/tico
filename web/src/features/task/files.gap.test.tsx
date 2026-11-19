@@ -92,7 +92,6 @@ function base(url: string): Reply {
   if (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1')) return { status: 200, body: detail };
   if (url.endsWith('/api/v2/tasks/t1/files?all=1')) return { status: 200, body: { files: [shot] } };
   if (url.endsWith('/api/v2/pages/f2')) return { status: 200, body: { page, can_manage: true, can_delete: true } };
-  if (url.endsWith('/api/v2/groups')) return { status: 200, body: [] };
   if (url.includes('/api/v2/pipelines')) return { status: 200, body: { pipelines: [{ id: 'p1', name: 'Product', stages: [{ id: 's2', name: 'Review', side: false }] }] } };
   if (url.includes('/needs-you')) return { status: 200, body: { items: [] } };
   return { status: 200, body: {} };
@@ -190,21 +189,6 @@ describe('a page’s ⋯ @s780', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/details'));
   });
 
-  it('chooses who can see the page @s780', async () => {
-    serve((url, method) => (method === 'PATCH' && url.endsWith('/api/v2/pages/f2') ? { status: 200, body: { page } } : null));
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
-    await screen.findByTitle('QA report');
-    await lastMore();
-    fireEvent.click(await screen.findByRole('menuitem', { name: /Who can see it/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Who can see it' });
-    fireEvent.click(within(dialog).getByRole('switch', { name: 'Everyone who can see the task' }));
-    fireEvent.click(await within(dialog).findByRole('checkbox', { name: 'Dana' }));
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
-    await waitFor(() =>
-      expect(sent.at(-1)).toEqual({ url: '/api/v2/pages/f2', method: 'PATCH', body: { audience: { everyone: false, people: ['h2'], teams: [], bots: [] } } }),
-    );
-  });
-
   it('deletes the page for good only after asking @s780', async () => {
     serve(() => null);
     show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
@@ -217,13 +201,12 @@ describe('a page’s ⋯ @s780', () => {
     await waitFor(() => expect(calls).toContain('DELETE /api/v2/files/f2'));
   });
 
-  it('who can see and delete are closed to Tico @s780', async () => {
+  it('delete is closed to Tico @s780', async () => {
     serve(() => null);
     show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
     await screen.findByTitle('QA report');
     const tico = { via: 'tico' } as const;
     expect((await run('task.deletePage', { task: 't1', page: 'f2' }, tico)).ok).toBe(false);
-    expect((await run('task.pageAudience', { task: 't1', page: 'f2', everyone: true, people: [], teams: [], agents: [] }, tico)).ok).toBe(false);
     // Showing a task to the whole team is the person's own press too.
     expect((await run('task.setVisible', { task: 't1', to: 'team' }, tico)).ok).toBe(false);
     expect(sent).toEqual([]);

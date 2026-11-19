@@ -218,7 +218,7 @@ describe('Settings › Agents › an opened agent', () => {
 describe('Settings › Tasks @s1077', () => {
   it('lists the public roadmap labels with their address, adds one, and Tico cannot change what the public sees', async () => {
     serve((url) => (url === '/api/v2/roadmaps/settings' ? ok({ labels: ['feature', 'idea'], bot_public_approval: true }) : undefined));
-    queryClient.setQueryData(roadmapQuery.queryKey, { labels: ['feature'], cors_origins: [], action_limit: 10, suggestion_limit: 20, bot_public_approval: true, suggestions_bot: null });
+    queryClient.setQueryData(roadmapQuery.queryKey, { labels: ['feature'], bot_public_approval: true });
     queryClient.setQueryData(labelsQuery.queryKey, [
       { id: '1', key: 'feature', label: 'Feature' },
       { id: '2', key: 'idea', label: 'Idea' },

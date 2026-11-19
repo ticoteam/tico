@@ -43,7 +43,7 @@ import type {
   WebhookShown,
 } from '@/api/schema';
 import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
-import type { DocsSearchResults, Group, LibrarianResearch, LibrarianResearchFiled } from '@/api/schema';
+import type { DocsSearchResults, LibrarianResearch, LibrarianResearchFiled } from '@/api/schema';
 
 /* Every Library call. Docs, files, skills, tools and contacts have no live topic (backend/events.py): they are read
    again after the person's own writes, on reconnect, and when a page opens on data older than a minute. Letters have
@@ -702,8 +702,7 @@ export interface LoginAdd {
   holder?: string;
   all_bots?: boolean;
 }
-export const addWebsite = (site: string, centralOnly: boolean) =>
-  made(api.post<WebsiteToolCreated>('/api/v2/website-tools', { sites: [site], central_only: centralOnly } satisfies WebsiteToolCreate));
+export const addWebsite = (site: string) => made(api.post<WebsiteToolCreated>('/api/v2/website-tools', { sites: [site] } satisfies WebsiteToolCreate));
 export const addAccount = (tool: string, login: LoginAdd) =>
   made(api.post<{ id: string }>(`/api/v2/website-tools/${enc(tool)}/accounts`, login satisfies WebsiteAccountCreate), [['tools', 'website', tool]]);
 /** Only what changed is sent; `totp: null` takes the authenticator off. */
@@ -812,7 +811,6 @@ export const pasteKeys = (tool: string, text: string) =>
 export interface WebsiteChange {
   name?: string;
   sites?: string[];
-  central_only?: boolean;
 }
 export function editWebsite(tool: string, change: WebsiteChange) {
   return andList(
@@ -1298,70 +1296,6 @@ export const docsSearchQuery = (words: string) =>
 export const startResearch = (body: LibrarianResearch) =>
   api.post<LibrarianResearchFiled>('/api/v2/librarian/research', body, { idempotencyKey: crypto.randomUUID() });
 
-/** What Files may be narrowed by, as the address carries it (`agent` is a bot id, `writer` and `linked` actor or target
-    ids, `days` back from now). The server's names: backend/file_library.py listing. */
-export interface FileFilters {
-  kind?: string;
-  role?: string;
-  agent?: string;
-  writer?: string;
-  linked?: string;
-  team?: string;
-  task?: string;
-  days?: number;
-  pinned?: 1;
-  archived?: 1;
-}
-const MORE_FILTERS = ['role', 'agent', 'writer', 'linked', 'team', 'task', 'days', 'pinned', 'archived'] as const;
-
-/** Files by every filter. With the kind alone it is `filesQuery(kind)`'s key, so the route's first read is the page's. */
-export const filesListQuery = (f: FileFilters) => {
-  const rest = Object.fromEntries(MORE_FILTERS.filter((k) => f[k] !== undefined).map((k) => [k, f[k]]));
-  const kind = f.kind ?? '';
-  return infiniteQueryOptions({
-    queryKey: Object.keys(rest).length ? ['files', 'list', kind, rest] : ['files', 'list', kind],
-    queryFn: ({ pageParam }) =>
-      api.get<FileLibrary>(
-        `/api/v2/files${q({
-          limit: 100,
-          kind,
-          role: f.role,
-          bot: f.agent,
-          writer: f.writer,
-          linked: f.linked,
-          team: f.team,
-          task: f.task,
-          since: f.days ? new Date(Date.now() - f.days * 86_400_000).toISOString() : undefined,
-          pinned: f.pinned ? true : undefined,
-          archived: f.archived ? true : undefined,
-          cursor: pageParam,
-        })}`,
-      ),
-    initialPageParam: '',
-    getNextPageParam: (last) => (last.has_more && last.next_cursor ? last.next_cursor : undefined),
-    ...quiet,
-  });
-};
-
-/** The file search with the filters it takes (kind, role, linked, writer); none is `fileSearchQuery`'s key. */
-export const filesFindQuery = (text: string, f: FileFilters) => {
-  const by = { kind: f.kind, role: f.role, linked: f.linked, writer: f.writer };
-  const on = Object.values(by).some(Boolean);
-  return queryOptions({
-    queryKey: on ? ['files', 'search', text, by] : ['files', 'search', text],
-    queryFn: ({ signal }) => api.get<{ results: Array<{ id: string; title: string }> }>(`/api/v2/files/search${q({ q: text, limit: 50, ...by })}`, { signal }),
-    enabled: text.trim().length > 1,
-    ...quiet,
-  });
-};
-
-/** The teams, for the Files filter. */
-export const filesTeamsQuery = queryOptions({
-  queryKey: ['files', 'teams'],
-  queryFn: ({ signal }) => api.get<Group[] | { groups: Group[] }>('/api/v2/groups', { signal }).then((r) => (Array.isArray(r) ? r : r.groups)),
-  ...quiet,
-});
-
 /** A rule that applies to a contact, with the path it comes by (backend/entities/routes.py contacts_rules). */
 export interface ContactRule {
   id?: string;
@@ -1403,13 +1337,6 @@ export interface PlaceInfo {
 export type CardLink = Card['links'][number] & { link_key?: string; from_entity_id?: string; inverse_name?: string | null };
 
 // ---------------------------------------------------------------- tier-2 gaps: skills (s781 s782 s783 s804), an outside doc (s778)
-
-/** The job functions a skill's SKILL.md may name (clients/skills.py FUNCTIONS); any other value, or none, is `other`. */
-export const SKILL_FUNCTIONS = ['tico', 'legal', 'marketing', 'growth', 'sales', 'customers', 'finance', 'product', 'engineering', 'people', 'operations', 'hardware', 'data', 'security'] as const;
-export const functionGroup = (f: string | null | undefined) => {
-  const w = (f ?? '').trim().toLowerCase();
-  return (SKILL_FUNCTIONS as readonly string[]).includes(w) ? w : 'other';
-};
 
 /** An install as one skill's usage reads it (backend/skill_usage.py coverage): its uses in 30 days, and whether the
     reader may take it off (`removable`: the rights of installing it). */

@@ -15,7 +15,7 @@ import { BuiltinPanel } from './BuiltinPanel';
 import { EndpointDialog, EndpointRow } from './Endpoints';
 import { NewInbox } from './Templates';
 import { Face, Find, press, Word } from './parts';
-import { endpointsQuery, heartbeatQuery, hooksQuery, maintenanceQuery, routinesQuery, systemJobsQuery, type Endpoint, type RunRange, type RunStatus, type RunTrigger } from './queries';
+import { endpointsQuery, heartbeatQuery, hooksQuery, maintenanceQuery, routinesQuery, systemJobsQuery, type Endpoint, type RunRange, type RunStatus } from './queries';
 import { RoutinePanel } from './RoutinePanel';
 import { RunsTab } from './RunsTab';
 import type { Hook, Routine } from './types';
@@ -33,9 +33,6 @@ export interface RoutinesSearch {
   /** Runs: which runs, and over what time. */
   status?: RunStatus;
   range?: RunRange;
-  /** Runs: what started them, and whose routine. */
-  trigger?: RunTrigger;
-  owner?: string;
   /** Routines: the words searched for, and which state shows. */
   q?: string;
   state?: RoutineState;
@@ -57,18 +54,8 @@ const head = { title: 'Routines', path: ROUTINES, tabs: routinesTabs, className:
 
 export function RoutinesPage({ search }: { search: RoutinesSearch }) {
   if (search.tab === 'runs') {
-    const { status, range, trigger, owner } = search;
-    return (
-      <RunsTab
-        head={head}
-        status={status}
-        range={range}
-        trigger={trigger}
-        owner={owner}
-        panel={search.panel}
-        href={(panel) => routinesHref({ tab: 'runs', status, range, trigger, owner, panel })}
-      />
-    );
+    const { status, range } = search;
+    return <RunsTab head={head} status={status} range={range} panel={search.panel} href={(panel) => routinesHref({ tab: 'runs', status, range, panel })} />;
   }
   return search.tab === 'webhooks' ? <WebhooksTab panel={search.panel} /> : <RoutinesTab panel={search.panel} q={search.q} state={search.state} />;
 }

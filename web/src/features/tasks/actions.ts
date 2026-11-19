@@ -20,7 +20,7 @@ import {
   type Skipped,
 } from './queries';
 import { VIEW_PREF } from './search';
-import { createTag, createTaggedTask, makeTagFrom, moreTagTasks, releaseChecklist, saveTag, tagKeyOf, tagQuery } from './queries';
+import { createTag, createTaggedTask, moreTagTasks, saveTag, tagKeyOf } from './queries';
 import { chatAddress } from '@/lib';
 
 const pipeline = s.string({ min: 1, max: 100, what: 'a pipeline id' });
@@ -445,53 +445,22 @@ export const filterTags = defineAction({
 
 export const newTag = defineAction({
   id: 'tags.create',
-  title: 'New tag or template',
+  title: 'New tag',
   kind: 'change',
   input: s.object({
     name: s.string({ min: 1, max: 100 }),
     key: s.optional(tagKey),
-    notes: s.optional(s.string({ max: 20000, what: 'markdown; "- [ ] step" lines are its checklist' })),
-    template: s.optional(s.boolean()),
+    notes: s.optional(s.string({ max: 20000, what: 'markdown' })),
   }),
-  run: async ({ router }, { name, key, notes, template }) => {
+  run: async ({ router }, { name, key, notes }) => {
     const made = await said(
-      () => createTag({ key: key || tagKeyOf(name), label: name, markdown: notes ?? '', is_template: !!template }),
+      () => createTag({ key: key || tagKeyOf(name), label: name, markdown: notes ?? '', is_template: false }),
       "Couldn't make the tag",
     );
     await router.navigate({ to: '/tags/$tag', params: { tag: made.id } });
     return made;
   },
   did: ({ name }) => `Made ${name}`,
-  target: (_input, out) => (out ? onTag(out.id) : null),
-});
-
-/** The release checklist template: opened, made first when there is none. */
-export const startRelease = defineAction({
-  id: 'tags.releaseChecklist',
-  title: 'Open the release checklist template, made if there is none',
-  kind: 'change',
-  input: s.object({}),
-  run: async ({ router }) => {
-    const tag = await said(() => releaseChecklist(), "Couldn't open it");
-    await router.navigate({ to: '/tags/$tag', params: { tag: tag.id } });
-    return tag;
-  },
-  did: () => 'Opened the release checklist',
-  target: (_input, out) => (out ? onTag(out.id) : null),
-});
-
-export const fromTemplate = defineAction({
-  id: 'tags.makeFromTemplate',
-  title: 'Make a tag from a template',
-  kind: 'change',
-  input: s.object({ template: tagId, key: tagKey, metadata }),
-  run: async ({ router }, { template, key, metadata }) => {
-    const fields = fieldsOf(metadata);
-    const made = await said(() => makeTagFrom(template, { key, ...(fields ? { metadata: fields } : {}) }), "Couldn't make the tag");
-    await router.navigate({ to: '/tags/$tag', params: { tag: made.id } });
-    return made;
-  },
-  did: ({ key }) => `Made ${key}`,
   target: (_input, out) => (out ? onTag(out.id) : null),
 });
 
@@ -505,24 +474,6 @@ export const editTag = defineAction({
     return said(() => saveTag(tag, { label: name, markdown: notes, metadata: fields }), "Couldn't save the tag");
   },
   did: () => 'Saved the tag',
-  target: ({ tag }) => onTag(tag),
-});
-
-/** Ticks or clears one box of a tag's checklist: its line in the notes, counted from 0. */
-export const tickTag = defineAction({
-  id: 'tags.tick',
-  title: "Tick or clear a box in a tag's checklist",
-  kind: 'change',
-  input: s.object({ tag: tagId, line: s.number({ int: true, min: 0 }), done: s.boolean() }),
-  run: async ({ queryClient }, { tag, line, done }) => {
-    const notes = (queryClient.getQueryData(tagQuery(tag).queryKey) ?? (await queryClient.fetchQuery(tagQuery(tag)))).tag.markdown.split('\n');
-    const was = notes[line];
-    const now = was?.replace(/^(\s*(?:[-*+]|\d+\.)\s+)\[[ xX]\]/, `$1[${done ? 'x' : ' '}]`);
-    if (was === undefined || now === was) return;
-    notes[line] = now!;
-    await said(() => saveTag(tag, { markdown: notes.join('\n') }), "Couldn't save the tag");
-  },
-  did: ({ done }) => (done ? 'Ticked it' : 'Cleared it'),
   target: ({ tag }) => onTag(tag),
 });
 

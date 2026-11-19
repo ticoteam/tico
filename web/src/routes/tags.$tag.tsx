@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { pipelinesQuery, TagPage, tagQuery } from '@/features/tasks/exports';
+import { TagPage } from '@/features/tasks/exports';
+import { pipelinesQuery, tagQuery } from '@/features/tasks/routing';
 
 /** One tag: its tasks, by pipeline. */
 export const Route = createFileRoute('/tags/$tag')({

@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { RoutinesPage, loadRoutines, validateRoutinesSearch } from '@/features/routines/exports';
+import { RoutinesPage } from '@/features/routines/exports';
+import { loadRoutines, validateRoutinesSearch } from '@/features/routines/routing';
 
 /** Routines: `?tab=webhooks`; one routine, a built-in one or a webhook opens in `?panel=`. */
 export const Route = createFileRoute('/company/routines')({

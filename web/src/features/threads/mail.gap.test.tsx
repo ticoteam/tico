@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '@/actions';
@@ -63,35 +63,26 @@ beforeEach(() => {
   queryClient.setQueryData(mailboxesQuery.queryKey, [{ address: 'help@example.test' }]);
 });
 
-describe('Mail: search and filters @s159', () => {
-  it('asks the server for what the address narrows to, and shows labels and attachments as pills @s159', async () => {
+describe('Mail: search @s159', () => {
+  it('asks the server for the words searched, and marks an attachment with an icon, not pills @s159', async () => {
     serve([letter()]);
-    show(<MailPage box="help@example.test" q="invoice" label="STARRED" attach />, '/threads/mail?box=help%40example.test&q=invoice&label=STARRED&attach=true');
+    show(<MailPage box="help@example.test" q="invoice" />, '/threads/mail?box=help%40example.test&q=invoice');
     const row = await screen.findByTitle('Sam Lee: Invoice question');
     const asked = new URL(urls.find((u) => u.includes('/mail/messages'))!, 'http://x');
     expect(asked.searchParams.get('q')).toBe('invoice');
-    expect(asked.searchParams.get('label')).toBe('STARRED');
-    expect(asked.searchParams.get('has_attachment')).toBe('true');
-    // Inbox, Unread and Gmail's categories say nothing a row needs; the rest are pills.
-    expect(within(row).getByText('Important')).toBeTruthy();
-    expect(within(row).getByText('Attachment')).toBeTruthy();
-    expect(within(row).queryByText('Inbox')).toBeNull();
-    // An opened mail keeps the list it was picked from.
-    expect(row.getAttribute('href')).toBe('/threads/mail?box=help%40example.test&q=invoice&label=STARRED&attach=true&open=th1');
-    const chips = screen.getByRole('group', { name: 'Filters' });
-    expect(within(chips).getByText('Starred')).toBeTruthy();
-    expect(within(chips).getByText('Has attachment')).toBeTruthy();
+    expect(within(row).getByRole('img', { name: 'Attachment' })).toBeTruthy();
+    expect(within(row).queryByText('Important')).toBeNull();
+    // An opened mail keeps the words it was found by.
+    expect(row.getAttribute('href')).toBe('/threads/mail?box=help%40example.test&q=invoice&open=th1');
     expect((screen.getByRole('textbox', { name: 'Find mail' }) as HTMLInputElement).value).toBe('invoice');
   });
 
-  it('narrows through the address, and a chip clears its filter @s159', async () => {
+  it('searches through the address @s159', async () => {
     serve([letter()]);
-    const router = show(<MailPage box="help@example.test" label="STARRED" />, '/threads/mail?box=help%40example.test&label=STARRED');
+    const router = show(<MailPage box="help@example.test" />, '/threads/mail?box=help%40example.test');
     await screen.findByTitle('Sam Lee: Invoice question');
-    expect((await run('mail.find', { box: 'help@example.test', q: 'refund', attach: true }, { via: 'tico' })).ok).toBe(true);
-    await waitFor(() => expect(router.state.location.search).toMatchObject({ box: 'help@example.test', q: 'refund', attach: true }));
-    fireEvent.click(screen.getByRole('button', { name: 'Clear Starred' }));
-    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('label'));
+    expect((await run('mail.find', { box: 'help@example.test', q: 'refund' }, { via: 'tico' })).ok).toBe(true);
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ box: 'help@example.test', q: 'refund' }));
   });
 
   it('says nothing matches, and keeps the search field, when a narrowing finds nothing @s159', async () => {
@@ -99,6 +90,5 @@ describe('Mail: search and filters @s159', () => {
     show(<MailPage box="help@example.test" q="nothing here" />, '/threads/mail?box=help%40example.test&q=nothing+here');
     expect(await screen.findByRole('heading', { name: 'No matches' })).toBeTruthy();
     expect(screen.getByRole('textbox', { name: 'Find mail' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Filter' })).toBeTruthy();
   });
 });

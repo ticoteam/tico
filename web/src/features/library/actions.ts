@@ -91,21 +91,16 @@ import {
   deleteKey,
   deleteWebsite,
   grantKey,
-  linkSlack,
   removeAccount,
   removeMailboxAccess,
-  resumeSlack,
   revokeKey,
   rotateKey,
   setAccountAccess,
-  setEveryoneReads,
   setInboxReaders,
   setMailboxLevel,
-  setSeenBy,
   shareMailbox,
   stopMailbox,
   storeKey,
-  unlinkSlack,
   was,
 } from './toolKeys';
 
@@ -665,8 +660,8 @@ export const toolsAddWebsite = defineAction({
   id: 'tools.addWebsite',
   title: 'Add a website',
   kind: 'change',
-  input: s.object({ site: s.string({ min: 1, max: 300 }), central_only: s.optional(s.boolean()) }),
-  run: async ({ router }, i) => opened(router, `website:${(await addWebsite(i.site, i.central_only ?? false)).id}`),
+  input: s.object({ site: s.string({ min: 1, max: 300 }) }),
+  run: async ({ router }, i) => opened(router, `website:${(await addWebsite(i.site)).id}`),
   did: (i) => `Added ${i.site}`,
   target: () => ({ kind: 'page', id: '/library/tools' }),
 });
@@ -676,9 +671,9 @@ export const toolsAddWebsiteWithLogin = defineAction({
   title: 'Add a website with a login',
   kind: 'change',
   tico: false,
-  input: s.object({ site: s.string({ min: 1, max: 300 }), central_only: s.optional(s.boolean()), ...login }),
-  run: async ({ router }, { site, central_only, ...l }) => {
-    const tool = (await addWebsite(site, central_only ?? false)).id;
+  input: s.object({ site: s.string({ min: 1, max: 300 }), ...login }),
+  run: async ({ router }, { site, ...l }) => {
+    const tool = (await addWebsite(site)).id;
     // A refused login keeps the site: adding the account again is all that is left.
     await opened(router, `website:${tool}`);
     await addAccount(tool, l);
@@ -834,14 +829,12 @@ export const toolsEditWebsite = defineAction({
     tool: id,
     name: s.optional(s.string({ min: 1, max: 80 })),
     sites: s.optional(s.array(s.string({ min: 1, max: 300 }), { max: 50 })),
-    central_only: s.optional(s.boolean()),
   }),
   can: (ctx, i) => {
-    if (ctx.via !== 'tico' || (i.sites === undefined && i.central_only !== false)) return true;
+    if (ctx.via !== 'tico' || i.sites === undefined) return true;
     const t = ctx.queryClient.getQueryData(websiteToolQuery(i.tool).queryKey);
     if (!t) return false;
-    const widened = adds(i.sites, t.tool.sites) || (i.central_only === false && t.tool.central_only);
-    return !widened || t.accounts.length === 0;
+    return !adds(i.sites, t.tool.sites) || t.accounts.length === 0;
   },
   run: (_ctx, { tool, ...change }) => editWebsite(tool, change),
   did: () => 'Saved',
@@ -938,7 +931,7 @@ export const toolsPauseWebhook = defineAction({
   title: 'Pause or restart an outgoing webhook',
   kind: 'change',
   input: s.object({ webhook: id, on: s.boolean() }),
-  // Sending again sends company events outside again (as `tools.resumeSlack`): Tico may pause, never restart.
+  // Sending again sends company events outside again: Tico may pause, never restart.
   can: (ctx, i) => ctx.via !== 'tico' || !i.on,
   run: (_ctx, i) => setWebhookOn(i.webhook, i.on),
   did: (i) => (i.on ? 'Sending again' : 'Paused'),
@@ -1279,40 +1272,6 @@ export const docsResearch = defineAction({
   target: (i) => ({ kind: 'page', id: `/library/${i.doc}` }),
 });
 
-const FILE_WORDS = ['kind', 'role', 'agent', 'writer', 'linked', 'team', 'task'] as const;
-const FILE_FLAGS = ['pinned', 'archived'] as const;
-
-/** Narrow Files (old library-files.ts filters), or search them (`q`): each one given is set, an empty one ('', 0,
-   false) is taken off, and `clear` takes the filters off. What is not given stays. */
-export const filesFilter = defineAction({
-  id: 'files.filter',
-  title: 'Filter Files',
-  kind: 'view',
-  input: s.object({
-    q: s.optional(text(200)),
-    kind: s.optional(text(40)),
-    role: s.optional(text(60)),
-    agent: s.optional(text(200)),
-    writer: s.optional(text(200)),
-    linked: s.optional(text(200)),
-    team: s.optional(text(200)),
-    task: s.optional(text(200)),
-    days: s.optional(s.number({ int: true, min: 0, max: 3650 })),
-    pinned: s.optional(s.boolean()),
-    archived: s.optional(s.boolean()),
-    clear: s.optional(s.boolean()),
-  }),
-  run: ({ router }, i) => {
-    const change: Record<string, string | number | undefined> = {};
-    if (i.q !== undefined) change.q = i.q.trim() || undefined;
-    for (const k of FILE_WORDS) if (i.clear || i[k] !== undefined) change[k] = i.clear ? undefined : i[k] || undefined;
-    if (i.clear || i.days !== undefined) change.days = i.clear ? undefined : i.days || undefined;
-    for (const k of FILE_FLAGS) if (i.clear || i[k] !== undefined) change[k] = !i.clear && i[k] ? 1 : undefined;
-    return on(router, '/library/files') ? set(router, change, true) : go(router, '/library/files', change);
-  },
-  target: () => ({ kind: 'page', id: '/library/files' }),
-});
-
 // ---------------------------------------------------------------- tools: stored keys, mailboxes, who reads and sees a tool
 
 /* The Tools gap rows (s787 s788 s865 s866 s867 s908 s909 s926). Tightening stays Tico's (taking access away, a lower
@@ -1538,93 +1497,10 @@ export const toolsSetAccountAccess = defineAction({
   target: (i) => site(i.tool),
 });
 
-/* Who sees an API tool or a website. */
-
-export const toolsSetEveryoneReads = defineAction({
-  id: 'tools.setEveryoneReads',
-  title: 'Let every agent read a tool',
-  kind: 'change',
-  input: s.object({ tool: id, on: s.boolean() }),
-  // Tico may turn it off, never on: on gives every agent the tool.
-  can: (ctx, i) => ctx.via !== 'tico' || !i.on,
-  run: (_ctx, i) => setEveryoneReads(i.tool, i.on),
-  did: (i) => (i.on ? 'Everyone can read' : 'Only those listed'),
-  target: (i) => ({ kind: 'tool-who', id: i.tool }),
-});
-
-const seenList = s.object({ people: s.array(subjectIn, { max: 500 }), teams: s.array(subjectIn, { max: 500 }), bots: s.array(subjectIn, { max: 500 }) });
-
-export const toolsSetSeenBy = defineAction({
-  id: 'tools.setSeenBy',
-  title: 'Choose who can see a tool',
-  kind: 'change',
-  input: s.object({ kind: s.oneOf(['api', 'website'] as const), tool: id, audience: s.nullable(seenList) }),
-  // Tico may make it Only listed or take someone off the list, never show it to everyone or add someone.
-  can: (ctx, i) => {
-    if (ctx.via !== 'tico') return true;
-    if (!i.audience) return false;
-    const t = i.kind === 'api' ? was.api(ctx.queryClient, i.tool) : was.website(ctx.queryClient, i.tool);
-    if (!t) return false;
-    if (!t.private) return true;
-    const a = t.audience ?? {};
-    return !adds(i.audience.people, a.people ?? []) && !adds(i.audience.teams, a.teams ?? []) && !adds(i.audience.bots, a.bots ?? []);
-  },
-  run: (_ctx, i) => setSeenBy(i.kind, i.tool, i.audience),
-  did: (i) => (i.audience ? 'Only listed' : 'Everyone'),
-  target: (i) => ({ kind: 'tool-seen', id: i.tool }),
-});
-
-/* Slack: threads linked to Slack channels. */
-
-export const toolsLinkSlack = defineAction({
-  id: 'tools.linkSlack',
-  title: 'Link a thread to a Slack channel',
-  kind: 'change',
-  // A linked channel reads the thread: an audience only the person opens.
-  tico: false,
-  input: s.object({ thread: id, channel: s.string({ min: 1, max: 200 }), history: s.boolean() }),
-  run: (_ctx, i) => linkSlack(i.thread, i.channel.trim(), i.history),
-  did: () => 'Asked',
-  target: () => ({ kind: 'tool', id: 'slack' }),
-});
-
-/** Nothing more goes to the channel: Tico may. */
-export const toolsUnlinkSlack = defineAction({
-  id: 'tools.unlinkSlack',
-  title: 'Unlink a thread from Slack',
-  kind: 'change',
-  input: s.object({ link: id }),
-  run: (_ctx, i) => unlinkSlack(i.link),
-  did: () => 'Unlinked',
-  target: () => ({ kind: 'tool', id: 'slack' }),
-});
-
-export const toolsResumeSlack = defineAction({
-  id: 'tools.resumeSlack',
-  title: 'Check a Slack link again',
-  kind: 'change',
-  // A link that passes starts sending the thread to its channel again: an audience only the person opens.
-  tico: false,
-  input: s.object({ link: id }),
-  run: (_ctx, i) => resumeSlack(i.link),
-  did: () => 'Checked',
-  target: () => ({ kind: 'tool', id: 'slack' }),
-});
-
 // ---------------------------------------------------------------- tier-2 gaps: skills (s781 s782 s783 s804)
 
 /* All open to Tico: each one only narrows the list, takes a skill off (installing it again puts it back), ends or
    re-screens a proposal, or answers the maintenance run's suggestion. The server checks the rights of each. */
-
-/** Narrow Skills to one job function (`other`: any other or none) and the words searched; nothing given shows them all. */
-export const skillsFilter = defineAction({
-  id: 'skills.filter',
-  title: 'Filter skills by function',
-  kind: 'view',
-  input: s.object({ function: s.optional(text(80)), q: s.optional(text(200)) }),
-  run: ({ router }, i) => go(router, '/library/skills', { function: i.function?.toLowerCase(), q: i.q }, on(router, '/library/skills')),
-  target: () => ({ kind: 'page', id: '/library/skills' }),
-});
 
 export const skillsRemoveInstall = defineAction({
   id: 'skills.removeInstall',
@@ -1695,28 +1571,12 @@ export const skillsDismissSuggestion = defineAction({
 // ---------------------------------------------------------------- tools: tier-2 gaps (webhooks, letters, messages)
 
 /* s515 s868 s869 s870 s932. The person's own: deleting an endpoint (cannot be undone), a new signing secret and a
-   message's code (each shows a secret). Giving someone Read on an address or send access to letters is a right only
-   the person gives; Tico may take either away. An agent's letter rules Tico may only tighten. Sending a webhook's
-   failed or missed events again, a letter retried and an address checked are ordinary work: open to Tico (the endpoint
-   is already on, and each goes where it was always meant to). */
+   message's code (each shows a secret). Giving someone Read on an address is a right only the person gives; Tico may
+   take it away. A send retried, a letter retried and an address checked are ordinary work: open to Tico. */
 
 // This section's calls live in toolMail.ts.
-import {
-  checkAddresses,
-  deleteWebhook,
-  letterSendersQuery,
-  readCode,
-  recoverWebhook,
-  replayWebhook,
-  retryLetterIn,
-  retryWebhookSend,
-  rotateWebhookSecret,
-  setAddressGrant,
-  setAgentLetters,
-  setLetterSender,
-} from './toolMail';
+import { checkAddresses, deleteWebhook, readCode, retryLetterIn, retryWebhookSend, rotateWebhookSecret, setAddressGrant } from './toolMail';
 
-const sinceDay = s.string({ pattern: /^\d{4}-\d{2}-\d{2}$/, what: 'a day like 2026-11-12' });
 const hookAt = (webhook: string) => ({ kind: 'tool', id: `webhook:${webhook}` });
 
 export const toolsDeleteWebhook = defineAction({
@@ -1745,26 +1605,6 @@ export const toolsNewWebhookSecret = defineAction({
   run: (_ctx, i) => rotateWebhookSecret(i.webhook),
   did: () => 'Made a new secret',
   target: () => null,
-});
-
-export const toolsRetryWebhook = defineAction({
-  id: 'tools.retryWebhook',
-  title: 'Send an outgoing webhook’s failed sends again',
-  kind: 'change',
-  input: s.object({ webhook: id, since: sinceDay }),
-  run: (_ctx, i) => recoverWebhook(i.webhook, i.since),
-  did: (_i, out) => (out ? `Retrying ${out.count}${out.more ? ', more wait' : ''}` : 'Retrying'),
-  target: (i) => hookAt(i.webhook),
-});
-
-export const toolsSendMissed = defineAction({
-  id: 'tools.sendMissed',
-  title: 'Send an outgoing webhook the events it missed',
-  kind: 'change',
-  input: s.object({ webhook: id, since: sinceDay }),
-  run: (_ctx, i) => replayWebhook(i.webhook, i.since),
-  did: (_i, out) => (out ? `Sending ${out.count}${out.more ? ', more wait' : ''}` : 'Sending'),
-  target: (i) => hookAt(i.webhook),
 });
 
 export const toolsRetrySend = defineAction({
@@ -1816,43 +1656,6 @@ export const toolsCheckAddress = defineAction({
   },
   did: (_i, out) => out?.text ?? 'Checked',
   target: (i) => ({ kind: 'tool', id: `address:${i.address}` }),
-});
-
-/* Letters out: who may send them, and each agent's own rule. */
-
-export const toolsSetLetterSender = defineAction({
-  id: 'tools.setLetterSender',
-  title: 'Change who may send letters',
-  kind: 'change',
-  input: s.object({ type: s.oneOf(['person', 'bot'] as const), who: id, send: s.boolean() }),
-  // Each letter is paid: Tico may take sending away, never give it.
-  can: (ctx, i) => ctx.via !== 'tico' || !i.send,
-  run: (_ctx, i) => setLetterSender(i.type, i.who, i.send),
-  did: (i) => (i.send ? 'Can send letters' : 'Removed'),
-  target: () => ({ kind: 'tool-set', id: 'letter-senders' }),
-});
-
-export const toolsSetAgentLetters = defineAction({
-  id: 'tools.setAgentLetters',
-  title: 'Change one agent’s letter rule and monthly cap',
-  kind: 'change',
-  input: s.object({
-    bot: id,
-    mode: s.nullable(s.oneOf(['ask_first', 'on_their_own', 'never'] as const)),
-    monthly_cap_micros: s.nullable(s.number({ int: true, min: 0, max: 1_000_000_000_000 })),
-  }),
-  // Tico may only tighten: a stricter rule, a lower cap; never the company's rule back, never no cap.
-  can: (ctx, i) => {
-    if (ctx.via !== 'tico') return true;
-    const g = ctx.queryClient.getQueryData(letterSendersQuery.queryKey)?.find((x) => x.grantee_type === 'bot' && x.grantee_id === i.bot);
-    const company = ctx.queryClient.getQueryData(lettersSettingsQuery.queryKey)?.mode;
-    if (!g || !company) return false;
-    const cap = i.monthly_cap_micros;
-    return !up(i.mode, g.mode ?? company) && cap !== null && (g.monthly_cap_micros == null || cap <= g.monthly_cap_micros);
-  },
-  run: (_ctx, { bot, ...change }) => setAgentLetters(bot, change),
-  did: () => 'Saved',
-  target: (i) => ({ kind: 'tool-set', id: `letter-senders:${i.bot}` }),
 });
 
 /* A message that came in to a Tico address or number. */

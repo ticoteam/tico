@@ -158,8 +158,7 @@ describe('Files', () => {
     expect(await screen.findByText('Today')).toBeTruthy();
     expect(screen.getByText('Earlier')).toBeTruthy();
     expect(screen.getByText('Fresh plan').closest('a')?.getAttribute('href')).toBe('/library/files?file=f1');
-    fireEvent.click(screen.getByRole('button', { name: 'Filter' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Kind' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Filter by kind' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Images' }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ kind: 'image' }));
   });
@@ -446,7 +445,7 @@ describe('Add tool', () => {
     await waitFor(() => expect(writes(sent)).toHaveLength(2));
     expect(router.state.location.search).toMatchObject({ tool: 'website:w9' });
     expect(writes(sent)).toEqual([
-      { url: '/api/v2/website-tools', method: 'POST', body: { sites: ['app.example.com'], central_only: false } },
+      { url: '/api/v2/website-tools', method: 'POST', body: { sites: ['app.example.com'] } },
       { url: '/api/v2/website-tools/w9/accounts', method: 'POST', body: { username: 'me@example.com', holder: 'human:me' } },
     ]);
     expect(await run('tools.addWebsiteWithLogin', { site: 'b.example.com', password: 'x' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
