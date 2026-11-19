@@ -1590,6 +1590,16 @@ def rule_candidates(c: sqlite3.Connection, book_id: str, start: str, most: int) 
     ).fetchall()
 
 
+def asked(c: sqlite3.Connection, name: str, subject: str) -> bool:
+    """Whether the plain `name` ask (no period key) was ever raised about `subject`, sent on or not."""
+    return (
+        c.execute(
+            "SELECT 1 FROM fin_events WHERE name=? AND subject=? AND period_key='' LIMIT 1", (name, subject)
+        ).fetchone()
+        is not None
+    )
+
+
 def withdraw_asks(c: sqlite3.Connection, name: str, subject: str) -> int:
     """Drop the `name` events about `subject` not yet sent on to Tico's rules (drained): what they asked is settled."""
     return c.execute(

@@ -136,7 +136,8 @@ APPLY_MOST = 5000  # past rows one rule_create or rule_update with apply_from lo
 def apply_from(ctx: Ctx, rule_id: str, day: str) -> dict[str, object]:
     """Post the past rows from `day` this rule matches that still wait for a category (banking.by_rule_again), each by
     the first matching rule as a new row would be, so a higher-priority rule still wins. A row in a closed period is
-    skipped and counted. At most APPLY_MOST rows are looked at; `capped` says the rest were not."""
+    skipped and counted. At most APPLY_MOST rows are looked at; `capped` says the rest were not. A row that raises is
+    undone alone and counted in `failed`; the others still post."""
     from .banking import by_rule_again, opening_terms, shift_openings
 
     row = SK.get(ctx.c, "fin_rules", rule_id)
@@ -146,7 +147,7 @@ def apply_from(ctx: Ctx, rule_id: str, day: str) -> dict[str, object]:
     money = {str(m["id"]): m for m in SK.money_accounts(ctx.c, ctx.book.id)}
     found = SK.rule_candidates(ctx.c, ctx.book.id, day, APPLY_MOST + 1)
     before = opening_terms(ctx)  # a waiting credit comes into the books with no bank movement
-    reposted = closed = 0
+    reposted = closed = failed = 0
     for r in found[:APPLY_MOST]:
         m = money.get(str(r["money_account_id"]))
         if m is None or not G.matches(rule.when, feed_facts(r, m)):
@@ -154,8 +155,10 @@ def apply_from(ctx: Ctx, rule_id: str, day: str) -> dict[str, object]:
         done = by_rule_again(ctx, r, m)
         reposted += done == "posted"
         closed += done == "closed"
+        failed += done == "failed"
     shift_openings(ctx, before)
-    return {"reposted": reposted, "skipped_closed": closed, "capped": len(found) > APPLY_MOST}
+    out: dict[str, object] = {"reposted": reposted, "skipped_closed": closed, "capped": len(found) > APPLY_MOST}
+    return {**out, "failed": failed} if failed else out
 
 
 # ------------------------------------------------------------------------------------------------ writing rules

@@ -150,3 +150,137 @@ def test_without_apply_from_past_rows_stay_and_a_gate_rule_refuses_it(books):
         }
         refused = act(c, OWNER, "rule_create", gate)
         assert refused.status != "committed" and "apply_from is for posting rules" in refused.reason, refused
+
+
+# ------------------------------------------------------------------------------------------------ what it leaves alone
+def _apply(c, counterparty, code, day="2026-10-01"):
+    return _rule(c, f"Rule {counterparty}", counterparty, code, apply_from=day)
+
+
+def test_a_deposit_waiting_for_its_stripe_payout_is_left_waiting(books):
+    _past(books, _txn("dep-1", "acct-chk", 96.8, "externalTransfer", day="2026-10-05", counterpartyName="STRIPE"))
+    with books.transaction() as c:
+        assert tuple(_feed(c, "dep-1")[1:]) == ("new", None)
+        assert _apply(c, "STRIPE", "4000")["reposted"] == 0
+        assert tuple(_feed(c, "dep-1")[1:]) == ("new", None)
+
+
+def test_a_refund_that_could_be_of_several_debits_keeps_waiting_with_its_ask(books):
+    _past(
+        books,
+        _txn("shop-1", "acct-chk", -40.0, "other", day="2026-10-01", counterpartyName="Example Shop"),
+        _txn("shop-2", "acct-chk", -60.0, "other", day="2026-10-02", counterpartyName="Example Shop"),
+        _txn("shop-back", "acct-chk", 30.0, "other", day="2026-10-05", counterpartyName="Example Shop"),
+    )
+    with books.transaction() as c:
+        back = _feed(c, "shop-back")[0]
+        assert _asks(c, back) == 1
+        assert _apply(c, "Example Shop", "6100")["reposted"] == 2  # the two debits; the refund stays for a person
+        assert tuple(_feed(c, "shop-back")[1:]) == ("new", None) and _asks(c, back) == 1
+
+
+def test_a_debit_once_held_for_two_bills_is_not_expensed_when_one_is_voided(books):
+    from backend.tests.helpers.finance_ap import _bill, _vendor
+
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        vendor = _vendor(c, "Example Supplies")
+        bills = [
+            _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 12_345}], number=f"B-{n}") for n in (1, 2)
+        ]
+        for b in bills:
+            assert act(c, OWNER, "bill_approve", {"bill_id": b}).status == "committed"
+    fake.txns["sup-1"] = _txn(
+        "sup-1", "acct-chk", -123.45, "other", day="2026-10-14", counterpartyName="Example Supplies"
+    )
+    sync_once(books, fake)
+    with books.transaction() as c:
+        assert tuple(_feed(c, "sup-1")[1:]) == ("new", None)  # either bill may be the one it pays
+        assert act(c, OWNER, "bill_void", {"bill_id": bills[0], "reason": "entered twice"}).status == "committed"
+        assert _apply(c, "Example Supplies", "6150")["reposted"] == 0
+        assert tuple(_feed(c, "sup-1")[1:]) == ("new", None)
+        assert (
+            c.execute(
+                "SELECT COUNT(*) FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id WHERE a.code='6150'"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_a_row_a_contact_default_put_on_other_expenses_on_purpose_stays(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        made = act(
+            c,
+            OWNER,
+            "contact_create",
+            {"name": "Example Hosting", "kind": "vendor", "default_account_id": account(c, "6900")},
+        )
+        assert made.status == "committed", made
+    fake.txns["host-1"] = _txn(
+        "host-1", "acct-chk", -40.0, "other", day="2026-10-02", counterpartyName="Example Hosting"
+    )
+    sync_once(books, fake)
+    with books.transaction() as c:
+        fid, _, entry = _feed(c, "host-1")
+        assert ("6900", 4_000) in _codes(c, entry) and _asks(c, fid) == 0  # no ask: not the automatic default
+        assert _apply(c, "Example Hosting", "6100")["reposted"] == 0
+        assert _feed(c, "host-1")[2] == entry
+
+
+def test_a_debit_carrying_a_canceled_payments_key_in_its_note_is_left_for_a_person(books, monkeypatch):
+    from backend.finance import banking
+
+    monkeypatch.setattr(
+        banking, "_canceled", lambda ctx, money, t: {"id": "pay-made-up"} if "tico:key-1" in t.note else None
+    )
+    _past(
+        books,
+        _txn(
+            "sent-1", "acct-chk", -50.0, "other", day="2026-10-02", counterpartyName="Example Payee", note="tico:key-1"
+        ),
+    )
+    with books.transaction() as c:
+        assert tuple(_feed(c, "sent-1")[1:]) == ("new", None)
+        assert _apply(c, "Example Payee", "6100")["reposted"] == 0
+        assert tuple(_feed(c, "sent-1")[1:]) == ("new", None)
+
+
+def test_a_reversed_row_and_a_zero_row_are_left_alone(books):
+    _past(
+        books,
+        _txn("back-1", "acct-chk", 250.0, "other", day="2026-10-03", counterpartyName="Example Client"),
+        _txn("zero-1", "acct-chk", 75.0, "other", day="2026-10-04", counterpartyName="Example Client"),
+    )
+    with books.transaction() as c:
+        c.execute("UPDATE fin_feed_txns SET provider_status='reversed' WHERE provider_id='back-1'")
+        c.execute("UPDATE fin_feed_txns SET amount=0 WHERE provider_id='zero-1'")
+        done = _apply(c, "Example Client", "4000")
+        assert (done["reposted"], done.get("failed", 0)) == (0, 0)
+        assert tuple(_feed(c, "back-1")[1:]) == ("new", None) and tuple(_feed(c, "zero-1")[1:]) == ("new", None)
+
+
+def test_a_row_that_raises_is_undone_alone_and_the_others_post(books, monkeypatch):
+    from backend.finance import banking
+
+    _past(
+        books,
+        _txn("cloud-1", "acct-chk", -40.0, "other", day="2026-10-02", counterpartyName="Example Cloud"),
+        _txn("cloud-2", "acct-chk", -45.0, "other", day="2026-10-03", counterpartyName="Example Cloud"),
+    )
+    real = banking._settle
+
+    def flaky(ctx, row, money, card, t):
+        if t.provider_id == "cloud-1":
+            raise RuntimeError("made-up failure")
+        return real(ctx, row, money, card, t)
+
+    monkeypatch.setattr(banking, "_settle", flaky)
+    with books.transaction() as c:
+        bad = _feed(c, "cloud-1")
+        done = _apply(c, "Example Cloud", "6100")
+        assert (done["reposted"], done["failed"]) == (1, 1)
+        assert _feed(c, "cloud-1")[2] == bad[2] and ("6900", 4_000) in _codes(c, bad[2]) and _asks(c, bad[0]) == 1
+        assert ("6100", 4_500) in _codes(c, _feed(c, "cloud-2")[2])
