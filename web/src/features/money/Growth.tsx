@@ -97,34 +97,36 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
       }
       tabs={tabs}
       figures={<FiguresStrip figures={figures} />}
-      chart={
-        one ? (
-          <Section name="Funnel">
-            <Funnel steps={funnelSteps(h)} label={`Funnel, ${one.name}`} />
-          </Section>
-        ) : (
-          <div className="two-col">
-            {segs.map((s, i) => {
-              const f = funnels[i]?.data;
-              return (
-                <Section key={s.slug} name={`Funnel, ${s.name}`}>
-                  {f ? <Funnel steps={funnelSteps(f.headline)} label={`Funnel, ${s.name}`} /> : null}
-                </Section>
-              );
-            })}
-          </div>
-        )
-      }
       widgets={
-        d && (
-          <>
-            <Channels read={d} segs={one ? [] : segs} selected={channel?.slug} />
-            <Trend title="New customers, by month" points={series.map((p) => [p.period, p.new_customers] as const)} fmt={(v) => count(v)} />
-            <Trend title="Cost per customer, by month" points={series.map((p) => [p.period, p.cac] as const)} fmt={(v) => usd(v, true)} />
-            <Retention read={d} />
-            <Kpis metrics={d.metrics} />
-          </>
-        )
+        <div className="stack">
+          {one ? (
+            <Section name="Funnel">
+              <Funnel steps={funnelSteps(h)} label={`Funnel, ${one.name}`} />
+            </Section>
+          ) : (
+            <div className="two-col">
+              {segs.map((s, i) => {
+                const f = funnels[i]?.data;
+                return (
+                  <Section key={s.slug} name={`Funnel, ${s.name}`}>
+                    {f ? <Funnel steps={funnelSteps(f.headline)} label={`Funnel, ${s.name}`} /> : null}
+                  </Section>
+                );
+              })}
+            </div>
+          )}
+          {d && (
+            <>
+              <Channels read={d} segs={one ? [] : segs} selected={channel?.slug} />
+              <div className="two-col">
+                <Trend title="New customers, by month" points={series.map((p) => [p.period, p.new_customers] as const)} fmt={(v) => count(v)} />
+                <Trend title="Cost per customer, by month" points={series.map((p) => [p.period, p.cac] as const)} fmt={(v) => usd(v, true)} />
+              </div>
+              <Retention read={d} />
+              <Kpis metrics={d.metrics} />
+            </>
+          )}
+        </div>
       }
       panel={channel && d && <ChannelPanel channel={channel} read={d} month={month} sources={sources.data?.sources ?? []} />}
     />
@@ -144,7 +146,7 @@ function Channels({ read, segs, selected }: { read: GrowthRead; segs: readonly S
     : [[null, read.channels]];
   const row = (c: GrowthChannel) => (
     <tr key={c.slug} className={c.slug === selected ? 'is-selected' : undefined} data-target={`channel:${c.slug}`}>
-      <td className="t-title">
+      <td className="t-name">
         <ActLink to={GROWTH} search={{ tab: undefined, panel: `channel:${c.slug}` }} action="growth.openChannel" input={{ channel: c.slug }} className="t-link">
           {c.name ?? c.slug}
         </ActLink>
@@ -197,7 +199,7 @@ function Channels({ read, segs, selected }: { read: GrowthRead; segs: readonly S
               ])}
             {read.channels.length > 0 && (
               <tr className="is-total">
-                <td className="t-title">Total</td>
+                <td className="t-name">Total</td>
                 <td className="num">{usd(h.cost?.value ?? null)}</td>
                 <td className="num">{count(h.new_customers?.value ?? null)}</td>
                 <td className="num">{usd(h.cac?.value ?? null, true)}</td>
@@ -273,7 +275,7 @@ function Retention({ read }: { read: GrowthRead }) {
         <tbody>
           {rows.map((r) => (
             <tr key={r.cohort}>
-              <td className="t-title">{/^\d{4}-\d{2}$/.test(r.cohort) ? monthName(r.cohort) : r.cohort}</td>
+              <td className="t-name">{/^\d{4}-\d{2}$/.test(r.cohort) ? monthName(r.cohort) : r.cohort}</td>
               <td className="num">{count(r.entered)}</td>
               {[r.kept_d30, r.kept_d90, r.kept_d180].map((w, i) => (
                 <td key={i} className="num">
@@ -317,7 +319,7 @@ function Kpis({ metrics }: { metrics: readonly GrowthMetric[] }) {
         <tbody>
           {metrics.map((m) => (
             <tr key={m.id} className={m.estimate ? 'is-quiet' : undefined}>
-              <td className="t-title">{m.name}</td>
+              <td className="t-name">{m.name}</td>
               <td className="num t-fig">{metricValue(m)}</td>
             </tr>
           ))}
@@ -394,7 +396,7 @@ function GrowthSources() {
                 {list.length === 0 && <EmptyRow span={4}>No source connected</EmptyRow>}
                 {list.map((s) => (
                   <tr key={s.id}>
-                    <td className="t-title">
+                    <td className="t-name">
                       {s.name ?? s.system ?? s.id}
                       {HEALTH[s.health] && <Pill flag={s.health === 'failing'}>{HEALTH[s.health]}</Pill>}
                     </td>

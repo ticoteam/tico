@@ -155,7 +155,7 @@ function Statement({ pnl, open }: { pnl: Pnl; open: string | null }) {
             if (r.kind === 'line')
               return (
                 <tr key={r.id} className={[r.depth > 0 && 'is-sub', r.id === open && 'is-selected'].filter(Boolean).join(' ') || undefined} data-target={`line:${r.id}`}>
-                  <td className="t-title">
+                  <td className="t-name">
                     <ActLink to={FIN} search={{ tab: 'pnl', panel: `line:${r.id}` }} action="finance.openLine" input={{ account: r.id }} className="t-link">
                       {r.name}
                     </ActLink>
@@ -166,7 +166,7 @@ function Statement({ pnl, open }: { pnl: Pnl; open: string | null }) {
               );
             return (
               <tr key={`${r.kind}${k}`} className={`is-${r.kind}`}>
-                <td className="t-title">{r.name}</td>
+                <td className="t-name">{r.name}</td>
                 {r.values.map((v, i) => cell(v, i, r.kind === 'pct'))}
               </tr>
             );

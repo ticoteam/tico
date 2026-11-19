@@ -45,7 +45,9 @@ const KIND_TAB: Record<string, FinanceTab> = {
   period_ready: 'balance',
 };
 
-/** The overview: four figures, revenue and spend by week, what waits on you and what changed. */
+/** The overview: four figures, then one column of sections as the mock stacks them (finance.js `overview`): revenue and
+    spend by week, what waits on you, what changed. Each Section puts its name on the page edge itself, so none sits in
+    the kind's padded chart slot or its two-column widget grid. */
 function Overview() {
   const press = usePress();
   const now = new Date();
@@ -114,27 +116,25 @@ function Overview() {
             ]}
           />
       }
-      chart={
-        n > 1 && (
-          <Section name="Revenue and spend, by week">
-            <div className="chart-sec">
-              <Lines
-                series={[
-                  { name: 'Revenue', end: cash(w?.income[n - 1]), pts: income, cls: 'l1' },
-                  { name: 'Spend', end: cash(w?.expense[n - 1]), pts: expense, cls: 'l2' },
-                ]}
-                height={184}
-                {...scale}
-                fmt={(v) => cash(v * 100)}
-                xl={xl}
-                label={`Revenue and spend, ${n} weeks`}
-              />
-            </div>
-          </Section>
-        )
-      }
       widgets={
-        <>
+        <div className="stack">
+          {n > 1 && (
+            <Section name="Revenue and spend, by week">
+              <div className="chart-sec">
+                <Lines
+                  series={[
+                    { name: 'Revenue', end: cash(w?.income[n - 1]), pts: income, cls: 'l1' },
+                    { name: 'Spend', end: cash(w?.expense[n - 1]), pts: expense, cls: 'l2' },
+                  ]}
+                  height={184}
+                  {...scale}
+                  fmt={(v) => cash(v * 100)}
+                  xl={xl}
+                  label={`Revenue and spend, ${n} weeks`}
+                />
+              </div>
+            </Section>
+          )}
           <Section name="Waits on you" count={waits.length}>
             <Table label="Waits on you">
               <tbody>
@@ -142,7 +142,7 @@ function Overview() {
                   const tab = KIND_TAB[it.kind] ?? 'overview';
                   return (
                     <tr key={it.id}>
-                      <td className="t-title">
+                      <td className="t-name">
                         <ActLink to={FIN} search={{ tab, panel: undefined }} action="finance.setTab" input={{ tab }}>
                           {it.label}
                         </ActLink>
@@ -159,13 +159,13 @@ function Overview() {
               <tbody>
                 {changed.map((line, i) => (
                   <tr key={i}>
-                    <td className="t-title">{line}</td>
+                    <td className="t-name">{line}</td>
                   </tr>
                 ))}
               </tbody>
             </Table>
           </Section>
-        </>
+        </div>
       }
     />
   );

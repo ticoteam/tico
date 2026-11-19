@@ -18,13 +18,21 @@
 
 /* table extras */
 .money .table{table-layout:fixed}
-.money .table td.t-title{overflow:hidden;text-overflow:ellipsis}
+.money .table td.t-name{overflow:hidden;text-overflow:ellipsis}
 .money .table td.t-words{color:var(--ink-2);overflow:hidden;text-overflow:ellipsis}
 .money .table td .who-cell{display:flex;align-items:center;gap:var(--s-2);min-width:0}
 .money .table td .who-cell span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .money .table td .who-cell .av{margin:0}
 .money .table td.t-bar{padding-right:var(--s-1)}
 .money .table tr.is-sub td:first-child{padding-left:calc(var(--s-6) + var(--s-1));color:var(--ink-2)}
+/* On the page the body has no left padding (marks hang in the margin) and a Section puts its name on --page-x itself,
+   so what stands under a name starts there too: a table's first column, the chart, bars, the control row, rules, folds
+   and definitions (the mock: body on --page-x less 12, each block 12 in). The panel keeps its own 12. */
+@media (min-width:761px){
+  .money .pk-body .table :is(th,td):first-child{padding-left:var(--page-x)}
+  .money .pk-body .table tr.is-sub td:first-child{padding-left:calc(var(--page-x) + var(--s-4))}
+  .money .pk-body :is(.chart-sec,.hbars,.ctl-row,.rule,.fold,.def){padding-left:var(--page-x)}
+}
 .money .table tr.is-pct td{color:var(--muted);font-size:var(--t-sm)}
 .money .table tr.is-net td{height:40px;font-family:var(--font-display);font-size:var(--t-base);font-weight:var(--w-title);line-height:1;border-top:1.5px solid var(--ink-2);border-bottom:0}
 .money .table tr.is-net:hover td,.money .table tr.is-pct:hover td{background:none}
@@ -56,12 +64,23 @@
 .money .ctl-row+.t-scroll .table.is-stick thead th{top:52px}
 .money .ctl-row .count{font-size:var(--t-sm)}
 
+/* the overview's sections in one column, as the mock stacks them */
+.money .pk-widgets>.stack{grid-column:1/-1}
+.money .stack>.two-col+.stage,.money .stack>.stage+.two-col{margin-top:var(--s-2h);padding-top:var(--s-2h);border-top:1px solid var(--line)}
+
+/* figures: label, value and sub on the same lines in every tile, whatever is missing; the sparkline keeps to the
+   bottom right and never moves the words (the mock draws every tile's three lines) */
+.money .pk-figs .widget{align-items:flex-start}
+.money .pk-figs .widget>.spark{align-self:flex-end}
+.money .pk-figs .widget b:empty::before{content:"\a0"}
+
 /* a chart under its section name */
 .money .chart-sec{padding:0 var(--s-3) var(--s-3h)}
 
 /* two statements side by side (the balance sheet, a funnel per segment) */
 .money .two-col{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:var(--s-2);align-items:start}
 .money .two-col>*+*{box-shadow:-1px 0 0 var(--line)}
+.money .two-col>.stage+.stage{margin-top:0;padding-top:0;border-top:0}
 
 /* a rule on one line: what it matches, where it sends it */
 .money .rule{grid-template-columns:minmax(0,1fr) 16px minmax(0,1fr) 72px;column-gap:var(--s-2h);padding:0 var(--s-3)}

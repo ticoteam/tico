@@ -130,7 +130,7 @@ export function BudgetsPage({ search }: { search: FinanceSearch }) {
                     className={[r.depth > 0 && 'is-sub', r.budget.id === id && 'is-selected'].filter(Boolean).join(' ') || undefined}
                     data-target={`budget:${r.budget.id}`}
                   >
-                    <td className="t-title">
+                    <td className="t-name">
                       <ActLink to={FIN} search={{ tab: 'budgets', panel: `budget:${r.budget.id}` }} action="budget.openRow" input={{ budget: r.budget.id }} className="t-link">
                         {r.budget.name}
                       </ActLink>
@@ -147,7 +147,7 @@ export function BudgetsPage({ search }: { search: FinanceSearch }) {
               ])}
               {all.length > 0 && (
                 <tr className="is-total">
-                  <td className="t-title">Total</td>
+                  <td className="t-name">Total</td>
                   <td className="num">{cash(spent)}</td>
                   <td className="num">{cash(amount)}</td>
                   <td className="num">

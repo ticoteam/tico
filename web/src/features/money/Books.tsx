@@ -201,7 +201,7 @@ function TxRow({ t, first }: { t: Tx; first: boolean }) {
   return (
     <tr className={t.pending ? 'is-quiet' : undefined}>
       <td className="t-words">{first ? fmtDate(t.date) : ''}</td>
-      <td className="t-title">
+      <td className="t-name">
         {describe(t)}
         {!t.account && <Pill flag>No line</Pill>}
       </td>
@@ -293,7 +293,7 @@ function DocTable({ label, name, number, groups }: { label: string; name: string
             </tr>,
             ...list.map((d) => (
               <tr key={d.id}>
-                <td className="t-title">
+                <td className="t-name">
                   {(number ? d.customer?.name : d.vendor?.name) || d.number}
                   {late(d) && <Pill>{late(d)}</Pill>}
                 </td>
@@ -304,7 +304,7 @@ function DocTable({ label, name, number, groups }: { label: string; name: string
             )),
           ])}
           <tr className="is-total">
-            <td className="t-title" colSpan={span - 1}>
+            <td className="t-name" colSpan={span - 1}>
               Total
             </td>
             <td className="num">{cash(sum(all))}</td>
@@ -407,18 +407,18 @@ function Side({ label, head, parts }: { label: string; head: string; parts: { na
           </tr>,
           ...p.rows.map((r) => (
             <tr key={`${p.name}:${r.code}:${r.name}`}>
-              <td className="t-title">{r.name}</td>
+              <td className="t-name">{r.name}</td>
               <td className={r.balance === 0 ? 'num zero' : 'num'}>{cash(r.balance)}</td>
             </tr>
           )),
           <tr key={`t:${p.name}`} className="is-total">
-            <td className="t-title">{p.total}</td>
+            <td className="t-name">{p.total}</td>
             <td className="num">{cash(total(p.rows))}</td>
           </tr>,
         ])}
         {parts.length > 1 && (
           <tr className="is-net">
-            <td className="t-title">{parts.map((p) => p.name).join(' and ')}</td>
+            <td className="t-name">{parts.map((p) => p.name).join(' and ')}</td>
             <td className="num">{cash(parts.reduce((a, p) => a + total(p.rows), 0))}</td>
           </tr>
         )}
@@ -503,7 +503,7 @@ function Cards() {
               const off = STATUS[c.status];
               return (
                 <tr key={c.id} className={off ? 'is-quiet' : undefined}>
-                  <td className="t-title">
+                  <td className="t-name">
                     {c.nickname}
                     {off && <Pill>{off}</Pill>}
                   </td>
@@ -516,7 +516,7 @@ function Cards() {
               );
             })}
             <tr className="is-total">
-              <td className="t-title" colSpan={3}>
+              <td className="t-name" colSpan={3}>
                 Total
               </td>
               <td className="num">{cash(spent)}</td>
@@ -556,7 +556,7 @@ function Tax() {
       <tbody>
         {list.map((r) => (
           <tr key={`${r.code}:${r.period}`} className={paid ? 'is-quiet' : undefined}>
-            <td className="t-title">
+            <td className="t-name">
               {paid && (
                 <span className="row-check" title="Done">
                   <Icon name="check" />
@@ -572,7 +572,7 @@ function Tax() {
         ))}
         {!paid && (
           <tr className="is-total">
-            <td className="t-title" colSpan={4}>
+            <td className="t-name" colSpan={4}>
               Total
             </td>
             <td className="num">{cash(list.reduce((a, r) => a + r.due, 0))}</td>
@@ -759,7 +759,7 @@ function Sources() {
               const more = items(g, r);
               return (
                 <tr key={`${g.group}:${r.id}`} data-target={`source:${r.id}`}>
-                  <td className="t-title">
+                  <td className="t-name">
                     {r.name}
                     {failing(r) && <Pill flag>Sign in again</Pill>}
                   </td>
@@ -819,7 +819,7 @@ function Access() {
         <tbody>
           {sees.map((t) => (
             <tr key={t.teammate}>
-              <td className="t-title">
+              <td className="t-name">
                 <Who id={t.teammate} />
               </td>
               <td className="t-words">{SEES[t.default] ?? ''}</td>

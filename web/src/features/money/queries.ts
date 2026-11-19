@@ -159,15 +159,21 @@ export const metricQuery = (name: 'cash') =>
     ...quiet,
   });
 
+/* Request shapes follow backend/finance_routes.py: list limits stop at 200, and `unpaid` is the server's word for every
+   status still owed (bills: open, scheduled; invoices: sent, partial). Invoices have no `open` status, so it 422s. */
+export const BILLS_URL = '/api/v2/finance/bills?status=unpaid&limit=200';
+export const INVOICES_URL = '/api/v2/finance/invoices?status=unpaid&limit=200';
+export const TRANSACTIONS_URL = '/api/v2/finance/transactions?limit=200';
+
 export const billsQuery = queryOptions({
-  queryKey: ['finance', 'bills', 'open'],
-  queryFn: ({ signal }) => api.get<FinanceBills>('/api/v2/finance/bills?status=open&limit=200', { signal }),
+  queryKey: ['finance', 'bills', 'unpaid'],
+  queryFn: ({ signal }) => api.get<FinanceBills>(BILLS_URL, { signal }),
   ...quiet,
 });
 
 export const invoicesQuery = queryOptions({
-  queryKey: ['finance', 'invoices', 'open'],
-  queryFn: ({ signal }) => api.get<FinanceInvoices>('/api/v2/finance/invoices?status=open&limit=200', { signal }),
+  queryKey: ['finance', 'invoices', 'unpaid'],
+  queryFn: ({ signal }) => api.get<FinanceInvoices>(INVOICES_URL, { signal }),
   ...quiet,
 });
 
@@ -185,7 +191,7 @@ export const briefQuery = queryOptions({
 
 export const transactionsQuery = queryOptions({
   queryKey: ['finance', 'transactions'],
-  queryFn: ({ signal }) => api.get<FinanceTransactions>('/api/v2/finance/transactions?limit=500', { signal }),
+  queryFn: ({ signal }) => api.get<FinanceTransactions>(TRANSACTIONS_URL, { signal }),
   ...quiet,
 });
 
