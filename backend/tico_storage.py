@@ -79,6 +79,7 @@ from pydantic import Field
 from clients import gateway as G
 
 from . import models as M
+from .api_contract import api_v2, error
 from .store import H, Problem
 
 PATH, TOTAL = "/files", "/files/total"
@@ -1089,7 +1090,34 @@ def install(app, store, auth):
         with store.read() as c:
             return {"move": latest_move(c)}
 
-    @app.get("/api/v2/system/storage/export")
+    @app.get(
+        "/api/v2/system/storage/export",
+        **api_v2(
+            "Files",
+            "exportFiles",
+            "Download every file and attachment the owner may open, as one zip; owner only",
+            {
+                "description": "A zip, streamed as an attachment (tico-files.zip): files/<id>/v<version>/<name> for "
+                "each version of each file, attachments/<id>/<name>, and manifest.json with how many were left out",
+                "headers": {
+                    "X-Tico-Left-Out": {
+                        "description": "How many files and versions were left out because they are private to "
+                        "someone else",
+                        "schema": {"type": "integer"},
+                    }
+                },
+                "content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}},
+            },
+            description="A browser download (link to it), not JSON. Files private to someone else are left out; Move "
+            "files back keeps every file. It answers while a Tico Cloud company is locked, too.",
+            responses={
+                "403": error(
+                    "forbidden: only the owner, signed in to Tico (not the Assistant or BotOps acting for them, nor a "
+                    "bot); identity: a computer"
+                )
+            },
+        ),
+    )
     def storage_export(request: Request):
         """A zip of every file and version the owner may open, streamed (files private to others are left out)."""
         who = owner(request)

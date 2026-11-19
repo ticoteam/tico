@@ -405,6 +405,22 @@ def test_the_owners_export_leaves_out_files_private_to_someone_else(api, tico):
     assert int(export.headers['x-tico-left-out']) >= 1
 
 
+def test_the_export_is_the_owners_alone_and_answers_the_zip_it_declares(api):
+    from backend.auth import Identity
+    from backend.tests.helpers.company import bot
+
+    identities = api.app.state.store.settings.test_identities
+    identities['ana-assistant'] = Identity('human:ana', 'owner', 'ana@acme.example', via='assistant', confirmed=True)
+    for token in ('ben-test', 'ana-assistant', bot(api, 'ops')):
+        refused = api.get('/api/v2/system/storage/export', headers=headers(token))
+        assert refused.status_code == 403, (token, refused.text)
+    op = api.get('/api/v2/openapi.json', headers=headers()).json()['paths']['/api/v2/system/storage/export']['get']
+    export = api.get('/api/v2/system/storage/export', headers=headers())
+    assert export.status_code == 200 and list(op['responses']['200']['content']) == [export.headers['content-type']]
+    assert export.headers['x-tico-left-out'] == '0' and 'X-Tico-Left-Out' in op['responses']['200']['headers']
+    assert json.loads(zipfile.ZipFile(io.BytesIO(export.content)).read('manifest.json'))['files'] == 0
+
+
 def test_credits_out_existing_files_open_and_uploads_follow_the_rule(api, tico):
     """Spec 6 (app half): files stay readable; new uploads go to the company's own storage, or are refused with a
     plain reason when it can't take them."""

@@ -6,6 +6,7 @@ publishes grants only after their opening audit transaction commits, and records
 
 from fastapi import Request
 
+from .api_contract import api_v2, error
 from .store import H, Problem
 
 MODES = ("off", "view", "control")
@@ -68,7 +69,22 @@ def install(app, store, auth, mutate, execution, settings):
     def computer(c, rid):
         return c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
 
-    @app.post("/api/v2/computers/{rid}/screen")
+    @app.post(
+        "/api/v2/computers/{rid}/screen",
+        **api_v2(
+            "Computers",
+            "setComputerScreen",
+            "Set who may open a computer's screen from the app: off, view or control; its operator or an admin",
+            "ComputerScreen",
+            description="A mode other than off needs the screen turned on on the computer itself (`screen_available`). "
+            "Off closes the screen's open sessions; view closes the ones in control. Audited as `runner.screen`.",
+            parameters={"rid": "The computer's id"},
+            responses={
+                "403": error("forbidden: only the computer's operator or an admin changes it"),
+                "409": error("screen_unavailable: the computer offers no screen; turn it on on the computer first"),
+            },
+        ),
+    )
     def screen_mode(request: Request, rid: str, body: M.ScreenMode):
         """Who may open this computer's screen from the app: off, view, or control. The computer's operator or an
         admin; a mode other than off needs the screen turned on on the computer. Off closes open sessions, view
@@ -93,7 +109,37 @@ def install(app, store, auth, mutate, execution, settings):
         sessions.set_mode(rid, mode, "screen turned off" if mode == "off" else "view only now")
         return result
 
-    @app.post("/api/v2/computers/{rid}/screen/sessions")
+    @app.post(
+        "/api/v2/computers/{rid}/screen/sessions",
+        **api_v2(
+            "Computers",
+            "openComputerScreen",
+            "Open a computer's screen: a single-use WebSocket path, good for a minute; its operator or an admin, in "
+            "person",
+            "ScreenSession",
+            description="Only the computer's operator or an admin, signed in to the app themselves: the Assistant, "
+            "BotOps, bots and personal API tokens are refused. `control` asks to drive the computer, which its "
+            "Screen setting must allow. Connect a WebSocket (subprotocol `binary`, RFB bytes both ways) to `ws_path` on "
+            "this server's own origin at once: its ticket opens one connection, within a minute, from this "
+            "app's origin, and is never logged or kept; a used, late or unknown ticket, or another site's page, is "
+            "refused 403 before the upgrade. Once open, the socket closes with 4403 when the permission changes "
+            "(the screen turned off, view only now, or the computer removed), 4404 when the computer does not answer "
+            "within the minute, 4408 at the hour's limit and 1012 when the relay or server restarts. To reconnect, "
+            "open a new session. Each opening and closing is audited (`runner.screen_open`, `runner.screen_close`).",
+            parameters={"rid": "The computer's id"},
+            responses={
+                "403": error(
+                    "forbidden: not the computer's operator or an admin, or not in person; screen_off: the screen is "
+                    "off; screen_view_only: control was asked of a view-only screen"
+                ),
+                "409": error("screen_unavailable: the computer offers no screen"),
+                "429": error("screen_busy: the computer's screen is open too many times; close one first"),
+                "503": error("screen_relay_unavailable: the screen relay is not answering; try again shortly"),
+            },
+            idempotency="Optional: each call opens a new session, and no answer is replayed (it would repeat the "
+            "ticket).",
+        ),
+    )
     def open_screen(request: Request, rid: str, body: M.ScreenSessionStart):
         """Open the computer's screen: a single-use ticket for the browser's websocket at `ws_path`, good for a
         minute. The computer's operator or an admin, in person: not the Assistant, BotOps or a personal token."""

@@ -425,6 +425,7 @@ def test_the_declared_answers_match_the_live_ones(api):
         params={"group": "hour", "from": "2026-01-01T17:00:00Z", "to": "2026-01-01T20:00:00Z"},
     )
     call("getHealth", "get", "/api/v2/health")
+    call("getCloudAccess", "get", "/api/v2/cloud-access")
     assert call("getGitHubApp", "get", "/api/v2/github/app")["connected"] is False
     from datetime import datetime, timezone
     from backend import heartbeat
@@ -458,6 +459,74 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("listApiToolActivity", "get", "/api/v2/api-tools/%s/activity" % tool["id"])
     assert call("getToolVendor", "get", "/api/v2/tool-vendors/close-crm")["rows"][0]["keys"] == []
     assert any(r.get("private") for r in call("listToolIndex", "get", "/api/v2/tool-index")["rows"])
+
+
+def declared(document, operation, kind="application/json"):
+    op = next(o for ops in document["paths"].values() for o in ops.values() if o["operationId"] == operation)
+    return op["responses"]["200"]["content"][kind]["schema"]
+
+
+def test_a_screen_answers_its_declared_shape_and_opens_only_for_its_operator_or_an_admin_in_person(api, monkeypatch):
+    """The screen routes' answers against the contract. The relay is replaced (its ticket is the relay's to make);
+    every refusal comes before it is asked."""
+    from types import SimpleNamespace
+
+    from backend import screen
+    from backend.auth import Identity
+    from backend.tests.helpers.api import as_member, post, runner
+    from backend.tests.helpers.company import bot
+    from backend.tests.helpers.screen import offer
+
+    as_member(api, "ben@acme.example")  # a member who is not the computer's operator
+    document = api.get("/api/v2/openapi.json", headers=headers()).json()
+    r = runner(api, operator="cara")
+    rid = r["runner_id"]
+    offer(api, r)
+    post(api, f"computers/{rid}/screen", {"mode": "view"}, token="ben-test", expected=403)
+    mode = post(api, f"computers/{rid}/screen", {"mode": "view"}, token="cara-test")  # its operator
+    assert mode == {"screen": "view", "screen_available": True}
+    assert conforms(mode, declared(document, "setComputerScreen"), document) is None
+
+    sessions = screen.registry(api.app.state.store)
+    asked = []
+
+    def admit(runner_id, actor, control, width, height, mode):
+        asked.append(actor)
+        return SimpleNamespace(id="screen-1", relay_lease="lease-1"), "t" * 64
+
+    monkeypatch.setattr(sessions, "admit", admit)
+    monkeypatch.setattr(sessions, "publish", lambda session: None)
+    identities = api.app.state.store.settings.test_identities
+    identities["cara-token"] = Identity("human:cara", "human", "cara@acme.example", via_token=True)
+    identities["cara-assistant"] = Identity("human:cara", "human", "cara@acme.example", via="assistant", confirmed=True)
+    path = f"/api/v2/computers/{rid}/screen/sessions"
+    for token, code in (
+        ("ben-test", "forbidden"),
+        ("cara-token", "forbidden"),
+        ("cara-assistant", "forbidden"),
+        (bot(api, "ops"), "identity"),
+    ):
+        refused = api.post(path, json={"control": False}, headers=headers(token))
+        assert (refused.status_code, refused.json()["error"]["code"]) == (403, code), (token, refused.text)
+    post(api, f"computers/{rid}/screen/sessions", {"control": True}, token="cara-test", expected=403)  # view only
+    assert asked == []
+    # In person, the operator and an admin; no Idempotency-Key needed (nothing is replayed).
+    for token in ("cara-test", "ana-test"):
+        opened = api.post(path, json={"control": False}, headers={"Authorization": headers(token)["Authorization"]})
+        assert opened.status_code == 200, opened.text
+        answer = opened.json()
+        assert conforms(answer, declared(document, "openComputerScreen"), document) is None
+        assert answer["ws_path"] == f"/api/v2/runners/{rid}/screen/ws?ticket=" + "t" * 64
+        assert (answer["width"], answer["height"], answer["control"]) == (1280, 800, False)
+    assert asked == ["human:cara", "human:ana"]
+
+
+def test_sign_out_is_declared_as_the_redirect_it_is_and_needs_no_session(api):
+    document = api.get("/api/v2/openapi.json", headers=headers()).json()
+    op = document["paths"]["/api/v2/logout"]["get"]
+    assert (op["operationId"], op["security"], list(op["responses"])) == ("signOut", [], ["302"])
+    out = api.get("/api/v2/logout", follow_redirects=False)
+    assert out.status_code == 302 and out.headers["location"] == "/"
 
 
 def test_the_finance_record_answers_match_the_live_ones(api):
