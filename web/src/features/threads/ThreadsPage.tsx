@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery, useSuspenseInfiniteQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { Conversation, Message, MessageBones } from '@/conversation';
@@ -49,13 +49,14 @@ const SEARCH_WAIT_MS = 200;
 
 /** Threads: the list of threads and DMs, newest first, with Catch up on top; the open one beside it. */
 export function ThreadsPage({ pane, thread, q = '', open = false }: ThreadsPageProps) {
-  const list = useSuspenseInfiniteQuery(threadListQuery);
+  const list = useInfiniteQuery(threadListQuery);
   const draft = useNewDraft();
   const tabs = useThreadTabs(pane === 'thread' && thread ? `/threads/${encodeURIComponent(thread)}` : pane === 'new' ? '/threads/new' : '/threads');
   const [browsing, setBrowsing] = useState(false);
   const navigate = useNavigate();
 
   const all = rowsOf(list.data);
+  const listState = q ? 'ready' : list.isPending ? 'loading' : !list.data ? 'fault' : !all.length && !open ? 'empty' : 'ready';
   const keep = q ? `?q=${encodeURIComponent(q)}` : '';
   const more = () => {
     if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
@@ -113,7 +114,8 @@ export function ThreadsPage({ pane, thread, q = '', open = false }: ThreadsPageP
       list={listNode}
       listLabel="Threads"
       open={open}
-      state={all.length === 0 && !open && !q ? 'empty' : 'ready'}
+      state={listState}
+      onRetry={() => void list.refetch()}
       empty={{ title: 'No threads yet', action: <Button onClick={() => void press('threads.compose', {})}>New message</Button> }}
       {...item}
     />
