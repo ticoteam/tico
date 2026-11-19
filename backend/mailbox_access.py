@@ -498,6 +498,13 @@ def revoke(c, actor, mailbox_id, access_id):
     if not found:
         raise Problem("not_found", "Access not found", 404)
     c.execute("DELETE FROM mailbox_accesses WHERE id=?", (found["id"],))
+    from . import residents
+
+    # A bot's process that read the mailbox ends with the access (backend/residents.py); a person's access may be
+    # what an Assistant read it through.
+    residents.revoke_for(
+        c, "credential_revoked", ("bot:" if found["grantee_type"] == "bot" else "human:") + found["grantee_id"]
+    )
     H.event(
         c,
         _actor_ref(actor),

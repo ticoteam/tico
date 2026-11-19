@@ -34,7 +34,7 @@ from . import (
     wake_presets,
     wake_rules,
 )
-from . import runner_online
+from . import residents, runner_online
 from . import task_privacy as privacy
 from . import task_text_keys
 from . import (
@@ -6030,7 +6030,7 @@ class Execution:
                     refs={"quiet": True, "stopped_by": person, "turn_id": row["id"]},
                 ),
             )
-        reason = "restart" if benched and quarantine_stops.restarted(c, row) else "quarantine"
+        reason = (quarantine_stops.kind(c, row) if benched else None) or "quarantine"
         H.event(
             c,
             H.TICO_ACTOR,
@@ -6197,6 +6197,8 @@ class Execution:
 
     def started(self, c, who, aid, body):
         row = self.attempt(c, who, aid)
+        # A revocation fenced the resident session this turn was bound to (backend/residents.py): it never starts.
+        residents.refuse_fenced(c, aid)
         if row["state"] != "leased":
             raise Problem("already_started", "This attempt was already started", 409)
         # Older workers did not negotiate a short start; their in-flight delivery lease stays valid.
@@ -6427,8 +6429,8 @@ class Execution:
             or not self.current_owner(c, who, attempt)
         ):
             return None
-        if attempt["state"] != "running":
-            return {"messages": []}
+        if attempt["state"] != "running" or residents.fenced(c, aid):
+            return {"messages": []}  # a fenced turn (backend/residents.py) is handed nothing new
         # A comment its author took back mid-turn (H.task_comment_delete) still started the turn: read its row,
         # whose words are already gone, so the turn keeps polling. Its follow-ups are read the normal way below.
         origin = H.message(
@@ -6631,6 +6633,9 @@ class Execution:
         row = self.attempt(c, who, aid, active=False, voice_control=True)
         if row["stop_requested_at"] and call_sessions.closed_attempt(c, aid):
             return {"ack_seq": max(row["last_seq"], body.events[-1].seq), "historical": True}
+        if residents.fenced(c, aid):
+            # Output after a revocation fenced this turn is acknowledged, so the runner stops resending it, and dropped.
+            return {"ack_seq": max(row["last_seq"], body.events[-1].seq), "historical": True}
         from . import counsel
 
         revoked = row["bot_id"] == H.RULES_OWNER and counsel.revoked_page_run(c, aid)
@@ -6707,6 +6712,7 @@ class Execution:
         from .watchers import defang, live
 
         row = self.attempt(c, who, aid, active=False)
+        residents.refuse_fenced(c, aid)  # a fenced turn wakes nothing
         if c.execute("SELECT 1 FROM events WHERE action='attempt.background-done' AND target=?", (aid,)).fetchone():
             return {"woke": False}
         job = c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
@@ -6924,6 +6930,10 @@ class Execution:
         # A turn that finished before its runner heard a restart's Stop (its computer's subscription changed) stays a
         # finished turn: nothing to run again.
         if benched and body.outcome == "completed" and not quarantine_stops.restarted(c, row):
+            body = body.model_copy(update={"outcome": "interrupted"})
+        # A turn a revocation fenced (backend/residents.py) never posts its answer, whoever stopped it; its usage
+        # below is still counted.
+        if body.outcome == "completed" and residents.fenced(c, aid):
             body = body.model_copy(update={"outcome": "interrupted"})
         # `attempt` has already given `restore` its chance. What is left is a finished turn whose
         # lease lapsed under it: settle the job with it when the job is still waiting, and file it
@@ -9098,7 +9108,7 @@ class Execution:
                             row,
                             row['attempt_id'],
                             'resume',
-                            quarantine_stops.resume_note(at),
+                            quarantine_stops.resume_note(at, quarantine_stops.stopper_of(c, stopped_run)),
                             H.TICO_ACTOR,
                             action='job.auto_reconcile',
                         )

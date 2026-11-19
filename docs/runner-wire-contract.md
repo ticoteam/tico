@@ -98,3 +98,32 @@ claiming another. `voice=restart` returns a fresh primer and notes stamp with a 
 After a call closes, the runner can acknowledge discarded output and settle the stopped lease with usage counts.
 Older hubs negotiate the capability away through the heartbeat 422 fallback.
 With `voice_inputs_v1`, the runner stream's `voice_inputs` hint carries only `attempt_id` and `call_id`, and goes only to the computer still holding that attempt. It is sent for a new turn and when the active turn is skipped (its deadline passed). The runner fetches inputs on hints and reconnects, with a 3-second backup poll; while the server refuses the capability, or the stream is down or quiet past 25 seconds, it keeps the 400 ms poll.
+
+## Resident sessions
+
+A runner advertises `resident_threads_v1` to keep a session's provider process between its turns, only where
+`GET runners/desired` lists `features.resident_threads_v1`. Each turn is still an ordinary claim, start-place, started,
+events, renew and complete; only the process is reused. With this capability the runner's longest capability list is
+32 values, the cap of the current hub and of the 0.6.0 hub, so a further capability needs that cap raised first and
+must wait out the window (a 0.6.0 hub stays at 32). The routes are outside the core contract, take the runner's
+credential, and answer 409 `resident_threads_off` to a runner that has not advertised the capability:
+
+- `POST attempts/{aid}/resident` `{provider_session_id, binding?, session_key?, replaces?}` registers the process of
+  this ordinary, authorized turn. The server keeps the session key the turn's privacy scope admits: a key outside it is
+  409 `session_key_mismatch`. One live process per bot, key and login binding: another is 409 `resident_taken`, unless
+  `replaces` names the incarnation this runner lost.
+- `POST residents/{rid}/renew` `{state: live|dormant, provider_session_id?}` about every `renew_seconds` (60); a
+  resident unheard from for 5 minutes lapses. `POST residents/{rid}/release` `{reason}` ends one incarnation and never
+  touches its replacement.
+- `POST attempts/{aid}/resident-bind` `{resident_id}` hands a claimed turn to a live resident of its session; 409
+  `resident_stopped`, `resident_mismatch` or `session_key_mismatch` means start the turn the ordinary way.
+- `POST runners/me/residents/reconcile` `{residents: [{id, state}]}` after a reconnect: the answer lists the residents
+  to keep (`residents`), to stop (`stops`, with `stop_reason` and `revoked`) and the turns a revocation fenced
+  (`fenced_attempts`).
+
+Every resident answer has `stop`; when true, end the process. A revocation (a bot paused or archived, moved or
+unassigned, a revoked computer, a removed thread member, a narrowed thread or task audience, a removed credential,
+sign-in or mailbox access) ends the residents it touches in its own write and fences their live turns: `started` and
+`background-done` answer 409 `stale_lease`, the turn's own token is refused, events are acknowledged as `historical`
+and dropped, `inputs` hands nothing, renew answers `stop`, and `complete` is taken with its usage but posts no answer.
+A cleared session ends its residents without fencing a turn.

@@ -247,9 +247,13 @@ def validate_identity(c, who):
     if not runner:
         raise Problem("revoked", "Runner credential is revoked or unknown", 401)
     if who.role == "bot":
+        # A turn a revocation fenced (backend/residents.py resident_turns) holds no tool authority or credentials
+        # from that write on, though its lease runs until its runner hears the stop.
         row = c.execute(
-            "SELECT a.*, x.runner_id AS assigned_runner, x.generation AS assigned_generation "
-            "FROM attempts a JOIN assignments x ON x.bot=a.bot_id WHERE a.id=?",
+            "SELECT a.*, x.runner_id AS assigned_runner, x.generation AS assigned_generation, "
+            "rt.fenced_at AS resident_fenced_at "
+            "FROM attempts a JOIN assignments x ON x.bot=a.bot_id "
+            "LEFT JOIN resident_turns rt ON rt.attempt_id=a.id WHERE a.id=?",
             (who.attempt_id,),
         ).fetchone()
         if (
@@ -258,6 +262,7 @@ def validate_identity(c, who):
             or row["lease_until"] <= H.now()
             or row["assigned_runner"] != who.runner_id
             or row["assigned_generation"] != row["generation"]
+            or row["resident_fenced_at"]
             or H.bot(c, row["bot_id"])["state"] != "active"
         ):
             raise Problem("stale_lease", "Execution ownership expired; stop work and reconnect", 409)

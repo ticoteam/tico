@@ -129,6 +129,8 @@ EMPTY = (
     "bot_sessions",
     "session_epochs",
     "bot_session_epochs",
+    "resident_sessions",  # live provider processes on the live install's computers (backend/residents.py)
+    "resident_turns",
     "compact_first",
     "model_logins",
     "model_login_cleared",

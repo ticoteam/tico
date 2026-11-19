@@ -562,6 +562,9 @@ class GitHubApp:
                 return ""
 
     def forget(self, c):
+        from . import residents
+
+        residents.revoke(c, "credential_revoked", everyone=True)  # a process may hold a token from the app
         c.execute("DELETE FROM github_app")
         c.execute("UPDATE repositories SET reachable=0 WHERE reachable<>0")
         c.execute("DELETE FROM github_app_states")

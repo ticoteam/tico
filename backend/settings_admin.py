@@ -1927,6 +1927,9 @@ class SettingsAdmin:
         if before == doc:
             raise Problem("unchanged", "That is already who has access", 409)
         c.execute("UPDATE bot_config SET access=?,revision=revision+1 WHERE bot=?", (BA.stored(doc), bot))
+        from . import residents
+
+        residents.revoke(c, "access_changed", bot=bot)  # its processes were kept for the old audience
         if rooms.thread_mode(c, bot) == rooms.SHARED:
             rooms.sync_shared_room(c, self.auth, bot)
         self.record(c, who.actor, bot, "access", before, doc)

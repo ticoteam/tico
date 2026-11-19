@@ -561,6 +561,11 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
     from .github_app import repo_of, save_extra_repos
 
     before = access(c, bot, org)
+    from . import residents
+
+    # A process may hold a token for the repositories the bot reaches now (backend/residents.py). A change that is
+    # refused below rolls this back with it.
+    residents.revoke(c, "credential_revoked", bot=bot)
     if body.create_repositories is not None:
         from .github_app import BOTOPS
 

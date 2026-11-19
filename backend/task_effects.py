@@ -225,6 +225,10 @@ def _follow_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: st
     conn.execute("DELETE FROM task_delegations WHERE task_id=?", (task_id,))
     if H.is_bot(old):
         H._demote_sessions(conn, task_id, owner=new)
+        from . import residents
+
+        # The old owner's process on this task ends with its ownership (backend/residents.py).
+        residents.revoke(conn, "task_access_changed", bot=old[4:], tasks=[task_id])
         for link in H.task_links(conn, task_id):
             if link["kind"] == "worktree":
                 detail: Row = H._json(link.get("detail"), {}) or {}

@@ -2592,6 +2592,9 @@ def set_task_readers(conn, actor, task_id, add=(), remove=(), *, replace=None, m
     conn.execute(
         "UPDATE tasks SET readers=?, updated_at=? WHERE id=?", (_dump(wanted) if wanted else None, now(), task_id)
     )
+    from . import residents
+
+    residents.revoke(conn, "task_access_changed", tasks=[task_id])  # sessions kept for the old readers end
     for reader in before:
         if reader not in wanted:
             _task_event(conn, task_id, actor, "reader", reader, None, "")
@@ -3908,6 +3911,9 @@ def _made_private(conn, actor, task_id):
     """A company-visible task goes private because the task above it is: the flag, its record, and the follow-ups."""
     conn.execute("UPDATE tasks SET private=1,visibility='private' WHERE id=?", (task_id,))
     _task_event(conn, task_id, actor, "private", 0, 1, "")
+    from . import residents
+
+    residents.revoke(conn, "task_access_changed", tasks=[task_id])  # its sessions were kept for company readers
     _private_followups(conn, task_id)
     from .reconnects import access_changed as reconnects_access_changed
 
@@ -5399,6 +5405,10 @@ def task_update(
             _task_human_reads(conn, actor, after)
         if private is not None or task_private(conn, after) != task_private(conn, row):
             conn.execute("DELETE FROM task_delegations WHERE task_id=?", (task_id,))
+        if task_private(conn, after) != task_private(conn, row):
+            from . import residents
+
+            residents.revoke(conn, "task_access_changed", tasks=[task_id])  # its sessions were kept for other readers
         if task_private(conn, after) and not task_private(conn, row):
             # A task under a private parent is private: every task below this one goes private with it, or a
             # colleague could read a sub-task of a parent they cannot see.

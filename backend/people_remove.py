@@ -108,8 +108,9 @@ def remove(c, actor, roster, person):
         raise Problem("not_removable", check(person), 409)
     if recent_history(c, pid):
         raise Problem("has_history", KEEPS, 409)
-    from . import pages
+    from . import pages, residents
 
+    residents.revoke(c, "person_left", everyone=True)  # as access.leave: an Assistant's process acted for them
     pages.forget_audience_member(c, actor, "people", pid)
     people = [p for p in roster["people"] if p["id"] != pid]
     people = [{**p, "reports_to": person.get("reports_to") or ""} if p.get("reports_to") == pid else p for p in people]

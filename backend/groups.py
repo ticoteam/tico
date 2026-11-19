@@ -170,6 +170,10 @@ def _set_bot(c, slug, gid):
         task_caps.forget(c, "bot:" + slug)  # its caps were its old group's (CONTRACT §3)
     was, declared["team"] = declared.get("team") or "", gid
     BS.write(c, slug, declared)
+    if was != gid:
+        from . import residents
+
+        residents.revoke(c, "group_changed", bot=slug)  # its old group's threads and access went with the move
     _follow(c, "bot:" + slug, was, gid)
     if was != gid:
         from .finance import actions as FA

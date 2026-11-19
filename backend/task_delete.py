@@ -331,7 +331,9 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
         )
     actor = actor or H.TICO_ACTOR
     now = H.now()
-    from . import task_engine
+    from . import residents, task_engine
+
+    residents.revoke(c, "task_access_changed", tasks=ids)  # no one reads a deleted task, its sessions included
 
     task_engine.on_delete(c, ids, actor)  # a deleted task's snooze ends: nothing waits for its date
     relations = {tid: TR.snapshot_rows(c, tid) for tid in ids}

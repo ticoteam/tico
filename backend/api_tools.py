@@ -1460,6 +1460,10 @@ def key_gone(c, who, key, grants):
     if tool is not None:
         detail |= {"tool": tool["id"], "private": tool["audience"] is not None}
     H.event(c, who.actor, "credential.deleted", key["id"], detail)
+    from . import residents
+
+    # A process that read the key may still hold it (backend/residents.py); who held it is not cheap to tell.
+    residents.revoke(c, "credential_revoked", everyone=True)
     if tool is not None:
         H.event(c, who.actor, "tool.key_deleted", tool["id"], {"credential": key["id"], "name": key["name"]})
 
@@ -1766,6 +1770,9 @@ def _revoke(c, who, key_id, subject):
             "UPDATE credential_grants SET revoked_at=?, revoked_by=? WHERE id=?", (H.now(), who.actor, grant["id"])
         )
         H.event(c, who.actor, "credential.revoked", key_id, {"grant": grant["id"], "subject": subject})
+        from . import residents
+
+        residents.revoke_for(c, "credential_revoked", subject)  # a process that read the key may still hold it
 
 
 def set_level(c, who, vault, tool_id, subject, level):

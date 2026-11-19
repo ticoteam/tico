@@ -2,7 +2,7 @@
 
 from . import built_on
 from .call_sessions import CLOSED_COMPLETION, VoicePhase, closed_attempt
-from . import runner_online
+from . import residents, runner_online
 from . import org_rule_check
 from . import placement as placing
 from .auth import Identity
@@ -702,6 +702,28 @@ def register(
     def background_done(request: Request, aid: str, body: M.BackgroundDone):
         body = scrub_attempt(aid, body)  # a secret set in this run never reaches the wake
         return mutate(request, body, lambda c: execution.background_done(c, request.state.identity, aid, body))
+
+    # Resident sessions (backend/residents.py): only for a runner that advertises `resident_threads_v1`. Each turn
+    # stays an ordinary claim, start and completion; these routes reserve and reuse its process.
+    @app.post("/api/v2/attempts/{aid}/resident")
+    def resident_register(request: Request, aid: str, body: M.ResidentRegister):
+        return mutate(request, body, lambda c: residents.register(execution, c, request.state.identity, aid, body))
+
+    @app.post("/api/v2/attempts/{aid}/resident-bind")
+    def resident_bind(request: Request, aid: str, body: M.ResidentBind):
+        return mutate(request, body, lambda c: residents.bind(execution, c, request.state.identity, aid, body))
+
+    @app.post("/api/v2/residents/{rid}/renew")
+    def resident_renew(request: Request, rid: str, body: M.ResidentRenew):
+        return mutate(request, body, lambda c: residents.renew(execution, c, request.state.identity, rid, body))
+
+    @app.post("/api/v2/residents/{rid}/release")
+    def resident_release(request: Request, rid: str, body: M.ResidentRelease):
+        return mutate(request, body, lambda c: residents.release(execution, c, request.state.identity, rid, body))
+
+    @app.post("/api/v2/runners/me/residents/reconcile")
+    def resident_reconcile(request: Request, body: M.ResidentReconcile):
+        return mutate(request, body, lambda c: residents.reconcile(execution, c, request.state.identity, body))
 
 
 def register_placement(
