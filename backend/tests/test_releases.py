@@ -48,7 +48,56 @@ def test_a_server_on_a_newer_prerelease_is_not_shown_an_older_release_as_the_lat
     seen = checker.view("0.6.0-rc.8")
     assert (seen["latest"], seen["available"], seen["url"]) == ("", False, "")
     assert checker.view("0.5.200")["latest"] == "0.5.216" and checker.view("0.5.200")["available"]
-    assert checker.view("0.5.300")["latest"] == "0.5.216"  # a stable build ahead of it still shows it
+    assert checker.view("0.5.300")["latest"] == ""  # nor is it to a stable build ahead of it
+
+
+def test_a_release_read_before_the_running_version_caught_up_is_read_again_soon(monkeypatch):
+    """Health said latest 0.6.78 for an hour while 0.6.79 was published and running: the check had read just before
+    0.6.79's caches caught up and kept that answer for TTL. Behind the running version, it reads again after BEHIND,
+    unconditionally, and past an HQ answer that is behind too; an older release is never shown as the latest."""
+    monkeypatch.setenv("TICO_VERSION", "0.6.79")
+    monkeypatch.setattr(releases.Checker, "enabled", staticmethod(lambda: True))
+    now = [1000.0]
+    checker = releases.Checker(clock=lambda: now[0])
+    checker.release = {**RELEASE, "tag": "v0.6.78", "url": "u78", "name": "n"}
+    checker.etag = "e78"
+    checker.checked = now[0]
+    started = []
+    monkeypatch.setattr(releases.Checker, "refresh", lambda self, force=False: started.append(force))
+    monkeypatch.setattr(
+        releases.threading, "Thread", lambda target, **kw: type("T", (), {"start": lambda s: target()})()
+    )
+    seen = checker.view("0.6.79")
+    assert (seen["latest"], seen["available"], seen["url"]) == ("", False, "")
+    assert started == []  # fresh: not read again at once
+    now[0] += releases.BEHIND + 1
+    checker.view("0.6.79")
+    assert started == [False]  # read again well before TTL
+    assert checker.view("0.6.80-rc.1")["latest"] == ""  # a prerelease ahead shows none
+    assert not checker._behind("0.6.80-rc.1")  # and is not read again every BEHIND
+
+
+def test_a_read_behind_the_running_version_skips_the_conditional_read_and_a_behind_hq(monkeypatch):
+    monkeypatch.setenv("TICO_VERSION", "0.6.79")
+    checker = releases.Checker()
+    checker.release = {**RELEASE, "tag": "v0.6.78", "url": "u78", "name": "n"}
+    checker.etag = "e78"
+    asked = []
+
+    def github(request):
+        asked.append((request.url.host, request.headers.get("if-none-match"), request.headers.get("cache-control")))
+        if request.url.host != "api.github.com":
+            return httpx.Response(200, json={**RELEASE, "tag_name": "v0.6.78"})  # HQ still behind
+        return httpx.Response(200, json={**RELEASE, "tag_name": "v0.6.79", "html_url": "u79"})
+
+    network(monkeypatch, github)
+    checker.census = type("C", (), {"query": lambda self, v: {"v": v}})()
+    checker.refresh()
+    assert asked[-1] == ("api.github.com", None, "no-cache")  # past HQ, and no conditional read of the stale answer
+    assert [a[0] for a in asked][-1] == "api.github.com" and len(asked) == 2  # HQ first, then GitHub
+    seen = checker.view("0.6.79")
+    assert (seen["latest"], seen["url"], seen["available"]) == ("0.6.79", "u79", False)
+    assert seen["known_issues_checked"]  # HQ's messages and known issues are kept beside GitHub's release
 
 
 def test_update_is_owner_only(environment):
