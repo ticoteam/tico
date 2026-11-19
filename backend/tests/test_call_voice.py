@@ -11,6 +11,7 @@ import sys
 import threading
 import wave
 from array import array
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import aclosing
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -116,6 +117,33 @@ def test_a_full_utterance_ends_at_460_ms_but_a_short_fragment_can_continue():
     short = call_voice.Segmenter()
     assert short.feed(ms(300, SPEECH) + ms(680, QUIET), 0) == []
     assert short.feed(QUIET, 980) == [(0, ms(300, SPEECH) + ms(200, QUIET))]
+
+
+@pytest.mark.parametrize("speech_ms", [1000, 300])  # a full utterance (450 ms pause) and a short fragment (700 ms)
+def test_the_early_snapshot_at_200_ms_of_pause_is_the_clip_the_pause_cuts(speech_ms):
+    cut = call_voice.Segmenter()
+    assert cut.feed(ms(100, QUIET) + ms(speech_ms, SPEECH) + ms(180, QUIET), 0) == [] and cut.early is None
+    assert cut.feed(QUIET, 100 + speech_ms + 180) == []
+    snapshot = cut.early
+    assert snapshot == (0, ms(100, QUIET) + ms(speech_ms, SPEECH) + ms(200, QUIET))
+    pause = call_voice.SILENCE_MS if speech_ms >= call_voice.FRAGMENT_SPEECH_MS else call_voice.FRAGMENT_SILENCE_MS
+    clips = []
+    for at in range(100 + speech_ms + 200, 100 + speech_ms + pause, 20):
+        assert cut.early is snapshot
+        clips += cut.feed(QUIET, at)
+    assert clips == [snapshot] and cut.early is None
+
+
+def test_speech_resuming_after_the_early_snapshot_drops_it():
+    cut = call_voice.Segmenter()
+    cut.feed(ms(1000, SPEECH) + ms(200, QUIET), 0)
+    snapshot = cut.early
+    assert snapshot is not None
+    cut.feed(SPEECH, 1200)
+    assert cut.early is None
+    [clip] = cut.feed(ms(460, QUIET), 1220)
+    assert clip != snapshot and clip[1].startswith(snapshot[1])
+    assert cut.feed(ms(100, SPEECH) + ms(200, QUIET), 3000) == [] and cut.early is None  # a click: too little to send
 
 
 def test_a_reply_is_spoken_without_its_markdown_and_only_its_first_part():
@@ -1211,7 +1239,9 @@ def test_questions_across_silent_mic_pauses_are_stored_or_ask_for_a_repeat(meet,
         ("3", "stored"),
         ("4", "stored"),
     ]
-    assert all(entry.keys() == {"call", "n", "ms", "outcome", "wait_ms"} for entry in fields)
+    assert all(entry.keys() == {"call", "n", "ms", "outcome", "early", "wait_ms"} for entry in fields)
+    # 200 ms into each full pause its clip starts transcribing; a clip whose mic packets stopped has no early text
+    assert [entry["early"] for entry in fields] == ["hit", "none", "none", "hit", "none"]
     assert all(entry["call"] == call_id and int(entry["ms"]) >= 1400 and int(entry["wait_ms"]) >= 0 for entry in fields)
 
 
@@ -1236,7 +1266,7 @@ def test_a_backlog_drop_is_reported_with_every_transcription_worker_busy(meet, m
         machine.ingest(call_id, "human:ana", audio, calls.WORKERS * 3000)
         wait_until(lambda: any("outcome=dropped_backlog" in line for line in caplog.messages))
         [line] = [line for line in caplog.messages if line.startswith("call_clip ")]
-        assert line.startswith(f"call_clip call={call_id} n=0 ms=1200 outcome=dropped_backlog wait_ms=")
+        assert line.startswith(f"call_clip call={call_id} n=0 ms=1200 outcome=dropped_backlog early=none wait_ms=")
         assert get(meet, f"calls/{call_id}")["voice"]["note"] == calls.REPEAT_NOTE
     finally:
         release.set()
@@ -1285,6 +1315,94 @@ def test_a_completed_clip_moves_past_a_transcription_at_the_order_deadline(meet,
     assert [line.split(" outcome=")[1].split()[0] for line in caplog.messages if line.startswith("call_clip ")] == [
         "late",
         "stored",
+    ]
+
+
+def test_a_clip_whose_pause_began_is_transcribed_early_and_asks_the_gateway_once(meet, monkeypatch, caplog):
+    heard, release, submitted = [], threading.Event(), []
+
+    def transcribe(base, key, audio, **kw):
+        heard.append(audio)
+        assert release.wait(10)
+        return SYNTHETIC_SPEECH
+
+    class Workers(ThreadPoolExecutor):
+        def submit(self, fn, /, *args, **kwargs):
+            submitted.append(fn.__name__)
+            return super().submit(fn, *args, **kwargs)
+
+    monkeypatch.setattr(call_media, "transcribe", transcribe)
+    caplog.set_level(logging.INFO, logger="tico.calls")
+    call = start_call(meet, thread(meet), speak_replies=False)
+    call_id, meeting_id, machine = call["id"], call["meeting_id"], meet.app.state.calls
+    workers = Workers(max_workers=1)  # one worker: a hit must not need a second
+    monkeypatch.setattr(machine, "workers", workers)
+    try:
+        machine.ingest(call_id, "human:ana", PCM_ONE_SECOND, 0)
+        machine.ingest(call_id, "human:ana", ms(200, QUIET), 1000)
+        wait_until(lambda: len(heard) == 1)  # transcribing while the pause still runs, on the only worker
+        machine.ingest(call_id, "human:ana", ms(100, QUIET), 1200)
+        machine.ingest(call_id, "human:ana", ms(160, QUIET), 1300)  # the pause ends: the same audio is cut
+        assert submitted == ["_transcribe"] and machine.early == {}
+        assert machine.speech_pending(call_id) and _chunks(meet, meeting_id) == []  # drain waits for the hit's text
+        release.set()
+        assert machine.settle()
+        assert [chunk["text"] for chunk in _chunks(meet, meeting_id)] == [SYNTHETIC_SPEECH] and len(heard) == 1
+
+        machine.ingest(call_id, "human:ana", PCM_ONE_SECOND + ms(200, QUIET), 5000)
+        with machine.lock:
+            early = machine.early[(call_id, "human:ana")]["future"]
+        assert early.result(5) == SYNTHETIC_SPEECH  # its text is in before the pause ends
+        machine.ingest(call_id, "human:ana", ms(260, QUIET), 6200)
+        assert machine.settle()
+        assert len(_chunks(meet, meeting_id)) == 2 and len(heard) == 2 and submitted == ["_transcribe"] * 2
+    finally:
+        release.set()
+        workers.shutdown(wait=True)
+    assert [line.split(" early=")[1].split()[0] for line in caplog.messages if line.startswith("call_clip ")] == [
+        "hit",
+        "hit",
+    ]
+
+
+def test_speech_resuming_after_its_early_transcription_is_transcribed_again_whole(meet, monkeypatch, caplog):
+    stale, release = threading.Event(), threading.Event()
+
+    def transcribe(base, key, audio, **kw):
+        if not stale.is_set():  # the early request is slow
+            stale.set()
+            assert release.wait(10)
+        return f"Clip of {len(audio)} bytes"
+
+    monkeypatch.setattr(call_media, "transcribe", transcribe)
+    caplog.set_level(logging.INFO, logger="tico.calls")
+    call = start_call(meet, thread(meet), speak_replies=False)
+    call_id, machine = call["id"], meet.app.state.calls
+    try:
+        machine.ingest(call_id, "human:ana", PCM_ONE_SECOND + ms(200, QUIET), 0)
+        with machine.lock:
+            early = machine.early[(call_id, "human:ana")]["future"]
+        assert stale.wait(5)
+        machine.ingest(call_id, "human:ana", PCM_ONE_SECOND + ms(460, QUIET), 1200)  # they go on, then pause
+        assert machine.settle()
+        whole = len(call_media.wav_bytes(PCM_ONE_SECOND + ms(200, QUIET) + PCM_ONE_SECOND + ms(200, QUIET)))
+        assert [chunk["text"] for chunk in _chunks(meet, call["meeting_id"])] == [f"Clip of {whole} bytes"]
+        # the unused early request is still out, and holds up neither the call's speech nor its drain
+        assert not early.done() and not machine.speech_pending(call_id) and machine.early == {}
+    finally:
+        release.set()
+    early.result(5)
+
+    machine.ingest(call_id, "human:ana", PCM_ONE_SECOND + ms(200, QUIET), 5000)
+    assert (call_id, "human:ana") in machine.early
+    machine.ingest(call_id, "human:ana", SPEECH, 6200)  # speech resumes: the early transcription is dropped at once
+    assert machine.early == {}
+    machine.ingest(call_id, "human:ana", ms(200, QUIET), 6220)  # a new pause: its own early text is used
+    machine.ingest(call_id, "human:ana", ms(260, QUIET), 6420)
+    assert machine.settle() and machine.early == {}
+    assert [line.split(" early=")[1].split()[0] for line in caplog.messages if line.startswith("call_clip ")] == [
+        "miss",
+        "hit",
     ]
 
 
