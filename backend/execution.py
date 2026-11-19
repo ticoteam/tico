@@ -4166,13 +4166,14 @@ class Execution:
                 }
                 if row["job_id"] in canceled:
                     state = "canceled"
-                if (
+                voice_restart = (
                     row["state"] == "running"
                     and state == "uncertain"
                     and not row["stop_requested_at"]
                     and not row["capped"]
                     and call_sessions.recover(c, row)
-                ):
+                )
+                if voice_restart:
                     state = retry_state = "queued"
                 c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), row["id"]))
                 from .performance import stamp_attempt
@@ -4285,14 +4286,16 @@ class Execution:
                         self.stopped(c, row, job["conversation_id"], held=held_back)
                 elif state == "canceled":
                     settle_status(c, row["bot_id"], "idle", "", claimed=row["created_at"])
-                elif state == "queued":
+                elif voice_restart:
+                    settle_status(
+                        c, row["bot_id"], "idle", "Resuming the call after a lost lease", claimed=row["created_at"]
+                    )
+                elif row["state"] == "leased" and state == "queued":
                     settle_status(
                         c,
                         row["bot_id"],
                         "idle",
-                        "Last run didn't start; it is back in the queue"
-                        if row["state"] == "leased"
-                        else "Resuming the call after a lost lease",
+                        "Last run didn't start; it is back in the queue",
                         claimed=row["created_at"],
                         stop=row["id"],
                     )

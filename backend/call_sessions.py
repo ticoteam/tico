@@ -80,7 +80,8 @@ def ensure(c: Any, settings: Any, row: Any, bot: str) -> bool:
     runner = c.execute(
         "SELECT r.capabilities FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?", (bot,)
     ).fetchone()
-    if not runner or CAPABILITY not in json.loads(runner[0] or "[]"):
+    capabilities: list[str] = json.loads(runner[0] or "[]") if runner else []
+    if CAPABILITY not in capabilities:
         return False
     raw = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     spec = (
@@ -88,7 +89,7 @@ def ensure(c: Any, settings: Any, row: Any, bot: str) -> bool:
         if raw
         else None
     )
-    if not spec or not accepts_runner(spec, json.loads(runner[0] or "[]")):
+    if not spec or not accepts_runner(spec, capabilities):
         return False
     from . import call_notes
 

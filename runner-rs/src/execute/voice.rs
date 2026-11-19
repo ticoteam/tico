@@ -208,7 +208,11 @@ impl Runner {
                         if !question.is_empty() && question != last {
                             let prompt = voice_question(&input["turn"], &mut notes_stamp);
                             last.clone_from(&question);
-                            active = Some(Turn::start(host, d, &prompt, Some(question)).await?);
+                            match Turn::start(host, d, &prompt, Some(question)).await {
+                                Ok(turn) => active = Some(turn),
+                                Err(_) if !host.alive() => return Ok(End::Restart),
+                                Err(error) => return Err(error),
+                            }
                         }
                     }
                 }

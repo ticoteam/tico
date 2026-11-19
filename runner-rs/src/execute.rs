@@ -2586,7 +2586,8 @@ impl Runner {
             let h = host.insert(made);
             if voice_call && matches!(h, Host::Codex(_)) {
                 let call_id = text_of(&refs["live_meeting"]["voice_call"]);
-                let scope = format!("call-voice:{call_id}:{conv}");
+                let job = text_of(&attempt["job_id"]);
+                let scope = format!("call-voice:{call_id}:{job}:{conv}");
                 previous = self.state.session(&bot, &scope, &session_runtime)?;
                 voice_scope = Some(scope);
             }
@@ -2780,8 +2781,9 @@ impl Runner {
                                 let start = voice::Start { primer: &primer, notes_stamp: stamp, scope, resumed, replacing: previous.is_some() };
                                 match self.codex_voice_session(&d, codex, rx, start, segment).await? {
                                     voice::End::Closed => {
-                                        if let Some(saved) = self.state.session(&bot, scope, &session_runtime)? {
-                                            drop_session(&self.state, &bot, scope, &session_runtime, &saved).await?;
+                                        drop_session(&self.state, &bot, scope, &session_runtime, &th).await?;
+                                        if let Some(old) = previous.as_deref().filter(|old| *old != th) {
+                                            drop_session(&self.state, &bot, scope, &session_runtime, old).await?;
                                         }
                                         drove.outcome = "completed".into();
                                     }
@@ -9572,7 +9574,7 @@ for line in sys.stdin:
             room_attempt(
                 aid,
                 json!({
-                    "token": token, "credential_vault": true,
+                    "token": token, "credential_vault": true, "job_id": "resident-voice-job",
                     "message": {"body": "You are Ops. Reply exactly READY to warm up.", "sender_id": "keeper",
                         "refs": {"live_meeting": {"voice_call": "call-2", "notes_stamp": crate::gitrun::sha256_hex(b"")}}},
                     "config": {"runtime": "codex", "harness": "codex", "model": "synthetic", "session": "task", "reasoning_effort": "low"}

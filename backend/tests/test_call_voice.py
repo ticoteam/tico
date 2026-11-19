@@ -540,6 +540,7 @@ def test_codex_call_recovers_the_resident_job_without_replaying_its_question(mee
     assert restarted["id"] != attempt["id"] and restarted["message"]["id"] == attempt["message"]["id"]
     resumed = post(meet, f"attempts/{restarted['id']}/inputs", {}, token)["call_voice"]
     assert resumed == {"closed": False}
+    meet.app.state.calls.voice.tick()
     _speak(meet, call["id"], 3500, text="Ops, when should we meet next?")
     another = post(meet, f"attempts/{restarted['id']}/inputs", {}, token)["call_voice"]["turn"]
     assert another["id"] != turn["id"]
