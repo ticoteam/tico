@@ -56,7 +56,7 @@ def stale(c: sqlite3.Connection, every: bool = False) -> list[str]:
         str(row[0])
         for row in c.execute(
             "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' "
-            "AND sql NOT LIKE 'CREATE VIRTUAL TABLE%' ORDER BY name"
+            "AND sql NOT LIKE 'CREATE VIRTUAL %' ORDER BY name"
         )
     ]
     if not every:
