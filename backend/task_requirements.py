@@ -671,7 +671,26 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     result = result or next((r for r in results if not r.met), results[0])
     result.notices = tuple(dict.fromkeys(n for r in results for n in r.notices))
     result.unchecked = any(r.unchecked for r in results)
+    if result.state == NOT_MET and len(pages) > 1 and result.line != STALE_REVIEW:
+        result.line = sentences(result.line, _pages_read(task, document, pages, results))
     return result
+
+
+# How a page one of several on a document approval is read: the approval waits on every one of them.
+_PAGE_STATE = {MET: "passed", NOT_MET: "not met", WAITING: "waiting"}
+
+
+def _pages_read(task: Row, document: str, pages: list[Row], results: list[Standing]) -> str:
+    """The pages a document approval judged together, each with how it stands, and the command that takes one off: a
+    page the decision model sent back keeps the approval not met beside a newer one it passed until it is unlinked
+    (D-2273, Nov 19). Attaching a page with --req replaces the others (task_pages.attach); a page linked another way
+    does not."""
+    read = ", ".join(
+        f"page:{p['file_id']}@{p['version']} {_PAGE_STATE.get(r.state, r.state)}"
+        for p, r in zip(pages, results, strict=True)
+    )
+    drop = f"tico page unlink <file id> --task {task['id']} --as '{document}'"
+    return f"Read {len(pages)} pages as {document}, all must pass: {read}. To drop one: {drop}"
 
 
 def _one_page(

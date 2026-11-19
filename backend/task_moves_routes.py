@@ -946,10 +946,13 @@ def register(
                 note=body.note,
                 changed=body.changed,
                 answered=body.answered,
+                add=body.add,
             )
             out: dict[str, Any] = {"page": {"file_id": made["file_id"], "version": made["version"]}}
             if made.get("said"):
                 out["said"] = made["said"]  # a person's OK this version keeps (task_pages.attach)
+            if made.get("replaced"):
+                out["replaced"] = made["replaced"]  # the pages this one took off a document approval
             return out
 
         return work(request, tid, body, call)
