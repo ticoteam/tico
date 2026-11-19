@@ -524,7 +524,7 @@ def test_codex_call_recovers_the_resident_job_without_replaying_its_question(mee
     call = start_call(meet, _dm(meet), bots=["ops"])
     attempt = _claim(meet, worker, "ops")
     assert attempt["message"]["refs"]["live_meeting"]["voice_call"] == call["id"]
-    assert (attempt["config"]["model"], attempt["config"]["reasoning_effort"]) == (model, "low")
+    assert (attempt["config"]["model"], attempt["config"]["reasoning_effort"]) == (model, "medium")
     _complete(meet, worker, _claim(meet, worker, "ops"), "Prepared for the call.")
     _speak(meet, call["id"], 0)
     path = f"attempts/{attempt['id']}"

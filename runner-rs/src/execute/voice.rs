@@ -1,9 +1,14 @@
+use std::future::{pending, Future};
+use std::pin::Pin;
+
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{self, Instant};
 
 use super::{keep_session, text_of, unstopped, CodexHost, Drive, Fail, Runner, Segment};
 use super::{Duration, Ordering, VOICE_INTERRUPT_WAIT};
+
+const TURN_START_ACK: Duration = Duration::from_secs(10);
 
 pub(super) struct Start<'a> {
     pub primer: &'a str,
@@ -19,7 +24,7 @@ pub(super) enum End {
 }
 
 struct Turn {
-    id: String,
+    id: Option<String>,
     question: Option<String>,
     spoken: String,
     answer: String,
@@ -27,19 +32,21 @@ struct Turn {
 }
 
 impl Turn {
-    async fn start(
-        host: &CodexHost,
-        d: &Drive<'_>,
-        text: &str,
-        question: Option<String>,
-    ) -> Result<Self, Fail> {
-        Ok(Self {
-            id: host.start_turn(d.thread, text, d.effort).await?,
+    fn new(question: Option<String>) -> Self {
+        Self {
+            id: None,
             question,
             spoken: String::new(),
             answer: String::new(),
             next_message: false,
-        })
+        }
+    }
+}
+
+async fn in_flight<F: Future>(future: &mut Option<Pin<Box<F>>>) -> F::Output {
+    match future {
+        Some(future) => future.as_mut().await,
+        None => pending().await,
     }
 }
 
@@ -64,6 +71,10 @@ pub(super) fn voice_answer(spoken: &str, answer: &str) -> String {
     } else {
         format!("{spoken}\n\n{answer}")
     }
+}
+
+pub(super) fn needs_sentence_boundary(text: &str) -> bool {
+    text.chars().next_back().is_some_and(|c| !c.is_whitespace())
 }
 
 async fn interrupt(host: &CodexHost, thread: &str, turn: &str) -> Instant {
@@ -93,6 +104,10 @@ impl Runner {
         }
         unstopped(d.flags)?;
         let mut notes_stamp = start.notes_stamp;
+        let begin = |prompt: String| async move {
+            time::timeout(TURN_START_ACK, host.start_turn(d.thread, &prompt, d.effort)).await
+        };
+        let mut starting = None;
         let mut active = if start.resumed {
             // The transcript holds the primer. Supply the current notes with the first question after a restart.
             notes_stamp.clear();
@@ -113,16 +128,33 @@ impl Runner {
             } else {
                 format!("For call replies, {brief}.\n{primer}")
             };
-            Some(Turn::start(host, d, &primer, None).await?)
+            starting = Some(Box::pin(begin(primer)));
+            Some(Turn::new(None))
         };
         let mut poll = time::interval(Duration::from_millis(400));
         poll.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
         let mut last = String::new();
         let mut interrupt_at = None;
         let mut closing = false;
-        let mut warmed_here = false;
+        let mut warmed = start.resumed;
+        let mut input_poll = None;
         loop {
             tokio::select! {
+                ack = in_flight(&mut starting) => {
+                    starting = None;
+                    match ack {
+                        Ok(Ok(id)) => {
+                            if let Some(turn) = &mut active {
+                                turn.id = Some(id);
+                            }
+                        }
+                        _ if interrupt_at.is_some() => {}
+                        Ok(Err(_)) if warmed && !host.alive() => return Ok(End::Restart),
+                        Ok(Err(error)) => return Err(error.into()),
+                        Err(_) if warmed => return Ok(End::Restart),
+                        Err(_) => return Err(Fail::runtime("Codex did not acknowledge the voice primer")),
+                    }
+                }
                 next = rx.recv() => {
                     let ev = next.ok_or_else(|| Fail::runtime("Codex closed the voice session"))?;
                     let kind = ev["kind"].as_str().unwrap_or_default();
@@ -132,7 +164,7 @@ impl Runner {
                         }
                         self.voice_event(d, "error", ev).await?;
                         // Only restart an established session. A fresh app server that cannot warm up should fail.
-                        if warmed_here || !last.is_empty() {
+                        if warmed {
                             return Ok(End::Restart);
                         }
                         return Err(Fail::runtime("Codex closed the voice session"));
@@ -143,9 +175,16 @@ impl Runner {
                     if kind == "tokens" {
                         segment.meter.add(&ev);
                     }
-                    let Some(turn) = active.as_mut().filter(|turn| ev["turn_id"] == turn.id) else {
+                    let Some(turn) = active.as_mut() else {
                         continue;
                     };
+                    // The notification identifies the turn even while the RPC response is outstanding.
+                    if turn.id.is_none() && kind == "status" && ev["state"] == "active" {
+                        turn.id = ev["turn_id"].as_str().map(str::to_owned);
+                    }
+                    if turn.id.is_none() || turn.id.as_deref() != ev["turn_id"].as_str() {
+                        continue;
+                    }
                     if kind == "turn_completed" || kind == "turn_failed" {
                         let canceled = interrupt_at.take().is_some() || d.flags.stopped.load(Ordering::SeqCst);
                         if closing {
@@ -167,7 +206,7 @@ impl Runner {
                             // A thread/start reply has no persisted rollout yet, and a half-finished primer
                             // cannot stand for a warm thread after a crash.
                             keep_session(&self.state, d.bot, start.scope, d.runtime, d.thread).await?;
-                            warmed_here = true;
+                            warmed = true;
                         } else {
                             return Err(Fail::runtime("Codex did not complete the voice primer"));
                         }
@@ -178,6 +217,9 @@ impl Runner {
                                 self.voice_event(d, "delta", json!({"voice_turn": question, "text": piece})).await?;
                             }
                         } else if kind == "message" {
+                            if !turn.next_message && needs_sentence_boundary(&turn.spoken) {
+                                self.voice_event(d, "delta", json!({"voice_turn": question, "text": " "})).await?;
+                            }
                             turn.next_message = true;
                             turn.answer = text_of(&ev["text"]);
                         }
@@ -189,30 +231,35 @@ impl Runner {
                         None => std::future::pending().await,
                     }
                 } => return Ok(if closing { End::Closed } else { End::Restart }),
-                _ = poll.tick(), if interrupt_at.is_none() => {
+                _ = poll.tick(), if input_poll.is_none() && interrupt_at.is_none() => {
                     if d.flags.lost.load(Ordering::SeqCst) {
                         return Err(Fail::runtime("Voice session lease ended"));
                     }
-                    let phase = if active.is_some() { "busy" } else { "ready" };
-                    let input = self.voice_inputs(d.aid, phase).await?;
+                    let phase = if active.is_some() || starting.is_some() { "busy" } else { "ready" };
+                    input_poll = Some(Box::pin(self.voice_inputs(d.aid, phase)));
+                }
+                input = in_flight(&mut input_poll) => {
+                    input_poll = None;
+                    let input = input?;
                     closing = input.is_null() || input["closed"] == true || d.flags.stopped.load(Ordering::SeqCst);
                     if let Some(turn) = &active {
                         let revoked = turn.question.as_ref().is_some_and(|id| input["turn"]["id"] != *id);
                         if closing || revoked {
-                            interrupt_at = Some(interrupt(host, d.thread, &turn.id).await);
+                            if let Some(id) = turn.id.clone().or_else(|| host.active_turn(d.thread)) {
+                                interrupt_at = Some(interrupt(host, d.thread, &id).await);
+                            } else {
+                                return Ok(if closing { End::Closed } else { End::Restart });
+                            }
                         }
                     } else if closing {
                         return Ok(End::Closed);
-                    } else {
+                    } else if starting.is_none() {
                         let question = text_of(&input["turn"]["id"]);
                         if !question.is_empty() && question != last {
                             let prompt = voice_question(&input["turn"], &mut notes_stamp);
                             last.clone_from(&question);
-                            match Turn::start(host, d, &prompt, Some(question)).await {
-                                Ok(turn) => active = Some(turn),
-                                Err(_) if !host.alive() => return Ok(End::Restart),
-                                Err(error) => return Err(error),
-                            }
+                            starting = Some(Box::pin(begin(prompt)));
+                            active = Some(Turn::new(Some(question)));
                         }
                     }
                 }

@@ -41,6 +41,10 @@ for line in sys.stdin:
         assert p["threadId"] == "call-thread"
         assert (root / "turn-count").is_file()
         reply(thread={"id": p["threadId"]})
+        exit_idle = root / "exit-idle"
+        if exit_idle.is_file():
+            exit_idle.unlink()
+            sys.exit(1)
     elif method == "turn/start":
         counter = root / "turn-count"
         n = int(counter.read_text()) + 1 if counter.exists() else 1
@@ -48,7 +52,8 @@ for line in sys.stdin:
         thread, turn = p["threadId"], f"codex-turn-{n}"
         prompt = p["input"][0]["text"]
         event = {"threadId": thread, "turnId": turn}
-        reply(turn={"id": turn})
+        if not prompt.endswith("End the call"):
+            reply(turn={"id": turn})
         notify("turn/started", threadId=thread, turn={"id": turn})
         if prompt.endswith(("Stall", "End the call")):
             pending = (thread, turn, n, prompt.endswith("Stall"))
@@ -57,9 +62,16 @@ for line in sys.stdin:
             continue
         text = "READY" if "Reply exactly READY" in prompt else "Agreed. Tomorrow."
         if prompt.endswith("First question"):
-            notify("item/agentMessage/delta", **event, itemId=turn, delta="Agreed. ")
             with socket.create_connection(("127.0.0.1", int((root / "stream-gate").read_text()))) as gate:
                 assert gate.recv(1) == b"y"
+                notify("item/agentMessage/delta", **event, itemId=turn + "-intro", delta="Agreed.")
+                notify(
+                    "item/completed",
+                    **event,
+                    item={"type": "agentMessage", "id": turn + "-intro", "phase": "commentary", "text": "Agreed."},
+                )
+                assert gate.recv(1) == b"z"
+            text = "Tomorrow."
             notify("item/agentMessage/delta", **event, itemId=turn, delta="Tomorrow.")
         else:
             notify("item/agentMessage/delta", **event, itemId=turn, delta=text)
