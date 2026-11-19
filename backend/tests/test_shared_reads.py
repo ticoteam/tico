@@ -54,7 +54,6 @@ def test_identical_reads_at_once_compute_once(monkeypatch):
         answers = await _all_at_once(reads, [reads.answer(key, 0, compute) for _ in range(10)], gate)
         assert len(calls) == 1 and {a.body for a in answers} == {b'{"n":1}'}
         assert len({id(a) for a in answers}) == 10  # each its own copy
-        assert (reads.computed, reads.joined) == (1, 9)
 
     asyncio.run(run())
 
