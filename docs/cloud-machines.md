@@ -329,28 +329,39 @@ Re-running the step is safe. A failed install stops `base` with the step's outpu
 ## Build the base snapshot
 
 After each minor release, from a computer with the boat CLI signed in to the account HQ uses, in a checkout of tico.
-The Release Owner, or anyone with that boat account, can run it. Give it the release the servers run and a new name:
+The Release Owner, or anyone with that boat account, can run it. Give it the release the servers run and the stem
+of the new name:
 
 ```sh
 python3 -m runner_support.base_snapshot --release v0.6.81 --name tico-runner-base-0-6-81
 ```
 
-It never replaces a saved snapshot: a name that already exists is refused, and so is any answer from boat that does
-not say clearly whether the name is free. The snapshot HQ boots from stays as it was until a person switches it, and
-a bad image rolls back by switching back. Names take lowercase letters, digits and hyphens, no dots. The script:
+It publishes under the stem plus a random suffix, such as `tico-runner-base-0-6-81-3f9a1c2e`, and prints that name.
+`boat snapshot <id> <name>` replaces a snapshot that already has the name, and boat has no create-only save, so two
+runs given the same name would otherwise both find it free and the second would replace the first one's image. It
+also looks the name up before the build and again just before the save, and refuses a name that exists or an answer
+from boat that does not say clearly that the name is free. The snapshot HQ boots from stays as it was until a person
+switches it, and a bad image rolls back by switching back. Stems take lowercase letters, digits and hyphens, no dots,
+at most 54 characters. The script:
 
 1. Makes a build sandbox with `boat new --no-env`. `--no-env` keeps the account's stored secrets out of the sandbox,
    and so out of the snapshot: a saved snapshot hands its variables to every machine made from it. Never pass `-e`
    secrets to it.
 2. Clones the release there and runs `sudo python3 -m runner_support.cloud_machine base --user user`: the runner is
-   installed, not enrolled. `base` also removes boat's box-scoped `export ASCII_TOKEN=` line from `~/.bashrc`.
-3. Checks the sandbox: the marker names the release, the checkout is on its tag, the runner's Python is there, no
-   `runner.json` (not enrolled), `tico-cloud-machine.service` enabled, lingering on, no `/.dockerenv`, and no
-   `ASCII_TOKEN` or `TICO_ENROLL_TOKEN` line on the disk. Any failure stops it before anything is saved.
-4. Looks at the name again, saves the snapshot under it (`boat snapshot <id> <name>`), and makes a second sandbox
-   from the saved snapshot, again with no secrets and no enroll code, so its boot service does nothing. It runs the
-   same check there: what HQ will boot is what was checked.
-5. Deletes both sandboxes (`--keep` leaves them to look at) and prints the person's step below.
+   installed, not enrolled. `base` also removes boat's box-scoped `export ASCII_TOKEN=` line from `~/.bashrc`. The
+   script writes a random stamp of this run to `/etc/tico/base-snapshot.stamp`.
+3. Checks the sandbox: the marker names the release, the stamp is this run's, the checkout is on its tag, the
+   runner's Python is there, no `runner.json` (not enrolled), `tico-cloud-machine.service` enabled, lingering on, no
+   `/.dockerenv`, and no `ASCII_TOKEN` or `TICO_ENROLL_TOKEN` line on the disk. Any failure stops it before anything
+   is saved.
+4. Looks at the name again, saves the snapshot under it, and makes a second sandbox from the saved snapshot, again
+   with no secrets and no enroll code, so its boot service does nothing. It runs the same check there, stamp
+   included: what HQ will boot is the image this run built. boat gives that sandbox a box token of its own, so there
+   the check is that none of its token lines is the build sandbox's (compared by hash, never by value). When this
+   step fails the snapshot is saved but unusable: the script says so, and says not to point HQ at it.
+5. Deletes both sandboxes (`--keep` leaves them to look at), each on its own even when another delete fails or times
+   out, and names any it could not delete with the command that does. A create that did not answer in time is
+   named by its sandbox name, to look for in `boat list`. Then it prints the person's step below.
 
 `base` refuses a computer that is already enrolled (every machine made from it would be that one runner) and a
 checkout that is not on a release tag. It builds the venv and the release's Rust runner as `user` (the same steps as
@@ -363,8 +374,8 @@ HQ boots new machines from `HQ_BOAT_BASE_SNAPSHOT` (default `tico-runner-base`),
 script does not change it.
 
 1. Write down the current value of `HQ_BOAT_BASE_SNAPSHOT` on HQ (unset means `tico-runner-base`).
-2. Set it to the new name, for example `HQ_BOAT_BASE_SNAPSHOT=tico-runner-base-0-6-81`, and apply it the way HQ's
-   settings are applied.
+2. Set it to the name the script printed, for example
+   `HQ_BOAT_BASE_SNAPSHOT=tico-runner-base-0-6-81-3f9a1c2e`, and apply it the way HQ's settings are applied.
 3. Watch the next new or replaced machine: it enrolls and shows its computer in Settings > Computers within a few
    minutes (see the checks below).
 4. To roll back, set it to the value from step 1. Machines that exist keep running whatever they have; only new and
