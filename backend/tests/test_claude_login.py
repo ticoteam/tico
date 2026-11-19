@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from backend import claude_login as CL
 from backend import model_subscriptions as MS
 from backend.store import H
-from backend.tests.helpers.api import assign, claim, get, post, runner
+from backend.tests.helpers.api import assign, claim, get, post, put, runner
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.model_subscriptions import TOKEN, add, company, give, on
 
@@ -544,3 +544,98 @@ def test_a_login_near_its_end_says_by_when_to_reconnect(api):
     assert sub["id"] == sid and sub["reconnect_by"] and sub["reconnect_by"] < at(days=4)
     with api.app.state.store.read() as c:
         assert H.parse_ts(MS.row(c, sid)["login_expires_at"])
+
+
+def test_a_poll_with_nothing_to_write_is_answered_off_the_write_lock_as_the_write_lock_would(api, monkeypatch):
+    """Every computer polls its full logins every few minutes, and most polls change nothing: such a poll is answered
+    from a read snapshot. One that comes to a write (a usage read to ask, a lease to take, a turn's revision to move)
+    is decided again whole under the write lock, so its answer is the one it always was."""
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    sid = add(api, "claude_login", full(minutes=30), name=None)["id"]
+    m = computer(api, bot="ops")
+    give(api, m, "claude", sid)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-1"}, m["token"])
+    modes = []
+    real = CL.poll
+
+    def recorded(c, vault, runner_id, body, write=True):
+        modes.append(write)
+        return real(c, vault, runner_id, body, write)
+
+    monkeypatch.setattr(CL, "poll", recorded)
+    # A lease to take: the read finds it, the write lock decides it.
+    first = poll(api, m, [(sid, 1)])
+    assert modes == [False, True] and first["refreshes"]
+    # Asked again: the same lease, read only.
+    modes.clear()
+    again = poll(api, m, [(sid, 1)])
+    assert modes == [False] and again == first
+    # The same answer as a poll under the write lock gives.
+    store, vault = api.app.state.store, api.app.state.vault
+    with store.read_transaction() as c:
+        read = real(c, vault, m["runner_id"], CL.Poll.model_validate({"live": [{"subscription": sid, "revision": 1}]}))
+    with store.transaction() as c:
+        written = real(
+            c, vault, m["runner_id"], CL.Poll.model_validate({"live": [{"subscription": sid, "revision": 1}]})
+        )
+    assert read == written == first
+    # A turn that holds a newer revision than its record moves the record: under the write lock.
+    with store.transaction() as c:
+        c.execute("UPDATE attempt_subscriptions SET revision=0 WHERE attempt_id=?", (turn["id"],))
+    modes.clear()
+    poll(api, m, [(sid, 1)])
+    assert modes == [False, True]
+    with store.read() as c:
+        assert (
+            c.execute("SELECT revision FROM attempt_subscriptions WHERE attempt_id=?", (turn["id"],)).fetchone()[0] == 1
+        )
+    # Before the vault's key is in memory, a poll that hands a value out loads it under the write lock.
+    vault.cipher.cached = None
+    modes.clear()
+    assert poll(api, m, [(sid, 1)]) == first
+    assert modes == [False, True]
+
+
+def test_the_plans_next_in_line_are_read_once_per_poll_and_are_the_ones_each_plan_asked_for(api, monkeypatch):
+    """A plan's usage is read on its schedule when it is next in line in a person's set: the sets and the plans'
+    readings are read once for the poll, not once for each plan, and name the same plans as asking each plan did."""
+    setup(api)
+    company(api)
+    plans = [add(api, "claude_login", full(f"p{n}@acme.example", n=n), name=None)["id"] for n in range(4)]
+    m = computer(api)
+    put(api, "computer-subscriptions", {"runner_id": m["runner_id"], "runtime": "claude", "person": "ana"})
+    store = api.app.state.store
+    # Every plan read a while ago and due again.
+    with store.transaction() as c:
+        for sid in plans:
+            CL._save_usage_meta(c, sid, {"schedule": {"read_at": at(minutes=-20), "next_at": at(minutes=-1)}})
+
+    def asked_each(c, sid):  # the rule as each plan asked it before
+        for (_, runtime), entry in MS._given(c).items():
+            if entry.get("id") == sid:
+                return True
+            if entry.get("person"):
+                ready = [x for x in entry.get("members") or [] if MS.available(c, x, runtime)]
+                if sid in [x["id"] for x in MS._ordered(c, ready, runtime)[:2]]:
+                    return True
+        return False
+
+    with store.read_transaction() as c:
+        line = CL._in_line(c)
+        expected = {sid for sid in plans if asked_each(c, sid)}
+    assert line == expected and 2 <= len(line) < len(plans)
+    listings = []
+    real = MS._listing
+
+    def counted(c, sid=None):
+        listings.append(sid)
+        return real(c, sid)
+
+    monkeypatch.setattr(MS, "_listing", counted)
+    jobs = poll(api, m)["usage"]
+    assert {j["subscription"] for j in jobs} == expected
+    assert listings == [None, None]  # once on the read snapshot, once more under the write lock
