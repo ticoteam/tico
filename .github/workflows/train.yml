@@ -123,6 +123,7 @@ jobs:
       CANARY_UPDATE_KEY: ${{ secrets.CANARY_UPDATE_KEY }}
       STABLE_UPDATE_KEY: ${{ secrets.STABLE_UPDATE_KEY }}
       RELEASE_HOLD: ${{ vars.RELEASE_HOLD }}
+      RELEASE_SPEED_HOLD: ${{ vars.RELEASE_SPEED_HOLD }}
       RELEASE_NEEDS_PERSON: ${{ vars.RELEASE_NEEDS_PERSON }}
       VALIDATION_RUN: ${{ inputs.validation_run }}
       RUN_EVENT: ${{ github.event.workflow_run.event }}

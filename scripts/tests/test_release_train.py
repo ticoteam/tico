@@ -2148,3 +2148,69 @@ def test_a_github_reply_cut_short_is_retried(monkeypatch):
     monkeypatch.setattr(rt, "sleep", lambda seconds: None)
     assert rt.GitHub("o/r", "t").get("actions/runs/1/jobs") == {"ok": True}
     assert len(calls) == 2
+
+
+# ---- the speed check ----
+
+
+def speeds(monkeypatch, installs, **by_install):
+    """Each named install answers GET SPEED_PATH with {release, since, now, routes}; the rest go to `installs`."""
+    plain = rt.rollout.call
+
+    def call(target, method, path, body=None, key=True):
+        if (method, path) == ("GET", rt.SPEED_PATH) and target["name"] in by_install:
+            answers = by_install[target["name"]]
+            return 200, answers.pop(0) if len(answers) > 1 else answers[0]
+        return plain(target, method, path, body, key)
+
+    monkeypatch.setattr(rt.rollout, "call", call)
+
+
+def route(name, before, after, n_before=100, n_after=100):
+    return {"route": name, "before": {"n": n_before, "p95": before}, "after": {"n": n_after, "p95": after}}
+
+
+ROUTES = [
+    route("GET /api/v2/threads/rail", 300, 900),  # three times slower: a regression
+    route("GET /api/v2/needs-you", 1200, 1300),  # over the target, not slower
+    route("GET /api/v2/tasks", 10, 30),  # three times slower, but 20 ms: noise
+    route("GET /api/v2/health", 100, 5000, n_after=10),  # too few requests to judge
+    route("GET /api/v2/tool-proxy/{tool_id}/{path:path}", 100, 8000),  # a vendor's time
+    route("GET /", 10, 2000),  # not the API
+]
+
+
+def test_a_route_twice_as_slow_on_the_canary_holds_stable_and_routes_over_1s_are_listed(installs, monkeypatch):
+    gh = FakeGitHub()
+    approval_for(gh, "v0.5.200", approved_by="chris")
+    speeds(monkeypatch, installs, canary=[{"release": "0.5.200", "since": 1000, "now": 1000 + 600, "routes": ROUTES}])
+    with pytest.raises(rt.Fail, match=r"holding, the canary answers 1 route\(s\).*rail p95 900 ms, was 300 ms"):
+        rt.promote(gh, ENV)
+    assert installs["updated"] == []
+    over = next(line for line in rt.LOG if "over 1000 ms" in line)
+    assert "rail 900" not in over and "needs-you 1300 ms (100 requests)" in over
+    assert "health" not in over and "tool-proxy" not in over and "GET / " not in over
+    # A person can let it through once, with the repository variable.
+    assert rt.promote(gh, dict(ENV, RELEASE_SPEED_HOLD="off")) == "v0.5.200"
+    assert installs["updated"] == [("stable", "0.5.200")]
+
+
+def test_the_check_waits_until_the_canary_has_run_the_release_a_few_minutes(installs, monkeypatch):
+    gh = FakeGitHub()
+    approval_for(gh, "v0.5.200", approved_by="chris")
+    slept = []
+    monkeypatch.setattr(rt, "sleep", slept.append)
+    early = {"release": "0.5.200", "since": 1000, "now": 1060, "routes": []}
+    later = {"release": "0.5.200", "since": 1000, "now": 1000 + rt.SPEED_AFTER, "routes": ROUTES[1:]}
+    speeds(monkeypatch, installs, canary=[early, later])
+    assert rt.promote(gh, ENV) == "v0.5.200"
+    assert slept[0] == rt.SPEED_AFTER - 60 and installs["updated"] == [("stable", "0.5.200")]  # then update polls
+    assert any("canary, 6 minutes on v0.5.200: no route twice as slow" in line for line in rt.LOG)
+
+
+def test_a_speed_answer_that_cannot_be_read_never_holds_stable(installs):
+    # The fake installs answer the speed route with their update status: no routes, as a release without the route.
+    gh = FakeGitHub()
+    approval_for(gh, "v0.5.200", approved_by="chris")
+    assert rt.promote(gh, ENV) == "v0.5.200"
+    assert any("canary's speed since v0.5.200 cannot be read; not checked" in line for line in rt.LOG)

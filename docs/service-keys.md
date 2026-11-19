@@ -87,6 +87,7 @@ owner's **Check for updates** and **Update now** use, and nothing else:
 |---|---|
 | `POST /api/v2/system/update/check` | Look for a new release now (at most once a minute); answers `current`, `latest`, `available` |
 | `POST /api/v2/system/update` `{"version": "X.Y.Z"}` | Start the update to that release through the install's updater |
+| `GET /api/v2/system/update/speed` | Each route's request count and p95 since the install took its release (its first 2 minutes left out) and in the hour before: route templates and times only. The release train's speed check ([Releasing](releasing.md)) reads it |
 | `GET /api/v2/system/update` | How the update stands (`state`, `from`, `to`, `message`), the release `running`, and `computers`: online computers counted by state (`current`, `updating`, `needs_update`, `incompatible`, `unknown`) |
 
 `GET /healthz` needs no key; its `release` is the release the server runs. Every other route answers `403`, the task

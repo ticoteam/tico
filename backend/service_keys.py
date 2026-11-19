@@ -33,7 +33,12 @@ UPDATE_PATH = "/api/v2/system/update"
 # The (method, path) pairs each scope reaches. /healthz needs no key at all.
 ROUTES = {
     "tasks": {("POST", INBOUND_PATH)},
-    "update": {("GET", UPDATE_PATH), ("POST", UPDATE_PATH), ("POST", UPDATE_PATH + "/check")},
+    "update": {
+        ("GET", UPDATE_PATH),
+        ("POST", UPDATE_PATH),
+        ("POST", UPDATE_PATH + "/check"),
+        ("GET", UPDATE_PATH + "/speed"),  # backend/flight.py `update_speed`
+    },
 }
 FIELDS = (
     "id",
@@ -62,7 +67,7 @@ def token_ended(c, token_id):
 
 def refusal(scope):
     if scope == "update":
-        return "An update key only checks for updates, starts one and reads its status (" + UPDATE_PATH + ")"
+        return "An update key only checks for updates, starts one and reads its status and speed (" + UPDATE_PATH + ")"
     return "A service key only files tasks, with POST " + INBOUND_PATH
 
 

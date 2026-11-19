@@ -1580,6 +1580,28 @@ def _db(c, now):
     }
 
 
+# GET /api/v2/system/update/speed: each route's requests and p95 in the hour before this server took its release and
+# since then, its first SPEED_WARMUP seconds (cold caches, every open page reloading) left out. Route templates and
+# timings only, never who made a request. The release train compares the two (scripts/release_train.py `speed_check`).
+SPEED_PATH = "/api/v2/system/update/speed"
+SPEED_BEFORE = 3600
+SPEED_WARMUP = 120
+
+
+def speed(c, since, now, warmup=SPEED_WARMUP):
+    """[{route, before: {n, p95}, after: {n, p95}}] around `since` (epoch seconds), busiest after first."""
+    windows = {
+        "before": _requests(c, since - SPEED_BEFORE, since, 500)["routes"],
+        "after": _requests(c, since + warmup, now + 60, 500)["routes"],
+    }
+    out = {}
+    for name, rows in windows.items():
+        for r in rows:
+            out.setdefault(r["route"], {"route": r["route"], "before": {"n": 0, "p95": 0}, "after": {"n": 0, "p95": 0}})
+            out[r["route"]][name] = {"n": r["n"], "p95": r["p95"]}
+    return sorted(out.values(), key=lambda r: (-r["after"]["n"], r["route"]))
+
+
 def view(c, minutes=60, sections=SECTIONS, now=None, since=None, until=None, routes=25, caller=None):
     """The last `minutes`, or with `since` the minutes from `since` up to `until` (epoch seconds, `until` excluded): a
     load run reads exactly its steady window this way. Requests and process minutes keep to the window; slow requests,
@@ -1670,6 +1692,26 @@ def install(app, store, auth):
             for row in out.get("slow") or []:
                 row.pop("actor", None)
         return out
+
+    @app.get(SPEED_PATH)
+    def update_speed(request: Request):
+        """How this server's routes answer since it took its release, against the hour before (`speed`): an `update`
+        service key (the release train, docs/service-keys.md), the owner and the admins."""
+        from . import releases
+
+        who = request.state.identity
+        if not (who.role == "service" and who.scope == "update"):
+            auth.domain(who)
+            if not auth.bot_admin(who) or who.role not in ("owner", "human"):
+                raise Problem("forbidden", "Only an owner, an admin or an update key reads the release's speed", 403)
+        now = int(time.time())
+        with store.read() as c:
+            ran = releases.history(c)
+            at = hubdb.parse_ts(ran[-1].get("since")) if ran else None
+            if at is None:
+                return {"release": releases.version(), "since": None, "now": now, "routes": []}
+            since = int(at.timestamp())
+            return {"release": releases.version(), "since": since, "now": now, "routes": speed(c, since, now)}
 
     # On app.state so a test can hold the minute still (backend/tests/test_web_timings.py).
     allowance = app.state.web_allowance = WebAllowance()

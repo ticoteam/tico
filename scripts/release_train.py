@@ -119,6 +119,30 @@ UPDATE_PATH = "/api/v2/system/update"
 # (TIDY) went unanswered about one train step in two while it was up, and each such miss failed the whole step.
 READ_TRIES = 3
 POLL = 20
+# The speed check (backend/flight.py `update_speed`): each route's p95 since an install took a release against the hour
+# before. A route answering SPEED_SLOWER times slower, with SPEED_MIN requests in both windows and at least
+# SPEED_FLOOR_MS more, holds stable when the canary shows it; any route over SPEED_TARGET_MS at p95 is listed. The
+# canary runs the release SPEED_AFTER seconds first, so its routes have requests to compare.
+SPEED_PATH = UPDATE_PATH + "/speed"
+SPEED_AFTER = 6 * 60
+SPEED_MIN = 30
+SPEED_SLOWER = 2.0
+SPEED_FLOOR_MS = 200
+SPEED_TARGET_MS = 1000
+# Not judged: routes whose time is mostly another service's (a vendor behind the tool proxy, GitHub's token minting,
+# a model provider, HQ, a live Gmail or calendar read, a fetched page) and pages that are not the API. The event
+# streams are judged: the flight recorder times a streamed answer to its first byte, which is its setup.
+SPEED_OUTSIDE = (
+    "/tool-proxy/",
+    "/github/token",
+    "/repositories/token",
+    "/model-subscriptions/",
+    "/runner-model-subscription-refresh",
+    "/support/tickets/refresh",
+    "/mail/messages",
+    "/calendar/events",
+    "/market/import",
+)
 REPUBLISH_AFTER = timedelta(minutes=30)  # a tag still unpublished this long after its Release run started
 RELEASE_RUNS = 2  # the first Release run on a tag, and one more
 IMAGES = ("tico", "tico-runner", "tico-updater")
@@ -1490,6 +1514,62 @@ def approval_waits(issue, approval, held, why=""):
     return []
 
 
+# ---- the speed check: each route's p95 since the release, against the hour before ----
+
+
+def judged(route):
+    method, _, path = str(route).partition(" ")
+    return path.startswith("/api/") and not any(part in path for part in SPEED_OUTSIDE)
+
+
+def speed_check(target, version):
+    """(lines, regressions) for an install that runs `version`: waits until it has run it SPEED_AFTER, then compares each
+    judged route's p95 since then with the hour before (SPEED_SLOWER with SPEED_MIN requests in each window and
+    SPEED_FLOOR_MS more), and lists the routes over SPEED_TARGET_MS. An answer it cannot read is one line and no
+    regression: an older release has no speed route, and the check never holds stable on a read that failed."""
+    want, name = rollout.plain(version), target["name"]
+
+    def read():
+        try:
+            code, data = rollout.call(target, "GET", SPEED_PATH)
+        except rollout.Stop:
+            return None
+        ok = code == 200 and isinstance(data, dict) and isinstance(data.get("routes"), list)
+        return data if ok and rollout.plain(data.get("release")) == want and data.get("since") else None
+
+    data = read()
+    if data:
+        left = SPEED_AFTER - (int(data.get("now") or 0) - int(data["since"]))
+        if left > 0:
+            note("Speed: waiting %d s for %s to run v%s %d minutes" % (left, name, want, SPEED_AFTER // 60))
+            sleep(left)
+            data = read()
+    if not data:
+        return ["Speed: %s's speed since v%s cannot be read; not checked" % (name, want)], []
+    lines, regressions, over = [], [], []
+    for r in data["routes"]:
+        route = r.get("route") or ""
+        if not judged(route):
+            continue
+        before, after = r.get("before") or {}, r.get("after") or {}
+        b, a = float(before.get("p95") or 0), float(after.get("p95") or 0)
+        if int(after.get("n") or 0) < SPEED_MIN:
+            continue
+        if a > SPEED_TARGET_MS:
+            over.append("%s %.0f ms (%d requests)" % (route, a, after["n"]))
+        if int(before.get("n") or 0) >= SPEED_MIN and b and a >= SPEED_SLOWER * b and a - b >= SPEED_FLOOR_MS:
+            regressions.append(
+                "%s p95 %.0f ms, was %.0f ms (%d and %d requests)" % (route, a, b, after["n"], before["n"])
+            )
+    window = "%d minutes on v%s" % ((int(data["now"]) - int(data["since"])) // 60, want)
+    lines.append(
+        "Speed: %s, %s: %s" % (name, window, "; ".join("SLOWER " + x for x in regressions) or "no route twice as slow")
+    )
+    if over:
+        lines.append("Speed: %s routes over %d ms at p95: %s" % (name, SPEED_TARGET_MS, "; ".join(over)))
+    return lines, regressions
+
+
 # ---- promote: canary -> stable ----
 
 
@@ -1522,8 +1602,9 @@ def holds(hold, blockers):
 
 def promote(gh, env):
     """Canary -> stable, when the canary runs a stable release ahead of stable's, that release is approved (by a person,
-    or automatically: approval_state) and not held, and the canary runs it healthy. Stable's update closes the release's
-    approval record, and older ones, saying how it was approved."""
+    or automatically: approval_state) and not held, the canary runs it healthy and no route answers twice as slowly on
+    the canary (speed_check). Stable's update closes the release's approval record, and older ones, saying how it was
+    approved. Returns the release stable took, else None."""
     canary, stable = install("CANARY", env), install("STABLE", env)
     if not canary or not stable:
         note("Promote: skipped, " + missing("CANARY" if not canary else "STABLE"))
@@ -1559,9 +1640,18 @@ def promote(gh, env):
     if waits:
         note("Promote: holding %s on the canary, %s" % (want, "; ".join(waits)))
         return
+    lines, slower = speed_check(canary, want)
+    for line in lines:
+        note(line)
+    if slower and (env.get("RELEASE_SPEED_HOLD") or "on").strip().lower() != "off":
+        raise Fail(
+            "promote %s: holding, the canary answers %d route(s) at least %gx slower than before it (RELEASE_SPEED_HOLD=off "
+            "promotes anyway): %s" % (want, len(slower), SPEED_SLOWER, "; ".join(slower))
+        )
     note("Promote: stable %s -> %s (%s)" % (have, want, approval))
     update_install(stable, want)
     retire_approvals(gh, want, "Promoted to stable (TIDY), %s." % approval, inclusive=True)
+    return want
 
 
 # ---- the release-train issue ----
@@ -1623,9 +1713,10 @@ def cmd_step(gh, env, now=None):
             note("FAILED %s: %s: %s" % (name, type(exc).__name__, exc))
 
     record = None
+    promoted = []
     step("latest", lambda: catch_up_latest(gh, env))
     # Stable takes the canary's approved release before the canary moves on.
-    step("promote", lambda: promote(gh, env))
+    step("promote", lambda: promoted.append(promote(gh, env)))
     plan = {}
     manual = manual_run(env)
 
@@ -1706,11 +1797,19 @@ def cmd_step(gh, env, now=None):
             if shipment:
                 # Continuous: stable takes the release as soon as the canary runs it healthy and it is approved (by a
                 # person, or automatically: approval_state), in this same step, not at the next event.
-                step("promote", lambda: promote(gh, env))
+                step("promote", lambda: promoted.append(promote(gh, env)))
         elif plan["action"] == "dispatch":
             step("validate", lambda: validate(plan))
         elif plan["action"] == "rerun":
             step("rerun", lambda: gh.rerun_failed(plan["rerun"]["id"]))
+    shipped_to_stable = [v for v in promoted if v]
+    if shipped_to_stable:
+        # Last, so its wait holds up nothing else: stable's speed on the release it just took, listed and never held.
+        def stable_speed():
+            for line in speed_check(install("STABLE", env), shipped_to_stable[-1])[0]:
+                note(line)
+
+        step("speed", stable_speed)
     if failures:
         report(gh, False, list(LOG), key=failures)
     elif shipment:
