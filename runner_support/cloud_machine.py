@@ -21,8 +21,9 @@ bot needs it installs itself with sudo, and that stays on the machine's disk acr
 member bot).
 
 `boot` is that service, at every boot. Without the marker it does nothing, so it can never act on another computer.
-Not enrolled and both variables found: it enrolls once to that hub and runs `scripts/tico-computer install` (the systemd user
-units, which then start at every boot by themselves). Enrolled: it starts those units. Not enrolled and no code (the
+Not enrolled and both variables found: it moves the checkout to the hub's release (`catch_up`: a saved image ships the
+release it was built on, which the hub may refuse), enrolls once to that hub and runs `scripts/tico-computer install` (the
+systemd user units, which then start at every boot by themselves). Enrolled: it starts those units. Not enrolled and no code (the
 base sandbox itself): nothing. A failed enroll exits 1, and systemd tries again in 30 seconds; a retry with the same
 code gets the same runner back (the server derives the runner token from the code), so an answer lost on the way
 does no harm.
@@ -74,6 +75,10 @@ URL_RE = re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$")
 CODE_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 LINE_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 ATTEMPTS, BACKOFF_S = 5, 5
+# A restored disk can show checkout files as changed for a few minutes after boot (#648): the first-boot catch-up
+# tries a refused update this many times, this far apart (six minutes, inside the enroll code's 15), before it enrolls
+# and leaves the update to the runner.
+CATCH_UP_TRIES, CATCH_UP_WAIT_S = 12, 30
 
 
 class Refused(Exception):
@@ -291,6 +296,52 @@ def enroll(m: Machine, code: str, hub: str) -> bool:
         Path(code_file).unlink(missing_ok=True)
 
 
+def hub_release(hub: str, opener=None) -> str:
+    """The release the hub runs (its public /healthz), or "" when it cannot be read or names none."""
+    import urllib.request
+
+    try:
+        with (opener or urllib.request.urlopen)(hub.rstrip("/") + "/healthz", timeout=20) as reply:
+            data = json.loads(reply.read(65536))
+    except (OSError, ValueError):
+        return ""
+    release = str(data.get("release") or "").lstrip("v") if isinstance(data, dict) else ""
+    return release if re.fullmatch(r"\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?", release) else ""
+
+
+def catch_up(m: Machine, hub: str, opener=None) -> None:
+    """Before the runner enrolls, move the image's checkout to the hub's release (#648): a saved image ships the release
+    it was built on, and a hub refuses runners older than its minimum, so nothing below it ever enrolls. The same updater
+    the runner uses does the move (`release_update --pid 0`: forward only, nothing restarted). A refusal (changed files
+    while a restored disk settles, a checkout that moved under it) is tried again every CATCH_UP_WAIT_S for
+    CATCH_UP_TRIES tries, well inside the enroll code's 15 minutes; after that the runner, which follows the hub by
+    itself, keeps trying."""
+    want = hub_release(hub, opener)
+    if not want:
+        m.say("could not read the hub's release: the runner will update itself once it starts")
+        return
+    state = m.config.parent / "first-boot-update"
+    m.as_user("mkdir", "-p", str(state), timeout=30)  # as the user, so ~/.config stays theirs
+    m.say(f"moving this computer to release {want}, the hub's, before it enrolls")
+    command = (str(m.python), "-m", "runner_support.release_update", "--version", want, "--state-dir", str(state))
+    for attempt in range(1, CATCH_UP_TRIES + 1):
+        done = m.as_user(*command, timeout=600)
+        lines = (done.stdout or "").strip().splitlines()
+        try:
+            result = json.loads(lines[-1]) if lines else {}
+        except ValueError:
+            result = {}
+        result = result if isinstance(result, dict) else {}
+        if not done.returncode and result.get("state") == "healthy":
+            m.say(f"on release {want}")
+            return
+        if result.get("state") != "blocked" or attempt == CATCH_UP_TRIES:
+            break
+        m.say(f"the update was refused (try {attempt} of {CATCH_UP_TRIES}); trying again shortly")
+        m.sleep(CATCH_UP_WAIT_S)
+    m.say("could not move to the hub's release now: the runner will keep trying once it starts")
+
+
 def installed(m: Machine) -> bool:
     return all((m.unit_dir / f"tico-{job}.service").is_file() for job in JOBS)
 
@@ -309,6 +360,7 @@ def boot(m: Machine | None, environ: dict[str, str]) -> int:
         if not CODE_RE.match(code) or not URL_RE.match(hub):
             m.say(f"the enroll code or hub URL from {where} is not well formed: nothing to do")
             return 0
+        catch_up(m, hub)
         m.say(f"enrolling with {hub} (the code from {where})")
         if not enroll(m, code, hub):
             return 1
