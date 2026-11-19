@@ -74,7 +74,7 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
           <Menu trigger={<IconButton icon="more" label="More" quiet disabled={tmp} />}>
             {/* an inbox board is edited a part at a time, in the board below */}
             {!board && <MenuItem label="Edit" icon="edit" disabled={!r.can_edit} onSelect={() => setEditing(true)} />}
-            <MenuItem label="Test run" icon="play" disabled={r.readonly} onSelect={() => setTesting(true)} />
+            <MenuItem label="Test run" icon="play" disabled={r.readonly || !r.can_edit} onSelect={() => setTesting(true)} />
             <MenuItem label="Versions" icon="clock" onSelect={() => setVersions(true)} />
             {takesTemplate(r) && <MenuItem label="Apply template" icon="mail" onSelect={() => setApplying(true)} />}
             <RemoveItem disabled={!r.can_edit} onSelect={() => remove.confirm(r.name || 'this routine', () => void press('routines.remove', { routine: r.id }))} />
@@ -96,6 +96,7 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
           {r.updated_at && <LabelValue label="Changed">{fmtDate(r.updated_at)}</LabelValue>}
         </Facts>
         {limiting && <LimitEditor routine={r} onDone={() => setLimiting(false)} />}
+        {r.hold && <HoldLine routine={r} held={r.hold.held} dropped={r.hold.dropped} />}
       </section>
       {step?.prompt && (
         <section className="rail-sec">
@@ -235,6 +236,46 @@ function VersionRow({ v, children }: { v: Version; children: ReactNode }) {
       <span className="row-sub">{what}</span>
       <span className="rr-field">{children}</span>
     </Row>
+  );
+}
+
+/** The run guard held its runs: how many, and Release or Drop for whoever may change it (Drop asks first). */
+function HoldLine({ routine, held, dropped }: { routine: Routine; held: number; dropped: number }) {
+  const [asking, setAsking] = useState(false);
+  const end = (action: 'release' | 'drop') => void press('routines.endHold', { routine: routine.id, action });
+  return (
+    <div className="rr-field" data-target={`hold:${routine.id}`}>
+      <Word icon="pause">On hold</Word>
+      <span className="row-sub">{dropped ? `${held} held, ${dropped} dropped` : `${held} held`}</span>
+      {routine.can_edit && (
+        <>
+          <Verb onClick={() => end('release')}>Release</Verb>
+          <Verb onClick={() => setAsking(true)}>Drop</Verb>
+        </>
+      )}
+      <Dialog
+        open={asking}
+        onOpenChange={setAsking}
+        title={`Drop ${held} held ${held === 1 ? 'run' : 'runs'}?`}
+        alert
+        actions={
+          <>
+            <Button variant="quiet" onClick={() => setAsking(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setAsking(false);
+                end('drop');
+              }}
+            >
+              Drop
+            </Button>
+          </>
+        }
+      />
+    </div>
   );
 }
 

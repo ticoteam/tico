@@ -14,7 +14,7 @@ import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { SidePanel } from '@/pagekinds';
 import { EventDialog } from './EventDialog';
-import { clock, dl, isLive, joinOf, kindWords, lengthWords, minutes, parseDay } from './model';
+import { clock, dl, isLive, joinOf, kindWords, lengthWords, minutes, parseDay, running } from './model';
 import { joinNow, LiveMark, press, refsOf } from './parts';
 import { itemsQuery, meetingQuery, type Meeting, type MeetingItem } from './queries';
 
@@ -93,7 +93,7 @@ export function EventPanel({
           ))}
         </section>
       )}
-      {(o.links.thread || o.links.meeting || o.links.task || o.open_url) && (
+      {(o.links.thread || o.links.meeting || o.links.task || o.links.automation || o.open_url) && (
         <section className="rail-sec">
           <h3>About</h3>
           {o.links.thread && (
@@ -112,6 +112,13 @@ export function EventPanel({
             <Link to="/task/$task" params={{ task: o.links.task }} className="rail-row call-rail">
               <Icon name="tasks" />
               <span>Task</span>
+            </Link>
+          )}
+          {/* a routine's run: the routine itself, its last runs in its panel (the old card's Automation and Last run) */}
+          {o.links.automation && (
+            <Link to="/company/routines" search={{ panel: `routine:${o.links.automation}` }} className="rail-row call-rail">
+              <Icon name="clock" />
+              <span>Routine</span>
             </Link>
           )}
           {o.open_url && (
@@ -293,7 +300,39 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
           )}
         </section>
       )}
+      {m.data && <Transcript m={m.data} />}
     </SidePanel>
+  );
+}
+
+/** What was said (meetings.ts meetTranscriptHTML): its turns, with times only when the source kept them; else its text. */
+function Transcript({ m }: { m: Meeting }) {
+  const turns = m.turns ?? [];
+  const timed = turns.some((t) => t.start_ms);
+  const lines = turns.length ? [] : (m.voice_text || m.transcript_readable || '').split('\n').filter((l) => l.trim());
+  if (!turns.length && !lines.length) return null;
+  return (
+    <section className="rail-sec">
+      <h3>Transcript</h3>
+      <div className="cw-ts">
+        {turns.map((t, i) => (
+          <div key={i} className="msg ts">
+            <div className="msg-main">
+              {(t.speaker || timed) && (
+                <div className="msg-meta">
+                  {t.speaker && <b>{t.speaker}</b>}
+                  {timed && <time>{running((t.start_ms ?? 0) / 1000)}</time>}
+                </div>
+              )}
+              <p>{t.text}</p>
+            </div>
+          </div>
+        ))}
+        {lines.map((l, i) => (
+          <p key={i}>{l}</p>
+        ))}
+      </div>
+    </section>
   );
 }
 

@@ -177,6 +177,9 @@ export interface Meeting {
   can_edit?: boolean;
   media_url?: string | null;
   turns?: { speaker?: string | null; start_ms?: number | null; text: string }[];
+  /** A transcript with no turns: a voice note's words, or the source's text a line at a time. */
+  voice_text?: string | null;
+  transcript_readable?: string | null;
 }
 export interface MeetingList {
   meetings: Meeting[];

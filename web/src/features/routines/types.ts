@@ -109,7 +109,10 @@ export interface SystemJob {
   /** It has a switch at all. */
   switch?: boolean;
   can_change?: boolean;
-  last?: string | null;
+  /** It has a Run now (POST /system-routines/{key}/run). */
+  controllable?: boolean;
+  /** Its last run (backend/system_routines.py row_of). */
+  last?: { started_at?: string | null; finished_at?: string | null; ok?: boolean; result?: string | null } | null;
 }
 
 // ---------------------------------------------------------------- incoming webhooks (/v2/triggers)

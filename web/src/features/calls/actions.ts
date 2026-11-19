@@ -120,7 +120,6 @@ const fields = (i: { title: string; start: string; minutes: number; with?: strin
   attendees: i.with ?? [],
   meet: !!i.meet,
 });
-
 export const newEvent = defineAction({
   id: 'calls.createEvent',
   title: 'Add an event',
@@ -212,6 +211,8 @@ export const review = defineAction({
   title: 'Share or put away a meeting',
   kind: 'change',
   input: s.object({ meeting: id('a meeting id'), action: s.oneOf(['approve', 'dismiss', 'restore'] as const) }),
+  // Sharing shows a meeting only the person saw to the whole company: their own press.
+  can: (ctx, { action }) => !(ctx.via === 'tico' && action === 'approve'),
   run: (_ctx, { meeting, action }) => reviewMeeting(meeting, action),
   did: ({ action }) => (action === 'approve' ? 'Shared the meeting' : action === 'dismiss' ? 'Put the meeting away' : 'Brought the meeting back'),
   target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
@@ -487,6 +488,8 @@ export const meetingSettingsAction = defineAction({
   title: 'Change meeting settings',
   kind: 'change',
   input: s.object({ mine: share, team: s.optional(s.oneOf(['review', 'auto'] as const)) }),
+  // Sharing at once shows every meeting brought in to the company without a look first: the person's own press.
+  can: (ctx, { mine, team }) => !(ctx.via === 'tico' && (mine === 'auto' || team === 'auto')),
   run: (_ctx, { mine, team }) => setMeetingSettings({ auto_share: mine === 'default' ? null : mine === 'auto', ...(team ? { review_default: team } : {}) }),
   did: ({ mine }) => (mine === 'auto' ? 'Set meetings to share at once' : mine === 'review' ? 'Set meetings to wait for review' : 'Set meetings to the company default'),
 });

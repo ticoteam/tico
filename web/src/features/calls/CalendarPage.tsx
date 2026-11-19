@@ -77,6 +77,8 @@ export function CalendarPage() {
   const day = parseDay(search.date) ?? today;
   const range = rangeOf(view, view === 'list' ? today : day);
   const events = useQuery(eventsQuery(range.from, range.to));
+  // List's own read (ListView reads the same): a refusal there is the page's fault, not "No meetings yet".
+  const past = useQuery({ ...meetingsQuery(search.review ?? 'live', search.q ?? ''), enabled: view === 'list' });
   const [adding, setAdding] = useState(false);
   const [calling, setCalling] = useState(false);
   const cards = useCards();
@@ -182,8 +184,9 @@ export function CalendarPage() {
             </MeetingMenu>
           ) : undefined
         }
-        state={view !== 'list' && events.isError ? 'fault' : undefined}
-        onRetry={() => void events.refetch()}
+        // Until the range is read the grid would say "Nothing this week": the kind's bars instead.
+        state={view === 'list' ? (past.isError ? 'fault' : undefined) : events.isError ? 'fault' : events.isPending ? 'loading' : undefined}
+        onRetry={() => void (view === 'list' ? past.refetch() : events.refetch())}
         grid={grid}
         agenda={view === 'week' || view === 'month' ? <Agenda days={range.days} list={list} now={now} today={today} at={at} /> : undefined}
         panel={panel}

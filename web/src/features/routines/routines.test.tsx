@@ -113,7 +113,7 @@ describe('words', () => {
 });
 
 describe('Routines', () => {
-  it('lists each routine under what starts it, opening it in the panel', async () => {
+  it('lists each routine under what starts it, opening it in the panel @s509', async () => {
     serve(nothing);
     queryClient.setQueryData(routinesQuery.queryKey, [routine()]);
     show(<RoutinesPage search={{}} />, '/company/routines');

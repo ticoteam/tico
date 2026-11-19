@@ -97,7 +97,7 @@ const block = (title: string) =>
   screen.getAllByTitle(new RegExp(`^${title},`)).find((el) => el.classList.contains('ev') || el.classList.contains('mi')) as HTMLElement;
 
 describe('Calendar', () => {
-  it('draws a week with its range, and an event links to its panel', async () => {
+  it('draws a week with its range, and an event links to its panel @s971 @s978', async () => {
     seed('week', [occ({})]);
     show(`/calendar?view=week&date=${DAY}`);
     await screen.findByText('Nov 15 to Nov 21');
@@ -107,7 +107,7 @@ describe('Calendar', () => {
     expect(screen.getByLabelText('Next week').getAttribute('href')).toContain('date=2026-11-25');
   });
 
-  it('opens the event beside the grid and closes it again', async () => {
+  it('opens the event beside the grid and closes it again @s983', async () => {
     seed('week', [occ({ recurring: true })]);
     const router = show(`/calendar?view=week&date=${DAY}`);
     fireEvent.click(await waitFor(() => block('Pricing review')));
@@ -120,7 +120,7 @@ describe('Calendar', () => {
     expect(router.state.location.search).not.toHaveProperty('panel');
   });
 
-  it('switches views through the address', async () => {
+  it('switches views through the address @s979', async () => {
     seed('week', [occ({})]);
     seed('month', [occ({})]);
     const router = show(`/calendar?view=week&date=${DAY}`);
@@ -176,7 +176,7 @@ describe('Calendar', () => {
     expect(u.searchParams.get('to')).toBe(r.to.toISOString());
   });
 
-  it('List shows past meetings; its filter and search go to the server through the address', async () => {
+  it('List shows past meetings; its filter and search go to the server through the address @s980 @s973', async () => {
     queryClient.setQueryData(meetingsQuery().queryKey, {
       meetings: [{ id: 'mt1', title: 'Weekly sync', review_state: 'live', started: at(9) }],
       count: 1,

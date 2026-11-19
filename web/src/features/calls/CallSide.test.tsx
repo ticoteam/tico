@@ -6,7 +6,7 @@ import type { Call } from '@/api/schema';
 import { queryClient } from '@/data';
 import type { CompanyRef, TicoDesktop } from '@/desktop';
 import { CallSide } from './CallSide';
-import { callQuery } from './queries';
+import { callQuery, transcriptQuery } from './queries';
 
 // The chat, faked: a few links of each kind, the in-app one moving through the router as real messages do.
 vi.mock('@/conversation', async () => {
@@ -79,5 +79,30 @@ describe('links in the small call window’s chat', () => {
     await screen.findByRole('heading', { name: 'Tasks' });
     expect(router.state.location.pathname).toBe('/tasks');
     expect(t.companies.switchTo).not.toHaveBeenCalled();
+  });
+});
+
+describe('Beside the call @s1046', () => {
+  it('Chat is the call’s thread; Transcript what has been said; People who is in it and who left', async () => {
+    queryClient.setQueryData(callQuery(ROOM).queryKey, {
+      id: ROOM,
+      thread_id: 'th1',
+      meeting_id: 'mt9',
+      participants: [
+        { actor: 'human:ana', in_call: true },
+        { actor: 'human:ben', in_call: false },
+      ],
+      bots: ['gm'],
+      state: 'live',
+    } as unknown as Call);
+    queryClient.setQueryData(transcriptQuery('mt9').queryKey, { chunks: [{ seq: 1, speaker: 'Ana', start_ms: 5_000, text: 'Prices go up in May.' }], event_id: 4 });
+    show(`/call/${ROOM}`);
+    expect(await screen.findByRole('link', { name: 'A task' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('tab', { name: 'Transcript' }));
+    expect(await screen.findByText('Prices go up in May.')).toBeTruthy();
+    expect(screen.getByText('0:05')).toBeTruthy();
+    fireEvent.click(screen.getByRole('tab', { name: /People/ }));
+    expect(await screen.findAllByText('In the call')).toHaveLength(2);
+    expect(screen.getByText('Left')).toBeTruthy();
   });
 });

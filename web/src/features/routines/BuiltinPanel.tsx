@@ -176,17 +176,20 @@ function SystemPanel({ onClose }: { onClose: () => void }) {
               <span className="row-title">{agentWords(job.name)}</span>
               <span className="row-sub">{agentWords(job.schedule ?? job.what ?? '')}</span>
             </span>
-            {job.switch === false ? (
-              <span className="row-age">{job.last ? <Ago at={job.last} /> : ''}</span>
-            ) : (
-              <Switch
-                label={agentWords(job.name)}
-                labelHidden
-                checked={job.on}
-                disabled={job.can_change === false}
-                onCheckedChange={(on) => void press('routines.setJob', { job: job.key, on })}
-              />
-            )}
+            <span className="rr-field">
+              {job.controllable && job.on && job.can_change && <Verb onClick={() => void press('routines.runJob', { job: job.key })}>Run now</Verb>}
+              {job.switch === false ? (
+                <span className="row-age">{job.last?.started_at ? <Ago at={job.last.started_at} /> : ''}</span>
+              ) : (
+                <Switch
+                  label={agentWords(job.name)}
+                  labelHidden
+                  checked={job.on}
+                  disabled={job.can_change === false}
+                  onCheckedChange={(on) => void press('routines.setJob', { job: job.key, on })}
+                />
+              )}
+            </span>
           </div>
         ))}
       </section>

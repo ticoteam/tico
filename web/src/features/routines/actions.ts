@@ -19,6 +19,7 @@ import {
   createRoutine,
   createWatch,
   decideOrgRule,
+  endHold,
   decideStageRule,
   discardVersion,
   hooksQuery,
@@ -31,6 +32,7 @@ import {
   rotateHook,
   routineQuery,
   routinesQuery,
+  runJob,
   runMaintenance,
   runRoutine,
   setHeartbeat,
@@ -238,6 +240,7 @@ export const testRun = defineAction({
   kind: 'change',
   // `sample`: JSON standing in for what its trigger gives (a message, an event, a webhook body)
   input: s.object({ routine: id, sample: s.optional(s.string({ max: 50_000 })) }),
+  can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
   run: async (_ctx, i) => {
     const r = await said(runRoutine(i.routine, sampleOf(i.sample)));
     return { dropped: !!r.dropped };
@@ -303,11 +306,26 @@ export const resume = defineAction({
   target: (i) => ({ kind: 'routine', id: i.routine }),
 });
 
+/** The run guard held its runs (too many at once): release them in order, or drop them. */
+export const endHoldAction = defineAction({
+  id: 'routines.endHold',
+  title: "Release or drop a routine's held runs",
+  kind: 'change',
+  input: s.object({ routine: id, action: s.oneOf(['release', 'drop'] as const) }),
+  // Dropped runs are skipped for good: the person's own press.
+  can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false && !(i.action === 'drop' && ctx.via === 'tico'),
+  run: (_ctx, i) => said(endHold(i.routine, i.action)).then(() => undefined),
+  did: (i) => (i.action === 'release' ? 'Released' : 'Dropped'),
+  target: (i) => ({ kind: 'routine', id: i.routine }),
+});
+
 export const removeRoutineAction = defineAction({
   id: 'routines.remove',
   title: 'Remove a routine',
   kind: 'change',
   input: s.object({ routine: id }),
+  // Nothing brings a removed routine back, and what it held is dropped: the person's own press.
+  tico: false,
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
   run: async ({ router }, i) => {
     await said(removeRoutine(i.routine));
@@ -350,6 +368,16 @@ export const setHeartbeatAction = defineAction({
   run: (_ctx, i) => said(setHeartbeat(i.seconds)),
   did: (i) => `Heartbeat every ${i.seconds} s`,
   target: () => ({ kind: 'routine', id: 'heartbeat' }),
+});
+
+export const runJobAction = defineAction({
+  id: 'routines.runJob',
+  title: 'Run a system job now',
+  kind: 'change',
+  input: s.object({ job: s.string({ min: 1, max: 100 }) }),
+  run: (_ctx, i) => said(runJob(i.job)),
+  did: () => 'Started it',
+  target: (i) => ({ kind: 'job', id: i.job }),
 });
 
 export const setJobAction = defineAction({
@@ -1041,6 +1069,8 @@ export const removeWatch = defineAction({
   title: 'Remove a listening watch',
   kind: 'change',
   input: s.object({ watch: id }),
+  // The same delete as a routine's: nothing brings it back.
+  tico: false,
   run: async ({ router }, i) => {
     await said(removeRoutine(i.watch, watchesQuery.queryKey));
     await go(router, LISTENING);

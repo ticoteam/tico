@@ -3,11 +3,12 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Call } from '@/api/schema';
-import { ActionsRoot } from '@/actions';
+import { ActionsRoot, run } from '@/actions';
 import { ticoRoomQuery } from '@/conversation';
 import { queryClient } from '@/data';
 import { openCallWindow, watchCallWindow, type CallWindowState, type TicoDesktop } from '@/desktop';
 import { dot } from '@/tico/dot';
+import './actions';
 import { CallBar } from './CallBar';
 import { CallPage } from './CallPage';
 import { callQuery, ringingQuery } from './queries';
@@ -98,6 +99,7 @@ const call = (p: Partial<Call> = {}): Call =>
   }) as Call;
 
 const posted: string[] = [];
+const asked: { url: string; body?: unknown }[] = [];
 const getUserMedia = vi.fn();
 const fakeStream = () => ({ getAudioTracks: () => [{ kind: 'audio' }], getTracks: () => [{ stop: vi.fn() }] });
 
@@ -107,6 +109,7 @@ beforeEach(() => {
   lk.rooms.length = 0;
   lk.refuseConnect = false;
   posted.length = 0;
+  asked.length = 0;
   getUserMedia.mockReset();
   getUserMedia.mockImplementation(async () => fakeStream());
   Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia } });
@@ -118,6 +121,7 @@ beforeEach(() => {
     const u = String(url);
     const method = init?.method ?? 'GET';
     if (method === 'POST') posted.push(u);
+    asked.push({ url: u, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     const body = u.endsWith('/join')
       ? { call: call(), token: 'test-token', url: 'wss://example.invalid' }
       : u.endsWith('/notes')
@@ -178,7 +182,7 @@ describe('Call window', () => {
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
-  it('joins on the press: microphone, token, room; then Mute and Leave', async () => {
+  it('joins on the press: microphone, token, room; then Mute and Leave @s974', async () => {
     show();
     await joinNow();
     expect(await screen.findByRole('button', { name: 'Leave' })).toBeTruthy();
@@ -237,7 +241,7 @@ describe('Call window', () => {
     expect(await screen.findByText('Call disconnected')).toBeTruthy();
   });
 
-  it('Leave hangs up and tells the server', async () => {
+  it('Leave hangs up and tells the server @s1047', async () => {
     show();
     await joinNow();
     fireEvent.click(await screen.findByRole('button', { name: 'Leave' }));
@@ -246,7 +250,7 @@ describe('Call window', () => {
     await waitFor(() => expect(posted.some((u) => u.endsWith(`/calls/${ROOM}/leave`))).toBe(true));
   });
 
-  it('with Tico, the Dot is the stage and speaks while the call voice talks', async () => {
+  it('with Tico, the Dot is the stage and speaks while the call voice talks @n:cl:tico', async () => {
     queryClient.setQueryData(callQuery(ROOM).queryKey, call({ thread_id: 'th-tico', bots: ['b1'] }));
     show();
     await joinNow();
@@ -272,7 +276,7 @@ describe('Call window', () => {
     expect(await screen.findByText('Call ended')).toBeTruthy();
   });
 
-  it('another page keeps the call: the bar shows it, mutes it, opens it, and Leave hangs up', async () => {
+  it('another page keeps the call: the bar shows it, mutes it, opens it, and Leave hangs up @s1049', async () => {
     const router = show();
     await joinNow();
     await screen.findByRole('button', { name: 'Mute' });
@@ -290,7 +294,7 @@ describe('Call window', () => {
     await waitFor(() => expect(posted.some((u) => u.endsWith(`/calls/${ROOM}/leave`))).toBe(true));
   });
 
-  it('a call ringing shows its card; Decline hides it, Answer joins', async () => {
+  it('a call ringing shows its card; Decline hides it, Answer joins @s1041', async () => {
     const other = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
     queryClient.setQueryData(ringingQuery.queryKey, { calls: [call({ id: other, ring: true, connector: 'human:ana', title: 'Seed box pricing' })] });
     show('/tasks');
@@ -308,6 +312,19 @@ describe('Call window', () => {
     fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Decline' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(posted).toEqual([]);
+  });
+
+  it('calls an agent: their direct thread, a Tico call with them in it, then the call itself @s488', async () => {
+    const router = show('/tasks');
+    await screen.findByRole('heading', { name: 'Tasks' });
+    asked.length = 0;
+    expect(await run('calls.start', { with: ['bot:gm'] }, { via: 'tico' })).toMatchObject({ ok: false });
+    expect(asked).toEqual([]);
+    expect(await run('calls.start', { with: ['bot:gm'] }, { via: 'click' })).toMatchObject({ ok: true });
+    expect(asked[0]?.url).toContain('/api/v2/threads/dm?with=bot%3Agm&create=true');
+    expect(asked.find((a) => a.url.endsWith(`/threads/${ROOM}/calls`))?.body).toEqual({ provider: 'tico', bots: ['gm'] });
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/call/${ROOM}`));
+    await waitFor(() => expect(posted.some((u) => u.endsWith(`/calls/${ROOM}/join`))).toBe(true));
   });
 });
 
@@ -383,7 +400,7 @@ describe('The desktop app’s small call window', () => {
     expect(await screen.findByRole('button', { name: 'Join' })).toBeTruthy();
   });
 
-  it('the small window joins at once, keeps on top, and goes back to the app', async () => {
+  it('the small window joins at once, keeps on top, and goes back to the app @s975', async () => {
     const { t } = fakeDesktop();
     show(`/call/${ROOM}?window=1`);
     await waitFor(() => expect(posted.some((u) => u.endsWith(`/calls/${ROOM}/join`))).toBe(true));

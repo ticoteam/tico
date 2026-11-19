@@ -155,6 +155,16 @@ export function setRoutineLimit(id: string, per30m: number | null) {
   });
 }
 
+/** End the run guard's hold: `release` queues its held runs, oldest first; `drop` skips them. */
+export function endHold(id: string, action: 'release' | 'drop') {
+  const change = (r: Routine): Routine => ({ ...r, hold: undefined });
+  return write<Routine>({
+    key: [routinesQuery.queryKey, routineQuery(id).queryKey],
+    optimistic: (cur: Routine[] | Routine | undefined) => (Array.isArray(cur) ? mapList(cur, id, change) : cur && change(cur)),
+    send: (idempotencyKey) => api.post<Routine>(`/api/v2/automations/${enc(id)}/held`, { action }, { idempotencyKey }),
+  });
+}
+
 /** Run it now; `input` stands in for the trigger's output (a test run). A sample its filters drop makes no run. */
 export function runRoutine(id: string, input?: Record<string, unknown>) {
   const shown: Run = { id: tmpId(), automation_id: id, status: 'queued', started_at: now(), steps: null, version: 0 };
@@ -339,6 +349,12 @@ export function setJob(key: string, on: boolean) {
       Array.isArray(cur) ? cur.map((j) => (j.key === key ? { ...j, on } : j)) : cur && { ...cur, steps: cur.steps.map((s) => (s.key === key ? { ...s, on } : s)) },
     send: (idempotencyKey) => api.put(`/api/v2/system-routines/${enc(key)}`, { on }, { idempotencyKey }),
   });
+}
+
+/** Run one of Tico's own jobs once, now; its row is read again for the result. */
+export async function runJob(key: string): Promise<void> {
+  await api.post(`/api/v2/system-routines/${enc(key)}/run`, {});
+  void queryClient.invalidateQueries({ queryKey: systemJobsQuery.queryKey });
 }
 
 // ---------------------------------------------------------------- incoming webhooks

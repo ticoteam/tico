@@ -167,7 +167,7 @@ describe('Runs', () => {
 });
 
 describe('The inbox board', () => {
-  it('shows its parts and saves a rule from its editor', async () => {
+  it('shows its parts and saves a rule from its editor @s527', async () => {
     const sent = record((url, method) => (method === 'PATCH' && url.endsWith('/automations/r9') ? ok({ ...boardRoutine() }) : nothing()));
     queryClient.setQueryData(routinesQuery.queryKey, [boardRoutine()]);
     show('/company/routines?panel=routine:r9');

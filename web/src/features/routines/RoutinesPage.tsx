@@ -147,6 +147,8 @@ function RoutineRow({ r, selected, when }: { r: Routine; selected: boolean; when
       <span className="row-state">
         {failed ? (
           <Word>Failed</Word>
+        ) : r.hold ? (
+          <Word icon="pause">On hold</Word>
         ) : off ? (
           <span title="Paused">
             <Icon name="pause" />

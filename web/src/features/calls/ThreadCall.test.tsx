@@ -122,7 +122,7 @@ function show(node: ReactNode) {
 }
 
 describe('A thread’s call control', () => {
-  it('starts a voice call with the agents left picked, then opens it', async () => {
+  it('starts a voice call with the agents left picked, then opens it @s1006', async () => {
     queryClient.setQueryData(threadCallsQuery('th1').queryKey, list());
     const router = show(<ThreadCallHead thread="th1" members={['human:ana', 'bot:b1', 'bot:b2']} canPost />);
     fireEvent.click(await screen.findByRole('button', { name: 'Call' }));
