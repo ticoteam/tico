@@ -169,6 +169,9 @@ def top_up(store, rnd):
                         sample,
                     ),
                 )
+    with store.transaction() as c:
+        # TIDY's task rooms were written before threads stored an audience: 18,923 of its 19,085 rooms have none.
+        c.execute("UPDATE conversations SET audience=NULL, kind='task' WHERE task_id IS NOT NULL AND parent_id IS NULL")
     plan = dict(part.split("=") for part in FOLLOW_PLAN.split(",") if part)
     with store.transaction() as c:
         for actor, want in plan.items():
