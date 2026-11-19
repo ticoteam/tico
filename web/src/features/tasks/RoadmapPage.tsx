@@ -8,17 +8,19 @@ import { Button } from '@/kit/Button';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { ContextMenu, Menu, MenuItem, MenuRule } from '@/kit/Menu';
+import { ContextMenu, Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { LatePill } from '@/kit/Pill';
+import { useCards } from '@/kit/Popover';
 import { Row } from '@/kit/Row';
 import { List, PageMore, Section, type PageState } from '@/pagekinds';
 import { usePref } from '@/prefs';
 import { fmtDate } from '@/lib';
+import { AskButton } from './Ask';
 import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
-import { FilterMenu } from './FilterMenu';
+import { FilterItems, FilterMenu } from './FilterMenu';
 import { NewTask } from './NewTask';
-import { Face, isPending, OwnerButton, taskHref, waitsOnMe } from './parts';
-import { isFiltered, loadMore, pipelinesQuery, pipelineTasksQuery, shelfQuery, tagsQuery, type Filters, type Pipeline, type TaskItem } from './queries';
+import { Face, isPending, taskHref, waitsOnMe } from './parts';
+import { isFiltered, loadMore, pipelinesQuery, pipelineTasksQuery, shelfQuery, shelfTotal, tagsQuery, type Filters, type Pipeline, type TaskItem } from './queries';
 import { RequestersDialog } from './Requesters';
 import { byHorizon, HORIZONS, roadmapPipeline, stageName, trackOf, type Horizon } from './roadmap';
 import { filtersOf, type RoadmapSearch } from './search';
@@ -67,7 +69,7 @@ export function RoadmapPage({ search }: { search: RoadmapSearch }) {
         path="/roadmap"
         className="tasks-page"
         actions={p && <HeadActions p={p} search={search} onNew={newFeature} none={state === 'empty'} />}
-        more={p && <MoreMenu p={p} />}
+        more={p && <MoreMenu p={p} search={search} none={state === 'empty'} />}
         state={state}
         empty={
           p
@@ -85,7 +87,7 @@ export function RoadmapPage({ search }: { search: RoadmapSearch }) {
         filter={<Chips search={search} />}
         sections={
           p && rows && done ? (
-            <Horizons p={p} rows={rows} done={done} me={me} folds={folds} fold={fold} cut={!!open.data?.next_after} shippedCut={!!shipped.data?.next_after} filters={filters} />
+            <Horizons p={p} rows={rows} done={done} me={me} folds={folds} fold={fold} cut={!!open.data?.next_after} shippedCut={!!shipped.data?.next_after} shippedCount={shelfTotal(shipped.data)} filters={filters} />
           ) : null
         }
       />
@@ -103,26 +105,34 @@ export function RoadmapPage({ search }: { search: RoadmapSearch }) {
   );
 }
 
-/** Filter, New feature, the pipeline's manager (their chat opens beside the page). Share is left out: the public
-    roadmap pages are off on the server. */
+/** Filter, New feature, the pipeline's owner (their chat opens beside the page; on a phone, the ask as on Tasks). Share
+    is left out: the public roadmap pages are off on the server. A phone's head keeps New feature and the face; Filter
+    moves into the "⋯". */
 function HeadActions({ p, search, onNew, none }: { p: Pipeline; search: RoadmapSearch; onNew: () => void; none: boolean }) {
   const actors = useActors();
   const tags = useQuery(tagsQuery).data ?? [];
-  const owner = p.manager ?? p.owner;
   return (
     <>
       {!none && <FilterMenu filters={search} actors={actors} tags={tags.map((t) => t.key)} />}
-      {!none && <IconButton icon="plus" label="New feature" onClick={onNew} data-target="tasks:new" />}
-      {owner && <OwnerButton actor={owner} />}
+      {!none && <IconButton icon="plus" label="New feature" onClick={onNew} data-target="tasks:new" data-phone />}
+      <AskButton p={p} />
     </>
   );
 }
 
-function MoreMenu({ p }: { p: Pipeline }) {
+function MoreMenu({ p, search, none }: { p: Pipeline; search: RoadmapSearch; none: boolean }) {
   const openTasks = useAction('tasks.open');
   const edit = useAction('tasks.editPipeline');
+  const cards = useCards();
+  const actors = useActors();
+  const tags = useQuery(tagsQuery).data ?? [];
   return (
     <PageMore target="roadmap:more">
+      {cards && !none && (
+        <MenuSub label="Filter" icon="filter">
+          <FilterItems filters={search} actors={actors} tags={tags.map((t) => t.key)} />
+        </MenuSub>
+      )}
       <MenuItem icon="tasks" label={`Open ${p.name}`} onSelect={() => void openTasks.run({ pipeline: p.id })} />
       {p.mayChange && <MenuItem icon="edit" label="Edit pipeline" onSelect={() => void edit.run({ pipeline: p.id })} />}
     </PageMore>
@@ -139,10 +149,13 @@ interface HorizonsProps {
   /** The server holds more open features than were read. */
   cut: boolean;
   shippedCut: boolean;
+  /** How many shipped, past what was read too; none when unknown. */
+  shippedCount: number | undefined;
   filters: Filters;
 }
 
-function Horizons({ p, rows, done, me, folds, fold, cut, shippedCut, filters }: HorizonsProps) {
+function Horizons({ p, rows, done, me, folds, fold, cut, shippedCut, shippedCount, filters }: HorizonsProps) {
+  const cards = useCards();
   const groups = { ...byHorizon(p, rows), shipped: [...done] };
   const more = cut ? () => void loadMore(p.id, filters) : undefined;
   return (
@@ -150,8 +163,20 @@ function Horizons({ p, rows, done, me, folds, fold, cut, shippedCut, filters }: 
       {HORIZONS.map(([h, name]) => {
         const list = groups[h];
         if (!list.length && h !== 'shipped') return null;
-        const count = h === 'shipped' ? (shippedCut ? undefined : list.length) : cut ? undefined : list.length;
-        const section = (
+        // A phone folds Shipped to one line that opens the pipeline's Archived (more.js: "14 since Oct 1").
+        if (h === 'shipped' && cards && list.length) {
+          const n = shippedCount ?? list.length;
+          return (
+            <div key={h} className="stage-fold">
+              <span className="fold-label">Shipped</span>
+              <Link to="/tasks/$pipeline" params={{ pipeline: p.id }} search={{ view: 'archived' }}>
+                {`${n}${shippedCount === undefined ? '+' : ''} ${n === 1 ? 'feature' : 'features'}`}
+              </Link>
+            </div>
+          );
+        }
+        const count = h === 'shipped' ? shippedCount : cut ? undefined : list.length;
+        return (
           <Section key={h} name={name} count={count} open={!folds.includes(h)} onOpenChange={(o) => fold(h, o)} target={`horizon:${h}`}>
             <Capped
               list={list}
@@ -163,19 +188,6 @@ function Horizons({ p, rows, done, me, folds, fold, cut, shippedCut, filters }: 
               moreRow={(n, open) => <RowMore key="more" n={n} cut={h === 'shipped' ? shippedCut : cut} onClick={open} />}
             />
           </Section>
-        );
-        if (h !== 'shipped' || !list.length) return section;
-        // A phone folds Shipped to one line that opens the pipeline's Archived (more.js: "14 since Oct 1").
-        return (
-          <div key={h} className="rm-shipped">
-            {section}
-            <div className="stage-fold rm-shipped-line">
-              <span className="fold-label">Shipped</span>
-              <Link to="/tasks/$pipeline" params={{ pipeline: p.id }} search={{ view: 'archived' }}>
-                {`${list.length}${shippedCut ? '+' : ''} ${list.length === 1 ? 'feature' : 'features'}`}
-              </Link>
-            </div>
-          </div>
         );
       })}
     </>

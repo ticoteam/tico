@@ -31,6 +31,7 @@ function show(node: ReactNode, at: string) {
       <Toasts />
     </QueryClientProvider>,
   );
+  return router;
 }
 
 const ME = 'human:me';
@@ -79,7 +80,10 @@ beforeEach(() => {
   queryClient.setQueryData(['directory'], { actors: [], byId: {} });
   queryClient.setQueryData(['tags'], []);
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  delete document.documentElement.dataset.layout;
+});
 
 describe('Roadmap @s2', () => {
   it('shows the Features pipeline as Now, Next and Later, with Shipped drawn shut', async () => {
@@ -122,6 +126,64 @@ describe('Roadmap @s2', () => {
     show(<RoadmapPage search={{}} />, '/roadmap');
     expect(await screen.findByText('No features yet')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'New feature' })).toBeTruthy();
+  });
+});
+
+describe('Roadmap head and Shipped, computer and phone', () => {
+  const OWNED: Pipeline = { ...FEAT, owner: 'bot:f00d-1', manager: 'bot:f00d-1' };
+  // the page's "⋯"; each row has its own
+  const pageMore = () => document.querySelector('[data-target="roadmap:more"]') as HTMLElement;
+  const seedOwned = () => {
+    seed([task('a', 7, 'Share a list by link', 'qa')], [task('d', 3, 'Gift cards', 'done', { status: 'done' })]);
+    queryClient.setQueryData(pipelinesQuery.queryKey, [ENG, OWNED]);
+    const fern = { id: 'bot:f00d-1', kind: 'agent', name: 'Fern Planner' };
+    queryClient.setQueryData(['directory'], { actors: [fern], byId: { [fern.id]: fern } });
+  };
+
+  it("the owner's face opens an agent's chat as an agent, not a person", async () => {
+    serve(() => ({ status: 200, body: {} }));
+    seedOwned();
+    show(<RoadmapPage search={{}} />, '/roadmap');
+    const face = await screen.findByRole('link', { name: 'Chat with Fern Planner' });
+    const chat = new URLSearchParams(face.getAttribute('href')?.split('?')[1]).get('chat');
+    expect(chat).toBe('agent:f00d-1');
+  });
+
+  it('a computer draws Shipped once, as its section; the phone line is not there', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    seedOwned();
+    show(<RoadmapPage search={{}} />, '/roadmap');
+    expect(await screen.findByRole('region', { name: 'Shipped' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: '1 feature' })).toBeNull();
+    // Filter is in the head, not the "⋯"
+    expect(screen.getByRole('button', { name: 'Filter' })).toBeTruthy();
+    fireEvent.click(pageMore());
+    expect(await screen.findByRole('menuitem', { name: 'Open Features' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Filter' })).toBeNull();
+  });
+
+  it('a phone folds Shipped to one line, keeps New feature and the face, and moves Filter into the "⋯"', async () => {
+    document.documentElement.dataset.layout = 'cards';
+    serve(() => ({ status: 200, body: {} }));
+    seedOwned();
+    show(<RoadmapPage search={{}} />, '/roadmap');
+    const line = await screen.findByRole('link', { name: '1 feature' });
+    expect(line.getAttribute('href')).toBe('/tasks/feat?view=archived');
+    expect(screen.queryByRole('region', { name: 'Shipped' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'New feature' }).hasAttribute('data-phone')).toBe(true);
+    expect(screen.getByRole('link', { name: 'Chat with Fern Planner' }).closest('[data-phone]')).toBeTruthy();
+    fireEvent.click(pageMore());
+    expect(await screen.findByRole('menuitem', { name: 'Filter' })).toBeTruthy();
+  });
+
+  it("a long press on a row offers the row's menu, Requesters first", async () => {
+    document.documentElement.dataset.layout = 'cards';
+    serve(() => ({ status: 200, body: {} }));
+    seedOwned();
+    const router = show(<RoadmapPage search={{}} />, '/roadmap');
+    fireEvent.contextMenu(await screen.findByTitle('Share a list by link'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Requesters' }));
+    await waitFor(() => expect((router.state.location.search as Record<string, unknown>).requesters).toBe('a'));
   });
 });
 

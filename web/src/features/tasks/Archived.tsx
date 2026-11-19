@@ -4,7 +4,7 @@ import { Row } from '@/kit/Row';
 import { Section } from '@/pagekinds';
 import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
 import { Face, taskHref } from './parts';
-import { loadMoreOf, shelfParams, shelfQuery, type Filters, type Pipeline, type Shelf, type TaskItem } from './queries';
+import { loadMoreOf, shelfParams, shelfQuery, shelfTotal, type Filters, type Pipeline, type Shelf, type TaskItem } from './queries';
 
 const SHELVES: readonly [Shelf, string][] = [
   ['snoozed', 'Snoozed'],
@@ -35,7 +35,7 @@ export function ArchivedSections({ p, filters, shelves }: { p: Pipeline; filters
     if (!page?.tasks.length) return null;
     const cut = !!page.next_after;
     return (
-      <Section key={shelf} name={name} count={cut ? undefined : page.tasks.length} target={`archived:${shelf}`}>
+      <Section key={shelf} name={name} count={shelfTotal(page)} target={`archived:${shelf}`}>
         <Capped
           list={page.tasks}
           cap={LIST_CAP}

@@ -106,7 +106,7 @@ export function FlowPage() {
     sections = flow.data.items.length ? groups(flow.data.items, pipes.data).map((g) => <FlowSection key={g.key} g={g} />) : <Clear />;
   return (
     <List
-      title="Tasks"
+      title="Flow"
       path="/flow"
       actions={<FlowButton on count={flow.data?.count ?? 0} />}
       state={state}

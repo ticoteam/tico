@@ -161,7 +161,9 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
   it('Archived shows snoozed, done and closed tasks, each naming its stage', async () => {
     serve((url) => {
       if (url.includes('snoozed=only')) return { status: 200, body: { tasks: [task('z1', 3, 'Try the new font', 's1', { snoozed: true })], cursor: 'c' } };
-      if (url.includes('status=done')) return { status: 200, body: { tasks: [task('d1', 2, 'Ship the price page', 'sd', { status: 'done' })], cursor: 'c' } };
+      // Done holds more than one page: its count is the server's total
+      if (url.includes('status=done'))
+        return { status: 200, body: { tasks: [task('d1', 2, 'Ship the price page', 'sd', { status: 'done' })], cursor: 'c', next_after: 'x', counts: { total: 340, stage: {} } } };
       if (url.includes('status=closed')) return { status: 200, body: { tasks: [], cursor: 'c' } };
       return { status: 200, body: {} };
     });
@@ -172,6 +174,7 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     const row = within(done).getByTitle('Ship the price page');
     expect(row.getAttribute('href')).toBe('/tasks/eng/2');
     expect(within(row).getByText('Done')).toBeTruthy();
+    expect(within(done).getByText('340')).toBeTruthy();
     expect(within(screen.getByRole('region', { name: 'Snoozed' })).getByText('Inbox')).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Closed' })).toBeNull();
   });
@@ -386,7 +389,7 @@ describe('Flow @s24', () => {
   it('names the page and offers Try again when the read fails', async () => {
     serve(() => ({ status: 500, body: { error: { code: 'down', detail: 'down' } } }));
     show(<FlowPage />, '/flow');
-    expect(await screen.findByRole('heading', { name: 'Tasks did not load' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Flow did not load' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 });

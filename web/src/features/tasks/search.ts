@@ -25,6 +25,17 @@ const actor = (v: unknown) => {
 };
 const DUE: readonly Due[] = ['overdue', 'week', 'any'];
 
+/**
+ * A teammate's chat as the shell's `?chat=` names it (shell.openChat: `agent:<id>` or `person:<id>`). A task's actor
+ * ids (`bot:<id>`, `human:<id>`) are not chat addresses: the chat sheet reads any kind but `agent` as a person.
+ */
+export function chatAddress(actor: string, kind?: 'person' | 'agent'): string {
+  const at = actor.indexOf(':');
+  const id = at < 0 ? actor : actor.slice(at + 1);
+  const agent = kind ? kind === 'agent' : /^(bot|agent):/.test(actor);
+  return `${agent ? 'agent' : 'person'}:${id}`;
+}
+
 /** `?view=board|list|archived&owner=bot:qa&waiting=human:1&asked=…&tag=ui&due=week&late=true&q=checkout&panel=pipeline`. */
 export function validateTasksSearch(raw: Record<string, unknown>): TasksSearch {
   const out: TasksSearch = {};

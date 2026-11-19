@@ -19,7 +19,7 @@ import {
   type Pipeline,
   type Skipped,
 } from './queries';
-import { VIEW_PREF } from './search';
+import { chatAddress, VIEW_PREF } from './search';
 
 const pipeline = s.string({ min: 1, max: 100, what: 'a pipeline id' });
 const task = s.string({ min: 1, max: 100, what: 'a task id' });
@@ -230,9 +230,10 @@ export const chatWith = defineAction({
   title: "Open the chat of one of a pipeline's agents",
   kind: 'view',
   input: s.object({ pipeline, who: actor }),
-  run: ({ router }, { pipeline, who }) => router.navigate({ to: where(pipeline), search: (prev: Record<string, unknown>) => ({ ...prev, chat: who }) }),
+  run: ({ router }, { pipeline, who }) =>
+    router.navigate({ to: where(pipeline), search: (prev: Record<string, unknown>) => ({ ...prev, chat: chatAddress(who) }) }),
   did: () => 'Opened the chat',
-  target: ({ who }) => ({ kind: 'chat', id: who }),
+  target: ({ who }) => ({ kind: 'chat', id: chatAddress(who) }),
 });
 
 const stageDraft = s.object({

@@ -421,11 +421,15 @@ const SHELF_PAGE = 200;
 
 /** One shelf of a pipeline's archive: snoozed open tasks in queue order; done and closed, the latest first. */
 export function shelfParams(pipeline: string, shelf: Shelf, f: Filters): Record<string, string | number> {
+  // `counts` stays: a shelf past one page still says how many it holds (its `total`).
   const base: Record<string, string | number> = { ...listParams(pipeline, f), limit: SHELF_PAGE };
-  delete base.counts; // a shelf shows no stage counts
   if (shelf === 'snoozed') return { ...base, snoozed: 'only' };
   return { ...base, status: shelf, sort: 'finished' };
 }
+
+/** How many a shelf holds: its rows, or past one page the server's total; none when the server gave no total. */
+export const shelfTotal = (page: TaskPage | undefined): number | undefined =>
+  page && (page.next_after ? page.counts?.total : page.tasks.length);
 
 export const shelfQuery = (pipeline: string, shelf: Shelf, f: Filters) => {
   const params = shelfParams(pipeline, shelf, f);

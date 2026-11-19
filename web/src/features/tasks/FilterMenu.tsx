@@ -14,7 +14,22 @@ type Who = 'owner' | 'waiting' | 'asked';
  * Filter: Owner ›, Waiting on ›, Asked by ›, Tag ›, Due ›, then Late (list.js filterMenu). Each choice is `tasks.filter`,
  * so it lands in the address.
  */
-export function FilterMenu({ filters, actors, tags }: { filters: Filters; actors: readonly Actor[]; tags: readonly string[] }) {
+export function FilterMenu(props: FilterProps) {
+  return (
+    <Menu trigger={<IconButton icon="filter" label="Filter" on={isFiltered({ ...props.filters, q: undefined })} data-target="tasks:filter" />}>
+      <FilterItems {...props} />
+    </Menu>
+  );
+}
+
+interface FilterProps {
+  filters: Filters;
+  actors: readonly Actor[];
+  tags: readonly string[];
+}
+
+/** The filter's rows, for a menu of their own or, on a phone, a page "⋯"'s Filter ›. */
+export function FilterItems({ filters, actors, tags }: FilterProps) {
   const filter = useAction('tasks.filter');
   const people = (key: Who, label: string) => (
     <MenuSub label={label}>
@@ -30,7 +45,7 @@ export function FilterMenu({ filters, actors, tags }: { filters: Filters; actors
     </MenuSub>
   );
   return (
-    <Menu trigger={<IconButton icon="filter" label="Filter" on={isFiltered({ ...filters, q: undefined })} data-target="tasks:filter" />}>
+    <>
       {people('owner', 'Owner')}
       {people('waiting', 'Waiting on')}
       {people('asked', 'Asked by')}
@@ -48,6 +63,6 @@ export function FilterMenu({ filters, actors, tags }: { filters: Filters; actors
       </MenuSub>
       <MenuRule />
       <MenuItem label="Late" on={!!filters.late} onSelect={() => void filter.run({ late: !filters.late })} />
-    </Menu>
+    </>
   );
 }

@@ -70,13 +70,13 @@ describe('Pipeline ask chat, on a phone @s146', () => {
     expect(face.closest('[data-phone]')).toBeTruthy();
     fireEvent.click(face);
     fireEvent.click(await screen.findByRole('menuitem', { name: /Birch Builder/ }));
-    await waitFor(() => expect((router.state.location.search as Record<string, unknown>).chat).toBe('bot:builder'));
+    await waitFor(() => expect((router.state.location.search as Record<string, unknown>).chat).toBe('agent:builder'));
   });
 
   it('opens the one agent at once when only the manager is on the board', async () => {
     show({ ...PIPE, stages: PIPE.stages.map((s) => ({ ...s, owner: null })) });
     const link = await screen.findByRole('link', { name: 'Chat with Maple Manager' });
     expect(link.closest('[data-phone]')).toBeTruthy();
-    expect(decodeURIComponent(link.getAttribute('href') ?? '')).toContain('chat=bot:mgr');
+    expect(decodeURIComponent(link.getAttribute('href') ?? '')).toContain('chat=agent:mgr');
   });
 });

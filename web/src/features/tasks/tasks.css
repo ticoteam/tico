@@ -100,14 +100,11 @@ html[data-layout="cards"] .tk-item>.tk-more{display:none}
 .rm .row-pills{align-items:center}
 .rm-lock{display:grid;color:var(--muted)}
 .rm-lock .ico{width:14px;height:14px;stroke-width:1.8}
-/* Shipped: a section drawn shut; a phone folds it to one line */
-.rm-shipped-line{display:none}
+/* Shipped: a section drawn shut; a phone draws one line in its place (RoadmapPage) */
 html[data-layout="cards"] .task .row-sub{grid-area:pills;display:flex;align-items:center;gap:var(--s-2)}
 html[data-layout="cards"] .task .row-sub .row-pills:empty{display:none}
 html[data-layout="cards"] .task.rm{grid-template-columns:20px minmax(0,1fr) var(--av-sm) 46px}
 html[data-layout="cards"] .task.rm .track{order:-1}
-html[data-layout="cards"] .rm-shipped>.stage{display:none}
-html[data-layout="cards"] .rm-shipped-line{display:flex}
 html[data-layout="cards"] .stage-fold a{min-height:var(--ctl);display:inline-flex;align-items:center}
 
 /* Requesters: who asked for a roadmap task */
