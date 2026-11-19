@@ -12,6 +12,9 @@ export const slugOf = (name: string): string =>
 
 export const DETAILS = 'details';
 
+/** A tab's words: a file's name without its extension (`letter.pdf` reads "letter"); a version number keeps its dot. */
+export const tabLabel = (name: string): string => name.replace(/\.(?=[a-z0-9]*[a-z])[a-z0-9]{1,5}$/i, '') || name;
+
 /** A tab's mark (parts-kit.js tab): approved, waits on you, not yet. */
 export type TabMark = 'ok' | 'ask' | 'none';
 
@@ -52,11 +55,11 @@ export function tabsOf(t: TaskData, files: TaskFileView[] = []): TaskTab[] {
     seen.add(doc.file_id);
     const slug = free(doc.name);
     const ok = doc.approved_version !== undefined && doc.approved_version === doc.version && !doc.changed_since_ok;
-    return [{ slug, label: doc.title || doc.name, mark: doc.file_id === asked ? 'ask' : ok ? 'ok' : 'none', doc }];
+    return [{ slug, label: tabLabel(doc.title || doc.name), mark: doc.file_id === asked ? 'ask' : ok ? 'ok' : 'none', doc }];
   });
   const others = files
     .filter((f) => !f.archived && !seen.has(f.id) && !(f.versions.find((v) => v.n === f.current_version) ?? f.versions.at(-1))?.mime.startsWith('image/'))
-    .map((f): TaskTab => ({ slug: free(f.title || f.name), label: f.title || f.name, file: f }));
+    .map((f): TaskTab => ({ slug: free(f.title || f.name), label: tabLabel(f.title || f.name), file: f }));
   const emails: TaskTab[] = [];
   for (const r of t.to_leave ?? [])
     for (const ref of r.shows ?? []) {

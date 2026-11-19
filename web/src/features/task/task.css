@@ -32,6 +32,9 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 /* ---------- tab marks: approved, waits on you, not yet (parts-kit.js tab) ---------- */
 .doc-tab .dot{margin-right:calc(var(--s-0) * -1)}
 .tv .doc-tab:has(>.hollow){color:var(--muted)}
+/* a long file name ends in an ellipsis; the row still scrolls sideways and never wraps */
+.tv .page-tabs .doc-tab>span[data-t]{display:block;max-width:24ch;overflow:hidden;text-overflow:ellipsis}
+.tv .page-tabs .doc-tab>span[data-t]::after{display:none}
 
 /* ---------- at the tab row's end: Details' Add, a page's versions and its changes (more.css .tv-ver, .tv-chg) ---------- */
 .tv-ver{height:var(--ctl-sm);border:0;background:none;border-radius:var(--r-ctl);display:inline-flex;align-items:center;gap:calc(var(--s-1) - 1px);flex:none;font-size:var(--t-sm);color:var(--muted);white-space:nowrap;

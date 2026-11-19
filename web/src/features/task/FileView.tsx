@@ -17,7 +17,8 @@ import type { TaskSearch } from './exports';
 import { download } from './Files';
 import { DETAILS, failedToast, isPage, tabAddress } from './model';
 import { Face, Go } from './parts';
-import { pageShownQuery, taskFilesQuery, type TaskData } from './queries';
+import { frameDoc, parsePage } from './changes';
+import { pageShownQuery, pageVersionQuery, taskFilesQuery, type TaskData } from './queries';
 
 /* What a task shows in its page sheet: one of its pages (a tab), or one of its files opened from Details. Both keep
    their own look in a frame (page-types: a file is a Document with its content in a frame). */
@@ -33,11 +34,22 @@ const currentOf = (f: TaskFileView): FileVersion | undefined => f.versions.find(
     is no page, `file` (the same file from its file read, in the file viewer). */
 function PageOrFile({ task, id, title, page, file }: { task: string; id: string; title: string; page: boolean; file: ReactNode }) {
   const shown = useQuery({ ...pageShownQuery(task, id), enabled: page });
+  // No address (an install without page hosting: `src` null): the page's own text at its version, framed as an older
+  // version is, so the tab never waits on an address that will not come.
+  const p = shown.data?.page;
+  const text = useQuery({ ...pageVersionQuery(id, p?.version ?? 0), enabled: !!p && !p.src && !!p.version });
   if (!page || shown.isError) return <div className="frame fv">{file}</div>;
-  const src = shown.data?.page.src;
+  if (text.isError) return <Empty icon="alert" title={`${title} did not load`} />;
+  const html = text.data != null ? frameDoc(parsePage(text.data)) : null;
   return (
     <div className="frame is-inset">
-      {src ? <iframe src={src} title={title} sandbox={PAGE_SANDBOX} referrerPolicy="no-referrer" /> : <PageBones />}
+      {p?.src ? (
+        <iframe src={p.src} title={title} sandbox={PAGE_SANDBOX} referrerPolicy="no-referrer" />
+      ) : html ? (
+        <iframe srcDoc={html} title={title} sandbox={PAGE_SANDBOX} referrerPolicy="no-referrer" />
+      ) : (
+        <PageBones />
+      )}
     </div>
   );
 }

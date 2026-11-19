@@ -7,6 +7,7 @@ import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
 import { FileFrame } from '@/features/library/exports';
 import type { TaskData } from './queries';
+import { tabLabel } from './model';
 import { TaskPage } from './TaskPage';
 
 vi.mock('@/live/follow', () => ({ useFollow: vi.fn() }));
@@ -114,11 +115,20 @@ describe('a task’s tabs: pages and plain files', () => {
 
   it('lists each page once, its Markdown files and its other files but pictures, then Details', async () => {
     show(<TaskPage task="12" pipeline="p1" tab="details" />, '/tasks/p1/12/details');
-    await screen.findByRole('link', { name: 'letter.pdf' });
+    // A file's tab reads its name without the extension; its address keeps the whole name.
+    const pdf = await screen.findByRole('link', { name: 'letter' });
+    expect(pdf.getAttribute('href')).toBe('/tasks/p1/12/letter-pdf');
     const tabs = screen.getAllByRole('link').map((a) => a.textContent);
     expect(tabs.filter((x) => x === 'Reply')).toHaveLength(1);
     expect(tabs).not.toContain('Reply page');
-    expect(tabs).not.toContain('shot.png');
+    expect(tabs).not.toContain('shot');
+  });
+
+  it('names a tab without its extension but keeps a version number whole', () => {
+    expect(tabLabel('TIDY Response - Nov 18 2026.pdf')).toBe('TIDY Response - Nov 18 2026');
+    expect(tabLabel('deadlines.md')).toBe('deadlines');
+    expect(tabLabel('Plan v1.2')).toBe('Plan v1.2');
+    expect(tabLabel('.env')).toBe('.env');
   });
 
   it('draws a Markdown file that is no page as formatted text, without asking for a page', async () => {
@@ -136,6 +146,21 @@ describe('a task’s tabs: pages and plain files', () => {
   it('draws a page as today, from its page read', async () => {
     show(<TaskPage task="12" pipeline="p1" tab="reply" />, '/tasks/p1/12/reply');
     await waitFor(() => expect(screen.getByTitle('Reply').getAttribute('src')).toBe('https://pages.example.test/pg1'));
+  });
+
+  it('draws a page with no address (no page hosting) from its own text at its version, in the page sandbox', async () => {
+    reply = (url) =>
+      url.endsWith('/api/v2/pages/pg1')
+        ? { body: { page: { file_id: 'pg1', src: null, version: 3, archived: false }, can_manage: true } }
+        : url.endsWith('/api/v2/files/pg1?v=3')
+          ? { body: '<h1>Reviewed</h1>', type: 'text/html' }
+          : null;
+    show(<TaskPage task="12" pipeline="p1" tab="reply" />, '/tasks/p1/12/reply');
+    const frame = await screen.findByTitle('Reply');
+    expect(frame.getAttribute('srcdoc')).toContain('<h1>Reviewed</h1>');
+    expect(frame.getAttribute('src')).toBeNull();
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-popups allow-popups-to-escape-sandbox');
+    reply = () => null;
   });
 
   it('draws an HTML document the server says is no page from its file read, sandboxed', async () => {
@@ -201,6 +226,14 @@ describe('the file viewer, by type', () => {
     at({ mime: 'application/zip', name: 'logs.zip', size: 900 });
     expect(await screen.findByRole('link', { name: 'Download' })).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Open' })).toBeNull();
+  });
+
+  it('offers a PDF by name with Download where the browser has no PDF viewer, never an empty frame', async () => {
+    vi.stubGlobal('navigator', { ...navigator, pdfViewerEnabled: false });
+    at({ mime: 'application/pdf', name: 'letter.pdf', size: 4096 });
+    expect(await screen.findByRole('heading', { name: 'letter.pdf' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Download' }).getAttribute('href')).toBe('/api/v2/files/f1?v=1');
+    expect(document.querySelector('iframe')).toBeNull();
   });
 });
 
