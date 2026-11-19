@@ -44,7 +44,6 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
 from backend.store import encode
-from backend.tests.helpers import engine as X
 from backend.tests.helpers.github_app import PUBLIC, FakeGitHub, connect
 
 BOTS = [f"bot{n:03d}" for n in range(165)]
@@ -61,20 +60,24 @@ def seed(api):
             "INSERT OR REPLACE INTO registry_metadata VALUES('onboarding',?)",
             (encode({"completed": "2026-01-01T00:00:00Z"}),),
         )
+        H.sync_registry(
+            c,
+            {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in BOTS},
+            {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]},
+        )
         for rid in RUNNERS:
             c.execute(
                 "INSERT OR IGNORE INTO runners(id,label,owner_id,token_hash,created_at) VALUES(?,?,'ana',?,?)",
                 (rid, "box" + rid, "h" + rid, H.now()),
             )
-        for n, repo in enumerate(REPOS):
+        for repo in REPOS:
             c.execute(
                 "INSERT INTO repositories(id,full_name,enabled,bot_repo,reachable,updated_at) VALUES(?,?,1,0,1,?)",
                 (uuid.uuid4().hex, repo, H.now()),
             )
         flagged = {}
         for n, slug in enumerate(BOTS):
-            X.bot(c, slug, computer=False)
-            c.execute("UPDATE bot_config SET repo=? WHERE bot=?", ("emp-" + slug, slug))
+            c.execute("INSERT INTO bot_config(bot,team,owner_id,repo) VALUES(?,'t','ana',?)", (slug, "emp-" + slug))
             c.execute(
                 "INSERT OR REPLACE INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, RUNNERS[n % 10], H.now())
             )
