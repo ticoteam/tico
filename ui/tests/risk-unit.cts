@@ -130,6 +130,9 @@ assert.match(rowOf('Records'), /<span class="rk-os"><i data-face="bot:legal-owne
 assert.match(rowOf('Production'), /aria-label="Met">check<\/span><span>Thu, Feb 27, 2031<\/span><i data-face="human:dana">/);
 assert.match(rowOf('Production'), /href="https:\/\/www\.files\.acme\.example\/p"[^>]*>.*<span>files\.acme\.example<\/span><\/a>/);
 assert.match(rkDatesHTML([]), /No dates\./);
+// A tab cut at its cap offers More; a whole one does not.
+assert.doesNotMatch(tab, /data-rk-dates-more/);
+assert.match(rkDatesHTML(dates, true), /data-rk-dates-more>More</);
 // Proof the viewer cannot open keeps its kind and no link; a file opens by its id; a sent email reads Sent mail.
 assert.equal(rkProofHTML({kind: 'file', ref: null, name: null}), '<span class="rk-pf"><span class="nav-icon" aria-hidden="true">description</span><span>File</span></span>');
 assert.match(rkProofHTML({kind: 'file', ref: 'f1', name: 'receipt.pdf'}), /href="\/api\/v2\/files\/f1".*receipt\.pdf/);

@@ -27,7 +27,7 @@ type RkProof = NonNullable<NonNullable<RkDue['mark']>['proof']>;
 type RkDetail = {risk: RkRisk; editable: boolean; matters: RkRow[]; next_offset: number | null; rules: RkLink[]; sources: RkLink[]; coverage: RkLink[]; obligations?: RkDue[]};
 type RkTab = 'risks' | 'disputes' | 'obligations' | 'one';
 // `dates`: the obligations on screen (every risk's on Obligations, the live risks' on Risks, the one risk's on its page).
-type RkPage = {run: number; tab: RkTab; slug: string; risks: RkRisk[]; rows: RkRow[]; closed: RkRow[]; detail: RkDetail | null; dates: RkDue[]; loaded: boolean; offs: (() => void)[]};
+type RkPage = {run: number; tab: RkTab; slug: string; risks: RkRisk[]; rows: RkRow[]; closed: RkRow[]; detail: RkDetail | null; dates: RkDue[]; datesCap: number; datesMore: boolean; loaded: boolean; offs: (() => void)[]};
 
 const RK_NEW_DAYS = 7;   // as backend/risk.py NEW_DAYS: a matter this new is marked New and makes its risk live
 const RK_KINDS: readonly [string, string][] = [['dispute', 'Dispute'], ['request', 'Request'], ['notice', 'Notice'], ['incident', 'Incident']];
@@ -97,7 +97,7 @@ function rkStart(tab: RkTab, slug: string): RkPage | null {
   // The same page with only its panel changed: keep what is drawn and open or close the panel.
   if (RKP && RKP.tab === tab && RKP.slug === slug && document.getElementById('rk-root')) { void rkSideSync(); return null; }
   rkDrop();
-  const page: RkPage = {run: ++RK_RUN, tab, slug, risks: [], rows: [], closed: [], detail: null, dates: [], loaded: false, offs: []};
+  const page: RkPage = {run: ++RK_RUN, tab, slug, risks: [], rows: [], closed: [], detail: null, dates: [], datesCap: RK_ALL_MAX, datesMore: false, loaded: false, offs: []};
   RKP = page;
   page.offs.push(liveOn('tasks', (e: {id?: unknown; task_id?: unknown; kinds?: unknown}) =>
     rkLiveTask(page, String(e.id || e.task_id || ''), Array.isArray(e.kinds) && e.kinds.includes('obligations'))));
@@ -153,7 +153,7 @@ async function pageRisk(tab: 'risks' | 'disputes' | 'obligations'): Promise<void
       for (const row of more.flat()) if (!page.rows.some(x => x.task.id === row.task.id)) page.rows.push(row);
       page.dates = (await Promise.all(page.risks.filter(r => r.level === 'live').map(r => rkDatesAll(r.key)))).flat();
     } else if (tab === 'obligations') {
-      page.dates = await rkDatesAll(null);
+      await rkTabDates(page);
     } else {
       // Every open dispute, so the count and the total are whole; the latest closed ones under them.
       const [open, closed] = await Promise.all([
@@ -183,16 +183,29 @@ async function rkAll(path: string): Promise<RkRow[]> {
   }
   return rows;
 }
-// Every page of the dates of one risk (by its key), or of every risk with null, up to RK_ALL_MAX.
-async function rkDatesAll(key: string | null): Promise<RkDue[]> {
-  const out: RkDue[] = [];
+// Every page of the dates of one risk (by its key), or of every risk with null, up to `cap`; `more` says some are left.
+async function rkDatesUpTo(key: string | null, cap: number): Promise<{dates: RkDue[]; more: boolean}> {
+  const dates: RkDue[] = [];
   let offset: number | null = 0;
-  while (offset !== null && out.length < RK_ALL_MAX) {
+  while (offset !== null && dates.length < cap) {
     const page: {obligations: RkDue[]; next_offset: number | null} = await get(`/v2/risk/obligations?${key ? `risk=${encodeURIComponent(key)}&` : ''}limit=200&offset=${offset}`, {fresh: true});
-    out.push(...page.obligations);
+    dates.push(...page.obligations);
     offset = page.next_offset;
   }
-  return out;
+  return {dates, more: offset !== null};
+}
+const rkDatesAll = async (key: string | null): Promise<RkDue[]> => (await rkDatesUpTo(key, RK_ALL_MAX)).dates;
+// Obligations' dates, as many as it shows: More raises the cap, and a re-read keeps it, so a live update never cuts the
+// list back.
+async function rkTabDates(page: RkPage): Promise<void> {
+  const read = await rkDatesUpTo(null, page.datesCap);
+  if (!rkLive(page.run)) return;
+  page.dates = read.dates; page.datesMore = read.more;
+}
+async function rkDatesMore(page: RkPage): Promise<void> {
+  page.datesCap += RK_ALL_MAX;
+  try { await rkTabDates(page); } catch (e) { toast(errorMessage(e, 'Something went wrong.'), true); return; }
+  if (rkLive(page.run)) rkDraw(page);
 }
 
 async function pageRiskOne(slug: string): Promise<void> {
@@ -233,7 +246,7 @@ function rkDraw(page: RkPage): void {
   const waiting = rkWaiting();
   if (page.tab === 'risks') body.innerHTML = rkRisksHTML(page.risks, page.rows, waiting, page.dates);
   else if (page.tab === 'disputes') body.innerHTML = rkDisputesHTML(page.rows, page.closed, waiting);
-  else if (page.tab === 'obligations') body.innerHTML = rkDatesHTML(page.dates);
+  else if (page.tab === 'obligations') body.innerHTML = rkDatesHTML(page.dates, page.datesMore);
   else if (page.detail) {
     if (document.querySelector('#rk-root .ph-t')?.textContent !== page.detail.risk.label || !document.querySelector('[data-rk-edit]') === page.detail.editable) rkOneHead(page.detail);
     body.innerHTML = rkOneHTML(page.detail, waiting, page.dates);
@@ -377,7 +390,7 @@ function rkDueHTML(d: RkDue, shape: 'tab' | 'cat' | 'one'): string {
     <span class="rk-bs">${esc(RK_BASIS[d.basis] || '')}</span>${proof}<span class="rk-os">${rkDueState(d)}</span>${more}</div>`;
 }
 // Obligations: Unconfirmed, Next 14 days, Later, Past 30 days, each under its label.
-function rkDatesHTML(dates: readonly RkDue[]): string {
+function rkDatesHTML(dates: readonly RkDue[], more = false): string {
   if (!dates.length) return '<div class="empty" data-rk-empty>No dates.</div>';
   const sorted = rkDueSort(dates);
   return `<div class="rk-table rk-dues" data-rk-dates>
@@ -387,7 +400,7 @@ function rkDatesHTML(dates: readonly RkDue[]): string {
         const rows = sorted.filter(d => d.group === g);
         return rows.length ? `<div class="rk-lbl" data-rk-group="${g}">${label}</div>${rows.map(d => rkDueHTML(d, 'tab')).join('')}` : '';
       }).join('')}
-    </div>`;
+    </div>${more ? '<button type="button" class="ghost small rk-next" data-rk-dates-more>More</button>' : ''}`;
 }
 
 function rkBind(page: RkPage): void {
@@ -399,6 +412,7 @@ function rkBind(page: RkPage): void {
     const facts = at.closest<HTMLElement>('[data-rk-matter]');
     if (facts) { ev.preventDefault(); location.hash = rkWithAll({matter: facts.dataset['rkMatter'] || '', due: '', on: ''}); return; }
     if (at.closest('[data-rk-next]')) { void rkMore(page); return; }
+    if (at.closest('[data-rk-dates-more]')) { void rkDatesMore(page); return; }
     // A date's row, or its ⋯, opens it in the panel; its proof link opens the proof.
     const due = at.closest<HTMLElement>('[data-rk-due]');
     if (due && !at.closest('a')) { location.hash = rkWithAll({due: due.dataset['rkDue'] || '', on: due.dataset['rkOn'] || '', matter: ''}); return; }
@@ -500,7 +514,7 @@ function rkKeyOf(page: RkPage, id: string): string {
 async function rkDatesFor(page: RkPage, risks: ReadonlyMap<string, string>): Promise<void> {
   // Obligations lists every date: one read of them all keeps each date's full list of risks.
   if (page.tab === 'obligations') {
-    try { const all = await rkDatesAll(null); if (rkLive(page.run)) page.dates = all; } catch { /* unread: as they were */ }
+    try { await rkTabDates(page); } catch { /* unread: as they were */ }
     return;
   }
   const shown = [...risks].filter(([id]) => (page.tab === 'risks' && page.risks.some(r => r.id === id && r.level === 'live'))
@@ -538,9 +552,8 @@ async function rkPoll(page: RkPage): Promise<void> {
       if (!rkLive(page.run)) return;
       page.risks = risks; page.dates = dates;
     } else if (page.tab === 'obligations') {
-      const dates = await rkDatesAll(null);
+      await rkTabDates(page);
       if (!rkLive(page.run)) return;
-      page.dates = dates;
     } else if (page.tab === 'one' && page.detail) {
       const dates = await rkDatesAll(page.detail.risk.key);
       if (!rkLive(page.run) || !page.detail) return;
