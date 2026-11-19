@@ -640,6 +640,14 @@ export const contactsQuery = (type: string, name: string) =>
     ...quiet,
   });
 
+/** Search's contacts: one type's, by name, a few rows without their details. */
+export const contactSearchQuery = (type: string, name: string, limit: number) =>
+  queryOptions({
+    queryKey: ['contacts', 'search', type, name, limit],
+    queryFn: ({ signal }) => api.get<{ rows: ContactRow[] }>(`/api/v2/entities/find/${enc(type)}${q({ name, limit })}`, { signal }),
+    ...quiet,
+  });
+
 export const cardQuery = (ref: string) =>
   queryOptions({
     queryKey: ['contacts', 'card', ref],

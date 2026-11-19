@@ -142,6 +142,16 @@ export const pipelineTasksQuery = (pipeline: string, f: Filters) => {
   });
 };
 
+/** Search's tasks: any pipeline's, by title words or #N (the server's `search`), a few. Under the list root, so the
+    stream's changes reach it. */
+export const taskSearchQuery = (q: string, limit: number) => {
+  const params = { search: q, limit, brief: 'true' };
+  return queryOptions({
+    queryKey: keys.tasks.list(params),
+    queryFn: ({ signal }) => api.get<TaskPage>(`/api/v2/tasks?${query(params)}`, { signal }),
+  });
+};
+
 const loading = new Set<string>();
 
 /** The next page of a pipeline's open list, added to the same cache entry (so the stream keeps patching it). */

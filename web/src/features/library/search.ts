@@ -1,3 +1,10 @@
+import { queryClient } from '@/data';
+import { fmtDate } from '@/lib';
+import { defineSearch } from '@/search/define';
+import { fetchFor, HITS } from '@/search/helpers';
+import { matches } from '@/search/results';
+import { contactSearchQuery, countsQuery, docsListQuery, fileSearchQuery, skillsQuery, toolsQuery, typesQuery } from './queries';
+
 /* What each Library address may carry, and the `validateSearch` for its route: keeps the words it knows, drops the rest. */
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : typeof v === 'number' ? String(v) : undefined);
@@ -61,3 +68,106 @@ export interface ContactsSearch {
   panel?: string;
 }
 export const contactsSearch = (raw: Record<string, unknown>): ContactsSearch => clean({ type: str(raw.type), q: str(raw.q), panel: str(raw.panel) });
+
+/* ---------------------------------------------------------------- Cmd+K: one group per Library page */
+
+export const docsFind = defineSearch({
+  group: 'Docs',
+  order: 60,
+  find: async (q) => {
+    if (!q.trim()) return [];
+    const { docs } = await queryClient.ensureQueryData(docsListQuery);
+    return docs
+      .filter((d) => matches(d.title, q))
+      .slice(0, HITS)
+      .map((d) => ({
+        key: `doc:${d.id}`,
+        title: d.title,
+        meta: fmtDate(d.updated_at) || undefined,
+        lead: { icon: 'file' as const },
+        run: { id: 'docs.open', input: { doc: d.id } },
+      }));
+  },
+});
+
+/** The server's file search (titles and text). `files.open` only works on the Files page, so a hit opens Files
+    narrowed to the file's name. */
+export const filesFind = defineSearch({
+  group: 'Files',
+  order: 61,
+  find: async (q, signal) => {
+    const words = q.trim().slice(0, 200);
+    if (words.length < 2) return [];
+    const { results } = await fetchFor(fileSearchQuery(words), signal);
+    return results.slice(0, HITS).map((f) => ({
+      key: `file:${f.id}`,
+      title: f.title,
+      lead: { icon: 'file' as const },
+      run: { id: 'files.list', input: { q: f.title.slice(0, 200) } },
+    }));
+  },
+});
+
+export const skillsFind = defineSearch({
+  group: 'Skills',
+  order: 62,
+  find: async (q) => {
+    if (!q.trim()) return [];
+    const skills = await queryClient.ensureQueryData(skillsQuery);
+    return skills
+      .filter((k) => matches(k.name, q))
+      .slice(0, HITS)
+      .map((k) => ({ key: `skill:${k.name}`, title: k.name, lead: { icon: 'spark' as const }, run: { id: 'skills.open', input: { skill: k.name } } }));
+  },
+});
+
+export const toolsFind = defineSearch({
+  group: 'Tools',
+  order: 63,
+  find: async (q) => {
+    if (!q.trim()) return [];
+    const { rows } = await queryClient.ensureQueryData(toolsQuery);
+    return rows
+      .filter((t) => matches(t.name, q))
+      .slice(0, HITS)
+      .map((t) => ({
+        key: `tool:${t.id}`,
+        title: t.name,
+        meta: t.vendor_name && t.vendor_name !== t.name ? t.vendor_name : undefined,
+        lead: { icon: 'link' as const },
+        run: { id: 'tools.open', input: { tool: t.id } },
+      }));
+  },
+});
+
+/** Each contact type that has any, searched by name on the server. `contacts.open` only works on the Contacts page,
+    so a hit opens Contacts on its type, narrowed to its name. */
+export const contactsFind = defineSearch({
+  group: 'Contacts',
+  order: 64,
+  find: async (q, signal) => {
+    const words = q.trim().slice(0, 200);
+    if (!words) return [];
+    const [counts, types] = await Promise.all([queryClient.ensureQueryData(countsQuery), queryClient.ensureQueryData(typesQuery).catch(() => [])]);
+    const found = await Promise.all(
+      counts
+        .filter((c) => c.count > 0)
+        .map((c) =>
+          fetchFor(contactSearchQuery(c.type, words, HITS), signal).then(
+            ({ rows }) => rows.map((r) => ({ r, type: c.type })),
+            () => [],
+          ),
+        ),
+    );
+    return found
+      .flat()
+      .slice(0, HITS)
+      .map(({ r, type }) => ({
+        key: `contact:${r.id}`,
+        title: r.name,
+        meta: types.find((t) => t.key === type)?.name,
+        lead: { icon: 'people' as const },
+        run: { id: 'contacts.list', input: type === 'person' ? { q: r.name.slice(0, 200) } : { type, q: r.name.slice(0, 200) } },
+      }));
+  },
+});

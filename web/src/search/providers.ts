@@ -10,6 +10,6 @@ export function collectProviders(sources: Record<string, Record<string, unknown>
 }
 
 export const providers = collectProviders(
-  // features add theirs; people come from the one directory
-  import.meta.glob<Record<string, unknown>>(['/src/features/*/search.ts', '/src/search/people.ts'], { eager: true }),
+  // features add theirs; people come from the one directory, pages from the menu
+  import.meta.glob<Record<string, unknown>>(['/src/features/*/search.ts', '/src/search/people.ts', '/src/search/pages.ts'], { eager: true }),
 );

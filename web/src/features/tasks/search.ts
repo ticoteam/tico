@@ -1,4 +1,7 @@
-import type { Due, Filters } from './queries';
+import { directoryQuery, queryClient } from '@/data';
+import { defineSearch } from '@/search/define';
+import { faceOf, fetchFor, HITS } from '@/search/helpers';
+import { pipelinesQuery, taskSearchQuery, type Due, type Filters } from './queries';
 
 /** Board and list are a pipeline's open tasks; Archived is its snoozed, done and closed ones. */
 export type View = 'board' | 'list' | 'archived';
@@ -43,3 +46,36 @@ export function validateTasksSearch(raw: Record<string, unknown>): TasksSearch {
 }
 
 export const filtersOf = ({ owner, waiting, asked, tag, due, late, q }: TasksSearch): Filters => ({ owner, waiting, asked, tag, due, late, q });
+
+/* ---------------------------------------------------------------- Cmd+K */
+
+/** Tasks in any pipeline by title words or #N, from the server's search; each shows its stage and owner's face. */
+export const tasksSearch = defineSearch({
+  group: 'Tasks',
+  order: 10,
+  find: async (q, signal) => {
+    const words = q.trim().slice(0, 200);
+    if (!words) return [];
+    const [page, pipelines, directory] = await Promise.all([
+      fetchFor(taskSearchQuery(words, HITS), signal),
+      queryClient.ensureQueryData(pipelinesQuery).catch(() => []),
+      queryClient.ensureQueryData(directoryQuery).catch(() => undefined),
+    ]);
+    const stages = new Map<string, string>();
+    const names = new Map<string, string>();
+    for (const p of pipelines) {
+      names.set(p.id, p.name);
+      for (const s of [...p.stages, p.done, p.closed]) if (s) stages.set(s.id, s.name);
+    }
+    return page.tasks.slice(0, HITS).map((t) => {
+      const owner = t.owner_id ? directory?.byId[t.owner_id] : undefined;
+      return {
+        key: `task:${t.number}`,
+        title: t.title,
+        meta: (t.stage_id && stages.get(t.stage_id)) || (t.pipeline_id && names.get(t.pipeline_id)) || undefined,
+        lead: owner ? faceOf(owner) : { icon: 'tasks' as const },
+        run: { id: 'task.open', input: t.pipeline_id ? { task: t.number, pipeline: t.pipeline_id } : { task: t.number } },
+      };
+    });
+  },
+});
