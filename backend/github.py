@@ -637,6 +637,95 @@ def refresh_conflicts(service: Any) -> int:
     return read
 
 
+FINISHED_READS_PER_PASS = 10
+_finished_retry = {}  # link id -> monotonic time a failed read may be tried again
+
+
+def refresh_finished_task_prs(service: Any) -> int:
+    """The maintenance pass's read of pull requests still `open` or `draft` on tasks that are no longer open.
+    `refresh_conflicts` reads only open tasks, so a link whose task finished first (a duplicate PR closed after the
+    one that merged, Engineering #2398) kept its old state when the close's webhook did not land, and Health's
+    `aged_prs` went on naming it with a merge to do. Each is read once per CONFLICT_STALE_MINUTES, at most
+    FINISHED_READS_PER_PASS a pass; a 404 counts as closed. Only the link is written (state, merged facts, the Health
+    wait): the task is finished, so nobody is woken and nothing is said on it. A failed read waits CONFLICT_RETRY_S."""
+    with service.store.read() as c:
+        app = service.row(c)
+        if not app:
+            return 0
+        marks = ",".join("?" * len(H.ACTIVE_STATUSES))
+        rows = H._rows(
+            c.execute(
+                "SELECT l.id,l.url,l.repo,l.number,l.state,l.detail FROM task_links l "
+                "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
+                "WHERE l.kind='pr' AND l.state IN ('open','draft') AND l.number IS NOT NULL AND r.reachable=1 "
+                f"AND lower(l.repo) LIKE ? AND t.status NOT IN ({marks}) "
+                "AND coalesce(l.updated_at,l.created_at)<? "
+                "ORDER BY coalesce(l.updated_at,l.created_at),l.id LIMIT ?",
+                (
+                    str(app["org"] or "").lower() + "/%",
+                    *H.ACTIVE_STATUSES,
+                    H.shift(H.now(), minutes=-CONFLICT_STALE_MINUTES),
+                    500,  # the backing-off ones are dropped below, so they never fill the pass
+                ),
+            )
+        )
+    now = time.monotonic()
+    for gone in [k for k, due in _finished_retry.items() if due <= now]:
+        _finished_retry.pop(gone, None)
+    read = 0
+    for r in [r for r in rows if r["id"] not in _finished_retry][:FINISHED_READS_PER_PASS]:
+        try:
+            token, _ = service.mint([r["repo"]], {"pull_requests": "read"})
+            response = service._call(
+                "GET",
+                f"/repos/{quote(r['repo'], safe='/')}/pulls/{r['number']}",
+                headers={"Authorization": "Bearer " + token},
+            )
+            if response.status_code not in (200, 404):
+                _finished_retry[r["id"]] = now + CONFLICT_RETRY_S
+                continue
+            pr = response.json() if response.status_code == 200 else {"state": "closed"}
+        except Exception:
+            logging.getLogger("tico.github").exception(
+                "Finished-task PR read failed for %s #%s", r["repo"], r["number"]
+            )
+            _finished_retry[r["id"]] = now + CONFLICT_RETRY_S
+            continue
+        state = (
+            "merged"
+            if pr.get("merged")
+            else "closed"
+            if pr.get("state") == "closed"
+            else "draft"
+            if pr.get("draft")
+            else "open"
+        )
+        detail = H._json(r["detail"], {}) or {}
+        with service.store.transaction() as c:
+            if state in ("open", "draft"):
+                # Still open: its clock moves on, so it is read again after the stale wait, not every pass.
+                c.execute(
+                    "UPDATE task_links SET state=?,updated_at=? WHERE id=? AND state IN ('open','draft')",
+                    (state, H.now(), r["id"]),
+                )
+            else:
+                detail.pop("health_wait", None)
+                c.execute(
+                    "UPDATE task_links SET state=?,detail=?,updated_at=?,pr_sha=coalesce(?,pr_sha),"
+                    "pr_merged_at=coalesce(?,pr_merged_at) WHERE id=? AND state IN ('open','draft')",
+                    (
+                        state,
+                        json.dumps(detail),
+                        H.now(),
+                        pr.get("merge_commit_sha") if state == "merged" else None,
+                        (pr.get("merged_at") or H.now()) if state == "merged" else None,
+                        r["id"],
+                    ),
+                )
+        read += 1
+    return read
+
+
 def _engine_speaks(c, task_id):
     """Whether the task is on a pipeline stage that waits on GitHub (an item requirement of source `github`: a PR
     open, checks, a merge, a release) or queues
