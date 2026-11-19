@@ -274,7 +274,9 @@ def warnings_in(text, kind):
     """What the page may keep but should look at again: a spec over its length, which clarity can need."""
     count = len(words(text))
     if kind in SPECS and count > PAGE_WORDS[kind]:
-        return [f"{count} words; a {kind} page is usually under {PAGE_WORDS[kind]}: cut every word clarity does not need"]
+        return [
+            f"{count} words; a {kind} page is usually under {PAGE_WORDS[kind]}: cut every word clarity does not need"
+        ]
     return []
 
 

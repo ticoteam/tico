@@ -235,7 +235,11 @@ def test_the_feature_owner_takes_a_feature_from_a_chat_to_production_in_one_sess
 # The one page skill every bot that writes a spec, a check or a review uses (docs/software-factory.md, "Visual specs").
 PAGE_SKILL = "build-the-page"
 PAGE_WRITERS = {
-    "feature-owner": (".claude/skills/write-the-spec/SKILL.md", "playbooks/qa.md", "playbooks/validate-in-production.md"),
+    "feature-owner": (
+        ".claude/skills/write-the-spec/SKILL.md",
+        "playbooks/qa.md",
+        "playbooks/validate-in-production.md",
+    ),
     "reviewer": ("playbooks/review-a-pull-request.md",),
     "builder": ("playbooks/qa.md",),
     "release-owner": ("playbooks/write-the-release-report.md",),
