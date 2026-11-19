@@ -20,7 +20,11 @@ use crate::drive::{from_person, tries, Drive, GoalRun, Segment};
 use crate::env::{Env, EnvContext, Vault};
 use crate::goals;
 use crate::hosts::{
-    self, antigravity::AntigravityHost, claude::ClaudeHost, codex::CodexHost, gemini::GeminiHost,
+    self,
+    antigravity::AntigravityHost,
+    claude::{ClaudeHost, ClaudeProcess, TurnUsage},
+    codex::CodexHost,
+    gemini::GeminiHost,
     Host, HostError, Settings,
 };
 use crate::profiles::{Profile, Unavailable};
@@ -1701,8 +1705,9 @@ impl Runner {
             return Ok(());
         }
         unstopped(d.flags)?;
-        let mut resident = claude.start_voice(d.thread, d.effort, d.aid)?;
-        resident.send(primer).await?;
+        let mut resident =
+            ClaudeProcess::spawn(claude, d.thread, d.effort, d.aid, "voice session")?;
+        resident.send_turn(primer).await?;
         let mut warming = true;
         let mut active: Option<String> = None;
         let mut last = String::new();
@@ -1718,7 +1723,7 @@ impl Runner {
         loop {
             if let Some(grace) = restart.take() {
                 input_poll = None;
-                resident.stop_for_restart(grace).await?;
+                resident.stop(grace).await?;
                 let state = self.voice_inputs(d.aid, "restart").await?;
                 if state.is_null() || state["closed"] == true {
                     return Ok(());
@@ -1729,28 +1734,27 @@ impl Runner {
                     .ok_or_else(|| Fail::runtime("The call did not supply a fresh primer"))?;
                 notes_stamp = text_of(&state["notes_stamp"]);
                 unstopped(d.flags)?;
-                resident = claude.restart_voice(d.thread, d.effort, d.aid)?;
-                resident.send(fresh).await?;
+                resident.restart(Some(fresh)).await?;
                 warming = true;
             }
             tokio::select! {
-                frame = resident.frame() => {
+                frame = resident.next_event() => {
                     let frame = match frame {
                         Ok(frame) => frame,
                         Err(_) if interrupt_at.take().is_some() => {
-                            meter.add(&resident.take_usage().1);
+                            meter.add(&resident.take_usage().tokens);
                             active = None;
                             restart = Some(Duration::ZERO);
                             continue;
                         }
                         Err(error) => {
-                            meter.add(&resident.take_usage().1);
+                            meter.add(&resident.take_usage().tokens);
                             return Err(error.into());
                         }
                     };
-                    if frame["type"] == "result" && frame["parent_tool_use_id"].is_null() {
-                        let (context, usage) = resident.take_usage();
-                        meter.add(&usage);
+                    if hosts::claude::ends_turn(&frame) {
+                        let TurnUsage { context_tokens: context, tokens } = resident.take_usage();
+                        meter.add(&tokens);
                         let canceled = interrupt_at.take().is_some();
                         if frame["is_error"] == true && !canceled {
                             return Err(Fail::runtime(text_of(&frame["result"])));
@@ -1798,14 +1802,14 @@ impl Runner {
                         None => std::future::pending().await,
                     }
                 } => {
-                    meter.add(&resident.take_usage().1);
+                    meter.add(&resident.take_usage().tokens);
                     interrupt_at = None;
                     active = None;
                     restart = Some(Duration::ZERO);
                 }
                 _ = inputs.wait(d.aid, call_id), if input_poll.is_none() && interrupt_at.is_none() => {
                     if d.flags.lost.load(Ordering::SeqCst) || d.flags.stopped.load(Ordering::SeqCst) {
-                        meter.add(&resident.take_usage().1);
+                        meter.add(&resident.take_usage().tokens);
                         return Err(Fail::runtime("Voice session lease ended"));
                     }
                     let phase = if warming || active.is_some() { "busy" } else { "ready" };
@@ -1817,14 +1821,14 @@ impl Runner {
                     let input = input?;
                     let poll_ms = u64::try_from(poll_began.elapsed().as_millis()).unwrap_or(u64::MAX);
                     if input.is_null() || input["closed"] == true {
-                        meter.add(&resident.take_usage().1);
+                        meter.add(&resident.take_usage().tokens);
                         return Ok(());
                     }
                     let turn = text_of(&input["turn"]["id"]);
                     if let Some(in_progress) = &active {
                         if *in_progress != turn && interrupt_at.is_none() {
                             let at = tokio::time::Instant::now() + VOICE_INTERRUPT_WAIT;
-                            let sent = tokio::time::timeout_at(at, resident.cancel()).await;
+                            let sent = tokio::time::timeout_at(at, resident.cancel_turn()).await;
                             interrupt_at = Some(match sent {
                                 Ok(Ok(())) => at,
                                 _ => tokio::time::Instant::now(),
@@ -1836,7 +1840,7 @@ impl Runner {
                         continue;
                     }
                     let question = voice_question(&input["turn"], &mut notes_stamp);
-                    resident.send(&question).await?;
+                    resident.send_turn(&question).await?;
                     clock = voice::VoiceClock::sent(Some(poll_ms));
                     spoken.clear();
                     model.clear();
