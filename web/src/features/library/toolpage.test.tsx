@@ -1344,6 +1344,23 @@ describe('Tools', () => {
     expect(screen.getByText('GET /v1/items → 200')).toBeTruthy();
   });
 
+  it('keeps the Tools search and filters in the row and the phone back link', async () => {
+    serve();
+    tools([indexRow({ id: 'api:t1', name: 'Sample API', needs_you: true, who: [{ id: 'p1', kind: 'person', name: 'Pat Sample' }] })]);
+    queryClient.setQueryData(apiToolQuery('t1').queryKey, apiTool() as never);
+    const filters = { q: 'sample', kind: 'api', needs: 1, who: 'human:p1' } as const;
+    at(
+      '/library/tools?q=sample&kind=api&needs=1&who=human%3Ap1&tool=api%3At1',
+      <ToolsPage search={{ ...filters, tool: 'api:t1' }} />,
+    );
+    const row = await screen.findByRole('link', { name: /Sample API/ });
+    const back = screen.getByRole('link', { name: 'Back to Tools' });
+    const params = (link: HTMLElement) => Object.fromEntries(new URL(link.getAttribute('href')!, 'http://example.test').searchParams);
+    const expected = { ...filters, needs: '1' };
+    expect(params(row)).toEqual({ ...expected, tool: 'api:t1' });
+    expect(params(back)).toEqual(expected);
+  });
+
   it('replaces a key: the value is only sent, never kept @s914 @s840', async () => {
     const FAKE = 'sk-new-fake-0000';
     const sent = serve();
