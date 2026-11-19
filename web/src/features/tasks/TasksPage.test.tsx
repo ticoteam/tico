@@ -298,6 +298,36 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     await waitFor(() => expect(posts).toHaveLength(2));
     expect(posts[1]?.body).toMatchObject({ move_tasks_to: { pipeline: 'eng', stage: 's1' } });
   });
+
+  it('Edit pipeline opens a stage to show its rules @s115 @s142', async () => {
+    const rec = {
+      id: 'eng',
+      name: 'Engineering',
+      settings_version: 3,
+      stages: [
+        { id: 's1', name: 'Inbox', side: false, requirements: [] },
+        { id: 's2', name: 'Doing', side: false, by_hand: false, requirements: [{ kind: 'checks_pass' }] },
+      ],
+    };
+    const rule = { id: 'sr1', name: '', pipeline_id: 'eng', pipeline_name: 'Engineering', stages: ['s2'], stage_names: ['Doing'], scope: 'stage', event: 'enters' };
+    const full = { ...rule, timer: null, cond: {}, jev: '', then: 'block', status: 'active', revision: 1, can_edit: true };
+    serve((url) => {
+      if (url === '/api/v2/pipelines/eng') return { status: 200, body: { pipeline: rec } };
+      if (url.startsWith('/api/v2/stage-rules')) return { status: 200, body: { items: [full], built_in: [], may_add: true } };
+      return { status: 200, body: {} };
+    });
+    seed(rows());
+    show(<TasksPage pipeline="eng" search={{ panel: 'pipeline' }} />, '/tasks/eng?panel=pipeline');
+    const open = await screen.findByRole('button', { name: 'Rules, Doing' });
+    expect(open.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(open);
+    expect(open.getAttribute('aria-expanded')).toBe('true');
+    const enter = await screen.findByRole('region', { name: 'On entering' });
+    expect(await within(enter).findByTitle('Enters Doing, Block')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'To leave' })).getByTitle('Checks pass')).toBeTruthy();
+    fireEvent.click(within(enter).getByRole('button', { name: 'Add rule' }));
+    expect(within(enter).getByRole('textbox', { name: 'Name' })).toBeTruthy();
+  });
 });
 
 describe('Flow @s24', () => {

@@ -209,16 +209,27 @@ function StageView({ id, onClose }: { id: string; onClose: () => void }) {
   );
 }
 
-type StageEvent = (typeof STAGE_EVENTS)[number]['value'];
+export type StageEvent = (typeof STAGE_EVENTS)[number]['value'];
 type TimerKind = (typeof STAGE_TIMERS)[number]['value'];
 type Then = (typeof STAGE_THENS)[number]['value'];
 
-function StageEditor({ rule, onDone, onClose }: { rule?: StageRule; onDone: () => void; onClose: () => void }) {
+/** Where a new rule goes when its place is already known (a stage in the pipeline editor): no Pipeline or Stage to pick. */
+export interface StagePreset {
+  pipeline: string;
+  stage: string;
+  event: StageEvent;
+}
+
+/**
+ * The one stage rule editor: its fields, and Add rule (or Save) and Cancel. The Rules page draws it in a panel; the
+ * pipeline editor draws it under a stage, with the pipeline and stage preset, and stays where it is when it saves.
+ */
+export function useStageRuleForm({ rule, preset, onSaved, onCancel }: { rule?: StageRule; preset?: StagePreset; onSaved?: () => void; onCancel: () => void }) {
   const pipelines = useQuery(pipelinesQuery).data ?? [];
   const [name, setName] = useState(rule?.name ?? '');
-  const [pipeline, setPipeline] = useState(rule && rule.scope !== 'company' ? rule.pipeline_id : '');
-  const [stage, setStage] = useState(rule?.stages[0] ?? '');
-  const firstEvent = (rule?.event.split(',')[0] ?? 'enters') as StageEvent;
+  const [pipeline, setPipeline] = useState(rule ? (rule.scope !== 'company' ? rule.pipeline_id : '') : (preset?.pipeline ?? ''));
+  const [stage, setStage] = useState(rule ? (rule.stages[0] ?? '') : (preset?.stage ?? ''));
+  const firstEvent = (rule?.event.split(',')[0] ?? preset?.event ?? 'enters') as StageEvent;
   const [event, setEvent] = useState<StageEvent>(STAGE_EVENTS.some((e) => e.value === firstEvent) ? firstEvent : 'enters');
   const [timerKind, setTimerKind] = useState<TimerKind>((rule?.timer?.kind as TimerKind | undefined) ?? 'in_stage');
   const [hours, setHours] = useState(String(rule?.timer?.hours ?? 24));
@@ -230,6 +241,7 @@ function StageEditor({ rule, onDone, onClose }: { rule?: StageRule; onDone: () =
   const timer = event === 'timer';
   const h = Number(hours);
   const ready = !timer || (Number.isFinite(h) && h >= 0.25);
+  const stay = preset ? { stay: true } : {};
 
   const save = async () => {
     if (!ready) return;
@@ -244,30 +256,26 @@ function StageEditor({ rule, onDone, onClose }: { rule?: StageRule; onDone: () =
       ...(reason.trim() ? { reason: reason.trim() } : {}),
     };
     setBusy(true);
-    const ok = await press(rule ? 'rules.update' : 'rules.add', rule ? { rule: rule.id, kind: 'stage', stage: fields } : { kind: 'stage', stage: fields });
+    const ok = await press(rule ? 'rules.update' : 'rules.add', rule ? { rule: rule.id, kind: 'stage', stage: fields } : { kind: 'stage', stage: fields, ...stay });
     setBusy(false);
-    if (ok && rule) onDone();
+    if (ok) onSaved?.();
   };
 
-  return (
-    <SidePanel
-      className="rr"
-      title={rule ? rule.name || 'Rule' : 'New stage rule'}
-      target={rule ? `rule:${rule.id}` : 'panel:rule:new'}
-      onClose={onClose}
-      foot={
-        <>
-          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void save()}>
-            {rule ? 'Save' : 'Add rule'}
-          </Button>
-          <Button variant="quiet" onClick={onDone}>
-            Cancel
-          </Button>
-        </>
-      }
-    >
-      <section className="rail-sec rr-form">
-        <Field label="Name" value={name} onValueChange={setName} autoFocus={!rule} />
+  const foot = (
+    <>
+      <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void save()}>
+        {rule ? 'Save' : 'Add rule'}
+      </Button>
+      <Button variant="quiet" onClick={onCancel}>
+        Cancel
+      </Button>
+    </>
+  );
+
+  const fields = (
+    <>
+      <Field label="Name" value={name} onValueChange={setName} autoFocus={!rule} />
+      {!preset && (
         <Select
           label="Pipeline"
           options={[{ value: '', label: 'Every pipeline' }, ...pipelines.map((p) => ({ value: p.id, label: p.name }))]}
@@ -277,31 +285,48 @@ function StageEditor({ rule, onDone, onClose }: { rule?: StageRule; onDone: () =
             setStage('');
           }}
         />
-        {pipe && (
-          <Select
-            label="Stage"
-            options={[{ value: '', label: 'Every stage' }, ...pipe.stages.filter((st) => !st.side).map((st) => ({ value: st.id, label: st.name }))]}
-            value={stage}
-            onValueChange={setStage}
-          />
-        )}
-        <Select label="When" options={STAGE_EVENTS} value={event} onValueChange={setEvent} />
-        {timer && (
-          <>
-            <Field label="Hours" type="number" value={hours} onValueChange={setHours} error={ready ? undefined : 'A quarter hour or more'} />
-            <Select label="Timer" options={STAGE_TIMERS.map((x) => ({ value: x.value, label: cap(x.label) }))} value={timerKind} onValueChange={setTimerKind} />
-          </>
-        )}
-        <Field label="Decision model" area value={model} onValueChange={setModel} placeholder="What the decision model checks, if anything" />
-        {timer ? (
-          <Select label="Then" options={STAGE_THENS} value={then} onValueChange={setThen} />
-        ) : (
-          <Facts>
-            <LabelValue label="Then">Block</LabelValue>
-          </Facts>
-        )}
-        <Field label="Why" area value={reason} onValueChange={setReason} placeholder="Said when the rule acts" />
-      </section>
+      )}
+      {!preset && pipe && (
+        <Select
+          label="Stage"
+          options={[{ value: '', label: 'Every stage' }, ...pipe.stages.filter((st) => !st.side).map((st) => ({ value: st.id, label: st.name }))]}
+          value={stage}
+          onValueChange={setStage}
+        />
+      )}
+      <Select label="When" options={STAGE_EVENTS} value={event} onValueChange={setEvent} />
+      {timer && (
+        <>
+          <Field label="Hours" type="number" value={hours} onValueChange={setHours} error={ready ? undefined : 'A quarter hour or more'} />
+          <Select label="Timer" options={STAGE_TIMERS.map((x) => ({ value: x.value, label: cap(x.label) }))} value={timerKind} onValueChange={setTimerKind} />
+        </>
+      )}
+      <Field label="Decision model" area value={model} onValueChange={setModel} placeholder="What the decision model checks, if anything" />
+      {timer ? (
+        <Select label="Then" options={STAGE_THENS} value={then} onValueChange={setThen} />
+      ) : (
+        <Facts>
+          <LabelValue label="Then">Block</LabelValue>
+        </Facts>
+      )}
+      <Field label="Why" area value={reason} onValueChange={setReason} placeholder="Said when the rule acts" />
+    </>
+  );
+
+  return { fields, foot };
+}
+
+function StageEditor({ rule, onDone, onClose }: { rule?: StageRule; onDone: () => void; onClose: () => void }) {
+  const form = useStageRuleForm({ rule, onSaved: rule ? onDone : undefined, onCancel: onDone });
+  return (
+    <SidePanel
+      className="rr"
+      title={rule ? rule.name || 'Rule' : 'New stage rule'}
+      target={rule ? `rule:${rule.id}` : 'panel:rule:new'}
+      onClose={onClose}
+      foot={form.foot}
+    >
+      <section className="rail-sec rr-form">{form.fields}</section>
     </SidePanel>
   );
 }

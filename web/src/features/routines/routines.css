@@ -90,6 +90,17 @@
 .rr-form{display:grid;gap:var(--s-3)}
 .rr-field{display:flex;align-items:center;gap:var(--s-2h)}
 
+/* ---------- a stage's rules in the pipeline editor: a moment, its rules, a rule being written (pages/1-tasks/more.css) ---------- */
+.ps-moments .ph{margin-top:var(--s-2h)}
+.ps-moments .ph-head{height:var(--ctl-sm);display:flex;align-items:center;gap:var(--s-2);margin:0 calc(var(--s-1h) * -1) 0 calc(var(--s-2) * -1);padding:0 0 0 var(--s-2);color:var(--muted)}
+.ps-moments .ph-head>.ico{width:14px;height:14px;stroke-width:1.8}
+.ps-moments .ph-head h3{flex:1;font-weight:var(--w-strong);font-size:var(--t-sm);line-height:1;color:var(--ink-2)}
+.ps-moments .ph-head .ib{color:var(--faint)}
+.ps-moments .ph-head .ib:hover{color:var(--ink)}
+.ps-moments .rule{margin:0 calc(var(--s-1h) * -1) 0 calc(var(--s-2) * -1);padding:0 0 0 var(--s-2)}
+.ps-moments .rule-new{margin:var(--s-1) calc(var(--s-5) + var(--s-0)) var(--s-2) calc(var(--s-4) + var(--s-0))}
+.ps-moments .rule-new-foot{display:flex;gap:var(--s-2)}
+
 @media (max-width:760px){
   .rr .set{min-height:48px}
 

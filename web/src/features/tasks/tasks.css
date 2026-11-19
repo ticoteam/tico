@@ -83,3 +83,12 @@ html[data-layout="cards"] .tk-item>.tk-more{display:none}
 .ps.is-add .ps-row:hover{--surface:var(--hover);background:var(--hover)}
 .ps.is-add .ps-name{font-weight:var(--w-text);color:var(--muted)}
 .ps.is-add .ps-row:hover .ps-name{color:var(--ink)}
+/* an open stage: its node fills, its rules sit between two lines under its row (more.css) */
+.ps.is-open>.ps-node{background:var(--ink);box-shadow:0 0 0 3px var(--surface)}
+.ps-chev{width:var(--ctl-sm);height:var(--ctl-sm);display:grid;place-items:center;flex:none;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--faint);cursor:pointer}
+.ps-chev:hover{background:var(--hover);color:var(--ink)}
+.ps-chev:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
+.ps-chev .ico{width:14px;height:14px;transition:transform var(--dur) var(--spring)}
+.ps.is-open .ps-chev .ico{transform:rotate(90deg)}
+.ps.is-open>.ps-in{margin:var(--s-1) 0 var(--s-2);padding:var(--s-0) 0 var(--s-4);border-block:1px solid var(--line)}
+.ps-body{padding:var(--s-1h) var(--s-2) 0}

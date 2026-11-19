@@ -11,6 +11,7 @@ import { routinesQuery, stageRulesQuery, watchesQuery, type StageRules } from '.
 import { runLink } from './RoutinePanel';
 import { RoutinesPage } from './RoutinesPage';
 import { RulesPage } from './RulesPage';
+import { StageRules as StageRulesList } from './StageRules';
 import type { Routine, StageRule } from './types';
 import { cronWords, orgParts, stageParts } from './words';
 
@@ -164,6 +165,52 @@ describe('Rules', () => {
     serve((url) => (url.includes('status=suggested') ? { status: 200, body: url.includes('stage-rules') ? { items: [], built_in: [], may_add: true } : { rules: [] } } : nothing()));
     show(<RulesPage search={{ tab: 'suggested' }} />, '/company/rules?tab=suggested');
     expect(await screen.findByText('No suggestions')).toBeTruthy();
+  });
+});
+
+describe('StageRules', () => {
+  const base = { name: '', pipeline_id: 'p1', pipeline_name: 'Engineering', stage_names: ['Review'], timer: null, cond: {}, then: 'block', status: 'active', revision: 1, can_edit: true };
+  const entering = { ...base, id: 'sr1', stages: ['s2'], scope: 'stage', event: 'enters', jev: 'Is it ready?' } as StageRule;
+  const wide = { ...base, id: 'sr2', stages: [], stage_names: [], scope: 'pipeline', event: 'timer', timer: { kind: 'in_stage', hours: 24 }, jev: '', then: 'tell_owner' } as StageRule;
+  const elsewhere = { ...base, id: 'sr3', pipeline_id: 'p2', stages: ['s9'], scope: 'stage', event: 'enters', jev: '' } as StageRule;
+  const rules: StageRules = { items: [entering, wide, elsewhere], built_in: [], may_add: true };
+  const leave = { requirements: [{ kind: 'page', settings: { document: 'Spec' } }, { kind: 'pr_merged' }], by_hand: true };
+
+  it('lists the stage’s rules by moment, and what it takes to leave', async () => {
+    serve(nothing);
+    queryClient.setQueryData<StageRules>(stageRulesQuery('active').queryKey, rules);
+    show(<StageRulesList pipeline="p1" stage="s2" leave={leave} />, '/tasks');
+    const enter = await screen.findByRole('region', { name: 'On entering' });
+    expect(within(enter).getByTitle('Enters Review, the decision model decides, Block')).toBeTruthy();
+    const here = screen.getByRole('region', { name: 'While here' });
+    expect(within(here).getAllByRole('button', { name: 'More' })).toHaveLength(1);
+    const out = screen.getByRole('region', { name: 'To leave' });
+    expect(within(out).getByTitle('Approve Spec')).toBeTruthy();
+    expect(within(within(out).getByTitle('PR merged')).getByTitle('Built in')).toBeTruthy();
+    expect(within(out).getByTitle('OK from anyone')).toBeTruthy();
+    expect(within(out).queryByRole('button', { name: 'Add rule' })).toBeNull();
+    expect(screen.getAllByRole('button', { name: /^On entering|^While here/ })).toHaveLength(2);
+  });
+
+  it('adds a rule with its pipeline and stage preset, and stays on the page', async () => {
+    const sent: unknown[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const post = init?.method === 'POST' && String(url).includes('/api/v2/stage-rules');
+      if (post) sent.push(JSON.parse(String(init.body)));
+      const body = post ? { ...wide, id: 'sr9' } : String(url).includes('/stage-rules') ? rules : { detail: 'not_found' };
+      return new Response(JSON.stringify(body), { status: post || String(url).includes('/stage-rules') ? 200 : 404, headers: { 'Content-Type': 'application/json' } });
+    });
+    queryClient.setQueryData<StageRules>(stageRulesQuery('active').queryKey, rules);
+    show(<StageRulesList pipeline="p1" stage="s2" />, '/tasks');
+    const here = await screen.findByRole('region', { name: 'While here' });
+    fireEvent.click(within(here).getByRole('button', { name: 'Add rule' }));
+    expect(within(here).queryByRole('combobox', { name: 'Pipeline' })).toBeNull();
+    const [, save] = within(here).getAllByRole('button', { name: 'Add rule' });
+    fireEvent.click(save!);
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ pipeline: 'p1', stages: ['s2'], event: 'timer', then: 'tell_owner' });
+    await waitFor(() => expect(within(here).queryByRole('textbox', { name: 'Why' })).toBeNull());
+    expect(screen.getByRole('region', { name: 'While here' })).toBeTruthy();
   });
 });
 

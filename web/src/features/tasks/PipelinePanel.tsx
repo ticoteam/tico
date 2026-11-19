@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useAction } from '@/actions';
+import { StageRules } from '@/features/routines/exports';
 import { Button } from '@/kit/Button';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
@@ -17,7 +18,8 @@ const HAS_TASKS = 'stage_has_tasks';
 
 /**
  * Edit pipeline, the smallest set (the old app's stage list): each stage's name, side or not, its place, remove; then
- * Add stage and Save. A side stage cannot be first. Removing a stage that holds tasks asks where they go.
+ * Add stage and Save. A side stage cannot be first. Removing a stage that holds tasks asks where they go. A saved stage
+ * opens under its row to show its rules: On entering, While here and To leave (more.js stageRow).
  */
 export function PipelinePanel({ p, onClose }: { p: Pipeline; onClose: () => void }) {
   const rec = useQuery(pipelineSettingsQuery(p.id));
@@ -25,6 +27,8 @@ export function PipelinePanel({ p, onClose }: { p: Pipeline; onClose: () => void
   const [draft, setDraft] = useState<Row[] | null>(null);
   /** Why the last save was refused; `move` when moving the removed stages' tasks would let it through. */
   const [held, setHeld] = useState<{ text: string; move: boolean } | null>(null);
+  /** The saved stage that is open, showing its rules. */
+  const [open, setOpen] = useState<string | null>(null);
   const rows: Row[] | null = draft ?? rec.data?.stages.map((s) => ({ id: s.id, name: s.name, side: s.side, k: s.id })) ?? null;
 
   const change = (next: Row[]) => {
@@ -83,24 +87,38 @@ export function PipelinePanel({ p, onClose }: { p: Pipeline; onClose: () => void
         )}
         {rows && (
           <div className="pe-stages">
-            {rows.map((r, i) => (
-              <div key={r.k} className={r.side ? 'ps is-side' : 'ps'}>
-                <i className="ps-node" />
-                <div className="ps-in">
-                  <div className="ps-row">
-                    <Field label="Name" labelHidden value={r.name} onValueChange={(name) => put(i, { name })} />
-                    <span className="grow" />
-                    <Switch label="Side" checked={r.side} disabled={i === 0} onCheckedChange={(side) => put(i, { side })} />
-                    <Menu trigger={<IconButton icon="more" label={`More, ${r.name || 'new stage'}`} size="sm" />}>
-                      <MenuItem label="Move up" disabled={i === 0} onSelect={() => swap(i - 1, i)} />
-                      <MenuItem label="Move down" disabled={i === rows.length - 1} onSelect={() => swap(i, i + 1)} />
-                      <MenuRule />
-                      <MenuItem label="Remove stage" onSelect={() => change(rows.filter((_, j) => j !== i).map((x, j) => (j === 0 ? { ...x, side: false } : x)))} />
-                    </Menu>
+            {rows.map((r, i) => {
+              const id = r.id && !r.side ? r.id : null;
+              const isOpen = !!id && open === id;
+              return (
+                <div key={r.k} className={['ps', r.side && 'is-side', isOpen && 'is-open'].filter(Boolean).join(' ')}>
+                  <i className="ps-node" />
+                  <div className="ps-in">
+                    <div className="ps-row">
+                      <Field label="Name" labelHidden value={r.name} onValueChange={(name) => put(i, { name })} />
+                      {id && (
+                        <button type="button" className="ps-chev" aria-expanded={isOpen} aria-label={`Rules, ${r.name}`} onClick={() => setOpen(isOpen ? null : id)}>
+                          <Icon name="chevron" />
+                        </button>
+                      )}
+                      <span className="grow" />
+                      <Switch label="Side" checked={r.side} disabled={i === 0} onCheckedChange={(side) => put(i, { side })} />
+                      <Menu trigger={<IconButton icon="more" label={`More, ${r.name || 'new stage'}`} size="sm" />}>
+                        <MenuItem label="Move up" disabled={i === 0} onSelect={() => swap(i - 1, i)} />
+                        <MenuItem label="Move down" disabled={i === rows.length - 1} onSelect={() => swap(i, i + 1)} />
+                        <MenuRule />
+                        <MenuItem label="Remove stage" onSelect={() => change(rows.filter((_, j) => j !== i).map((x, j) => (j === 0 ? { ...x, side: false } : x)))} />
+                      </Menu>
+                    </div>
+                    {isOpen && (
+                      <div className="ps-body">
+                        <StageRules pipeline={p.id} stage={id} leave={rec.data?.stages.find((st) => st.id === id)} />
+                      </div>
+                    )}
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             <div className="ps is-add">
               <i className="ps-node">
                 <Icon name="plus" />

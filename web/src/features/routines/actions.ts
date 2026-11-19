@@ -409,7 +409,8 @@ export const addRule = defineAction({
   id: 'rules.add',
   title: 'Add a rule',
   kind: 'change',
-  input: s.object({ kind: s.oneOf(['org', 'stage'] as const), org: s.optional(s.object(orgFields)), stage: s.optional(s.object(stageFields)) }),
+  // `stay`: keep the page where it is (the pipeline editor) instead of opening the new rule on the Rules page
+  input: s.object({ kind: s.oneOf(['org', 'stage'] as const), org: s.optional(s.object(orgFields)), stage: s.optional(s.object(stageFields)), stay: s.optional(s.boolean()) }),
   run: async ({ router }, i) => {
     if (i.kind === 'org' && i.org) {
       const o = i.org;
@@ -434,7 +435,7 @@ export const addRule = defineAction({
           reason: t.reason ?? '',
         }),
       );
-      await ruleTab(router, 'stages', `stage:${made.id}`);
+      if (!i.stay) await ruleTab(router, 'stages', `stage:${made.id}`);
       return made.id;
     }
     throw Object.assign(new Error('Say what the rule is'), { code: 'bad_input: org or stage is required' });
@@ -484,7 +485,7 @@ export const removeRule = defineAction({
   id: 'rules.remove',
   title: 'Remove a rule',
   kind: 'change',
-  input: s.object({ rule: id, kind: s.oneOf(['org', 'stage'] as const) }),
+  input: s.object({ rule: id, kind: s.oneOf(['org', 'stage'] as const), stay: s.optional(s.boolean()) }),
   can: (ctx, i) => (i.kind === 'org' ? orgRule(ctx, i.rule)?.can_edit !== false : stageRule(ctx, i.rule)?.can_edit !== false),
   run: async (ctx, i) => {
     if (i.kind === 'org') {
@@ -496,7 +497,7 @@ export const removeRule = defineAction({
       if (!was) throw missing();
       await said(decideStageRule(was, 'retire'));
     }
-    await panelOff(ctx.router);
+    if (!i.stay) await panelOff(ctx.router);
   },
   did: () => 'Removed the rule',
 });
