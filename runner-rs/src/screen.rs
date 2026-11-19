@@ -752,12 +752,12 @@ async fn sessions(client: Client, events: Arc<crate::events::Events>) {
             continue; // a hint heard meanwhile keeps its URGENT_FOR window for when the display is back
         }
         let now = Instant::now();
-        let urgent = s
+        let soon = s
             .urgent_until
             .lock()
             .unwrap()
             .is_some_and(|until| now < until);
-        if !read_due(urgent, events.pushing(), read_at, now) {
+        if !read_due(soon, events.pushing(), read_at, now) {
             continue;
         }
         read_at = Some(now);
