@@ -32,13 +32,13 @@ const BRIDGE_SCRIPT: &str = r#"
 })();
 "#;
 
-/// A call's meeting window (windows::open_call_window): the bridge for its one ask, `callWindowSize`, and nothing else.
+/// The bridge for a call's meeting window (windows::open_call_window).
 pub(crate) const CALL_WINDOW_SCRIPT: &str = r#"
 (() => {
   if (!window.__TAURI__ || !window.__TAURI__.core) return;
   const invoke = window.__TAURI__.core.invoke;
   window.ticoNative = name => ({postMessage: body => invoke('bridge', {name, body: body === undefined ? null : body})});
-  window.ticoNativeFeatures = ['callWindowSize'];
+  window.ticoNativeFeatures = ['callWindowSize', 'callStartTiming'];
 })();
 "#;
 
@@ -164,19 +164,13 @@ fn own_page_call(name: &str) -> bool {
     )
 }
 
-/// `callWindowSize` ({call: id, wide}): a call's meeting window grows while a screen is shared and goes back after
-/// (ui/app/call-window.ts cwWide). Only that call's own window (`call-<org>-<id>`), at that org's origin.
-fn call_window_size(app: &App, webview: &Webview, body: Option<&Value>) -> Result<(), String> {
+/// Only the call's own window (`call-<org>-<id>`) at its org's origin can report on it.
+fn own_call_window(app: &App, webview: &Webview, body: Option<&Value>) -> bool {
     let id = body
         .and_then(|b| b.get("call"))
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let wide = body
-        .and_then(|b| b.get("wide"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let label = webview.label();
-    let own = call_window_org(label, id).is_some_and(|org| {
+    call_window_org(webview.label(), id).is_some_and(|org| {
         let hub = app
             .state::<AppState>()
             .orgs
@@ -185,12 +179,7 @@ fn call_window_size(app: &App, webview: &Webview, body: Option<&Value>) -> Resul
             .get(org)
             .and_then(|o| o.hub());
         server_document(hub.as_ref(), org, Some(org), webview.url().ok().as_ref())
-    });
-    if !own {
-        return Err("Only a call's own window may size it.".into());
-    }
-    resize_call_window(app, label, wide);
-    Ok(())
+    })
 }
 
 /// The org whose page this is, when the page is at that org's own origin: any org page, open or not.
@@ -276,9 +265,25 @@ pub(crate) fn bridge(
     name: String,
     body: Option<Value>,
 ) -> Result<Value, String> {
-    // A call window is no org page (org_of): its one ask is checked against its own label instead.
-    if name == "callWindowSize" {
-        return call_window_size(&app, &webview, body.as_ref()).map(|()| Value::Null);
+    // A call window uses its own label and origin to authorize its bridge messages.
+    if matches!(name.as_str(), "callWindowSize" | "callStartTiming") {
+        if !own_call_window(&app, &webview, body.as_ref()) {
+            return Err("Only a call's own window may report on it.".into());
+        }
+        let body = body.as_ref();
+        if name == "callWindowSize" {
+            let wide = body
+                .and_then(|b| b.get("wide"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            resize_call_window(&app, webview.label(), wide);
+        } else {
+            log::info!(
+                "[call-start] {}",
+                call_start_line(body.and_then(|b| b.get("marks")))?
+            );
+        }
+        return Ok(Value::Null);
     }
     let caller = if from_server(&app, &webview) || own_page_call(&name) {
         page_org(&app, &webview)
@@ -506,6 +511,31 @@ const BOOT_MARKS: [&str; 8] = [
 ];
 /// No time in a report is longer than ten minutes.
 const BOOT_MS_MAX: u64 = 600_000;
+
+fn call_start_line(marks: Option<&Value>) -> Result<String, String> {
+    const MARKS: [&str; 8] = [
+        "click",
+        "created",
+        "window-opened",
+        "boot-done",
+        "token",
+        "connected",
+        "mic-published",
+        "first-remote",
+    ];
+    let marks = marks
+        .and_then(Value::as_object)
+        .filter(|marks| {
+            marks.len() == MARKS.len()
+                && MARKS.iter().all(|key| {
+                    marks.get(*key).is_some_and(|value| {
+                        value.is_null() || value.as_u64().is_some_and(|ms| ms <= BOOT_MS_MAX)
+                    })
+                })
+        })
+        .ok_or_else(|| "The call's timing is not in the expected form.".to_string())?;
+    Ok(Value::Object(marks.clone()).to_string())
+}
 
 /// A read's path as the page writes it (ui/app/boot-timing.js bootPath): `/api/`, then `v2/` if there, the resource's
 /// name, and `:id` for every part after it, so the log can never name a bot, task or person. `/api/v2/messaging/bots/ops`

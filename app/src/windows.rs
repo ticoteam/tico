@@ -3407,7 +3407,7 @@ pub(crate) fn open_meeting_window(app: &App, home: &Home, id: &str) {
 }
 
 /// A call's meeting window (`#/call/<id>`, ui/app/call-window.ts): small, the size of a phone, until someone shares
-/// their screen and the page asks to grow (`callWindowSize`, its one use of the bridge). One per call, like a
+/// their screen and the page asks to grow (`callWindowSize`). One per call, like a
 /// meeting's. `join`: it joins the call as it opens (`?join=1`); a plain open shows Join.
 pub(crate) fn open_call_window(app: &App, home: &Home, id: &str, join: bool) {
     let fragment = format!("/call/{id}{}", if join { "?join=1" } else { "" });
@@ -3417,8 +3417,8 @@ pub(crate) fn open_call_window(app: &App, home: &Home, id: &str, join: bool) {
     open_page_window(app, home, "call", id, &fragment, "Call", (400.0, 640.0));
 }
 
-/// The bridge for org `id`'s call windows (`call-<org>-<call>`), at the org's origin: only so the page can ask to
-/// grow (bridge.rs `callWindowSize`, which checks the window again).
+/// The bridge for org `id`'s call windows (`call-<org>-<call>`), at the org's origin. Each message is checked against
+/// the call's own window again in bridge.rs.
 pub(crate) fn call_capability(hub: &url::Url, id: &str) -> Value {
     serde_json::json!({
         "identifier": format!("call-{id}"),
@@ -3516,7 +3516,7 @@ fn open_page_window(
         .on_new_window(new_window_handler(app, home.clone(), None))
         .on_navigation(navigate)
         .on_page_load(move |_, payload| page(payload));
-    // A call window's page may ask to grow (bridge.rs callWindowSize); a meeting window's asks nothing.
+    // The call window uses its own bridge; a meeting window has none.
     if kind == "call" {
         builder = builder.initialization_script(crate::bridge::CALL_WINDOW_SCRIPT);
     }

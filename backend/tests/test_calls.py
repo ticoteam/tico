@@ -147,6 +147,22 @@ def test_a_gateway_that_does_not_answer_keeps_the_transcript_and_posts_no_action
     assert not any(text.startswith("Action items:") for text in texts)
 
 
+def test_ending_a_silent_call_leaves_only_its_call_card(meet):
+    cid = thread(meet)
+    call = start_call(meet, cid)
+    before = thread_texts(meet, cid)
+    assert call["card_message_id"] and before
+
+    post(meet, f"calls/{call['id']}/end", {}, token="ana-test")
+    settle(meet)
+
+    ended = get(meet, f"calls/{call['id']}")
+    assert ended["state"] == "ended"
+    assert ended["card_message_id"] == call["card_message_id"]
+    assert ended["transcript_message_id"] is None
+    assert thread_texts(meet, cid) == before
+
+
 def _owed(api, call_id):
     """The call's action-item bookkeeping, as the sweep leaves it."""
     with api.app.state.store.read() as c:
@@ -556,9 +572,12 @@ def test_a_media_restart_before_the_first_sweep_ends_the_call(meet):
     assert ended["state"] == "ended" and ended["end_reason"] == "media_lost"
 
 
-def test_a_call_whose_room_will_not_close_is_finished_once_the_sweep_can_reach_the_media_server(meet):
+def test_a_call_whose_room_will_not_close_is_finished_once_the_sweep_can_reach_the_media_server(meet, monkeypatch):
     cid = thread(meet)
     call_id = start_call(meet, cid)["id"]
+    meet.app.state.calls.ingest(call_id, "human:ana", PCM_EIGHT_SECONDS, 0)
+    settle(meet)
+    monkeypatch.setattr(gateway, "relay", lambda *args, **kwargs: (200, drafted([])))
     media = meet.app.state.call_media
     media.down = True
     post(meet, f"calls/{call_id}/end", {}, token="ana-test")
@@ -567,7 +586,7 @@ def test_a_call_whose_room_will_not_close_is_finished_once_the_sweep_can_reach_t
     meet.app.state.calls.sweep()
     meet.app.state.calls.sweep()  # a second pass posts nothing more
     transcripts = [t for t in thread_texts(meet, cid) if t.startswith("Call transcript")]
-    assert len(transcripts) == 1
+    assert len(transcripts) == 1 and SYNTHETIC_SPEECH in transcripts[0]
     with meet.app.state.store.read() as c:
         assert c.execute("SELECT finalized_at FROM calls WHERE id=?", (call_id,)).fetchone()[0]
 

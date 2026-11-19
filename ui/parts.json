@@ -902,11 +902,15 @@
  },
  "thread-call-live": {
   "files": [
+   "app/thread-call-start.ts",
    "app/thread-call-live.ts"
   ],
   "deps": [],
   "pages": [],
   "calls": [
+   "callStartThread",
+   "callStartBot",
+   "callStartTeammates",
    "callJoin",
    "callHangUp",
    "callHandOff"

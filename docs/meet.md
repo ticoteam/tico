@@ -3,7 +3,8 @@
 A call happens in a thread. A call is a Tico Meet call (the default, for every call, people-only calls too: audio and
 screen share on the install's own LiveKit) or a Google Meet, picked per call with **Use Google Meet instead** next to the
 call button. A Google Meet has no bots. A live transcript is kept while it runs, and bots that were attached listen and reply in the
-thread. When the call ends, the transcript and the action items drafted from it are posted to the thread.
+thread. When the call ends, the transcript and the action items drafted from it are posted to the thread if there was
+transcribed speech. A silent call leaves only its Call card.
 
 ## Google Meet
 
@@ -175,7 +176,7 @@ A Google Meet call still opens Meet in a tab of its own.
    thread per call, however many Ends arrive: when it is done within 2 seconds End answers with the call `ended`;
    otherwise it answers `ending` (a second End answers the same), and the call becomes `ended` once the clips are
    stored (up to 45 seconds). A Tico that restarts while a call is `ending` ends it on the sweep. Then the recorder leaves and the media session closes. If LiveKit does not confirm the
-   close, the sweep retries it, and the transcript and action items wait until it does. Then two messages are posted to
+   close, the sweep retries it, and the transcript and action items wait until it does. If speech was transcribed, these messages are posted to
    the thread from the connector, each once. Each names the call's meeting, so the meeting's own rules decide who reads
    it, and each is marked `restricted`:
    - `Call transcript: <title>` with one `speaker: text` line per piece of speech. Long transcripts are cut short, and
@@ -209,8 +210,9 @@ A Tico Meet call is a voice call: `speak_replies` is on by default for Tico Meet
 bots or voice is always Tico Meet: asking for Google Meet with either is `422 voice_needs_tico_meet`, and `auto` picks
 Tico Meet.
 
-**Calling a bot.** The call button in a DM with one bot, and Call on a bot's card in the org chart, start a Tico Meet
-call in the viewer's DM with that bot, with the bot in it, and join it.
+**Calling a bot.** Start in a DM or named private thread whose only other member is a bot includes that bot in the
+call. In a group thread, add a bot from the call window. Call on a bot's card in the org chart opens a Tico Meet call
+with that bot in the viewer's DM.
 
 **Call now.** The Meetings page's call icon (only where the server runs Tico Meet, `features.tico_meet` in the config)
 picks people and bots, each named by its id or its slug, (a team, listed first with a few of its faces and how many, adds its bots in one pick) and

@@ -1823,8 +1823,8 @@ class Calls:
 
     def post_transcript(self, call_id):
         """The call's transcript, bounded, as one message in its thread, with the meeting it came from. Once only. A
-        thread that refuses the post leaves it unposted: that refusal is a hold the connector sees, and it is final. A
-        Google Meet call has a transcript only when one was written into its meeting: with none, nothing is posted."""
+        thread that refuses the post leaves it unposted: that refusal is a hold the connector sees, and it is final.
+        A call without transcribed speech leaves only its call card."""
         try:
             with self.store.transaction() as c:
                 row = _call(c, call_id)
@@ -1841,9 +1841,9 @@ class Calls:
                         break
                     lines.append(line)
                     size += len(line) + 1
-                if not lines and _google(row):
+                if not lines and not cut:
                     return
-                body = f"Call transcript: {row['title']}\n" + ("\n".join(lines) or "(no speech was transcribed)")
+                body = "\n".join([f"Call transcript: {row['title']}", *lines])
                 if cut:
                     body += f"\n(cut short; the full transcript is on meeting {row['live_meeting_id']})"
                 posted = self._post_in_thread(c, row, body)
