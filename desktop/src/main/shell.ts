@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { app, BaseWindow, dialog, nativeImage, nativeTheme, screen, session, WebContentsView, type NativeImage, type Session, type WebContents } from 'electron';
 import type { CallWindowState, CompanyRef } from '../bridge';
-import { appUrl, checkAddress, hostOf } from './address';
+import { appUrl, checkAddress, hostOf, localSignInUrl } from './address';
 import { anyCallLive, badgeFor, dotBitmap } from './badge';
 import { CallWindow } from './callWindow';
 import * as C from './companies';
@@ -300,32 +300,36 @@ export class Shell {
     }
   }
 
-  /** Adds a server (or finds it), its page's session and view, and shows it. `beforeLoad` runs before its first page. */
-  async addOrigin(origin: string, beforeLoad?: (company: C.Company) => Promise<void>, show = true): Promise<C.Company> {
+  /**
+   * Adds a server (or finds it), its page's session and view, and shows it. `beforeLoad` runs before its first page;
+   * `at` is that first page (a local copy's sign-in link), shown in place of the app's.
+   */
+  async addOrigin(origin: string, beforeLoad?: (company: C.Company) => Promise<void>, show = true, at?: string): Promise<C.Company> {
     const added = C.addCompany(this.file, origin, C.companyId(randomBytes(8).toString('hex')));
     if (!added.existed) {
       this.file = { ...added.file, active: show ? added.file.active : this.file.active };
       this.persist();
       if (beforeLoad) await beforeLoad(added.company);
-      this.createEntry(added.company);
+      this.createEntry(added.company, !(show && at));
       log('info', `added ${origin}`);
     }
-    if (show) this.switchTo(added.company.id);
+    if (show) this.switchTo(added.company.id, at);
     return added.company;
   }
 
-  /** "Use a server address" on the Add company page. */
+  /** "Use a server address" on the Add company page; a local copy's sign-in link adds that copy and signs in. */
   async addServer(text: string): Promise<Health> {
     const address = checkAddress(text);
     if (!address.ok) return address;
+    const signIn = localSignInUrl(text) ?? undefined;
     const existing = C.findByOrigin(this.file, address.origin);
     if (existing) {
-      this.switchTo(existing.id);
+      this.switchTo(existing.id, signIn);
       return { ok: true };
     }
     const health = await checkServer(address.origin);
     if (!health.ok) return health;
-    await this.addOrigin(address.origin);
+    await this.addOrigin(address.origin, undefined, true, signIn);
     return { ok: true };
   }
 

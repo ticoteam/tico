@@ -1,5 +1,5 @@
 // tico:// links (platforms.md 4.5). Pure.
-import { APP_PATH, checkAddress, isPageUrl } from './address';
+import { APP_PATH, checkAddress, isPageUrl, localSignInUrl } from './address';
 
 export type DeepLink =
   | { kind: 'open'; companyId: string; url?: string }
@@ -8,7 +8,7 @@ export type DeepLink =
 
 /**
  * - `tico://open?u=<encoded https URL>`: the company whose origin matches, at that URL; an unknown server opens
- *   Add company prefilled with it.
+ *   Add company prefilled with it. A local copy's sign-in link (http on loopback, address.ts) opens as it is.
  * - `tico://<path>` (today's form): the active company at /next/<path>.
  * Anything else only brings the window forward.
  */
@@ -30,9 +30,13 @@ export function parseDeepLink(
     if (!u) return { kind: 'focus' };
     const address = checkAddress(u);
     if (!address.ok || !/^https?:\/\//i.test(u)) return { kind: 'focus' };
+    const signIn = localSignInUrl(u);
     const company = companies.find((c) => c.origin === address.origin);
-    if (!company) return { kind: 'add', server: address.origin };
-    // Any website can hand the app a tico:// link: it opens the company, at the link only when that is an app page.
+    // An unknown local copy's sign-in link prefills Add company whole, so Add signs in too.
+    if (!company) return { kind: 'add', server: signIn ?? address.origin };
+    // Any website can hand the app a tico:// link: it opens the company, at the link only when that is an app page,
+    // or a local copy's sign-in link (loopback only).
+    if (signIn) return { kind: 'open', companyId: company.id, url: signIn };
     const href = new URL(u).href;
     return isPageUrl(href, company.origin) ? { kind: 'open', companyId: company.id, url: href } : { kind: 'open', companyId: company.id };
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appUrl, checkAddress, isAppUrl } from './address';
+import { appUrl, checkAddress, isAppUrl, localSignInUrl } from './address';
 import { classifyHealth } from './health';
 
 describe('server addresses', () => {
@@ -14,6 +14,31 @@ describe('server addresses', () => {
     expect(checkAddress('http://127.0.0.1:8765')).toEqual({ ok: true, origin: 'http://127.0.0.1:8765' });
     expect(checkAddress('http://localhost:8765/next/')).toEqual({ ok: true, origin: 'http://localhost:8765' });
     expect(checkAddress('http://tico.example.com').ok).toBe(false);
+  });
+
+  it('takes a local copy’s sign-in link only on loopback over http, at exactly its path', () => {
+    for (const host of ['127.0.0.1:8766', 'localhost:8766', '[::1]:8766']) {
+      const link = `http://${host}/api/v2/local-signin?token=t0k&next=/next/`;
+      expect(localSignInUrl(` ${link} `), host).toBe(link);
+      expect(checkAddress(link), host).toEqual({ ok: true, origin: `http://${host}` });
+    }
+    expect(localSignInUrl('http://127.0.0.1:8766/api/v2/local-signin?token=t0k#x')).toBe('http://127.0.0.1:8766/api/v2/local-signin?token=t0k');
+    for (const bad of [
+      'https://acme.tico.team/api/v2/local-signin?token=t',
+      'http://tico.example.com/api/v2/local-signin?token=t',
+      'http://127.0.0.1.evil.example/api/v2/local-signin?token=t',
+      'https://127.0.0.1:8766/api/v2/local-signin?token=t',
+      'http://u:p@127.0.0.1:8766/api/v2/local-signin?token=t',
+      'http://127.0.0.1:8766/api/v2/local-signin',
+      'http://127.0.0.1:8766/api/v2/logout?token=t',
+      'http://127.0.0.1:8766/api/v2/local-signin/?token=t',
+      'http://127.0.0.1:8766/next/api/v2/local-signin?token=t',
+      'http://127.0.0.1:8766/api/v2/%6cocal-signin?token=t',
+      'http://127.0.0.1:8766/',
+      'not a url',
+    ]) {
+      expect(localSignInUrl(bad), bad).toBeNull();
+    }
   });
 
   it('refuses other schemes, credentials and junk', () => {
