@@ -9,7 +9,8 @@ Reads, each as Ana and as Ben: the rail, Catch up and its count, the sidebar, Ne
 stream's setup (Needs you's baseline) and one round after a handful of writes. Per read it prints the statements one call
 takes and the median wall time of RUNS calls. Env as bench/perf-hub-overload.py (OPEN, CLOSED, THREADS, RUNS, DB=<file>
 to keep the seeded database and reuse it, ANSWERS=<file> for each read's answer as JSON, STATEMENTS=<path> for the
-slowest statements of one read), plus FOLLOWED (6100), REVIVED (350), UNREAD (30).
+slowest statements of one read), plus FOLLOWED (6100), REVIVED (350), UNREAD (30), and RESAVE=<file> (with DB: save the
+copy as one start of the app leaves it, and measure nothing).
 
 DB= on a checkout with a pending migration applies it on open, so the same seeded database measures before and after a
 schema change. Only fictional data, in a temporary folder removed afterwards (unless DB is given). Never point it at a
@@ -50,6 +51,7 @@ RUNS = O.RUNS = int(os.environ.get("RUNS", 5))
 FOLLOWED = int(os.environ.get("FOLLOWED", 6100))
 REVIVED = int(os.environ.get("REVIVED", 350))
 UNREAD = int(os.environ.get("UNREAD", 30))
+ROUND_CHANGES = 40  # the changes one round reads, back from the newest
 PATHS = (
     "/api/v2/threads/rail",
     "/api/v2/threads/catch-up",
@@ -122,12 +124,19 @@ def seed(api):
                 "WHERE id=?)",
                 (H.shift(H.now(), seconds=1),) * 3 + (room,),
             )
-    # Revived: a person's post after the finish brings the room back.
+    # Revived: a person's post after the finish brings the room back. Last, what a stream's round reads: a post in an
+    # open task's room and a change to that task.
     for start in range(0, REVIVED, 100):
         with store.transaction() as c:
             for room in finished[start : min(REVIVED, start + 100)]:
                 with contextlib.suppress(Problem, H.Refused):
                     threads.post(c, rnd.choice(["human:ben", "human:cara"]), room, "One more thing on this")
+    with store.transaction() as c:
+        room = c.execute(
+            "SELECT r.id FROM conversations r JOIN tasks t ON t.id=r.task_id WHERE t.status='open' ORDER BY r.id LIMIT 1"
+        ).fetchone()[0]
+        threads.post(c, "human:ben", room, "Round check @ana")
+        c.execute("UPDATE tasks SET title=title||' ' WHERE id=(SELECT task_id FROM conversations WHERE id=?)", (room,))
 
 
 def _stream_reads(api, token, after):
@@ -175,15 +184,9 @@ def report(api):
             t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
             for t in ("tasks", "conversations", "messages", "thread_followers")
         }
-        after = E.latest(c)
+        # What a round reads: the changes of the last writes the seed made (`ROUND_CHANGES`), the same on every copy.
+        after = max(0, E.latest(c) - ROUND_CHANGES)
     print(counts)
-    # What a round reads: a few writes since the stream's cursor.
-    with store.transaction() as c:
-        room = c.execute(
-            "SELECT r.id FROM conversations r JOIN tasks t ON t.id=r.task_id WHERE t.status='open' LIMIT 1"
-        ).fetchone()[0]
-        threads.post(c, "human:ben", room, "Round check @ana")
-        c.execute("UPDATE tasks SET title=title||' ' WHERE id=(SELECT task_id FROM conversations WHERE id=?)", (room,))
     answers = {}
     for token in TOKENS:
         for path in PATHS:
@@ -226,6 +229,16 @@ def main():
                 if keep:
                     with api.app.state.store.read() as c:
                         c.execute("VACUUM INTO ?", (keep,))
+            if os.environ.get("RESAVE"):
+                # A copy as one start of the app and one of each read leave it (what they make on first use
+                # included), so two checkouts measured on it start from the same rows and their answers compare.
+                for token in TOKENS:
+                    for path in PATHS:
+                        api.get(path, headers=headers(token))
+                    _stream_reads(api, token, 0)
+                with api.app.state.store.read() as c:
+                    c.execute("VACUUM INTO ?", (os.environ["RESAVE"],))
+                return
             report(api)
         finally:
             install.close()
