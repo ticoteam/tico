@@ -11,6 +11,7 @@
     "gen:routes": "tsr generate",
     "gen:api": "node scripts/gen-api-types.ts",
     "gen:screen-actions": "node scripts/gen-screen-actions.ts",
+    "parity": "node scripts/parity.ts",
     "typecheck": "npm run gen:routes && npm run gen:api && tsc -p tsconfig.json && tsc -p tsconfig.node.json",
     "lint": "eslint . && stylelint \"src/**/*.css\" && node scripts/check-jade.ts && node scripts/check-copy.ts",
     "test": "vitest run"
