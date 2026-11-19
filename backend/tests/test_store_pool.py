@@ -46,6 +46,26 @@ def test_reads_reuse_a_connection_left_clean(tmp_path):
         assert second.read_cache == {}
 
 
+def test_a_savepoint_inside_a_transaction_keeps_its_reads_and_a_rollback_to_it_drops_them(tmp_path):
+    # A write's `SAVEPOINT domain_write` comes after validate_identity's reads: the route's own read of the same row
+    # (execution.runner) is answered from them, while a write or a rollback to the savepoint reads again.
+    s = store(tmp_path)
+    with s.read() as c:
+        c.execute("SAVEPOINT outer")  # outside a transaction it begins one
+        assert c.in_transaction
+        assert read_cache.rows(c, "SELECT x FROM t")[0][0] == 1
+        c.execute("SAVEPOINT inner")
+        assert ("SELECT x FROM t", ()) in c.read_cache
+        c.execute("UPDATE t SET x=2")
+        assert read_cache.rows(c, "SELECT x FROM t")[0][0] == 2
+        c.execute("ROLLBACK TO inner")
+        assert read_cache.rows(c, "SELECT x FROM t")[0][0] == 1
+        c.execute("RELEASE inner")
+        assert ("SELECT x FROM t", ()) in c.read_cache
+        c.execute("RELEASE outer")  # ends the transaction: nothing is answered from it after
+        assert not c.in_transaction and read_cache.cache(c) is None and c.read_cache == {}
+
+
 def test_a_connection_a_caller_changed_is_not_reused(tmp_path):
     s = store(tmp_path)
     with s.read() as first:

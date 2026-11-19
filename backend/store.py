@@ -765,17 +765,13 @@ def _pooled(base):
             self.read_cache.clear()
 
     def execute(self, statement, *args, **kwargs):
-        # Explicit transaction control starts a new snapshot even without row changes.
-        if (statement.lstrip().split(None, 1) or [""])[0].upper() in (
-            "BEGIN",
-            "COMMIT",
-            "END",
-            "ROLLBACK",
-            "SAVEPOINT",
-            "RELEASE",
-            "CREATE",
-            "ALTER",
-            "DROP",
+        # Explicit transaction control starts a new snapshot even without row changes. A savepoint inside a transaction
+        # does not: it changes no rows and keeps the snapshot (ROLLBACK TO clears, and a write moves total_changes), so
+        # the reads before a write's `SAVEPOINT domain_write` (validate_identity's) still count inside it. One outside
+        # a transaction begins one; a RELEASE that ends it leaves no transaction, which read_cache.cache clears.
+        word = (statement.lstrip().split(None, 1) or [""])[0].upper()
+        if word in ("BEGIN", "COMMIT", "END", "ROLLBACK", "CREATE", "ALTER", "DROP") or (
+            word == "SAVEPOINT" and not self.in_transaction
         ):
             clear(self)
         return base.execute(self, statement, *args, **kwargs)
