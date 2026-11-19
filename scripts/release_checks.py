@@ -147,6 +147,12 @@ class Check:
     def tail(self, lines=40):
         return '\n'.join(self.log.read_text(errors='replace').splitlines()[-lines:])
 
+    def failed_tests(self):
+        """Every pytest short-summary line ("FAILED <node id> - <first line>") in the whole log. A long assert message
+        pushes them above the tail, and scripts/main_red.py reads only the job log to name the failing test."""
+        lines = re.sub(r'\x1b\[[0-9;]*m', '', self.log.read_text(errors='replace')).splitlines()
+        return list(dict.fromkeys(line for line in lines if line.startswith('FAILED ')))
+
 
 def edge_settings(prefix):
     """The edge settings docker/edge-env.sh writes for one range, as the stacks append them to their env files."""
@@ -875,7 +881,8 @@ def release(args):
         not_run += ('smoke', 'side-jobs', 'isolation')
     failed = [check for check in builds + checks if check.join() != 0]
     for check in failed:
-        print(f'\n--- {check.name} (last lines of {check.log}) ---\n{check.tail()}', flush=True)
+        named = ''.join(f'{line}\n' for line in check.failed_tests())
+        print(f'\n--- {check.name} (last lines of {check.log}) ---\n{named}{check.tail()}', flush=True)
     warned = [check for check in failed if check.name in OPTIONAL_CHECKS]
     for check in warned:
         print(
