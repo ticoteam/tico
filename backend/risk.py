@@ -33,7 +33,7 @@ from . import page_owners
 from . import rule_due as _rule_due
 from . import task_privacy as _privacy
 from . import teammate_access as _teammate_access
-from .api_contract import api_v2
+from .api_contract import api_v2, error
 from .entities import store as ES
 from .models import ID, Contract
 from .store import H as _H, Problem
@@ -106,7 +106,8 @@ class MatterWrite(Contract):
     side: Literal["theirs", "ours"] | None = None
     forum: str | None = Field(default=None, max_length=FORUM_MAX)
     place_id: ID | None = None
-    product_id: ID | None = None
+    # A product's id is product/<key>, and its key can be as long as a product's name (200).
+    product_id: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 def _via(who: Any) -> str:
@@ -683,7 +684,7 @@ def product_matter_ids(c: Any, who: Any, ident: str) -> list[str]:
     product = _entity(c, who.actor, ident if "/" in ident else "product/" + ident, "product")
     stored = [r[0] for r in c.execute("SELECT DISTINCT product_id FROM matters WHERE product_id IS NOT NULL")]
     now = _current(c, stored)
-    return [product, *(ident for ident in stored if ident != product and now[ident] == product)]
+    return [product, *(sid for sid in stored if sid != product and now[sid] == product)]
 
 
 def redact_audit(c: Any, auth: Any, who: Any, found: list[Row]) -> None:
@@ -891,7 +892,16 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
     def create_route(request: Request, body: RiskCreate) -> Any:  # pyright: ignore[reportUnusedFunction]
         return mutate(request, body, lambda c: create(auth, c, request.state.identity, body))  # pyright: ignore[reportUnknownLambdaType]
 
-    @app.get("/api/v2/matters", **api_v2("Risk", "listMatters", "Matters the caller reads, newest first", "MatterList"))
+    @app.get(
+        "/api/v2/matters",
+        **api_v2(
+            "Risk",
+            "listMatters",
+            "Matters the caller reads, newest first",
+            "MatterList",
+            responses={"404": error("not_found: no such risk or product, or one the caller may not see")},
+        ),
+    )
     def matters_route(  # pyright: ignore[reportUnusedFunction]
         request: Request,
         kind: str | None = None,

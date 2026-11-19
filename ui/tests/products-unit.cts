@@ -1,5 +1,5 @@
 // No browser: the Products list shows a column only when some product has a value in it, words not keys, and an
-// agreement opens its file when it has one. Risks link to their pages, and open matters show as a count.
+// agreement opens its file when it has one. Risks show by name, and open matters as a count.
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const vm: typeof import('node:vm') = require('node:vm');
@@ -42,7 +42,7 @@ const risky = prTable([
   product({key: 'app'}),
 ]);
 assert.deepEqual(heads(risky), ['Name', 'Risks', 'Matters']);
-assert.match(risky, /<a href="#\/risk\/r\/supplier-recall">Supplier &#60;recall&#62;<\/a>/, 'a risk links to its page');
+assert.match(risky, /data-label="Risks">Supplier &#60;recall&#62;</, 'a risk is its name, escaped');
 assert.match(risky, />2 open</);
 assert.deepEqual(heads(prTable([product({open_matters: 0, risks: []})])), ['Name'], 'no risks and no open matters: no columns');
 console.log('products-unit: ok');

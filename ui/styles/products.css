@@ -4,7 +4,6 @@
 .pr-name strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pr-agreement a{color:var(--ink)}
 .pr-list td.muted{white-space:nowrap}
-.pr-risks a{color:var(--ink)}
 .pr-items li.muted .pr-item a{color:var(--muted)}   /* a closed matter */
 
 /* a product's fields: each value a quiet select that reads as text until it is used */

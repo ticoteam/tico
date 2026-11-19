@@ -38,9 +38,8 @@ let PR_MATTERS: { key: string; rows: PrMatter[] } | null = null;   // the matter
 let PR_RUN = 0;   // never reset, so a page opened after leaving Products never takes an earlier page's answer
 
 const prHref = (key: string): string => PRODUCTS_ROUTE + '/' + encodeURIComponent(key);
-// A risk's page (Risk › one risk, #/risk/r/<slug>): its key is risk:<slug>.
-const prRiskHref = (key: string): string => '#/risk/r/' + encodeURIComponent(key.replace(/^risk:/, ''));
-const prRisks = (p: Product): string => p.risks.map(r => `<a href="${prRiskHref(r.key)}">${esc(r.label)}</a>`).join(', ');
+// A risk shows by name: Risk has no page of its own to open yet.
+const prRisks = (p: Product): string => p.risks.map(r => esc(r.label)).join(', ');
 const prLive = (run: number): boolean => PRP !== null && PRP.run === run;
 const prErr = (e: unknown): string => `<p class="err" data-pr-error>${esc(errorMessage(e, 'Something went wrong.'))}</p>`;
 const prWord = (field: PrChoice, key: string | null): string => key ? (PR_CHOICES[field].find(([k]) => k === key)?.[1] ?? key) : '';
@@ -86,7 +85,7 @@ function prTable(rows: readonly Product[]): string {
     {head: 'Tax kind', cls: 'muted', cell: p => esc(prWord('tax_kind', p.tax_kind))},
     {head: 'Agreement', cls: 'pr-agreement', cell: p => p.agreements.map(prAgreement).join(', ')},
     {head: 'Owner', cls: 'muted', cell: p => esc(prWho(p.owner_teammate))},
-    {head: 'Risks', cls: 'pr-risks', cell: prRisks},
+    {head: 'Risks', cls: '', cell: prRisks},
     {head: 'Matters', cls: 'muted', cell: p => p.open_matters ? `${p.open_matters} open` : ''},
   ];
   const shown = cols.filter(c => rows.some(r => c.cell(r) !== ''));
@@ -135,18 +134,20 @@ async function pageProduct(key: string): Promise<void> {
   if (!main) return;
   main.innerHTML = `<div class="tt pr pr-one" id="pr-root" data-pr-page="product">${skelRows(6, { card: true })}</div>`;
   let product: Product;
-  // A product's matters come from the matters list; a failed read leaves the card out rather than the page.
-  const matters = get<{ matters: PrMatter[] }>(`/v2/matters?product=${encodeURIComponent(key)}&limit=50`, { fresh: true })
+  let rows: PrMatter[];
+  // A product's matters come from the matters list (its most, 200); a failed read leaves the card out, not the page.
+  const matters = get<{ matters: PrMatter[] }>(`/v2/matters?product=${encodeURIComponent(key)}&limit=200`, { fresh: true })
     .then(r => r.matters, () => [] as PrMatter[]);
   try {
     product = (await get<{ product: Product }>(`/v2/products/${encodeURIComponent(key)}`, { fresh: true })).product;
-    PR_MATTERS = { key: product.key, rows: await matters };
+    rows = await matters;
   } catch (e) {
     if (prLive(run)) main.innerHTML = `<div class="tt pr">${pageHead({title: 'Product', hook: 'pr-ehead', back: {href: PRODUCTS_ROUTE, label: 'Products'}, more: PAGE_HEAD_COPY})}${prErr(e)}</div>`;
     return;
   }
   const root = document.getElementById('pr-root');
   if (!prLive(run) || !root) return;
+  PR_MATTERS = { key: product.key, rows };
   prDraw(root, product);
   prBind(root, run, product);
 }
@@ -169,7 +170,7 @@ function prDraw(root: HTMLElement, p: Product): void {
 function prRiskCards(p: Product): string {
   const matters = PR_MATTERS?.key === p.key ? PR_MATTERS.rows : [];
   const risks = p.risks.length ? `<section class="card dir-card" data-pr-risks><header><h2>Risks</h2></header>
-    <ul class="pr-items">${p.risks.map(r => `<li><span class="pr-item"><a href="${prRiskHref(r.key)}">${esc(r.label)}</a></span></li>`).join('')}</ul></section>` : '';
+    <ul class="pr-items">${p.risks.map(r => `<li><span class="pr-item">${esc(r.label)}</span></li>`).join('')}</ul></section>` : '';
   const rows = matters.map(m => {
     const closed = m.task.status !== 'open';
     return `<li data-pr-matter="${esc(m.task.id)}"${closed ? ' class="muted"' : ''}><span class="pr-item"><a href="#/task/${encodeURIComponent(m.task.id)}">${esc(m.task.title || m.task.label || m.task.id)}</a></span>

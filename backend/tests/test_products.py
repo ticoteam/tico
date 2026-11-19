@@ -310,10 +310,19 @@ def test_a_product_rolls_up_the_risks_on_its_matters_and_agreements_for_who_read
     with api.app.state.store.transaction() as c:
         stored = c.execute("SELECT product_id FROM matters WHERE task_id=?", (elsewhere["id"],)).fetchone()[0]
     assert stored == product["id"]
-    tico("matters", "--product", product["key"], "--open")
+    listed = tico("matters", "--product", product["key"], "--open")
+    assert {row["task"]["id"] for row in listed["matters"]} == {open_id, elsewhere["id"]}
     assert ok(api, "get", "products/" + product["key"])["product"]["open_matters"] == 2
     assert [r["key"] for r in ok(api, "get", "products/" + product["key"])["product"]["risks"]] == [
         "risk:recall-claims",
         "risk:supplier-terms",
         "risk:unrelated",
     ]
+
+    # A retried edit answers with the risks as they are now, not as the first answer had them.
+    retry = headers("ana-test", "edit-kit-once")
+    first = api.post("/api/v2/products/" + product["key"], json={"status": "live"}, headers=retry).json()["product"]
+    assert first["open_matters"] == 2
+    ok(api, "post", f"tasks/{open_id}/done", json={"note": "Settled."})
+    again = api.post("/api/v2/products/" + product["key"], json={"status": "live"}, headers=retry)
+    assert again.status_code == 200 and again.json()["product"]["open_matters"] == 1
