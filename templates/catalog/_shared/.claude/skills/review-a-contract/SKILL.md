@@ -97,7 +97,8 @@ message and save the answers at the top of `knowledge/playbook.md`, dated. Work 
    automatic renewal for more than one year at a time; a right for the other side to change the terms alone.
 8. **Work out the dates.** Start, initial term, renewal mechanics, the last day to give notice
    (`count-a-notice-deadline`), price-change notice, and any cure periods. Put the notice date on the calendar
-   (`tico calendar add`) once the contract is signed.
+   (`tico calendar add --title "<contract>: last day to give notice" --start <YYYY-MM-DD> --end <the next day, YYYY-MM-DD> --all-day`)
+   once the contract is signed.
 9. **Write the changes.** One unit per yellow or red row that needs a change:
    - the section number and the current words, quoted;
    - the replacement, as exact "strike" and "insert" text;

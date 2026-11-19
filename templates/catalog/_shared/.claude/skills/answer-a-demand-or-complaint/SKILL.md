@@ -83,7 +83,8 @@ numbered message and save the answers there, dated. Work on the defaults until t
 4. **Extract the demand.** Who sent it and for whom; whether a lawyer signed; each allegation, numbered in their
    order; each law, contract term or policy cited; what they want (money with the figure, an act, a refund, an
    apology, a change); what they threaten; their deadline; and whether it is marked as a settlement communication.
-5. **Set three dates** with `check-a-legal-deadline`, and put each on the calendar (`tico calendar add`):
+5. **Set three dates** with `check-a-legal-deadline`, and put each on the calendar as an all-day event
+   (`tico calendar add --title "<matter>: <which date>" --start <YYYY-MM-DD> --end <the next day, YYYY-MM-DD> --all-day`):
    - Their date: what the letter or the portal asks. Usually not binding, but missing it has a cost
      (`references/channels-and-deadlines.md`).
    - Our decision date: at least five business days before theirs, so drafting and an OK fit.

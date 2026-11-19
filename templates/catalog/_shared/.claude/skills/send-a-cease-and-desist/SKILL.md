@@ -104,7 +104,8 @@ numbered message, then save the answers there with the date. Work on the default
 11. **Send and prove delivery.** Send as the signer by email from the company's address (`tico email draft`, then
     `tico email send`) and by a tracked postal method to the notice address; a contract's notice clause decides the
     method when there is one. If the team has no letter Tool, file a sub-task for a person to post it. Save the sent
-    copy and the proof of delivery in the matter folder. Add the deadline to the calendar with `tico calendar add`.
+    copy and the proof of delivery in the matter folder. Add the deadline to the calendar with
+    `tico calendar add --title "<matter>: their deadline" --start <YYYY-MM-DD> --end <the next day, YYYY-MM-DD> --all-day`.
 12. **Follow through.** A reply goes to `answer-a-demand-or-complaint`. Compliance: capture the changed pages, thank
     them in one line, close the matter. Silence at the deadline: check whether the conduct stopped anyway, then give
     the approver the next step that was decided in step 7, with the counsel brief (`write-a-counsel-brief`) if that

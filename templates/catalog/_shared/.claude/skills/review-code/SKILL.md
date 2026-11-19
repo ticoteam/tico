@@ -97,7 +97,7 @@ meanwhile.
     have it), save it as `reports/reviews/<task>-<first 7 of SHA>.html`, and publish:
     `tico page publish <file> --task <id> --title "Review: PR <n> at <first 7 of SHA>"`. Attach it to the stage's
     requirement with `tico task attach <id> page:<file id> --req "<requirement>" --version N`. Submit the verdict on
-    GitHub with `tico repo review`: approve, or request changes. The verdict covers that SHA and no other.
+    GitHub with `tico repo review <owner/repo> <PR number> --head <full 40-character SHA> --verdict approve|changes --body-file <file>`. The verdict covers that SHA and no other.
 13. **After the fixes, check; do not review again.** Confirm each blocking finding is resolved at the new head SHA.
     Compare the new head with the reviewed SHA and confirm the difference contains the fixes and nothing else. If
     it holds new behaviour, review only that part. The author decides on everything that was not blocking and

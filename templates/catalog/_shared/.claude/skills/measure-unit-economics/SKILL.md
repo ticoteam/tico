@@ -136,8 +136,9 @@ step here says enough to do the work.
     - *Hold*: none of the above.
     The decision goes on a task for whoever owns the channel's budget. If that is you and the move is inside the
     budget, make it.
-14. **Record and publish.** Push what Growth should show from the same rows (`tico growth rows push`,
-    `tico growth costs push`; the read's `you_may` says whether you may). Find the company's KPIs for these figures
+14. **Record and publish.** Push what Growth should show from the same rows
+    (`tico growth rows push --source <label> --file <cohorts.csv>`, `tico growth costs push --source <label> --file <costs.csv>`;
+    the read's `you_may` says whether you may). Find the company's KPIs for these figures
     (`tico kpi list`) and log each reading you own with its period and evidence (`tico kpi log <id> <value> "<how
     computed>" --period-start <date> --period-end <date>
     --evidence <query or page> --quality measured`); a correction uses `--supersedes`. Publish the page (Output).
@@ -171,7 +172,7 @@ For one segment's weekly read between monthly runs, that segment's direct CAC an
 
 Do on your own: read every source; save queries; compute; push rows and costs to Growth where `you_may` allows; log and
 correct the KPI readings you own; publish the page inside the team; file tasks for source owners; propose a source
-(`tico growth source propose`); design and run a holdout on a channel you own, inside its budget, since a holdout
+(`tico growth source propose --truth-for "<the number>" --system "<the system>"`); design and run a holdout on a channel you own, inside its budget, since a holdout
 spends less, not more.
 
 Someone else decides:

@@ -59,7 +59,8 @@ chargeback is not a question: every chargeback is contested.
 1. **Find the forum and the clock, today.** Read the notice itself, not a summary. Record how and when it arrived,
    and keep the envelope or headers. Add the matter to `knowledge/matters.md` and keep the work on one private task
    with the approver as a reader. Confirm every date with `check-a-legal-deadline` and put it on the calendar
-   (`tico calendar add`) with an action date before it.
+   (`tico calendar add --title "<matter>: <which date>" --start <YYYY-MM-DD> --end <the next day, YYYY-MM-DD> --all-day`)
+   with an action date before it.
 
    | What arrived | Who decides | The clock | Who acts for the company |
    |---|---|---|---|
