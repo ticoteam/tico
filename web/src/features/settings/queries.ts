@@ -24,6 +24,8 @@ import type {
   UsageLimits,
 } from '@/api/schema';
 import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
+import type { TaskCaps } from '@/api/schema';
+import type { ProductRepositoryPreview, ProductRepositoryResult, Repository, RepositoryList } from '@/api/schema';
 
 /* Settings and Usage have no live topic: both are read again after the person's own writes, on reconnect, and when a
    section opens with data older than a minute. The one timer is a model sign-in under way (readSignIn). */
@@ -89,7 +91,8 @@ export const removePerson = (pid: string) =>
   write({
     key: accessQuery.queryKey,
     optimistic: patchPerson(pid, { left: true }),
-    send: (idempotencyKey) => api.post(`/api/v2/access/humans/${enc(pid)}`, { left: true }, { idempotencyKey }),
+    // The access route refuses `left: true` (422); the owner marks someone as left on their profile.
+    send: (idempotencyKey) => api.post(`/api/v2/humans/${enc(pid)}`, { left: true }, { idempotencyKey }),
   });
 
 /** Add a person, then send the invite when this server can mail one (the old app's two calls). */
@@ -249,10 +252,10 @@ export const tokensQuery = queryOptions({
   ...quiet,
 });
 
-export const createToken = (label: string) =>
+export const createToken = (label: string, days = 90) =>
   api.post<{ id: string; token: string; label: string; expires_at: string | null }>('/api/v2/me/tokens', {
     label,
-    expires_in_days: 90,
+    expires_in_days: days,
   });
 
 export const revokeToken = (id: string) =>
@@ -1073,3 +1076,639 @@ export const addContactField = (type: string, name: string, kind: FieldKind, des
       description,
     },
   );
+
+// ---- company gaps (anchor: General, People, tokens, Security and Tico support add their calls below) ----
+
+// People: who can join, the agents a person may have, sign-in, and the people who left.
+
+/** What GET /api/v2/access also says (backend/access.py view) that AccessView leaves out. */
+export interface AccessJoin {
+  /** The owner's own company domain, when it is not public mail. */
+  home_domain?: string;
+  /** "domain": anyone at home_domain may sign in; "admin": only people added here. */
+  join?: 'domain' | 'admin';
+  member_bot_limit?: number;
+}
+export type AccessFull = AccessView & AccessJoin;
+
+/** Who may join by signing in (owner): the whole lists, against the revision on screen (PUT /api/v2/access/allow). */
+export const setAllowed = (allowed: string[], domains: string[]) => {
+  const revision = queryClient.getQueryData<AccessView>(accessQuery.queryKey)?.revision ?? 0;
+  return write({
+    key: accessQuery.queryKey,
+    optimistic: (v: AccessFull | undefined) =>
+      v && {
+        ...v,
+        allowed,
+        allowed_domains: domains,
+        join: v.home_domain && domains.includes(v.home_domain) ? ('domain' as const) : ('admin' as const),
+      },
+    send: (idempotencyKey) =>
+      api.put('/api/v2/access/allow', { allowed, allowed_domains: domains, expected_revision: revision }, { idempotencyKey }),
+  });
+};
+
+/** How many active agents one member may have (owners and admins). */
+export const setAgentLimit = (limit: number) =>
+  write({
+    key: accessQuery.queryKey,
+    optimistic: (v: AccessFull | undefined) => v && { ...v, member_bot_limit: limit },
+    send: (idempotencyKey) => api.put('/api/v2/access/limits', { member_bot_limit: limit }, { idempotencyKey }),
+  });
+
+/** Whether a person may sign in; off signs their open browsers out at once (POST /api/v2/access/humans/{id}). */
+export const setSignIn = (pid: string, on: boolean) =>
+  write({
+    key: accessQuery.queryKey,
+    optimistic: patchPerson(pid, { sign_in: on }),
+    send: (idempotencyKey) => api.post(`/api/v2/access/humans/${enc(pid)}`, { sign_in: on }, { idempotencyKey }),
+  });
+
+/** Bring back someone who left. */
+export const restorePerson = (pid: string) =>
+  write({
+    key: accessQuery.queryKey,
+    optimistic: patchPerson(pid, { left: false }),
+    send: (idempotencyKey) => api.post(`/api/v2/access/humans/${enc(pid)}`, { left: false }, { idempotencyKey }),
+  });
+
+/** Remove a left person with no history, for good (owner; backend/people_remove.py). */
+export const forgetPerson = (pid: string) =>
+  write({
+    key: accessQuery.queryKey,
+    optimistic: (v: AccessView | undefined) => v && { ...v, people: v.people.filter((p) => p.id !== pid) },
+    send: (idempotencyKey) => api.delete(`/api/v2/humans/${enc(pid)}`, { idempotencyKey }),
+  });
+
+/** Add a person and send no email: the old app's plain Add. */
+export const addPersonQuietly = (email: string, name: string) => api.post<{ person: string }>('/api/v2/access/humans', { email, name });
+
+// Tokens: everyone's, for owners and admins (GET /api/v2/access/tokens), revoked with the same call as your own.
+
+export interface CompanyToken extends PersonalToken {
+  human?: string;
+  name?: string;
+  email?: string;
+}
+
+export const allTokensQuery = queryOptions({
+  queryKey: ['settings', 'all-tokens'],
+  queryFn: ({ signal }) => api.get<{ tokens: CompanyToken[] }>('/api/v2/access/tokens', { signal }),
+  ...quiet,
+});
+
+export const revokeAnyToken = (id: string) => {
+  const gone = (v: { tokens: PersonalToken[] } | undefined) =>
+    v && { ...v, tokens: v.tokens.map((t) => (t.id === id ? { ...t, revoked_at: new Date().toISOString() } : t)) };
+  return write({
+    key: [allTokensQuery.queryKey, tokensQuery.queryKey],
+    optimistic: gone,
+    send: (idempotencyKey) => api.post(`/api/v2/me/tokens/${enc(id)}/revoke`, {}, { idempotencyKey }),
+  });
+};
+
+// Screening: what it caught lately (on GET /api/v2/screening) and the built-in samples run on demand.
+
+export interface ScreeningCaught {
+  at?: string;
+  action: 'held' | 'warned';
+  source?: string | null;
+  score?: number | null;
+  task?: string | null;
+}
+export type ScreeningFull = ScreeningView & { recent?: ScreeningCaught[] };
+
+export interface ScreeningTestRun {
+  passed: number;
+  total: number;
+  model?: string | null;
+  results: { name: string; attack?: boolean; action: string; score?: number | null; ok?: boolean }[];
+}
+
+/** Four attacks and four lookalikes through the check; nothing is held or kept (POST /api/v2/screening/test). */
+export const testScreening = () => api.post<ScreeningTestRun>('/api/v2/screening/test', {});
+
+// Tico support signs in for a while, from one of the person's own open requests (backend/support_access.py).
+
+export interface SupportSession {
+  id: string;
+  ticket_id: string;
+  tier: 'app' | 'full';
+  started_at: string;
+  expires_at: string;
+  seconds_left?: number;
+  ended_at?: string | null;
+  end_reason?: string | null;
+}
+
+export interface SupportAccessView {
+  available: boolean;
+  off_reason?: string;
+  active: SupportSession | null;
+  last: SupportSession | null;
+  sessions: SupportSession[];
+  can_start: boolean;
+  can_full: boolean;
+}
+
+export const supportAccessQuery = queryOptions({
+  queryKey: ['settings', 'support-access'],
+  queryFn: ({ signal }) => api.get<SupportAccessView>('/api/v2/support/access', { signal }),
+  ...quiet,
+});
+
+/** The person's own requests to Tico support: a sign-in is let in against an open one. */
+export const supportTicketsQuery = queryOptions({
+  queryKey: ['settings', 'support-tickets'],
+  queryFn: async ({ signal }) =>
+    (await api.get<{ tickets?: { id: string; status: string; created_at: string; pending?: boolean }[] }>('/api/v2/support/tickets', { signal }))
+      .tickets ?? [],
+  ...quiet,
+});
+
+export interface SupportLogLine {
+  created_at: string;
+  by: string;
+  method: string;
+  path: string;
+  status: number | string;
+}
+
+export const supportLogQuery = (sid: string) =>
+  queryOptions({
+    queryKey: ['settings', 'support-log', sid],
+    queryFn: async ({ signal }) => (await api.get<{ log?: SupportLogLine[] }>(`/api/v2/support/access/${enc(sid)}/log`, { signal })).log ?? [],
+    ...quiet,
+  });
+
+export const startSupportAccess = (ticket: string, tier: 'app' | 'full', hours: number) =>
+  write({
+    key: supportAccessQuery.queryKey,
+    optimistic: (v: SupportAccessView | undefined) => v,
+    send: (idempotencyKey) => api.post('/api/v2/support/access', { ticket_id: ticket, tier, hours }, { idempotencyKey }),
+  });
+
+export const stopSupportAccess = (sid: string) =>
+  write({
+    key: supportAccessQuery.queryKey,
+    optimistic: (v: SupportAccessView | undefined) => v && { ...v, active: null },
+    send: (idempotencyKey) => api.post(`/api/v2/support/access/${enc(sid)}/stop`, {}, { idempotencyKey }),
+  });
+
+// General: the team icon, privacy, storage and repositories.
+
+/** PNG, JPEG or WebP up to 1 MB, sent as the file itself (owner; backend/team_icon.py). */
+export const setTeamIcon = (file: Blob) => api.post<{ url: string }>('/api/v2/team/icon', file);
+
+export interface UsageCountView {
+  enabled: boolean;
+  /** Why nothing is sent: "setting" when it was turned off here, else the server's own reason. */
+  off_by: string;
+  install_id: string;
+  doc?: string;
+}
+
+export const usageCountQuery = queryOptions({
+  queryKey: ['settings', 'usage-count'],
+  queryFn: ({ signal }) => api.get<UsageCountView>('/api/v2/system/usage-count', { signal }),
+  ...quiet,
+});
+
+export const setUsageCount = (enabled: boolean) =>
+  write({
+    key: usageCountQuery.queryKey,
+    optimistic: (v: UsageCountView | undefined) => v && { ...v, enabled, off_by: enabled ? '' : 'setting' },
+    send: (idempotencyKey) => api.put('/api/v2/system/usage-count', { enabled }, { idempotencyKey }),
+  });
+
+export const resetInstallId = () =>
+  write({
+    key: usageCountQuery.queryKey,
+    optimistic: (v: UsageCountView | undefined) => v,
+    send: (idempotencyKey) => api.post('/api/v2/system/usage-count/reset', {}, { idempotencyKey }),
+  });
+
+export interface SuggestionPrivacy {
+  share_stats_for_suggestions: boolean;
+  report_suggestion_outcomes: boolean;
+  /** Sharing needs Tico Gateway. */
+  available: boolean;
+}
+
+export const suggestionsQuery = queryOptions({
+  queryKey: ['settings', 'suggestions'],
+  queryFn: ({ signal }) => api.get<SuggestionPrivacy>('/api/v2/system/suggestions', { signal }),
+  ...quiet,
+});
+
+export const setSuggestionPrivacy = (field: 'share_stats_for_suggestions' | 'report_suggestion_outcomes', on: boolean) =>
+  write({
+    key: suggestionsQuery.queryKey,
+    optimistic: (v: SuggestionPrivacy | undefined) => v && { ...v, [field]: on },
+    send: (idempotencyKey) => api.put('/api/v2/system/suggestions', { [field]: on }, { idempotencyKey }),
+  });
+
+export interface StorageBucket {
+  location: string;
+  region: string;
+  bucket: string;
+  prefix?: string | null;
+  access_key_id: string;
+  retired_at?: string;
+}
+
+/** Where the company's files go (backend/company_storage.py, tico_storage.py). */
+export interface StorageView {
+  active: StorageBucket | null;
+  server: { mode: string; location?: string };
+  tico?: { state: string; label?: string; address?: string; error?: string; keep_until?: string | null } | null;
+  copy: { running?: boolean; failed?: number; done: number; total: number };
+  earlier: StorageBucket[];
+  doc?: string;
+}
+
+export interface StorageMoveView {
+  estimate: { files?: number; bytes: number };
+  move?: { state: string; moved_files: number; estimate_files: number; moved_bytes: number; estimate_bytes: number; error?: string | null } | null;
+}
+
+export const storageQuery = queryOptions({
+  queryKey: ['settings', 'storage'],
+  queryFn: ({ signal }) => api.get<StorageView>('/api/v2/system/storage', { signal }),
+  ...quiet,
+});
+
+export const storageMoveQuery = queryOptions({
+  queryKey: ['settings', 'storage', 'move'],
+  queryFn: ({ signal }) => api.get<StorageMoveView>('/api/v2/system/storage/move', { signal }),
+  ...quiet,
+});
+
+export interface BucketForm {
+  bucket: string;
+  region: string;
+  prefix: string;
+  access_key_id: string;
+  /** Sent once and sealed on the server; empty keeps the saved one for the same key id. */
+  secret_access_key: string;
+}
+
+/** The server writes and reads back a small object before it takes the bucket. */
+export const saveBucket = (b: BucketForm) =>
+  write({
+    key: storageQuery.queryKey,
+    optimistic: (v: StorageView | undefined) => v,
+    send: (idempotencyKey) => api.put('/api/v2/system/storage', b, { idempotencyKey }),
+  });
+
+/** New files go to the server's own storage again; files already in the bucket keep opening from it. */
+export const dropBucket = () =>
+  write({
+    key: storageQuery.queryKey,
+    optimistic: (v: StorageView | undefined) => v && { ...v, active: null },
+    send: (idempotencyKey) => api.delete('/api/v2/system/storage', { idempotencyKey }),
+  });
+
+export const checkHosting = () =>
+  write({
+    key: storageQuery.queryKey,
+    optimistic: (v: StorageView | undefined) => v,
+    send: (idempotencyKey) => api.post('/api/v2/system/storage/tico/check', {}, { idempotencyKey }),
+  });
+
+/** Copy every file, every version, to where new files go now; each copy is checked, nothing is deleted. */
+export const moveFiles = (bytes: number) =>
+  write({
+    key: storageMoveQuery.queryKey,
+    optimistic: (v: StorageMoveView | undefined) => v,
+    send: (idempotencyKey) => api.post('/api/v2/system/storage/move', { expect_bytes: bytes }, { idempotencyKey }),
+  });
+
+export type Repo = Repository & { archived?: boolean };
+export type ProductRepoPreview = ProductRepositoryPreview;
+export type RepoList = Omit<RepositoryList, 'repositories'> & { repositories: Repo[] };
+
+export const repositoriesQuery = queryOptions({
+  queryKey: ['settings', 'repositories'],
+  queryFn: ({ signal }) => api.get<RepoList>('/api/v2/repositories', { signal }),
+  ...quiet,
+});
+
+const repoPath = (name: string) => name.split('/').map(enc).join('/');
+
+/** Put a repository in use or take it out, or change its setup command (blank hands it back to tico.json). */
+export const setRepo = (name: string, change: { enabled?: boolean; setup_command?: string }) =>
+  write({
+    key: repositoriesQuery.queryKey,
+    optimistic: (v: RepoList | undefined) =>
+      v && { ...v, repositories: v.repositories.map((r) => (r.full_name === name ? { ...r, ...change } : r)) },
+    send: (idempotencyKey) => api.put(`/api/v2/repositories/${repoPath(name)}`, change, { idempotencyKey }),
+  });
+
+export const setNewAgentRepos = (value: 'own' | 'all') =>
+  write({
+    key: repositoriesQuery.queryKey,
+    optimistic: (v: RepoList | undefined) => v && { ...v, new_bot_default: value },
+    send: (idempotencyKey) => api.put('/api/v2/repositories/settings', { new_bot_default: value }, { idempotencyKey }),
+  });
+
+export const refreshRepos = () =>
+  write({
+    key: repositoriesQuery.queryKey,
+    optimistic: (v: RepoList | undefined) => v,
+    send: (idempotencyKey) => api.post<RepoList>('/api/v2/repositories/refresh', {}, { idempotencyKey }),
+  });
+
+/** What a new private repository would be, before it is made (owner; spends nothing). */
+export const previewRepo = (name: string) =>
+  api.get<ProductRepositoryPreview>(`/api/v2/github/product-repos/preview?name=${enc(name)}`);
+
+export const createRepo = (p: ProductRepositoryPreview) =>
+  api.post<ProductRepositoryResult>('/api/v2/github/product-repos', {
+    org: p.org,
+    name: p.name,
+    visibility: p.visibility,
+    auto_init: p.auto_init,
+    confirmed: true,
+  });
+
+// ---- gap wave: usage filters, pools and task caps; history pages, runs and changes; billing months; Gateway checks ----
+
+/** Spend over a range, or two UTC days of one's own (`from`/`to`), narrowed by team (`department`) and by the
+    dimensions the server keeps (harness, model, effort, subscription). Not narrowed, it is the range's own read. */
+export interface UsageWhere {
+  range: UsageRange;
+  from?: string;
+  to?: string;
+  filter?: Record<string, string>;
+}
+
+export const USAGE_FILTERS = ['department', 'harness', 'model', 'effort', 'subscription'] as const;
+
+const narrowed = (w: UsageWhere) => !!(w.from && w.to) || Object.values(w.filter ?? {}).some(Boolean);
+
+function whereParams(w: UsageWhere): URLSearchParams {
+  const span = w.from && w.to ? { from: w.from, to: w.to } : rangeDays(w.range);
+  const q = new URLSearchParams(span);
+  for (const k of USAGE_FILTERS) if (w.filter?.[k]) q.set(k, w.filter[k]);
+  return q;
+}
+
+export const usageWhereQuery = (w: UsageWhere, group: 'bot' | 'day' | 'model') =>
+  narrowed(w)
+    ? queryOptions({
+        queryKey: ['usage', 'where', whereParams(w).toString(), group],
+        queryFn: async ({ signal }) => {
+          const q = whereParams(w);
+          q.set('group', group);
+          const u = await api.get<Usage>(`/api/v2/usage?${q}`, { signal });
+          return { from: u.from, to: u.to, totals: u.totals, rows: (u.rows ?? []) as unknown as UsageRow[] } satisfies UsageView;
+        },
+        ...quiet,
+      })
+    : usageQuery(w.range, group);
+
+export const agentUsageWhereQuery = (w: UsageWhere, bot: string) =>
+  narrowed(w)
+    ? queryOptions({
+        queryKey: ['usage', 'where', whereParams(w).toString(), 'agent', bot],
+        queryFn: async ({ signal }) => {
+          const q = whereParams(w);
+          q.set('bot', bot);
+          const u = await api.get<Usage>(`/api/v2/usage?${q}`, { signal });
+          return { totals: u.totals, tasks: (u.tasks ?? []) as unknown as UsageRow[], models: (u.models ?? []) as unknown as UsageRow[] } satisfies AgentUsage;
+        },
+        ...quiet,
+      })
+    : agentUsageQuery(w.range, bot);
+
+/** What the filter can pick over the span: the teams and each dimension's values (`__unknown__`: not recorded). */
+export interface UsageChoices {
+  departments: string[];
+  dimensions: Record<string, string[]>;
+  labels: Record<string, Record<string, string>>;
+}
+
+export const usageChoicesQuery = (w: UsageWhere) =>
+  queryOptions({
+    queryKey: ['usage', 'choices', whereParams({ ...w, filter: undefined }).toString()],
+    queryFn: async ({ signal }) => {
+      const q = whereParams({ ...w, filter: undefined });
+      const u = await api.get<Usage>(`/api/v2/usage?${q}&group=bot`, { signal });
+      return {
+        departments: u.departments ?? [],
+        dimensions: (u.dimensions ?? {}) as Record<string, string[]>,
+        labels: (u.dimension_labels ?? {}) as Record<string, Record<string, string>>,
+      } satisfies UsageChoices;
+    },
+    ...quiet,
+  });
+
+/** One agent's days over the span, for its CSV (the old app's Export CSV). */
+export const agentDays = async (w: UsageWhere, bot: string) => {
+  const q = whereParams(w);
+  q.set('bot', bot);
+  const u = await api.get<Usage>(`/api/v2/usage?${q}`);
+  return { from: u.from, to: u.to, daily: (u.daily ?? []) as Record<string, unknown>[] };
+};
+
+/** A combined limit: the whole company's, or a team's (its spend counts every agent under it). */
+export interface UsagePool {
+  name?: string;
+  parent?: string | null;
+  monthly_usd: number | null;
+  month_spent: number | null;
+  percent: number;
+  blocked: string | null;
+  may_edit?: boolean;
+}
+
+export interface UsagePools {
+  company: UsagePool | null;
+  groups: Record<string, UsagePool>;
+}
+
+/** The limits read's `pools`: null for someone who leads nothing and is no administrator. */
+export function poolsOf(v: UsageLimits | undefined): UsagePools | null {
+  const p = v?.pools as Partial<UsagePools> | null | undefined;
+  return p ? { company: p.company ?? null, groups: p.groups ?? {} } : null;
+}
+
+/** A pool's monthly limit in dollars; null takes it off. `scope`: 'company' or a team's group id. */
+export const setPoolLimit = (scope: string, monthly: number | null) =>
+  write({
+    key: limitsQuery.queryKey,
+    optimistic: (v: UsageLimits | undefined) => {
+      const p = poolsOf(v);
+      if (!v || !p) return v;
+      const fix = (pool: UsagePool): UsagePool => ({ ...pool, monthly_usd: monthly, percent: monthly ? Math.round(((pool.month_spent ?? 0) / monthly) * 100) : 0 });
+      const group = p.groups[scope];
+      const next: UsagePools =
+        scope === 'company' ? { ...p, company: p.company && fix(p.company) } : group ? { ...p, groups: { ...p.groups, [scope]: fix(group) } } : p;
+      return { ...v, pools: next as unknown as Record<string, unknown> };
+    },
+    send: (idempotencyKey) =>
+      api.put(scope === 'company' ? '/api/v2/usage/pools/company' : `/api/v2/usage/pools/groups/${enc(scope)}`, { monthly_usd: monthly }, { idempotencyKey }),
+  });
+
+/** Caps on the tasks one teammate sends another a day (`bot:<slug>` / `person:<id>`), with today's count. */
+export const taskCapsQuery = queryOptions({
+  queryKey: ['usage', 'task-caps'],
+  queryFn: ({ signal }) => api.get<TaskCaps>('/api/v2/task-caps', { signal }),
+  ...quiet,
+});
+
+/** null removes the cap; 0 blocks the pair. An agent's own change comes back as an approval a person decides. */
+export const setTaskCap = (sender: string, receiver: string, perDay: number | null) =>
+  write({
+    key: taskCapsQuery.queryKey,
+    optimistic: (v: TaskCaps | undefined) => {
+      if (!v) return v;
+      const same = (c: { sender: string; receiver: string }) => c.sender === sender && c.receiver === receiver;
+      if (perDay == null) return { ...v, caps: v.caps.filter((c) => !same(c)) };
+      return v.caps.some(same)
+        ? { ...v, caps: v.caps.map((c) => (same(c) ? { ...c, per_day: perDay } : c)) }
+        : { ...v, caps: [...v.caps, { sender, receiver, per_day: perDay, count: 0, closed: 0, updated_at: '', updated_by: '' }] };
+    },
+    send: (idempotencyKey) =>
+      perDay == null
+        ? api.delete(`/api/v2/task-caps?sender=${enc(sender)}&receiver=${enc(receiver)}`, { idempotencyKey })
+        : api.put('/api/v2/task-caps', { sender, receiver, per_day: perDay }, { idempotencyKey }),
+  });
+
+/** The history read's filters as the server takes them: who, kind (one of HISTORY_KINDS), and the page before. */
+export function historyParams(who?: string, kind = '', before = ''): string {
+  const q = new URLSearchParams(historyFilter(who).slice(1));
+  if (kind) q.set('kind', kind);
+  if (before) q.set('before', before);
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
+
+/** One page of the log; the first page with no kind is `historyFor(who)`. `before`: the page's `next` cursor. */
+export const historyPage = (who?: string, kind = '', before = '') =>
+  !kind && !before
+    ? historyFor(who)
+    : queryOptions({
+        queryKey: ['settings', 'history', who ?? '', kind, before],
+        queryFn: ({ signal }) =>
+          api.get<{ items: HistoryItem[]; names: Record<string, string>; next?: string | null }>(`/api/v2/history${historyParams(who, kind, before)}`, { signal }),
+        ...quiet,
+      });
+
+/** A run as GET /api/runs lists it (backend/views.py run_view). */
+export interface RunRow {
+  id?: string | null;
+  employee: string;
+  state: string;
+  exit: number | null;
+  outcome?: string | null;
+  failure_reason?: string | null;
+  didnt_start?: boolean;
+  cost_usd?: number | null;
+  output_tokens?: number | null;
+  ran_on?: { segments?: { model?: string | null; effort?: string | null }[] } | null;
+  fallback?: string | null;
+  resumed?: boolean;
+  duration_s?: number | null;
+  finished_at?: string | null;
+}
+
+/** The newest runs this person may read; `failed`: only the day's failed ones, as Health counts them. */
+export const runsQuery = (failed: boolean) =>
+  queryOptions({
+    queryKey: ['settings', 'runs', failed ? 'failed' : 'all'],
+    queryFn: ({ signal }) => api.get<RunRow[]>(failed ? '/api/runs?failed=true' : '/api/runs', { signal }),
+    ...quiet,
+  });
+
+/** One change to an agent's settings (backend/settings_admin.py history); the owner's list. */
+export interface SettingsChange {
+  id: string;
+  bot: string;
+  field: string;
+  actor: string;
+  via?: string | null;
+  created_at: string;
+  undone_at?: string | null;
+  can_undo?: boolean;
+  truncated?: boolean;
+  before?: unknown;
+  after?: unknown;
+}
+
+export const changesQuery = (before = '') =>
+  queryOptions({
+    queryKey: ['settings', 'changes', before],
+    queryFn: ({ signal }) =>
+      api.get<{ changes: SettingsChange[]; next_before?: string | null }>(`/api/v2/settings/history?limit=50${before ? `&before=${enc(before)}` : ''}`, {
+        signal,
+      }),
+    ...quiet,
+  });
+
+/** Undo records the reverse change against the agent's settings revision; a model or computer move comes back as a
+    transition (`id`) that finishes on its own. */
+export const undoChange = (change: string, revision: number) =>
+  api.post<{ undone?: boolean; bot?: string; field?: string; id?: string }>(`/api/v2/settings/history/${enc(change)}/undo`, { expected_revision: revision });
+
+/** One day's (or hour's) charges, split by product and model. */
+export interface BillingLine {
+  product: string;
+  sku?: string | null;
+  amount_micros: number;
+}
+
+export interface BillingBucket {
+  period: string;
+  total_micros: number;
+  lines?: BillingLine[];
+}
+
+/** The billing read in full: a month's days, its statement, and where credit is added. */
+export interface BillingMonth extends BillingView {
+  grace_until?: string | null;
+  booking_url?: string | null;
+  record_only?: boolean;
+  usage: BillingBucket[];
+  statement: BillingView['statement'] & { credits_by_source?: Record<string, number>; expired_micros?: number | null };
+}
+
+/** The month picked on the page ('' is the server's current one). */
+export const billingFor = (month = '') =>
+  month
+    ? queryOptions({
+        queryKey: ['settings', 'billing', month],
+        queryFn: ({ signal }) => api.get<BillingView>(`/api/v2/billing?month=${enc(month)}`, { signal }),
+        ...quiet,
+      })
+    : billingQuery;
+
+/** One day's hours; `state` other than ok: Tico HQ gave none. */
+export const billingDayQuery = (day: string) =>
+  queryOptions({
+    queryKey: ['settings', 'billing-day', day],
+    queryFn: ({ signal }) => api.get<{ state: string; hours?: BillingBucket[] }>(`/api/v2/billing/usage?day=${enc(day)}`, { signal }),
+    ...quiet,
+  });
+
+/** What the owner sees of the Gateway connection besides the key's preview: the last check's word. */
+export interface GatewayStatus extends GatewayView {
+  source?: string;
+  automatic?: boolean;
+  /** The install's automatic key was cleared: it may connect automatically again. */
+  auto_off?: boolean;
+  state?: string;
+  working?: boolean;
+  message?: string;
+}
+
+const gatewayAnswer = async (p: Promise<GatewayView>) => {
+  const v = await p;
+  queryClient.setQueryData(gatewayQuery.queryKey, v);
+  return v;
+};
+
+export const checkGateway = () => gatewayAnswer(api.post<GatewayView>('/api/v2/providers/gateway/check', {}));
+export const clearGateway = () => gatewayAnswer(api.delete<GatewayView>('/api/v2/providers/gateway'));
+export const connectGatewayAutomatically = () => gatewayAnswer(api.post<GatewayView>('/api/v2/providers/gateway/automatic', {}));

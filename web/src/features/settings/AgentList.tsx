@@ -230,20 +230,30 @@ export function presetOf(l: Levels): Preset {
 
 const ACCESS_WORD: Record<Preset, string> = { open: 'Open', requests: 'Requests only', private: 'Private', custom: 'Custom' };
 
-function PeoplePicks({ who, onChange }: { who: Audience; onChange: (a: Audience) => void }) {
+/** People, groups and other agents an access level can name (backend/bot_access.py: people, teams, bots). */
+function PeoplePicks({ who, onChange, teams = [], self = '' }: { who: Audience; onChange: (a: Audience) => void; teams?: Person[]; self?: string }) {
   const people = usePeople();
+  const bots = useQuery({ ...botsQuery, retry: false });
+  const agents = (bots.data ?? [])
+    .filter((b) => b.state !== 'archived' && (b.id ?? b.slug) && b.id !== self && b.slug !== self)
+    .map((b) => ({ id: (b.id ?? b.slug) as string, name: b.display_name ?? b.slug ?? '' }));
+  const lists = [
+    ['people', people],
+    ['teams', teams],
+    ['bots', agents],
+  ] as const;
   return (
     <div className="set-picks">
-      {people.map((p) => (
-        <Checkbox
-          key={p.id}
-          label={p.name}
-          checked={who.people.includes(p.id)}
-          onCheckedChange={(on) =>
-            onChange({ ...who, everyone: false, people: on ? [...who.people, p.id] : who.people.filter((x) => x !== p.id) })
-          }
-        />
-      ))}
+      {lists.map(([key, items]) =>
+        items.map((p) => (
+          <Checkbox
+            key={`${key}:${p.id}`}
+            label={p.name}
+            checked={who[key].includes(p.id)}
+            onCheckedChange={(on) => onChange({ ...who, everyone: false, [key]: on ? [...who[key], p.id] : who[key].filter((x) => x !== p.id) })}
+          />
+        )),
+      )}
     </div>
   );
 }
@@ -285,7 +295,7 @@ function AccessDialog({ bot, name, now, onClose }: { bot: string; name: string; 
     >
       <div className="set-add">
         <Segmented label="Access" options={PRESETS} value={preset} onValueChange={pick} />
-        {(preset === 'requests' || preset === 'private') && <PeoplePicks who={chosen} onChange={choose} />}
+        {(preset === 'requests' || preset === 'private') && <PeoplePicks who={chosen} onChange={choose} teams={now.teams} self={bot} />}
         {preset === 'custom' &&
           LEVELS.map(([key, label]) => (
             <div key={key} className="set-level">
@@ -294,7 +304,9 @@ function AccessDialog({ bot, name, now, onClose }: { bot: string; name: string; 
                 checked={draft[key].everyone}
                 onCheckedChange={(on) => setDraft((d) => ({ ...d, [key]: { ...d[key], everyone: on } }))}
               />
-              {!draft[key].everyone && <PeoplePicks who={draft[key]} onChange={(a) => setDraft((d) => ({ ...d, [key]: a }))} />}
+              {!draft[key].everyone && (
+                <PeoplePicks who={draft[key]} onChange={(a) => setDraft((d) => ({ ...d, [key]: a }))} teams={now.teams} self={bot} />
+              )}
             </div>
           ))}
       </div>

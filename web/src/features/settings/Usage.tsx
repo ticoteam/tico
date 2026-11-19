@@ -1,27 +1,41 @@
 import { useQuery, type QueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useLayoutEffect, useRef, useState } from 'react';
-import { refusal, run } from '@/actions';
+import { run } from '@/actions';
 import type { UsageFigures } from '@/api/schema';
 import { directoryQuery } from '@/data';
 import { Avatar } from '@/kit/Avatar';
-import { Button } from '@/kit/Button';
 import { BarChart, Sparkline } from '@/kit/Chart';
-import { Dialog } from '@/kit/Dialog';
+import { DatePick } from '@/kit/DatePick';
 import { Empty } from '@/kit/Empty';
-import { Field } from '@/kit/Field';
-import { Facts, LabelValue } from '@/kit/LabelValue';
-import { Pill } from '@/kit/Pill';
+import { IconButton } from '@/kit/IconButton';
+import { MenuItem } from '@/kit/Menu';
+import { Popover } from '@/kit/Popover';
 import { Segmented } from '@/kit/Segmented';
+import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
-import { Dashboard, FiguresStrip, Section } from '@/pagekinds';
-import { Foot, Meter, Verb, Word, act, isForbidden, usd } from './parts';
-import { agentUsageQuery, limitsQuery, usageQuery, type UsageRange, type UsageRow } from './queries';
+import { Dashboard, FiguresStrip, PageMore, Section } from '@/pagekinds';
+import { Meter, Verb, isForbidden, usd } from './parts';
+import {
+  agentDays,
+  agentUsageWhereQuery,
+  limitsQuery,
+  rangeDays,
+  usageChoicesQuery,
+  usageQuery,
+  usageWhereQuery,
+  USAGE_FILTERS,
+  type UsageRange,
+  type UsageRow,
+  type UsageWhere,
+} from './queries';
+import { AddLimit, LimitPanel, Limits } from './UsageLimits';
 import './settings.css';
 
 /* Usage (kind: Dashboard; pages/8-settings/more.js). Spend: figures, a bar a day, then the money by agent or by model;
-   an agent's row opens its tasks and its tokens. Limits: each agent's monthly limit, changed where it stands. The view,
-   the range, the grouping and the opened agent are in the address. */
+   an agent's row opens its tasks and its tokens. Limits: the company's, each team's and each agent's monthly limit,
+   a row opening beside the list (UsageLimits.tsx). The view, the range, the grouping and the opened row are in the
+   address; a custom range and the filter are the page's own (the route keeps only the four ranges). */
 
 export interface UsageSearch {
   view?: 'limits';
@@ -34,12 +48,13 @@ export interface UsageSearch {
 export const loadUsage = (qc: QueryClient, search: UsageSearch) =>
   search.view === 'limits' ? qc.prefetchQuery(limitsQuery) : qc.prefetchQuery(usageQuery(search.range ?? '7d', 'bot'));
 
-const RANGES = [
+const RANGES: readonly { value: UsageRange | 'custom'; label: string }[] = [
   { value: 'today', label: 'Today' },
   { value: '7d', label: '7 days' },
   { value: '30d', label: '30 days' },
   { value: 'month', label: 'This month' },
-] as const;
+  { value: 'custom', label: 'Custom' },
+];
 
 /** API-equivalent: what the runs would have cost on keys, plan runs included. */
 export const spent = (f: Pick<UsageFigures, 'est_cost_usd' | 'subscription_equiv_usd'>) => (f.est_cost_usd ?? 0) + (f.subscription_equiv_usd ?? 0);
@@ -67,8 +82,8 @@ function niceMax(v: number) {
   return Math.ceil(v / p) * p;
 }
 
-function DayChart({ range }: { range: UsageRange }) {
-  const days = useQuery(usageQuery(range, 'day'));
+function DayChart({ where }: { where: UsageWhere }) {
+  const days = useQuery(usageWhereQuery(where, 'day'));
   const [ref, width] = useWidth();
   const rows = days.data?.rows ?? [];
   const points = rows.map((r) => spent(r));
@@ -91,10 +106,10 @@ function DayChart({ range }: { range: UsageRange }) {
   );
 }
 
-function AgentOpen({ range, bot }: { range: UsageRange; bot: string }) {
-  const q = useQuery(agentUsageQuery(range, bot));
+function AgentOpen({ where, bot }: { where: UsageWhere; bot: string }) {
+  const q = useQuery(agentUsageWhereQuery(where, bot));
   const u = q.data;
-  if (!u) return null;
+  if (!u?.totals) return null;
   const t = u.totals;
   const parts = [
     ['Cache reads', t.cached_tokens],
@@ -135,7 +150,7 @@ function AgentOpen({ range, bot }: { range: UsageRange; bot: string }) {
           </span>
         ))}
       </div>
-      {u.tasks.length > 0 && (
+      {(u.tasks ?? []).length > 0 && (
         <>
           <div className="row g-utask u-cols" aria-hidden="true">
             <span>Task</span>
@@ -161,8 +176,8 @@ function AgentOpen({ range, bot }: { range: UsageRange; bot: string }) {
   );
 }
 
-function ByAgent({ search, range }: { search: UsageSearch; range: UsageRange }) {
-  const by = useQuery(usageQuery(range, 'bot'));
+function ByAgent({ search, where }: { search: UsageSearch; where: UsageWhere }) {
+  const by = useQuery(usageWhereQuery(where, 'bot'));
   const dir = useQuery(directoryQuery);
   const rows = [...(by.data?.rows ?? [])].sort((a, b) => spent(b) - spent(a));
   const top = Math.max(1e-9, ...rows.map(spent));
@@ -206,7 +221,7 @@ function ByAgent({ search, range }: { search: UsageSearch; range: UsageRange }) 
         return isOpen ? (
           <div key={slug} className="open">
             {row}
-            <AgentOpen range={range} bot={slug} />
+            <AgentOpen where={where} bot={slug} />
           </div>
         ) : (
           row
@@ -227,8 +242,8 @@ function ByAgent({ search, range }: { search: UsageSearch; range: UsageRange }) 
   );
 }
 
-function ByModel({ range }: { range: UsageRange }) {
-  const by = useQuery(usageQuery(range, 'model'));
+function ByModel({ where }: { where: UsageWhere }) {
+  const by = useQuery(usageWhereQuery(where, 'model'));
   const rows: UsageRow[] = [...(by.data?.rows ?? [])].sort((a, b) => spent(b) - spent(a));
   const top = Math.max(1e-9, ...rows.map(spent));
   if (rows.length === 0) return <Empty title="No runs in this range" />;
@@ -256,163 +271,121 @@ function ByModel({ range }: { range: UsageRange }) {
   );
 }
 
-function LimitDialog({ who, now, agent, onClose }: { who: string; now: number | null; agent?: string; onClose: () => void }) {
-  const [value, setValue] = useState(now != null ? String(now) : '');
-  const n = Number(value);
-  const ok = value.trim() !== '' && Number.isFinite(n) && n >= 0;
-  const save = () => {
-    onClose();
-    void (agent ? act('usage.setLimit', { agent, monthly: n }) : act('usage.setDefaultLimit', { monthly: n }));
+/* ---------------------------------------------------------------- custom range, filter, CSV */
+
+/** A UTC day ('2026-11-19') as the date picker's local midnight, and back. */
+const dayDate = (s: string) => new Date(`${s}T00:00:00`);
+const dayOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+const FILTER_LABEL: Record<(typeof USAGE_FILTERS)[number], string> = {
+  department: 'Team',
+  harness: 'Harness',
+  model: 'Model',
+  effort: 'Effort',
+  subscription: 'Plan',
+};
+
+/** The filter icon's card: a team, then each dimension with a choice to make in it (ui/app/usage.ts useFilterMenu). */
+function UsageFilter({ where, filter, onChange }: { where: UsageWhere; filter: Record<string, string>; onChange: (f: Record<string, string>) => void }) {
+  const [open, setOpen] = useState(false);
+  const choices = useQuery({ ...usageChoicesQuery(where), enabled: open });
+  const on = USAGE_FILTERS.filter((k) => filter[k]).length;
+  const c = choices.data;
+  const values = (k: (typeof USAGE_FILTERS)[number]) => {
+    const got = k === 'department' ? (c?.departments ?? []) : (c?.dimensions[k] ?? []);
+    return [...new Set([...got, ...(filter[k] ? [filter[k]] : [])])].filter(Boolean).sort();
   };
+  const label = (k: string, v: string) => c?.labels[k]?.[v] ?? (v === '__unknown__' ? 'Not recorded' : v);
   return (
-    <Dialog
-      open
-      onOpenChange={(o) => !o && onClose()}
-      title={`Monthly limit for ${who}`}
-      description="When it is reached, new work waits until the month turns over."
-      actions={
-        <>
-          <Button variant="quiet" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button variant="primary" disabled={!ok} onClick={save}>
-            Save
-          </Button>
-        </>
-      }
+    <Popover
+      trigger={<IconButton icon="filter" label={on ? `Filter, ${on} on` : 'Filter'} on={on > 0 || undefined} quiet />}
+      className="u-filter"
+      label="Filter usage"
+      open={open}
+      onOpenChange={setOpen}
+      align="end"
     >
-      <Field label="Dollars a month" type="number" value={value} onValueChange={setValue} autoFocus />
-    </Dialog>
+      <div className="set-add">
+        {USAGE_FILTERS.map((k) => {
+          const vs = values(k);
+          if (!filter[k] && vs.length < 2) return null;
+          return (
+            <Select
+              key={k}
+              label={FILTER_LABEL[k]}
+              look="field"
+              value={filter[k] ?? ''}
+              options={[{ value: '', label: 'All' }, ...vs.map((v) => ({ value: v, label: label(k, v) }))]}
+              onValueChange={(v) => onChange({ ...filter, [k]: v })}
+            />
+          );
+        })}
+        {c && USAGE_FILTERS.every((k) => !filter[k] && values(k).length < 2) && <p className="u-more">Nothing to narrow in this range</p>}
+        {on > 0 && <Verb onClick={() => onChange({})}>Reset</Verb>}
+      </div>
+    </Popover>
   );
 }
 
-/** Cancel the queued automatic wakes and waits, company-wide; asked first. */
-function ClearQueue() {
-  const [asking, setAsking] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const clear = async () => {
-    setBusy(true);
-    const r = await run('usage.clearQueue', { scope: 'company' }, { via: 'click' });
-    setBusy(false);
-    setAsking(false);
-    toast(r.ok ? { text: r.did ?? 'Cleared', kind: 'done' } : refusal(r, "Couldn't clear"));
+const CSV_FIGS = ['runs', 'input_tokens', 'cached_tokens', 'cache_write_tokens', 'output_tokens', 'est_cost_usd', 'subscription_equiv_usd'] as const;
+
+/** Rows as CSV, in the units the API returns; a cell with a comma, quote or line break is quoted. */
+export function usageCsv(head: readonly string[], rows: readonly Record<string, unknown>[]): string {
+  const cell = (v: unknown) => {
+    const s = v == null ? '' : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  return (
-    <>
-      <Foot>
-        <Verb onClick={() => setAsking(true)}>Clear queue</Verb>
-      </Foot>
-      <Dialog
-        open={asking}
-        onOpenChange={setAsking}
-        alert
-        title="Clear the automatic queue?"
-        description="Cancels queued automatic wakes and waits. Keeps tasks, people's messages and running work."
-        actions={
-          <>
-            <Button variant="quiet" onClick={() => setAsking(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" busy={busy} onClick={() => void clear()}>
-              Clear queue
-            </Button>
-          </>
-        }
-      />
-    </>
-  );
+  return [head.join(','), ...rows.map((r) => head.map((k) => cell(r[k])).join(','))].join('\n') + '\n';
 }
 
-function Limits({ search }: { search: UsageSearch }) {
-  const limits = useQuery(limitsQuery);
-  const dir = useQuery(directoryQuery);
-  const [editing, setEditing] = useState<{ who: string; now: number | null; agent?: string } | null>(null);
-  const v = limits.data;
-  if (!v) return null;
-  const bots = Object.entries(v.bots).sort((a, b) => (b[1].month_spent ?? 0) - (a[1].month_spent ?? 0));
-  return (
-    <>
-      <Section name="Defaults" target="limit:default">
-        <Facts label="Defaults">
-          <LabelValue
-            label="A new agent"
-            onEdit={v.may_edit_default ? () => setEditing({ who: 'a new agent', now: v.default.monthly_usd }) : undefined}
-          >
-            {v.default.monthly_usd != null ? `${usd(v.default.monthly_usd)} a month` : 'No limit'}
-          </LabelValue>
-          <LabelValue label="When reached">New work waits</LabelValue>
-          <LabelValue label="Count plan runs">{v.default.count_subscription ? 'Yes' : 'No'}</LabelValue>
-        </Facts>
-        {v.may_edit_default && <ClearQueue />}
-      </Section>
-      <Section name="Agents" count={bots.length} target="setting:limits">
-        {bots.length === 0 ? (
-          <Empty title="No agents yet" />
-        ) : (
-          bots.map(([slug, l]) => {
-            const who = dir.data?.byId[slug] ?? dir.data?.byId[`bot:${slug}`];
-            const name = who?.name ?? slug;
-            const isOpen = search.open === slug;
-            const row = (
-              <Link
-                key={slug}
-                to="/company/usage"
-                search={{ ...search, open: isOpen ? undefined : slug }}
-                className={l.blocked ? 'row g-lim is-bad' : 'row g-lim'}
-                data-target={`limit:${slug}`}
-                aria-expanded={isOpen}
-                title={name}
-              >
-                <Avatar kind="agent" name={name} hue={who?.hue} decorative />
-                <span className="row-title">
-                  {name}
-                  {l.blocked ? <Word>Paused</Word> : l.percent >= 90 ? <Pill flag>Near</Pill> : null}
-                </span>
-                <span className="u-bar">
-                  <Meter pct={l.percent} over={!!l.blocked} />
-                </span>
-                <span className="row-fig u-used">{usd(l.month_spent ?? 0)}</span>
-                <span className="row-fig l-of">{l.monthly_usd != null ? `of ${usd(l.monthly_usd)}` : 'No limit'}</span>
-                <span className="row-cell u-per">month</span>
-              </Link>
-            );
-            if (!isOpen) return row;
-            return (
-              <div key={slug} className="open">
-                {row}
-                <Facts label={name}>
-                  <LabelValue
-                    label="Limit"
-                    onEdit={l.may_edit ? () => setEditing({ who: name, now: l.own_monthly_usd ?? l.monthly_usd, agent: slug }) : undefined}
-                  >
-                    {l.monthly_usd != null ? `${usd(l.monthly_usd)} a month` : 'No limit'}
-                    {l.own_monthly_usd == null && l.monthly_usd != null ? ' (the default)' : ''}
-                  </LabelValue>
-                </Facts>
-                {l.may_edit && l.own_monthly_usd != null && (
-                  <Foot open>
-                    <Verb onClick={() => void act('usage.setLimit', { agent: slug })}>Use the default</Verb>
-                  </Foot>
-                )}
-              </div>
-            );
-          })
-        )}
-      </Section>
-      {editing && <LimitDialog {...editing} onClose={() => setEditing(null)} />}
-    </>
-  );
+function save(name: string, text: string) {
+  if (typeof URL.createObjectURL !== 'function') return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+/** Download CSV: the open agent's days (as the old app's Export CSV), else the list on screen. */
+async function download(where: UsageWhere, search: UsageSearch, rows: UsageRow[], from: string, to: string) {
+  try {
+    if (search.open && search.view !== 'limits') {
+      const d = await agentDays(where, search.open);
+      return save(`usage-${search.open}-${d.from}-${d.to}.csv`, usageCsv(['day', ...CSV_FIGS], d.daily));
+    }
+    const key = search.by === 'model' ? 'value' : 'bot';
+    save(`usage-${search.by === 'model' ? 'models' : 'agents'}-${from}-${to}.csv`, usageCsv([key, 'name', ...CSV_FIGS], rows as unknown as Record<string, unknown>[]));
+  } catch {
+    toast({ text: "Couldn't download", kind: 'failed' });
+  }
 }
 
 export function UsagePage({ search }: { search: UsageSearch }) {
   const range = search.range ?? '7d';
   const limits = search.view === 'limits';
-  const main = useQuery(usageQuery(range, 'bot'));
-  const days = useQuery(usageQuery(range, 'day'));
+  const [span, setSpan] = useState<{ from: string; to: string } | null>(null);
+  const [filter, setFilter] = useState<Record<string, string>>({});
+  const where: UsageWhere = { range, ...(span ?? {}), filter };
+  const main = useQuery(usageWhereQuery(where, 'bot'));
+  const days = useQuery(usageWhereQuery(where, 'day'));
+  const listed = useQuery({ ...usageWhereQuery(where, 'model'), enabled: !limits && search.by === 'model' });
   const lim = useQuery({ ...limitsQuery, enabled: limits });
   const q = limits ? lim : main;
   const t = main.data?.totals;
   const spark = (days.data?.rows ?? []).map(spent);
+  const pickRange = (r: UsageRange | 'custom') => {
+    if (r === 'custom') return setSpan(span ?? rangeDays(range));
+    setSpan(null);
+    go({ ...search, range: r, open: undefined });
+  };
+  const setDay = (end: 'from' | 'to', d: Date) => {
+    if (!span) return;
+    const next = { ...span, [end]: dayOf(d) };
+    setSpan(next.from > next.to ? { from: next.to, to: next.from } : next);
+  };
   const view = (
     <Segmented
       label="View"
@@ -424,19 +397,39 @@ export function UsagePage({ search }: { search: UsageSearch }) {
       onValueChange={(v) => go({ ...search, view: v === 'limits' ? 'limits' : undefined, open: undefined })}
     />
   );
+  const rows = (search.by === 'model' ? listed.data?.rows : main.data?.rows) ?? [];
+  const more = limits ? undefined : (
+    <PageMore target="usage:more">
+      <MenuItem label="Download CSV" icon="download" onSelect={() => void download(where, search, rows, main.data?.from ?? '', main.data?.to ?? '')} />
+    </PageMore>
+  );
   return (
     <Dashboard
       title="Usage"
       path="/company/usage"
       className="set-page"
-      actions={view}
+      actions={
+        <>
+          {view}
+          {limits && !isForbidden(lim.error) && <AddLimit />}
+        </>
+      }
+      more={more}
       state={q.isPending ? 'loading' : q.isError && !isForbidden(q.error) ? 'fault' : undefined}
       onRetry={() => void q.refetch()}
       figures={
         limits ? undefined : (
           <>
             <div className="u-tools">
-              <Segmented label="Range" options={RANGES} value={range} onValueChange={(r) => go({ ...search, range: r, open: undefined })} />
+              <Segmented label="Range" options={RANGES} value={span ? 'custom' : range} onValueChange={pickRange} />
+              {span && (
+                <>
+                  <DatePick label="From" withTime={false} value={dayDate(span.from)} onValueChange={(d) => setDay('from', d)} />
+                  <DatePick label="To" withTime={false} value={dayDate(span.to)} onValueChange={(d) => setDay('to', d)} />
+                </>
+              )}
+              <span className="grow" />
+              <UsageFilter where={where} filter={filter} onChange={setFilter} />
             </div>
             {t && (
               <FiguresStrip
@@ -452,7 +445,8 @@ export function UsagePage({ search }: { search: UsageSearch }) {
           </>
         )
       }
-      chart={limits ? undefined : <DayChart range={range} />}
+      chart={limits ? undefined : <DayChart where={where} />}
+      panel={limits && search.open && !isForbidden(lim.error) ? <LimitPanel search={search} /> : undefined}
       widgets={
         isForbidden(q.error) ? (
           <Empty icon="lock" title="Owners and admins only" />
@@ -473,7 +467,7 @@ export function UsagePage({ search }: { search: UsageSearch }) {
               />
             }
           >
-            {search.by === 'model' ? <ByModel range={range} /> : <ByAgent search={search} range={range} />}
+            {search.by === 'model' ? <ByModel where={where} /> : <ByAgent search={search} where={where} />}
           </Section>
         )
       }

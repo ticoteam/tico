@@ -17,10 +17,17 @@ import { toast } from '@/kit/Toast';
 import type { MotionChoice } from '@/motion';
 import { Section } from '@/pagekinds';
 import { THEME_KEY, usePref, type Theme } from '@/prefs';
+import { Privacy, Repositories, Storage, TeamIcon } from './Company';
+import { AllTokens, EXPIRES } from './CompanyTokens';
 import { DesktopRows } from './Desktop';
+import { AddPerson, Joining, LeftPeople, SignInLine } from './People';
+import { ScreeningMore, SupportAccess } from './SecurityMore';
 import { Foot, Line, SwitchLine, Verb, Word, act } from './parts';
 import {
   accessQuery,
+  supportAccessQuery,
+  type AccessFull,
+  type ScreeningFull,
   directorySyncQuery,
   humansQuery,
   pageOwnersQuery,
@@ -56,6 +63,7 @@ export function General() {
           <LabelValue label="Name">{c?.company_name}</LabelValue>
           <LabelValue label="Owner">{c?.owner_email}</LabelValue>
           <LabelValue label="Version">{c?.version}</LabelValue>
+          {access.data && <TeamIcon owner={access.data.you === 'owner'} />}
           {access.data && (
             <SwitchLine
               label="Agents send reports to Tico support"
@@ -93,6 +101,9 @@ export function General() {
           </Facts>
         </Section>
       )}
+      {access.data?.you === 'owner' && <Privacy />}
+      {access.data?.you === 'owner' && <Storage />}
+      {access.data && <Repositories admin={access.data.you === 'owner' || access.data.you === 'admin'} owner={access.data.you === 'owner'} />}
       <DesktopRows />
     </>
   );
@@ -101,45 +112,6 @@ export function General() {
 // ---------------------------------------------------------------- People
 
 const ROLE: Record<string, string> = { owner: 'Owner', admin: 'Admin', member: 'Member' };
-
-function AddPerson() {
-  const [open, setOpen] = useState(false);
-  const [email, setEmail] = useState('');
-  const [name, setName] = useState('');
-  const [busy, setBusy] = useState(false);
-  const add = async () => {
-    setBusy(true);
-    const r = await run('settings.invite', { email: email.trim(), ...(name.trim() ? { name: name.trim() } : {}) }, { via: 'click' });
-    setBusy(false);
-    if (!r.ok) return toast(refusal(r, "Couldn't add"));
-    setOpen(false);
-    setEmail('');
-    setName('');
-  };
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={setOpen}
-      title="Add a person"
-      trigger={<Button icon="plus">Add person</Button>}
-      actions={
-        <>
-          <Button variant="quiet" onClick={() => setOpen(false)}>
-            Cancel
-          </Button>
-          <Button variant="primary" busy={busy} disabled={!email.includes('@')} onClick={() => void add()}>
-            Invite
-          </Button>
-        </>
-      }
-    >
-      <div className="set-add">
-        <Field label="Email" type="email" value={email} onValueChange={setEmail} autoFocus />
-        <Field label="Name" value={name} onValueChange={setName} />
-      </div>
-    </Dialog>
-  );
-}
 
 const looksLikeEmail = (s: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s);
 
@@ -229,7 +201,7 @@ function EmailDialog({ p, onClose }: { p: AccessPerson; onClose: () => void }) {
   );
 }
 
-function PersonOpen({ p, mayEdit, youOwn, ownerName }: { p: AccessPerson; mayEdit: boolean; youOwn: boolean; ownerName: string }) {
+function PersonOpen({ p, mayEdit, youOwn, ownerName, mine }: { p: AccessPerson; mayEdit: boolean; youOwn: boolean; ownerName: string; mine: boolean }) {
   const [confirm, setConfirm] = useState(false);
   const [handing, setHanding] = useState<'owner' | 'email' | null>(null);
   // Only the owner sees these: hand the company over, or change their own sign-in address.
@@ -258,7 +230,7 @@ function PersonOpen({ p, mayEdit, youOwn, ownerName }: { p: AccessPerson; mayEdi
             (ROLE[p.owner ? 'owner' : p.role] ?? p.role)
           )}
         </Line>
-        <LabelValue label="Signs in">{p.sign_in ? 'Yes' : 'Not yet'}</LabelValue>
+        {mayEdit && !p.owner && !mine ? <SignInLine p={p} /> : <LabelValue label="Signs in">{p.sign_in ? 'Yes' : 'Not yet'}</LabelValue>}
       </Facts>
       {((mayEdit && !p.owner) || mayHand || myEmail) && (
         <Foot open>
@@ -269,7 +241,8 @@ function PersonOpen({ p, mayEdit, youOwn, ownerName }: { p: AccessPerson; mayEdi
           )}
           {mayHand && <Verb onClick={() => setHanding('owner')}>Make owner</Verb>}
           {myEmail && <Verb onClick={() => setHanding('email')}>Change email</Verb>}
-          {mayEdit && !p.owner && p.removable !== false && <Verb onClick={() => setConfirm(true)}>Remove</Verb>}
+          {/* The owner marks someone as left (`removable` is about removing a left person for good, below). */}
+          {youOwn && !p.owner && <Verb onClick={() => setConfirm(true)}>Remove</Verb>}
         </Foot>
       )}
       {handing === 'owner' && <OwnerDialog p={p} ownerName={ownerName} onClose={() => setHanding(null)} />}
@@ -303,15 +276,17 @@ function PersonOpen({ p, mayEdit, youOwn, ownerName }: { p: AccessPerson; mayEdi
 
 export function People({ open }: { open?: string }) {
   const access = useQuery(accessQuery);
-  const v = access.data;
-  if (!v) return null;
+  const me = useQuery(meQuery);
+  const v = access.data as AccessFull | undefined;
+  if (!v || !Array.isArray(v.people)) return null;
   const people = v.people.filter((p) => !p.left);
+  const myId = me.data ? bare(me.data.id) : '';
   // `you` is the reader's company role; only owners and admins read this at all.
   const mayEdit = v.you === 'owner' || v.you === 'admin';
   const owner = v.people.find((p) => p.owner);
   return (
     <>
-    <Section name="People" count={people.length} actions={mayEdit ? <AddPerson /> : undefined}>
+    <Section name="People" count={people.length} actions={mayEdit ? <AddPerson v={v} /> : undefined}>
       {people.length === 0 ? (
         <Empty title="No one yet" />
       ) : (
@@ -345,7 +320,7 @@ export function People({ open }: { open?: string }) {
             return open === p.id ? (
               <div key={p.id} className="open">
                 {row}
-                <PersonOpen p={p} mayEdit={mayEdit} youOwn={v.you === 'owner'} ownerName={owner?.name ?? 'yourself'} />
+                <PersonOpen p={p} mayEdit={mayEdit} youOwn={v.you === 'owner'} ownerName={owner?.name ?? 'yourself'} mine={p.id === myId} />
               </div>
             ) : (
               row
@@ -354,6 +329,8 @@ export function People({ open }: { open?: string }) {
         </>
       )}
     </Section>
+    {mayEdit && <Joining v={v} />}
+    <LeftPeople v={v} />
     {v.you === 'owner' && <DirectorySync />}
     </>
   );
@@ -654,6 +631,7 @@ const MOTIONS = [
 function Tokens() {
   const tokens = useQuery(tokensQuery);
   const [label, setLabel] = useState('');
+  const [days, setDays] = useState('90');
   const [making, setMaking] = useState(false);
   const [shown, setShown] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -663,7 +641,7 @@ function Tokens() {
   const line = shown ? `export HUB_API_URL=${window.location.origin} HUB_TOKEN=${shown}` : '';
   const make = async () => {
     setBusy(true);
-    const r = await run('settings.createToken', { label: label.trim() }, { via: 'click' });
+    const r = await run('settings.createToken', { label: label.trim(), days: Number(days) }, { via: 'click' });
     setBusy(false);
     if (!r.ok) return toast(refusal(r, "Couldn't make it"));
     setMaking(false);
@@ -682,7 +660,7 @@ function Tokens() {
             open={making}
             onOpenChange={setMaking}
             title="Make a token"
-            description="It works as you for 90 days. You see it once."
+            description="It works as you. You see it once."
             trigger={<Button icon="plus">Make token</Button>}
             actions={
               <>
@@ -695,7 +673,10 @@ function Tokens() {
               </>
             }
           >
-            <Field label="Name" value={label} onValueChange={setLabel} autoFocus />
+            <div className="set-add">
+              <Field label="Name" value={label} onValueChange={setLabel} autoFocus />
+              <Select label="Expires" value={days} options={EXPIRES} onValueChange={setDays} />
+            </div>
           </Dialog>
         )
       }
@@ -826,8 +807,16 @@ export function Account() {
         </Facts>
       </Section>
       <Tokens />
+      <EveryonesTokens />
     </>
   );
+}
+
+/** Only the owner and the admins may read everyone's tokens; the rest never ask. */
+function EveryonesTokens() {
+  const access = useQuery({ ...accessQuery, retry: false });
+  const you = access.data?.you;
+  return you === 'owner' || you === 'admin' ? <AllTokens /> : null;
 }
 
 // ---------------------------------------------------------------- Security
@@ -843,7 +832,8 @@ const DOORS: Record<string, string> = { webhook: 'Webhooks', mail: 'Email', idea
 export function Security() {
   const screening = useQuery(screeningQuery);
   const support = useQuery(supportQuery);
-  const v = screening.data;
+  const letIn = useQuery({ ...supportAccessQuery, retry: false });
+  const v = screening.data as ScreeningFull | undefined;
   if (!v) return null;
   const doors = Object.keys(v.modes);
   return (
@@ -875,16 +865,20 @@ export function Security() {
               />
             </Line>
           ))}
+          <ScreeningMore recent={v.recent} />
         </Facts>
       </Section>
-      {support.data?.available && (
+      {(support.data?.available || letIn.data?.available) && (
         <Section name="Tico support" target="setting:support">
           <Facts label="Tico support">
-            <SwitchLine
-              label="Let Tico support reach your cloud computers"
-              checked={support.data.on === true}
-              onChange={(on) => void act('settings.setSupport', { on })}
-            />
+            <SupportAccess />
+            {support.data?.available && (
+              <SwitchLine
+                label="Let Tico support reach your cloud computers"
+                checked={support.data.on === true}
+                onChange={(on) => void act('settings.setSupport', { on })}
+              />
+            )}
           </Facts>
         </Section>
       )}

@@ -1,4 +1,6 @@
+import type { QueryClient } from '@tanstack/react-query';
 import { defineAction, s } from '@/actions';
+import type { Ctx, Schema } from '@/actions';
 import { run } from '@/actions/run';
 import { meQuery } from '@/data';
 import { desktopApp, tellDesktopSigningOut } from '@/desktop';
@@ -58,6 +60,44 @@ import {
   syncDirectory,
   saveGateway,
   withDestination,
+  checkGateway,
+  clearGateway,
+  connectGatewayAutomatically,
+  limitsQuery,
+  poolsOf,
+  setPoolLimit,
+  setTaskCap,
+  taskCapsQuery,
+  undoChange,
+  type SettingsChange,
+} from './queries';
+import {
+  accessQuery,
+  addPersonQuietly,
+  checkHosting,
+  createRepo,
+  forgetPerson,
+  moveFiles,
+  previewRepo,
+  refreshRepos,
+  resetInstallId,
+  restorePerson,
+  revokeAnyToken,
+  setAgentLimit,
+  setAllowed,
+  setNewAgentRepos,
+  setRepo,
+  setSignIn,
+  setSuggestionPrivacy,
+  setTeamIcon,
+  setUsageCount,
+  startSupportAccess,
+  stopSupportAccess,
+  testScreening,
+  saveBucket,
+  dropBucket,
+  type AccessFull,
+  type ProductRepoPreview,
 } from './queries';
 import { askDestination } from './Destination';
 import { SECTION_IDS } from './sections';
@@ -137,10 +177,11 @@ export const makeToken = defineAction({
   id: 'settings.createToken',
   title: 'Make an API token',
   kind: 'change',
-  input: s.object({ label: s.string({ min: 1, max: 80 }) }),
+  // `days` until it stops working (the server's 1 to 365); left out, 90.
+  input: s.object({ label: s.string({ min: 1, max: 80 }), days: s.optional(s.number({ int: true, min: 1, max: 365 })) }),
   tico: false,
-  run: async (ctx, { label }) => {
-    const made = await createToken(label);
+  run: async (ctx, { label, days }) => {
+    const made = await createToken(label, days);
     void ctx.queryClient.invalidateQueries({ queryKey: tokensQuery.queryKey });
     // Shown once, on this screen: the result carries it to the press (never to Tico, which cannot run this).
     return { id: made.id, token: made.token };
@@ -841,8 +882,12 @@ export const limit = defineAction({
   title: "Change an agent's monthly limit",
   kind: 'change',
   input: s.object({ agent: id('an agent slug'), monthly: money }),
-  // A spending limit is budget: the person's own press.
-  tico: false,
+  // Raising or removing a spending limit is budget, the person's own press; Tico may only lower one.
+  can: (ctx, { agent, monthly }) => {
+    if (ctx.via !== 'tico') return true;
+    const now = ctx.queryClient.getQueryData(limitsQuery.queryKey)?.bots[agent];
+    return lowers(now ? now.monthly_usd : undefined, monthly);
+  },
   run: (_ctx, { agent, monthly }) => setLimit(agent, monthly ?? null),
   did: ({ monthly }) => (monthly == null ? 'Limit removed' : `Limit set to $${monthly}`),
   target: ({ agent }) => ({ kind: 'limit', id: agent }),
@@ -853,7 +898,8 @@ export const defaultLimit = defineAction({
   title: 'Change the monthly limit for a new agent',
   kind: 'change',
   input: s.object({ monthly: money }),
-  tico: false,
+  // Raising or removing the default is budget, the person's own press; Tico may only lower it.
+  can: (ctx, { monthly }) => ctx.via !== 'tico' || lowers(ctx.queryClient.getQueryData(limitsQuery.queryKey)?.default.monthly_usd, monthly),
   run: (_ctx, { monthly }) => setDefaultLimit(monthly ?? null),
   did: ({ monthly }) => (monthly == null ? 'Limit removed' : `Limit set to $${monthly}`),
   target: () => ({ kind: 'limit', id: 'default' }),
@@ -936,4 +982,440 @@ export const openAtLogin = defineAction({
   run: (_ctx, { on }) => theApp().openAtLogin(on),
   did: ({ on }) => (on ? 'Opens at login' : 'Stopped opening at login'),
   target: () => setting('open-at-login'),
+});
+
+// ---- gap wave (the Usage builder): pools, task caps, undo in History, Gateway checks ----
+
+/** True when `next` lowers (or keeps) the limit in force now (null: none). Unread (undefined) or removed: false. */
+function lowers(now: number | null | undefined, next: number | null | undefined): boolean {
+  if (next == null || now === undefined) return false;
+  return now === null || next <= now;
+}
+
+export const poolLimit = defineAction({
+  id: 'usage.setPoolLimit',
+  title: "Change the company's or a team's monthly limit",
+  kind: 'change',
+  input: s.object({ scope: id("'company' or a team's group id"), monthly: money }),
+  // Raising or removing a combined limit is budget, the person's own press; Tico may only lower one.
+  can: (ctx, { scope, monthly }) => {
+    if (ctx.via !== 'tico') return true;
+    const p = poolsOf(ctx.queryClient.getQueryData(limitsQuery.queryKey));
+    const now = scope === 'company' ? p?.company : p?.groups[scope];
+    return lowers(now ? now.monthly_usd : undefined, monthly);
+  },
+  run: (_ctx, { scope, monthly }) => setPoolLimit(scope, monthly ?? null),
+  did: ({ monthly }) => (monthly == null ? 'Limit removed' : `Limit set to $${monthly}`),
+  target: ({ scope }) => ({ kind: 'limit', id: scope === 'company' ? 'company' : `team:${scope}` }),
+});
+
+export const taskCap = defineAction({
+  id: 'usage.setTaskCap',
+  title: 'Cap the tasks one teammate sends another a day',
+  kind: 'change',
+  input: s.object({
+    sender: id("'bot:<slug>' or 'person:<id>'"),
+    receiver: id("a manager above the sender, 'bot:<slug>' or 'person:<id>'"),
+    perDay: s.optional(s.number({ min: 0, max: 10_000 })),
+  }),
+  // A cap is a limit: Tico may add or lower one, never raise or remove it.
+  can: (ctx, { sender, receiver, perDay }) => {
+    if (ctx.via !== 'tico') return true;
+    const caps = ctx.queryClient.getQueryData(taskCapsQuery.queryKey)?.caps;
+    if (!caps) return false;
+    // An agent may be named by its slug or its id: either names the same cap.
+    const roster = ctx.queryClient.getQueryData(agentsQuery.queryKey) ?? [];
+    const same = (ref: string) => {
+      const a = roster.find((r) => `bot:${r.slug}` === ref || `bot:${r.id}` === ref);
+      return a ? [`bot:${a.slug}`, `bot:${a.id}`] : [ref];
+    };
+    const senders = same(sender);
+    const receivers = same(receiver);
+    const now = caps.find((c) => senders.includes(c.sender) && receivers.includes(c.receiver));
+    return lowers(now ? now.per_day : null, perDay);
+  },
+  run: (_ctx, { sender, receiver, perDay }) => setTaskCap(sender, receiver, perDay ?? null),
+  did: ({ perDay }) => (perDay == null ? 'Cap removed' : perDay === 0 ? 'Blocked' : `Capped at ${perDay} a day`),
+  target: ({ sender }) => ({ kind: 'limit', id: sender.replace(/^bot:/, '') }),
+});
+
+/** Changes Tico may undo: ones whose undo can itself be undone and give no one a right (backend/settings_admin.py). */
+const UNDOABLE_BY_TICO = new Set(['model', 'placement', 'fallback', 'profile']);
+
+function cachedChange(ctx: { queryClient: QueryClient }, change: string) {
+  for (const [, page] of ctx.queryClient.getQueriesData<{ changes?: SettingsChange[] }>({ queryKey: ['settings', 'changes'] })) {
+    const found = page?.changes?.find((c) => c.id === change);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+export const undoSettingsChange = defineAction({
+  id: 'settings.undoChange',
+  title: "Undo a change to an agent's settings",
+  kind: 'change',
+  input: s.object({ change: id('a settings change id from History') }),
+  // Open to Tico only for a change whose undo can be undone again and grants nothing; owners and access, and
+  // the changes that cannot be undone twice, are the person's own press.
+  can: (ctx, { change }) => ctx.via !== 'tico' || UNDOABLE_BY_TICO.has(cachedChange(ctx, change)?.field ?? ''),
+  run: async (ctx, { change }) => {
+    const c = cachedChange(ctx, change);
+    if (!c) throw new Error('Open History first');
+    const agents = await ctx.queryClient.fetchQuery(agentsQuery);
+    const revision = agents.find((a) => a.id === c.bot || a.slug === c.bot)?.revision;
+    if (revision == null) throw new Error('That agent is gone');
+    const out = await undoChange(change, revision);
+    void ctx.queryClient.invalidateQueries({ queryKey: ['settings', 'changes'] });
+    void ctx.queryClient.invalidateQueries({ queryKey: agentsQuery.queryKey });
+    return out;
+  },
+  did: (_input, out) => (out?.id ? 'Undo started' : 'Undone'),
+  target: () => setting('history'),
+});
+
+export const gatewayCheck = defineAction({
+  id: 'settings.checkGateway',
+  title: 'Check the Tico Gateway key now',
+  kind: 'change',
+  input: s.object({}),
+  run: () => checkGateway(),
+  did: (_input, out) => (out as { message?: string } | undefined)?.message ?? 'Checked',
+  target: () => setting('gateway'),
+});
+
+export const gatewayClear = defineAction({
+  id: 'settings.clearGateway',
+  title: 'Clear the Tico Gateway key',
+  kind: 'change',
+  input: s.object({}),
+  // Removes a stored secret, and agents on Tico models stop until one is saved: the owner's own press.
+  tico: false,
+  run: () => clearGateway(),
+  did: () => 'Key cleared',
+  target: () => setting('gateway'),
+});
+
+export const gatewayAutomatic = defineAction({
+  id: 'settings.connectGateway',
+  title: 'Connect the Tico Gateway automatically again',
+  kind: 'change',
+  input: s.object({}),
+  // Enrolls the install and stores the key it gets back: the owner's own press.
+  tico: false,
+  run: () => connectGatewayAutomatically(),
+  did: () => 'Connecting',
+  target: () => setting('gateway'),
+});
+
+// ---- company gaps (anchor: General, People, tokens, Security and Tico support add their actions below) ----
+
+const accessNow = (ctx: Ctx) => ctx.queryClient.getQueryData<AccessFull>(accessQuery.queryKey);
+const person = (p: string) => ({ kind: 'person', id: p });
+const addresses = s.array(s.string({ min: 1, max: 320 }), { max: 500 });
+
+/** A file from the person's disk: only a click has one (as files.upload). */
+const picture: Schema<File> = {
+  parse: (v, p) => (typeof File !== 'undefined' && v instanceof File ? { ok: true, value: v } : { ok: false, error: `${p || 'input'}: expected a file` }),
+  json: () => ({ type: 'object', description: 'A picture the person chose' }),
+  optional: false,
+  '~standard': {
+    version: 1,
+    vendor: 'tico',
+    validate: (v) => (typeof File !== 'undefined' && v instanceof File ? { value: v } : { issues: [{ message: 'expected a file' }] }),
+  },
+};
+
+export const addQuietly = defineAction({
+  id: 'settings.addPerson',
+  title: 'Add a person without sending an email',
+  kind: 'change',
+  input: s.object({ email: s.string({ min: 3, max: 320, pattern: /^[^\s@]+@[^\s@]+$/, what: 'an email address' }), name: s.optional(s.string({ max: 120 })) }),
+  // As settings.invite: adding a teammate is ordinary setup work.
+  run: async (ctx, { email, name }) => {
+    const added = await addPersonQuietly(email, name ?? '');
+    void ctx.queryClient.invalidateQueries({ queryKey: accessQuery.queryKey });
+    return added;
+  },
+  did: ({ email }) => `Added ${email}`,
+  target: (_input, out) => (out ? person(out.person) : setting('people')),
+});
+
+export const joining = defineAction({
+  id: 'settings.setJoining',
+  title: 'Change who can join by signing in',
+  kind: 'change',
+  input: s.object({ allowed: addresses, domains: s.array(s.string({ min: 1, max: 253 }), { max: 100 }) }),
+  // Letting more people in is the person's own press; taking an address or a domain off stays Tico's.
+  can: (ctx, { allowed, domains }) => {
+    if (ctx.via !== 'tico') return true;
+    const v = accessNow(ctx);
+    return !!v && allowed.every((x) => v.allowed.includes(x)) && domains.every((d) => v.allowed_domains.includes(d));
+  },
+  run: (_ctx, { allowed, domains }) => setAllowed(allowed, domains),
+  did: () => 'Joining changed',
+  target: () => setting('joining'),
+});
+
+export const agentLimit = defineAction({
+  id: 'settings.agentLimit',
+  title: 'Change how many agents a person may have',
+  kind: 'change',
+  input: s.object({ limit: s.number({ int: true, min: 0, max: 1000 }) }),
+  // Raising a limit is the person's own press; lowering it stays Tico's.
+  can: (ctx, { limit }) => ctx.via !== 'tico' || limit <= (accessNow(ctx)?.member_bot_limit ?? 0),
+  run: (_ctx, { limit }) => setAgentLimit(limit),
+  did: ({ limit }) => `Limit set to ${limit}`,
+  target: () => setting('agent-limit'),
+});
+
+export const signIn = defineAction({
+  id: 'settings.signIn',
+  title: "Turn a person's sign-in on or off",
+  kind: 'change',
+  input: s.object({ person: id('a person id'), on: s.boolean() }),
+  // Turning sign-in back on lets someone in: the person's own press. Turning it off stays Tico's.
+  can: (ctx, { on }) => !(on && ctx.via === 'tico'),
+  run: (_ctx, { person: p, on }) => setSignIn(p, on),
+  did: ({ on }) => (on ? 'Sign-in on' : 'Sign-in off'),
+  target: ({ person: p }) => person(p),
+});
+
+export const restoreLeft = defineAction({
+  id: 'settings.restorePerson',
+  title: 'Bring back a person who left',
+  kind: 'change',
+  input: s.object({ person: id('a person id') }),
+  // Gives someone their sign-in back.
+  tico: false,
+  run: (_ctx, { person: p }) => restorePerson(p),
+  did: () => 'Restored',
+  target: ({ person: p }) => person(p),
+});
+
+export const forget = defineAction({
+  id: 'settings.forgetPerson',
+  title: 'Remove a person who left, for good',
+  kind: 'change',
+  input: s.object({ person: id('a person id') }),
+  // Cannot be undone.
+  tico: false,
+  run: (_ctx, { person: p }) => forgetPerson(p),
+  did: () => 'Removed',
+  target: () => setting('people'),
+});
+
+export const revokeAny = defineAction({
+  id: 'settings.revokeAnyToken',
+  title: "Revoke someone's API token",
+  kind: 'change',
+  input: s.object({ token: id('a token id') }),
+  // Its scripts stop for good: cannot be undone.
+  tico: false,
+  run: (_ctx, { token }) => revokeAnyToken(token),
+  did: () => 'Token revoked',
+  target: ({ token }) => ({ kind: 'token', id: token }),
+});
+
+export const screeningTest = defineAction({
+  id: 'settings.testScreening',
+  title: 'Run the screening samples',
+  kind: 'change',
+  input: s.object({}),
+  // Nothing is held or kept; the old app's agents could run it too.
+  run: () => testScreening(),
+  did: (_input, out) => (out ? `Passed ${out.passed} of ${out.total}` : 'Ran the samples'),
+  target: () => setting('screening'),
+});
+
+export const letSupportIn = defineAction({
+  id: 'settings.letSupportIn',
+  title: 'Let Tico support sign in for a while',
+  kind: 'change',
+  input: s.object({ ticket: id('a support request id'), tier: s.oneOf(['app', 'full'] as const), hours: s.number({ int: true, min: 1, max: 8760 }) }),
+  // Lets someone from outside the company in: the person's own press.
+  tico: false,
+  run: (_ctx, { ticket, tier, hours }) => startSupportAccess(ticket, tier, hours),
+  did: () => 'Tico support let in',
+  target: () => setting('support-access'),
+});
+
+export const stopSupport = defineAction({
+  id: 'settings.stopSupport',
+  title: "End Tico support's sign-in now",
+  kind: 'change',
+  input: s.object({ session: id('a support session id') }),
+  run: (_ctx, { session }) => stopSupportAccess(session),
+  did: () => 'Tico support stopped',
+  target: () => setting('support-access'),
+});
+
+export const teamIcon = defineAction({
+  id: 'settings.teamIcon',
+  title: "Change the company's icon",
+  kind: 'change',
+  input: s.object({ file: picture }),
+  // Only a press has a file to send.
+  tico: false,
+  run: (_ctx, { file }) => setTeamIcon(file),
+  did: () => 'Icon changed',
+  target: () => setting('icon'),
+});
+
+export const usageCount = defineAction({
+  id: 'settings.usageCount',
+  title: 'Send the anonymous usage count',
+  kind: 'change',
+  input: s.object({ on: s.boolean() }),
+  // Sending anything outside the company is the person's own press; stopping it stays Tico's.
+  can: (ctx, { on }) => !(on && ctx.via === 'tico'),
+  run: (_ctx, { on }) => setUsageCount(on),
+  did: ({ on }) => (on ? 'Turned on' : 'Turned off'),
+  target: () => setting('usage-count'),
+});
+
+export const newInstallId = defineAction({
+  id: 'settings.resetInstallId',
+  title: 'Start a new install ID',
+  kind: 'change',
+  input: s.object({}),
+  // The old ID cannot be brought back.
+  tico: false,
+  run: () => resetInstallId(),
+  did: () => 'New install ID',
+  target: () => setting('usage-count'),
+});
+
+export const suggestionPrivacy = defineAction({
+  id: 'settings.suggestionPrivacy',
+  title: 'Change what suggestions may share',
+  kind: 'change',
+  input: s.object({ field: s.oneOf(['share_stats_for_suggestions', 'report_suggestion_outcomes'] as const), on: s.boolean() }),
+  // Sharing more outside the company is the person's own press; sharing less stays Tico's.
+  can: (ctx, { on }) => !(on && ctx.via === 'tico'),
+  run: (_ctx, { field, on }) => setSuggestionPrivacy(field, on),
+  did: ({ on }) => (on ? 'Turned on' : 'Turned off'),
+  target: ({ field }) => setting(field),
+});
+
+export const bucket = defineAction({
+  id: 'settings.saveBucket',
+  title: "Store new files in the company's own bucket",
+  kind: 'change',
+  input: s.object({
+    bucket: s.string({ min: 3, max: 63 }),
+    region: s.string({ min: 1, max: 32 }),
+    prefix: s.optional(s.string({ max: 200 })),
+    keyId: s.string({ min: 1, max: 128 }),
+    secret: s.optional(s.string({ max: 128 })),
+  }),
+  // Stores a secret key.
+  tico: false,
+  run: (_ctx, i) =>
+    saveBucket({ bucket: i.bucket, region: i.region, prefix: i.prefix ?? '', access_key_id: i.keyId, secret_access_key: i.secret ?? '' }),
+  did: () => 'New files go to the bucket',
+  target: () => setting('storage'),
+});
+
+export const serverStorage = defineAction({
+  id: 'settings.dropBucket',
+  title: "Store new files on the server's storage again",
+  kind: 'change',
+  input: s.object({}),
+  run: () => dropBucket(),
+  did: () => "New files go to the server's storage",
+  target: () => setting('storage'),
+});
+
+export const hostingCheck = defineAction({
+  id: 'settings.checkHosting',
+  title: 'Check Tico file hosting now',
+  kind: 'change',
+  input: s.object({}),
+  run: () => checkHosting(),
+  did: () => 'Checked',
+  target: () => setting('storage'),
+});
+
+export const filesMove = defineAction({
+  id: 'settings.moveFiles',
+  title: 'Move existing files to where new files go',
+  kind: 'change',
+  input: s.object({ bytes: s.number({ int: true, min: 0 }) }),
+  // Tico file hosting bills what it stores in Gateway credits: spends money.
+  tico: false,
+  run: (_ctx, { bytes }) => moveFiles(bytes),
+  did: () => 'Moving files',
+  target: () => setting('storage'),
+});
+
+const repo = s.string({ min: 3, max: 200, pattern: /^[^/\s]+\/[^/\s]+$/, what: 'owner/name' });
+
+export const useRepo = defineAction({
+  id: 'settings.useRepo',
+  title: 'Put a repository in use or take it out',
+  kind: 'change',
+  input: s.object({ repo, on: s.boolean() }),
+  run: (_ctx, { repo: name, on }) => setRepo(name, { enabled: on }),
+  did: ({ on }) => (on ? 'In use' : 'Not in use'),
+  target: ({ repo: name }) => ({ kind: 'repo', id: name }),
+});
+
+export const repoSetup = defineAction({
+  id: 'settings.repoSetup',
+  title: "Change a repository's setup command",
+  kind: 'change',
+  input: s.object({ repo, command: s.string({ max: 2000 }) }),
+  run: (_ctx, { repo: name, command }) => setRepo(name, { setup_command: command.trim() }),
+  did: () => 'Setup command saved',
+  target: ({ repo: name }) => ({ kind: 'repo', id: name }),
+});
+
+export const newAgentRepos = defineAction({
+  id: 'settings.newAgentRepos',
+  title: 'Choose the repositories new agents get',
+  kind: 'change',
+  input: s.object({ value: s.oneOf(['own', 'all'] as const) }),
+  run: (_ctx, { value }) => setNewAgentRepos(value),
+  did: () => 'Saved',
+  target: () => setting('repositories'),
+});
+
+export const reposRefresh = defineAction({
+  id: 'settings.refreshRepos',
+  title: 'Read the repositories from GitHub again',
+  kind: 'change',
+  input: s.object({}),
+  run: () => refreshRepos(),
+  did: () => 'Refreshed',
+  target: () => setting('repositories'),
+});
+
+const repoName = s.string({ min: 1, max: 100, pattern: /^[A-Za-z0-9._-]+$/, what: 'a repository name' });
+
+export const repoPreview = defineAction({
+  id: 'settings.previewRepo',
+  title: 'See what a new repository would be',
+  kind: 'view',
+  input: s.object({ name: repoName }),
+  run: (_ctx, { name }): Promise<ProductRepoPreview> => previewRepo(name),
+  did: () => 'Previewed',
+  target: () => setting('repositories'),
+});
+
+export const repoCreate = defineAction({
+  id: 'settings.createRepo',
+  title: 'Make a new private repository on GitHub',
+  kind: 'change',
+  input: s.object({ name: repoName }),
+  // Makes a repository outside Tico that Tico cannot take back: the owner's own press.
+  tico: false,
+  run: async (ctx, { name }) => {
+    const p = await previewRepo(name);
+    if (p.capability !== 'available') throw new Error(p.capability_detail || 'GitHub cannot make it now');
+    const made = await createRepo(p);
+    void ctx.queryClient.invalidateQueries({ queryKey: ['settings', 'repositories'] });
+    return made;
+  },
+  did: (_input, out) => (out ? `Made ${out.repository}` : 'Made'),
+  target: () => setting('repositories'),
 });
