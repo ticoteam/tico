@@ -63,12 +63,22 @@ tico email message owner@example.com 18f2c9a3b4d5e6f7
 tico email attachments owner@example.com 18f2...                 # references a1, a2, ...
 tico email attachment owner@example.com 18f2... a1 --out /private/dir/file.pdf
 tico email label owner@example.com hub/needs-owner 18f2...       # unlabel, archive, unarchive, mark-read, mark-unread
-tico email label owner@example.com STARRED 18f2...               # stars it
+tico email star owner@example.com 18f2...                        # unstar, important, not-important, spam, not-spam
+tico email trash owner@example.com --thread 18f2...              # a whole thread; untrash brings it back
+tico email search owner@example.com 'in:trash'                   # in:sent and in:spam too
+tico email labels owner@example.com                              # every label with its counts
+tico email label-create owner@example.com Clients/Acme           # label-rename, label-delete (your own labels only)
+tico email original owner@example.com 18f2... [--out /tmp/message.eml]   # every header as received
 tico email draft owner@example.com --to person@example.org --subject "..." --body-file out/draft.txt
 tico email draft owner@example.com --reply-to 18f2... --body-file out/reply.txt
-tico email discard owner@example.com r-882...                    # only an unsent draft
-tico email send owner@example.com --draft r-882...               # queues it with Tico
+tico email drafts owner@example.com [--q 'to:person@example.org'] [--thread 18f2...]   # draft ids, whoever made them
+tico email draft-show owner@example.com r-882...                 # one draft: headers, body, files (or its message id)
+tico email draft-update owner@example.com r-882... --body-file out/draft.txt   # in place; what you leave out stays
+tico email discard owner@example.com r-882...                    # a draft id or its message id; only an unsent draft
+tico email send owner@example.com --draft r-882...               # queues it with Tico (prints send id, state, task)
 tico email reply owner@example.com --thread 18f2... --body-file out/reply.txt   # draft, then queue it with Tico
+tico email reply owner@example.com --thread 18f2... --all --body-file out/reply.txt   # to everyone on it
+tico email forward owner@example.com 18f2... --to person@example.org --body "For you."   # with its files; queued
 tico email lint owner@example.com --body-file out/draft.txt --subject "..." [--to addr]
 tico email unsubscribe owner@example.com 18f2...                 # one RFC 8058 one-click request
 tico email policy --bot <slug>                                   # your sending policy, as Tico answers it
@@ -82,7 +92,9 @@ tico automation list --owner person:<id>                         # the inbox's M
 tico automation recent-runs --trigger message --range 24h        # what it did to new mail
 ```
 
-Each filing command prints an undo line. Add `--json` for the API response.
+Each filing command prints an undo line. Add `--json` for the API response. Every filing command takes message ids,
+`--thread <id>` (repeatable: every message in the thread) or `--query`. Nothing deletes a message for good: trash and
+spam are kept by Gmail for 30 days, and `untrash` and `not-spam` bring them back.
 
 ## Rules
 
@@ -135,7 +147,10 @@ Each filing command prints an undo line. Add `--json` for the API response.
 - A refused `send` is not an error: the answer is `blocked` with Tico's reason, and the draft stays in Drafts. Check
   the state (`pending`, `waiting_approval` or `blocked`), not the exit code.
 - Running the same `draft` twice finds the same Gmail draft; changing a word makes a
-  new one. Sending the same draft twice sends nothing the second time.
+  new one. To change a draft, use `draft-update`: it keeps the draft id. Sending the same draft twice sends nothing
+  the second time.
+- A draft's message in `thread` or `search` carries its `draft_id`; `drafts` lists them all. Canceling a queued send
+  keeps its draft in Gmail; discard it yourself if it is not wanted.
 - If `tico email mailboxes` shows the mailbox not connected or its last check failed, that is the owner's twenty
   minutes: file a task for `the owner` quoting the line and stop.
 - An unsubscribe `accepted` means the sender said 2xx, not that they will never write again;

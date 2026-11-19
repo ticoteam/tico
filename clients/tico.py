@@ -24,15 +24,18 @@ CLIENT_VERSION = "0.2.1"
 
 
 def gmail_read_timeout(method, path, default):
-    """Live Gmail reads and organizing may mint and page before answering."""
+    """Live Gmail reads and organizing may mint and page before answering, and a queued send reads its draft from Gmail
+    and waits for the second reviewer (a decision model chain) before it answers."""
     route = path.split("?", 1)[0]
     if method == "POST" and (
-        route in ("/api/v2/mail/messages/organize", "/api/v2/mail/drafts")
+        route in ("/api/v2/mail/messages/organize", "/api/v2/mail/drafts", "/api/v2/email/sends")
         or re.fullmatch(r"/api/v2/mail/messages/[^/]+/unsubscribe", route)
     ):
         return max(default, 90)
+    if method in ("PATCH", "DELETE") and re.fullmatch(r"/api/v2/mail/drafts/[^/]+", route):
+        return max(default, 90)
     if method == "GET" and re.fullmatch(
-        r"/api/v2/mail/(?:messages(?:/[^/]+(?:/attachments(?:/[^/]+)?)?)?|threads/[^/]+)", route
+        r"/api/v2/mail/(?:messages(?:/[^/]+(?:/attachments(?:/[^/]+)?)?)?|threads/[^/]+|drafts(?:/[^/]+)?)", route
     ):
         return max(default, 90)
     return default

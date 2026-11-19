@@ -59,6 +59,9 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     person. `to_bot(name)` says a recipient is a bot. `direct` is the team's rule: without it, only the person's own."""
     if method in ("GET", "HEAD", "OPTIONS"):
         return True
+    # Changing a Gmail draft delivers nothing, as writing one does; discarding one (Gmail deletes it for good) asks.
+    if method == "PATCH" and re.fullmatch(r"/api/v2/mail/drafts/[^/]+", path):
+        return True
     if method != "POST":
         return False
     if path == "/api/v2/pages":

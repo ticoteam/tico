@@ -703,5 +703,601 @@
   "stdout": "Unlabeled 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
   "stderr": "",
   "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "drafts",
+   "ops@acme.test",
+   "--q",
+   "to:ana@vendor.example",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_drafts",
+    {
+     "limit": 50,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "q": "to:ana@vendor.example"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/drafts?mailbox=ops%40acme.test&q=to%3Aana%40vendor.example&limit=50",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "drafts",
+   "ops@acme.test",
+   "--thread",
+   "18c2f0a1b2c3d4e5",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_drafts",
+    {
+     "limit": 50,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "thread": "18c2f0a1b2c3d4e5"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/drafts?mailbox=ops%40acme.test&thread=18c2f0a1b2c3d4e5&limit=50",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "draft-show",
+   "ops@acme.test",
+   "r-123",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_draft_show",
+    {
+     "draft": "r-123",
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/drafts/r-123?mailbox=ops%40acme.test",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "draft-update",
+   "ops@acme.test",
+   "r-123",
+   "--subject",
+   "Records",
+   "--body",
+   "Updated text.",
+   "--to",
+   "ana@vendor.example"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "PATCH",
+    "mail/drafts/r-123",
+    {
+     "mailbox": "ops@acme.test",
+     "to": [
+      "ana@vendor.example"
+     ],
+     "subject": "Records",
+     "body": "Updated text."
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "send",
+   "ops@acme.test",
+   "--draft",
+   "r-123",
+   "--task",
+   "1a2b3c4d",
+   "--approval-id",
+   "msg-1"
+  ],
+  "tools": [
+   [
+    "tico_email_send",
+    {
+     "approval_id": "msg-1",
+     "draft": "r-123",
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "task": "1a2b3c4d"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "email/sends",
+    {
+     "mailbox": "ops@acme.test",
+     "draft_id": "r-123",
+     "approval_id": "msg-1",
+     "task_id": "1a2b3c4d"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"send\": {\n    \"id\": \"snd_1\",\n    \"state\": \"waiting_approval\",\n    \"decision\": {\n      \"outcome\": \"ask\"\n    }\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "discard",
+   "ops@acme.test",
+   "18c2f0a1b2c3d4e5"
+  ],
+  "tools": [
+   [
+    "tico_email_discard",
+    {
+     "draft": "18c2f0a1b2c3d4e5",
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "DELETE",
+    "mail/drafts/18c2f0a1b2c3d4e5?mailbox=ops%40acme.test",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "drafts",
+   "ops@acme.test"
+  ],
+  "tools": [
+   [
+    "tico_email_drafts",
+    {
+     "limit": 50,
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/drafts?mailbox=ops%40acme.test&limit=50",
+    null
+   ]
+  ],
+  "stdout": "# Email\n\nNo drafts.\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "trash",
+   "ops@acme.test",
+   "--thread",
+   "18c2f0a1b2c3d4e5",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_trash",
+    {
+     "ids": [],
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "threads": [
+      "18c2f0a1b2c3d4e5"
+     ]
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 100,
+     "threads": [
+      "18c2f0a1b2c3d4e5"
+     ],
+     "action": "trash"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"count\": 2,\n  \"mailbox\": \"ops@acme.test\",\n  \"ids\": [\n    \"m1\",\n    \"m2\"\n  ],\n  \"undo\": {\n    \"action\": \"unlabel\",\n    \"label\": \"Receipts\",\n    \"ids\": [\n      \"m1\",\n      \"m2\"\n    ]\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "star",
+   "ops@acme.test",
+   "18c2f0a1b2c3d4e5"
+  ],
+  "tools": [
+   [
+    "tico_email_star",
+    {
+     "ids": [
+      "18c2f0a1b2c3d4e5"
+     ],
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 100,
+     "ids": [
+      "18c2f0a1b2c3d4e5"
+     ],
+     "action": "star"
+    }
+   ]
+  ],
+  "stdout": "Starred 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "not-spam",
+   "ops@acme.test",
+   "--query",
+   "in:spam from:bank.example",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_not_spam",
+    {
+     "ids": [],
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "query": "in:spam from:bank.example"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "query": "in:spam from:bank.example",
+     "limit": 100,
+     "action": "not_spam"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"count\": 2,\n  \"mailbox\": \"ops@acme.test\",\n  \"ids\": [\n    \"m1\",\n    \"m2\"\n  ],\n  \"undo\": {\n    \"action\": \"unlabel\",\n    \"label\": \"Receipts\",\n    \"ids\": [\n      \"m1\",\n      \"m2\"\n    ]\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "labels",
+   "ops@acme.test"
+  ],
+  "tools": [
+   [
+    "tico_email_labels",
+    {
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/labels?mailbox=ops%40acme.test",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "label-create",
+   "ops@acme.test",
+   "Clients/Acme"
+  ],
+  "tools": [
+   [
+    "tico_email_label_create",
+    {
+     "mailbox": "ops@acme.test",
+     "name": "Clients/Acme",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/labels",
+    {
+     "mailbox": "ops@acme.test",
+     "name": "Clients/Acme"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "label-rename",
+   "ops@acme.test",
+   "Clients/Acme",
+   "Clients/Acme-Co"
+  ],
+  "tools": [
+   [
+    "tico_email_label_rename",
+    {
+     "label": "Clients/Acme",
+     "mailbox": "ops@acme.test",
+     "name": "Clients/Acme-Co",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PATCH",
+    "mail/labels/Clients%2FAcme",
+    {
+     "mailbox": "ops@acme.test",
+     "name": "Clients/Acme-Co"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "label-delete",
+   "ops@acme.test",
+   "Clients/Acme"
+  ],
+  "tools": [
+   [
+    "tico_email_label_delete",
+    {
+     "label": "Clients/Acme",
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "DELETE",
+    "mail/labels/Clients%2FAcme?mailbox=ops%40acme.test",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "original",
+   "ops@acme.test",
+   "18c2f0a1b2c3d4e5"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "mail/messages/18c2f0a1b2c3d4e5/original?mailbox=ops%40acme.test",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "original",
+   "ops@acme.test",
+   "18c2f0a1b2c3d4e5",
+   "--raw"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "mail/messages/18c2f0a1b2c3d4e5/original?mailbox=ops%40acme.test&raw=true",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "forward",
+   "ops@acme.test",
+   "18c2f0a1b2c3d4e5",
+   "--to",
+   "books@acme.test",
+   "--body",
+   "For the books."
+  ],
+  "tools": [],
+  "http": [
+   [
+    "POST",
+    "mail/drafts",
+    {
+     "mailbox": "ops@acme.test",
+     "to": [
+      "books@acme.test"
+     ],
+     "forward": "18c2f0a1b2c3d4e5",
+     "body": "For the books."
+    }
+   ],
+   [
+    "POST",
+    "email/sends",
+    {
+     "mailbox": "ops@acme.test",
+     "draft_id": "r-123",
+     "draft_message": "dm-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"draft\": {\n    \"mailbox\": \"ops@acme.test\",\n    \"draft\": \"r-123\",\n    \"message\": \"dm-1\",\n    \"thread\": \"t-1\"\n  },\n  \"send\": {\n    \"id\": \"snd_1\",\n    \"state\": \"waiting_approval\",\n    \"decision\": {\n      \"outcome\": \"ask\"\n    }\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "reply",
+   "ops@acme.test",
+   "--thread",
+   "18c2f0a1b2c3d4e5",
+   "--all",
+   "--body",
+   "Thanks, all."
+  ],
+  "tools": [],
+  "http": [
+   [
+    "POST",
+    "mail/drafts",
+    {
+     "mailbox": "ops@acme.test",
+     "reply_all": true,
+     "reply_to": "18c2f0a1b2c3d4e5",
+     "body": "Thanks, all."
+    }
+   ],
+   [
+    "POST",
+    "email/sends",
+    {
+     "mailbox": "ops@acme.test",
+     "draft_id": "r-123",
+     "draft_message": "dm-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"draft\": {\n    \"mailbox\": \"ops@acme.test\",\n    \"draft\": \"r-123\",\n    \"message\": \"dm-1\",\n    \"thread\": \"t-1\"\n  },\n  \"send\": {\n    \"id\": \"snd_1\",\n    \"state\": \"waiting_approval\",\n    \"decision\": {\n      \"outcome\": \"ask\"\n    }\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "draft",
+   "ops@acme.test",
+   "--forward",
+   "18c2f0a1b2c3d4e5",
+   "--to",
+   "books@acme.test"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "POST",
+    "mail/drafts",
+    {
+     "mailbox": "ops@acme.test",
+     "to": [
+      "books@acme.test"
+     ],
+     "forward": "18c2f0a1b2c3d4e5",
+     "body": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"mailbox\": \"ops@acme.test\",\n  \"draft\": \"r-123\",\n  \"message\": \"dm-1\",\n  \"thread\": \"t-1\"\n}\n",
+  "stderr": "",
+  "exit": 0
  }
 ]

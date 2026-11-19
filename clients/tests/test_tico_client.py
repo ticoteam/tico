@@ -100,6 +100,11 @@ def test_live_mail_waits_for_metadata_batches_without_changing_other_routes():
     assert gmail_read_timeout("GET", "/api/v2/mail/messages/m1", 120) == 120
     assert gmail_read_timeout("GET", "/api/v2/mail/mailboxes", 15) == 15
     assert gmail_read_timeout("POST", "/api/v2/mail/messages", 15) == 15
+    # A queued send reads its draft and waits for the second reviewer: a 15 s wait gave up on a send it had queued.
+    assert gmail_read_timeout("POST", "/api/v2/email/sends", 15) == 90
+    assert gmail_read_timeout("GET", "/api/v2/mail/drafts?mailbox=ana%40acme.example", 15) == 90
+    assert gmail_read_timeout("PATCH", "/api/v2/mail/drafts/r-1", 15) == 90
+    assert gmail_read_timeout("POST", "/api/v2/email/sends/s1/cancel", 15) == 15
 
 
 if __name__ == "__main__":
