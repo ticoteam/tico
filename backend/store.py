@@ -1362,11 +1362,9 @@ class Store:
                     if aid and operation.startswith("/api/v2/attempts/") and not operation.endswith("/complete"):
                         residents.refuse_fenced(c, aid)
                     if operation.startswith("/api/v2/residents/") and isinstance(result, dict):
-                        current = c.execute(
-                            "SELECT * FROM resident_sessions WHERE id=?", (result.get("id"),)
-                        ).fetchone()
-                        if current and current["state"] == "closed":
-                            return residents.view(current)
+                        stopped = residents.stopped_view(c, result.get("id"))
+                        if stopped:
+                            return stopped
                 replay_principal = replay_auth.runner_receipt_principal(c, identity, aid)
                 if identity.role == "runner" and operation == "/api/v2/jobs/claim" and isinstance(saved, dict):
                     from . import task_context

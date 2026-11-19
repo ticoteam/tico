@@ -87,6 +87,12 @@ def view(row):
     }
 
 
+def stopped_view(c, rid):
+    """The current answer for a resident that has closed since a saved answer was given, or None."""
+    row = c.execute("SELECT * FROM resident_sessions WHERE id=?", (str(rid or ""),)).fetchone()
+    return view(row) if row and row["state"] == "closed" else None
+
+
 def fenced(c, aid):
     """Whether a revocation fenced this turn: it may not start, act, take input or have its answer posted."""
     row = c.execute("SELECT fenced_at FROM resident_turns WHERE attempt_id=?", (aid,)).fetchone()

@@ -1809,7 +1809,7 @@ def set_level(c, who, vault, tool_id, subject, level):
     finally:
         access_requests.DEFERRED.reset(deferred)
     after = subject_level(c, tool_id, subject)
-    if before and RANK.get(after, -1) < RANK.get(before, -1):
+    if before and RANK.get(after or "", 0) < RANK[before]:
         from . import residents
 
         # A lowered level on the same key: a process may hold the Read and write value it had (backend/residents.py).
