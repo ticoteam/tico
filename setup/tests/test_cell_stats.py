@@ -960,6 +960,31 @@ def test_stacks_refuses_a_pid_that_is_not_the_server(box):
     assert r["ok"] is False and box.kills == []
 
 
+def test_profile_runs_py_spy_on_the_server_by_its_host_pid_and_ranks_its_stacks(box):
+    data = box.cell_root / "companies" / "boatyard" / "data" / "flight"
+    (data / "server.pid").write_text("57")
+    fake_process(box, 4100, 1)
+    fake_process(box, 4150, 57)
+    run = box.run
+
+    def spy(argv, timeout=20, cwd=None):
+        if argv[0].endswith("/py-spy"):
+            box.calls.append(list(argv))
+            Path(argv[argv.index("--output") + 1]).write_text("main;serve;read_rows 30\nmain;serve;json 10\nmain 0\n")
+            return Result(0)
+        return run(argv, timeout, cwd)
+
+    box.run = spy
+    r = cs.run_tool(box, "profile", {"company": "boatyard", "seconds": 10})
+    assert r["ok"], r
+    call = next(c for c in box.calls if c[0].endswith("/py-spy"))
+    assert call[0] == str(box.path(cell.PY_SPY)) and call[1:4] == ["record", "--gil", "--nonblocking"]
+    assert call[call.index("--pid") + 1] == "4150" and call[call.index("--duration") + 1] == "10"
+    lines = r["output"].splitlines()
+    assert "40 samples" in lines[0] and lines[1:3] == [" 75.0%  main;serve;read_rows", " 25.0%  main;serve;json"]
+    assert cs.run_tool(box, "profile", {"company": "boatyard", "seconds": 61})["ok"] is False
+
+
 def test_tracemalloc_start_then_dump(box):
     import signal
 

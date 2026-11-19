@@ -1258,6 +1258,7 @@ TOOLS: dict[str, dict] = {
     "db": {"company": ("company", True)},
     "stacks": {"company": ("company", True)},
     "tracemalloc": {"company": ("company", True), "action": (("start", "dump"), True)},
+    "profile": {"company": ("company", True), "seconds": ((5, 60), True)},
     "journal": {"unit": ("unit", True), "minutes": ((1, 60), True)},
 }
 TIMEOUTS = {
@@ -1269,6 +1270,7 @@ TIMEOUTS = {
     "db": 60,
     "stacks": 8,
     "tracemalloc": 20,
+    "profile": 75,  # the most seconds it samples, and the time py-spy takes to attach and write
     "journal": 20,
 }
 
@@ -1487,6 +1489,39 @@ def tracing(root: Path, now: float) -> bool:
     return state
 
 
+PROFILES = "profiles"  # under the cell root: each profile's folded stacks, the newest PROFILES_KEPT kept
+PROFILES_KEPT = 20
+PROFILE_TOP = 40  # stacks a profile's output lists
+
+
+def t_profile(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
+    """`seconds` of py-spy (setup/cell.py PY_SPY, installed by `cell init`) on the server process: only threads holding
+    the GIL (--gil, where a slow server spends its time), sampled without pausing it (--nonblocking). The folded stacks
+    go to <cell root>/profiles/<company>-<time>.txt; the output is the hottest PROFILE_TOP of them, with their share."""
+    pid, why = server_pid(box, view, a["company"])
+    if not pid:
+        return False, why
+    folder = box.cell_root / PROFILES
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    target = folder / f"{a['company']}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.txt"
+    spy = box.path(cell.PY_SPY)
+    argv = [str(spy), "record", "--gil", "--nonblocking", "--pid", str(pid), "--duration", str(a["seconds"])]
+    r = box.run([*argv, "--format", "raw", "--output", str(target)], timeout=timeout)
+    if r.returncode or not target.exists():
+        return False, f"py-spy failed ({r.returncode}): " + _out(r)
+    for old in sorted(folder.glob("*.txt"))[:-PROFILES_KEPT]:
+        old.unlink(missing_ok=True)
+    stacks = []
+    for line in target.read_text(errors="replace").splitlines():
+        stack, _, n = line.rpartition(" ")
+        if stack and n.isdigit():
+            stacks.append((int(n), stack))
+    total = sum(n for n, _ in stacks) or 1
+    lines = [f"{target} ({total} samples of threads holding the GIL over {a['seconds']} s)"]
+    lines += [f"{100 * n / total:5.1f}%  {stack}" for n, stack in sorted(stacks, reverse=True)[:PROFILE_TOP]]
+    return True, "\n".join(lines)
+
+
 def t_tracemalloc(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
     root = view.root(a["company"])
     on = tracing(root, box.time())
@@ -1549,6 +1584,7 @@ RUNNERS = {
     "db": t_db,
     "stacks": t_stacks,
     "tracemalloc": t_tracemalloc,
+    "profile": t_profile,
     "journal": t_journal,
 }
 

@@ -2965,3 +2965,44 @@ def test_compose_gives_the_gateway_only_the_companys_own_data_network_and_limits
     assert [(v["source"], v["target"]) for v in slack["volumes"]] == [(str(d / "data"), "/data")]
     assert list(slack["networks"]) == ["default"] and not slack.get("ports")
     assert slack["labels"] == {cell.LABEL: "boatyard"} and slack["mem_limit"] == str(1024**3)
+
+
+def py_spy_wheel(text):
+    """A wheel holding a fake py-spy that prints `text` (FakeSystem runs it by reading it)."""
+    buf = io.BytesIO()
+    import zipfile
+
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr(cell.PY_SPY_MEMBER, text)
+    return buf.getvalue()
+
+
+def test_init_installs_the_pinned_py_spy_once_and_a_bad_download_never_fails_it(host, monkeypatch):
+    import hashlib
+
+    wheel = py_spy_wheel(f"py-spy {cell.PY_SPY_VERSION}\n")
+    url = "https://files.example/py_spy.whl"
+    monkeypatch.setattr(cell, "PY_SPY_WHEELS", {"aarch64": (url, hashlib.sha256(wheel).hexdigest())})
+    host.system.py_spy = None  # not on the host yet
+    host.system.downloads[url] = wheel[:-1] + b"x"  # not what was pinned
+    first = host("init", "--json")
+    assert first["ok"] and "sha256" in first["py_spy"] and not (host.etc / cell.PY_SPY).exists()
+    host.system.downloads[url] = wheel
+    second = host("init", "--json")
+    spy = host.etc / cell.PY_SPY
+    assert second["ok"] and "py-spy" in second["changed"] and "py_spy" not in second
+    assert spy.read_text() == f"py-spy {cell.PY_SPY_VERSION}\n" and stat.S_IMODE(spy.stat().st_mode) == 0o755
+    third = host("init", "--json")
+    assert third["changed"] == [] and "py_spy" not in third
+    host.system.arch = "riscv64"
+    spy.unlink()
+    assert "riscv64" in host("init", "--json")["py_spy"]
+
+
+def test_profile_answers_the_debug_tool_refusal(ready):
+    answer = ready("profile", "--company", "nobody", "--seconds", "10")
+    assert answer == {
+        "ok": False,
+        "error": "profile_failed",
+        "detail": "refused: company: no such company on this host",
+    }
