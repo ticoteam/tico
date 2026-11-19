@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate } from '@tanstack/react-router';
+import { Link } from '@tanstack/react-router';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { reasonIn, refusal, run } from '@/actions';
 import { configQuery, meQuery } from '@/data';
@@ -18,8 +18,7 @@ import { toast } from '@/kit/Toast';
 import { poll } from '@/lib';
 import { Section } from '@/pagekinds';
 import { AgentList } from './AgentList';
-import { ComputerPanel } from './ComputerPanel';
-import { Gateway } from './Gateway';
+import { GatewayLines } from './Gateway';
 import { installCommands, type Command, type ComputerKind, type RunnerConfig } from './install';
 import { Foot, Line, Meter, SwitchLine, Verb, Word, act, usd, useVisible } from './parts';
 import {
@@ -392,7 +391,6 @@ function Subs({ list, open, owned, add }: { list: Subscription[]; open?: string;
 
 export function Agents({ open }: { open?: string }) {
   const subs = useQuery(subscriptionsQuery);
-  const computers = useQuery(computersQuery);
   const [adding, setAdding] = useState<Adding>(null);
   const v = subs.data;
   if (!v) return null;
@@ -400,7 +398,6 @@ export function Agents({ open }: { open?: string }) {
   const signIns = v.kinds.filter((k) => k.kind === 'claude_login' || k.kind === 'codex_login');
   const keys = v.kinds.filter((k) => !k.connect && k.kind !== 'claude_login' && k.kind !== 'codex_login');
   const owned = new Set<string>(v.kinds.filter((k) => k.owned).map((k) => k.kind));
-  const live = (computers.data ?? []).filter((c) => !c.revoked_at);
   const add = (
     <Menu trigger={<Button icon="plus">Add</Button>}>
       {signIns.map((k) => (
@@ -416,26 +413,6 @@ export function Agents({ open }: { open?: string }) {
     <>
       <Subs list={list} open={open} owned={owned} add={add} />
       <AgentList open={open} />
-      {live.length > 0 && (
-        <Section name="When a plan runs out" defaultOpen={false} target="setting:fallback">
-          <Facts label="When a plan runs out">
-            {live.map((c) => (
-              <SwitchLine
-                key={c.id}
-                label={`${c.label || c.id}: fall back to Tico Gateway`}
-                target={`computer:${c.id}`}
-                checked={c.gateway_fallback === true}
-                onChange={(on) => void act('settings.gatewayFallback', { computer: c.id, on })}
-              />
-            ))}
-            <Line label="Limits">
-              <Link className="verb" to="/company/usage" search={{ view: 'limits' }}>
-                Open limits
-              </Link>
-            </Line>
-          </Facts>
-        </Section>
-      )}
       {adding && 'sign' in adding && <SignInDialog kind={adding.sign} onClose={() => setAdding(null)} />}
       {adding && 'key' in adding && <KeyDialog kind={adding.key} label={adding.label} onClose={() => setAdding(null)} />}
     </>
@@ -468,7 +445,7 @@ function CommandLine({ c }: { c: Command }) {
   );
 }
 
-function AddComputer() {
+export function AddComputer() {
   const config = useQuery(configQuery);
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<ComputerKind>('server');
@@ -492,7 +469,7 @@ function AddComputer() {
     : [];
   return (
     <>
-      <Button icon="plus" onClick={() => setOpen(true)}>
+      <Button variant="primary" onClick={() => setOpen(true)}>
         Add computer
       </Button>
       <Dialog
@@ -559,7 +536,7 @@ function Hosted() {
   if (v?.state === 'deactivated')
     return (
       <Section name="Hosted servers" target="setting:hosted">
-        <Empty title="Hosting has ended" text="Ask Tico support to start it again." />
+        <Empty title="Hosting has ended" />
       </Section>
     );
   if (v?.state !== 'ok' || !v.servers?.length) return null;
@@ -639,51 +616,16 @@ function Sleep() {
   );
 }
 
+/** One folding section per computer: its state (it opens the computer's panel), its agents and their models. Add
+    computer is the page's filled button. */
 export function Computers({ open }: { open?: string }) {
-  const navigate = useNavigate();
   const computers = useQuery(computersQuery);
-  const list = (computers.data ?? []).filter((c) => !c.revoked_at);
   if (!computers.data) return null;
+  // An old address names the computer alone (?open=<id>); the list opens it as computer:<id>.
+  const at = open && computers.data.some((c) => c.id === open) ? `computer:${open}` : open;
   return (
     <>
-      <Section name="Computers" count={list.length} actions={<AddComputer />} target="setting:computers">
-        {list.length === 0 ? (
-          <Empty icon="computer" title="No computers yet" text="Agents run on a computer: yours, or one in the cloud." />
-        ) : (
-          <>
-            <div className="tbl-head g-comp" aria-hidden="true">
-              <span>Computer</span>
-              <span>Kind</span>
-              <span>Agents</span>
-              <span>State</span>
-            </div>
-            {list.map((c) => {
-              return (
-                <Link
-                  key={c.id}
-                  to="/settings/$section"
-                  params={{ section: 'computers' }}
-                  search={open === c.id ? {} : { open: c.id }}
-                  className={c.online ? 'row g-comp' : 'row g-comp is-bad'}
-                  data-target={`computer:${c.id}`}
-                  aria-expanded={open === c.id}
-                  title={c.label || c.id}
-                >
-                  <span className="row-title">{c.label || c.id}</span>
-                  <span className="row-cell">{c.cloud_machine?.shared ? 'Shared' : c.cloud_machine ? 'Cloud' : 'Own'}</span>
-                  <span className="row-cell">{Object.keys(c.readiness?.bots ?? {}).length}</span>
-                  <span className="row-state">
-                    <Word fine={c.online}>{c.online ? 'Online' : 'Offline'}</Word>
-                  </span>
-                </Link>
-              );
-            })}
-          </>
-        )}
-      </Section>
-      {open && list.some((c) => c.id === open) && (
-        <ComputerPanel id={open} onClose={() => void navigate({ to: '/settings/$section', params: { section: 'computers' }, search: {} })} />
-      )}
+      <AgentList open={at} section="computers" />
       {/* Owner, Nov 19: agents made and run outside Tico are not in the first build; one dimmed line. */}
       <Section name="External agents" target="setting:external">
         <div className="row is-off" aria-disabled="true" title="Agents made and run outside Tico">
@@ -700,22 +642,6 @@ export function Computers({ open }: { open?: string }) {
 }
 
 // ---------------------------------------------------------------- Models
-
-/** A provider's own spelling; an id not listed is capitalized. */
-const PROVIDERS: Record<string, string> = {
-  anthropic: 'Anthropic',
-  openai: 'OpenAI',
-  google: 'Google',
-  xai: 'xAI',
-  deepseek: 'DeepSeek',
-  meta: 'Meta',
-  mistral: 'Mistral',
-  moonshot: 'Moonshot',
-  openrouter: 'OpenRouter',
-  cursor: 'Cursor',
-  tico: 'Tico',
-};
-export const providerName = (id: string) => PROVIDERS[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
 
 function Defaults({ names }: { names: { value: string; label: string }[] }) {
   const providers = useQuery({ ...providersQuery, retry: false });
@@ -758,38 +684,44 @@ function Defaults({ names }: { names: { value: string; label: string }[] }) {
   );
 }
 
+/** What happens when a plan runs out: each computer may fall back to Tico Gateway, the Gateway's key (owner), and the
+    limits that cap it. */
+function WhenOut() {
+  const computers = useQuery(computersQuery);
+  const live = (computers.data ?? []).filter((c) => !c.revoked_at);
+  return (
+    <Section name="When a plan runs out" target="setting:fallback">
+      <Facts label="When a plan runs out">
+        {live.map((c) => (
+          <SwitchLine
+            key={c.id}
+            label={`${c.label || c.id}: use Tico Gateway`}
+            target={`computer:${c.id}`}
+            checked={c.gateway_fallback === true}
+            onChange={(on) => void act('settings.gatewayFallback', { computer: c.id, on })}
+          />
+        ))}
+        <GatewayLines />
+        <Line label="Gateway limit">
+          <Link className="verb" to="/company/usage" search={{ view: 'limits' }}>
+            Limits
+          </Link>
+        </Line>
+      </Facts>
+    </Section>
+  );
+}
+
 export function Models() {
   const models = useQuery(modelsQuery);
   const v = models.data;
   if (!v) return null;
   const on = v.enabled_providers;
   const shown = v.models.filter((m) => !m.deprecated && (!on || on.includes(m.provider)));
-  const providers = [...new Set(shown.map((m) => m.provider))];
-  if (shown.length === 0)
-    return (
-      <>
-        <Empty title="No models yet" text="Connect a subscription or a key under Agents." />
-        <Gateway />
-      </>
-    );
   return (
     <>
-      <Defaults names={shown.map((m) => ({ value: m.id, label: m.label }))} />
-      <Gateway />
-      {providers.map((p) => {
-        const rows = shown.filter((m) => m.provider === p);
-        return (
-          <Section key={p} name={providerName(p)} count={rows.length}>
-            {rows.map((m) => (
-              <div key={m.id} className="row g-model" title={m.label}>
-                <span className="row-title">{m.label}</span>
-                <span className="row-cell">{m.runtime ?? ''}</span>
-                <span className="row-fig">{m.context_tokens ? `${Math.round(m.context_tokens / 1000)}K` : ''}</span>
-              </div>
-            ))}
-          </Section>
-        );
-      })}
+      {shown.length === 0 ? <Empty title="No models yet" /> : <Defaults names={shown.map((m) => ({ value: m.id, label: m.label }))} />}
+      <WhenOut />
     </>
   );
 }

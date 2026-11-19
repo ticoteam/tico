@@ -1,4 +1,4 @@
-import { useEffect, useImperativeHandle, useLayoutEffect, useRef, type CSSProperties, type ReactNode, type Ref } from 'react';
+import { useEffect, useImperativeHandle, useLayoutEffect, useRef, type ReactNode, type Ref } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import './VirtualList.css';
 
@@ -61,6 +61,10 @@ export function VirtualList<T>({
     overscan: 6,
     anchorTo: anchor,
     followOnAppend: anchor === 'end',
+    // Scrolling moves the rows in the DOM; React draws again only when the rows in view change.
+    directDomUpdates: true,
+    // Each row is registered so it can be placed; fixed rows keep their given height rather than being measured.
+    useCachedMeasurements: !measure,
   });
   useImperativeHandle(ref, () => ({
     scrollToEnd: () => {
@@ -97,17 +101,11 @@ export function VirtualList<T>({
   }, [last, items.length, onReachEnd]);
 
   return (
-    <div ref={scrollRef} className={className} role={role} aria-label={label}>
-      <div className="vl-space" style={{ '--h': `${v.getTotalSize()}px` } as CSSProperties}>
+    // A list read from the top keeps its place for Back (router.tsx); a timeline always opens at its end.
+    <div ref={scrollRef} className={className} role={role} aria-label={label} data-scroll-restoration-id={anchor === 'start' && label ? `vl:${label}` : undefined}>
+      <div className="vl-space" ref={v.containerRef}>
         {rows.map((r) => (
-          <div
-            key={r.key}
-            className="vl-item"
-            role={role === 'list' ? 'listitem' : undefined}
-            data-index={r.index}
-            ref={measure ? v.measureElement : undefined}
-            style={{ '--y': `${r.start}px` } as CSSProperties}
-          >
+          <div key={r.key} className="vl-item" role={role === 'list' ? 'listitem' : undefined} data-index={r.index} ref={v.measureElement}>
             {renderItem(items[r.index]!, r.index)}
           </div>
         ))}

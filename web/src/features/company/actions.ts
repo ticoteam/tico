@@ -279,6 +279,17 @@ export const productUpdate = defineAction({
   target: ({ product, field }) => ({ kind: 'fact', id: `${product}:${field}` }),
 });
 
+/** Risk as its risks, or as one table of disputes: the switch in Risk's head. */
+export const riskView = defineAction({
+  id: 'risk.view',
+  title: 'Show Risk as risks or as disputes',
+  kind: 'view',
+  input: s.object({ view: s.oneOf(['risks', 'disputes'] as const) }),
+  run: ({ router }, { view }) => go(router, view === 'disputes' ? '/company/risk/disputes' : '/company/risk'),
+  did: ({ view }) => (view === 'disputes' ? 'Showed disputes' : 'Showed risks'),
+  target: () => ({ kind: 'page', id: '/company/risk' }),
+});
+
 export const riskCreate = defineAction({
   id: 'risk.create',
   title: 'Add a risk',
@@ -303,9 +314,6 @@ export const riskUpdate = defineAction({
 
 const versionN = s.number({ int: true, min: 1 });
 const nav = (router: AnyRouter, to: string, search: Record<string, unknown> = {}) => router.navigate({ to, search });
-/** Sets one key of this page's address, keeping the rest. */
-const setSearch = (router: AnyRouter, patch: Record<string, unknown>) =>
-  router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, ...patch }) });
 
 export const strategyOpenVersion = defineAction({
   id: 'strategy.openVersion',
@@ -325,16 +333,6 @@ export const brandOpenVersion = defineAction({
   run: ({ router }, { v }) => nav(router, BRAND, v ? { v } : {}),
   did: ({ v }) => (v ? `Opened v${v}` : 'Opened the latest version'),
   target: () => ({ kind: 'page', id: BRAND }),
-});
-
-/** Strategy or the brand book: mark what changed from the version before, or show the clean page. */
-export const markChanges = defineAction({
-  id: 'strategy.markChanges',
-  title: 'Mark what changed from the version before',
-  kind: 'view',
-  input: s.object({ on: s.boolean() }),
-  run: ({ router }, { on }) => setSearch(router, { compare: on || undefined }),
-  did: ({ on }) => (on ? 'Marked the changes' : 'Cleared the marks'),
 });
 
 export const brandEdit = defineAction({

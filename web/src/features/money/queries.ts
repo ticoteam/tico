@@ -74,7 +74,6 @@ export const pnlQuery = (p: PnlParams, as?: string) =>
   queryOptions({
     queryKey: ['finance', 'pnl', p, ...asKey(as)],
     queryFn: ({ signal }) => api.get<Pnl>(viewAs(`/api/v2/finance/pnl?${qs({ ...p })}`, as), { signal }),
-    ...quiet,
   });
 
 export interface LineGroup {
@@ -99,7 +98,6 @@ export interface LineDetail {
   by_team?: LineGroup[];
   by_teammate?: LineGroup[];
   entries: LineEntry[];
-  paid_by: { kind: 'card' | 'bank' | 'entry'; name: string; amount: number }[] | null;
 }
 
 /** One line over one period; no period (the column before the first) reads nothing. */
@@ -109,7 +107,6 @@ export const lineQuery = (account: string, span: { start: string; end: string } 
     queryFn: ({ signal }) =>
       api.get<LineDetail>(viewAs(`/api/v2/finance/lines/${enc(account)}?${qs({ start: span?.start, end: span?.end, top_n: 8, limit: 12 })}`, as), { signal }),
     enabled: !!span,
-    ...quiet,
   });
 
 export interface SourceRow {
@@ -138,7 +135,6 @@ export const sourcesQuery = (as?: string) =>
   queryOptions({
     queryKey: ['finance', 'sources', ...asKey(as)],
     queryFn: ({ signal }) => orNull(api.get<{ groups: SourceGroup[] }>(viewAs('/api/v2/finance/sources', as), { signal })),
-    ...quiet,
   });
 
 /** After a books sign-in's return: Finance read again, and the sources as the server has them now. */
@@ -171,14 +167,12 @@ export interface Access {
 export const accessQuery = queryOptions({
   queryKey: ['finance', 'access'],
   queryFn: ({ signal }) => orNull(api.get<Access>('/api/v2/finance/access', { signal })),
-  ...quiet,
 });
 
 export const metricQuery = (name: 'cash', as?: string) =>
   queryOptions({
     queryKey: ['finance', 'metric', name, ...asKey(as)],
     queryFn: ({ signal }) => orNull(api.get<FinanceMetric>(viewAs(`/api/v2/finance/metrics/${name}`, as), { signal })),
-    ...quiet,
   });
 
 /* Request shapes follow backend/finance_routes.py: list limits stop at 200, and `unpaid` is the server's word for every
@@ -191,35 +185,30 @@ export const billsQuery = (as?: string) =>
   queryOptions({
     queryKey: ['finance', 'bills', 'unpaid', ...asKey(as)],
     queryFn: ({ signal }) => api.get<FinanceBills>(viewAs(BILLS_URL, as), { signal }),
-    ...quiet,
   });
 
 export const invoicesQuery = (as?: string) =>
   queryOptions({
     queryKey: ['finance', 'invoices', 'unpaid', ...asKey(as)],
     queryFn: ({ signal }) => api.get<FinanceInvoices>(viewAs(INVOICES_URL, as), { signal }),
-    ...quiet,
   });
 
 export const inboxQuery = (as?: string) =>
   queryOptions({
     queryKey: ['finance', 'inbox', ...asKey(as)],
     queryFn: ({ signal }) => api.get<FinanceInbox>(viewAs('/api/v2/finance/inbox?limit=20', as), { signal }),
-    ...quiet,
   });
 
 export const briefQuery = (as?: string) =>
   queryOptions({
     queryKey: ['finance', 'brief', ...asKey(as)],
     queryFn: ({ signal }) => orNull(api.get<FinanceBrief>(viewAs('/api/v2/finance/brief', as), { signal })),
-    ...quiet,
   });
 
 export const transactionsQuery = (as?: string) =>
   queryOptions({
     queryKey: ['finance', 'transactions', ...asKey(as)],
     queryFn: ({ signal }) => api.get<FinanceTransactions>(viewAs(TRANSACTIONS_URL, as), { signal }),
-    ...quiet,
   });
 
 const loadingTx = new Set<string>();
@@ -245,27 +234,23 @@ export const cardsQuery = (as?: string) =>
   queryOptions({
     queryKey: ['finance', 'cards', ...asKey(as)],
     queryFn: ({ signal }) => api.get<FinanceCards>(viewAs('/api/v2/finance/cards?limit=200', as), { signal }),
-    ...quiet,
   });
 
 export const balanceQuery = (asOf?: string, as?: string) =>
   queryOptions({
     queryKey: ['finance', 'balance', asOf ?? 'today', ...asKey(as)],
     queryFn: ({ signal }) => api.get<FinanceBalanceSheet>(viewAs(`/api/v2/finance/balance-sheet${asOf ? `?as_of=${asOf}` : ''}`, as), { signal }),
-    ...quiet,
   });
 
 export const taxQuery = (as?: string) =>
   queryOptions({
     queryKey: ['finance', 'tax', ...asKey(as)],
     queryFn: ({ signal }) => api.get<FinanceSalesTax>(viewAs('/api/v2/finance/tax/sales-tax', as), { signal }),
-    ...quiet,
   });
 
 export const rulesQuery = queryOptions({
   queryKey: ['finance', 'rules'],
   queryFn: ({ signal }) => api.get<FinanceAttributionRules>('/api/v2/finance/attribution-rules', { signal }),
-  ...quiet,
 });
 
 // ---------------------------------------------------------------- budgets
@@ -298,15 +283,15 @@ export const budgetsQuery = (at: string, as?: string) =>
   });
 
 export interface BudgetHistory {
-  columns: { start: string }[];
+  columns: { start: string; end?: string }[];
   budgets: { id: string; budget: (number | null)[]; actual?: (number | null)[] }[];
 }
-export const budgetHistoryQuery = (start: string, end: string, as?: string) =>
+/** Each budget's amount and spend by month, quarter or year over a window (the buckets the window touches, whole). */
+export const budgetHistoryQuery = (start: string, end: string, as?: string, period: 'month' | 'quarter' | 'year' = 'month') =>
   queryOptions({
-    queryKey: ['budget', 'history', { start, end }, ...asKey(as)],
+    queryKey: ['budget', 'history', { start, end, period }, ...asKey(as)],
     queryFn: ({ signal }) =>
-      api.get<BudgetHistory>(viewAs(`/api/v2/finance/reports/budget_vs_actual?${qs({ period: 'month', start, end, top_n: 200 })}`, as), { signal }),
-    ...quiet,
+      api.get<BudgetHistory>(viewAs(`/api/v2/finance/reports/budget_vs_actual?${qs({ period, start, end, top_n: 200 })}`, as), { signal }),
   });
 
 /** A Finance change. Anything but committed is refused here, so `write` takes the change back: an approval is not
@@ -443,13 +428,11 @@ export async function decide(kind: string, payload: object): Promise<Decided> {
 export const payFromQuery = queryOptions({
   queryKey: ['finance', 'pay-from'],
   queryFn: ({ signal }) => api.get<FinancePayFrom>('/api/v2/finance/pay-from', { signal }),
-  ...quiet,
 });
 
 export const mercuryUsersQuery = queryOptions({
   queryKey: ['finance', 'mercury-users'],
   queryFn: ({ signal }) => orNull(api.get<FinanceMercuryUsers>('/api/v2/finance/mercury-users', { signal })),
-  ...quiet,
 });
 
 export interface Hook {
@@ -461,7 +444,6 @@ export interface Hook {
 export const hooksQuery = queryOptions({
   queryKey: ['finance', 'hooks'],
   queryFn: ({ signal }) => orNull(api.get<{ triggers?: Hook[] }>('/api/v2/triggers', { signal })),
-  ...quiet,
 });
 
 export type KeyProvider = 'mercury' | 'brex' | 'stripe';
@@ -604,19 +586,16 @@ export const lineShareQuery = (line: string, as?: string) =>
   queryOptions({
     queryKey: ['finance', 'attribution', line, ...asKey(as)],
     queryFn: ({ signal }) => api.get<LineShare>(viewAs(`/api/v2/finance/lines/${enc(line)}/attribution`, as), { signal }),
-    ...quiet,
   });
 
 /** What a rule can match, by kind: vendors, P&L accounts, or the bank and card accounts. */
 export const vendorsQuery = queryOptions({
   queryKey: ['finance', 'contacts', 'vendor'],
   queryFn: ({ signal }) => api.get<FinanceContacts>('/api/v2/finance/contacts?kind=vendor&limit=200', { signal }),
-  ...quiet,
 });
 export const journalChartQuery = queryOptions({
   queryKey: ['finance', 'chart', 'journal'],
   queryFn: ({ signal }) => api.get<FinanceChart>('/api/v2/finance/chart?for=journal', { signal }),
-  ...quiet,
 });
 
 // ---------------------------------------------------------------- Growth (dollars; rates are 0 to 1)
@@ -780,7 +759,6 @@ export const growthReadQuery = (segment: string | undefined, month: string | und
     queryKey: ['growth', 'read', growthScope(segment), month ?? 'last', detail],
     queryFn: ({ signal }) =>
       api.get<GrowthRead>(`/api/v2/growth/read?${qs({ scope: growthScope(segment), detail: detail ? 'series,retention' : undefined, period: month })}`, { signal }),
-    ...quiet,
   });
 
 /** One channel's own read for its side panel: its budget and spend, its months and its campaigns. */
@@ -789,7 +767,6 @@ export const growthChannelQuery = (channel: string, month: string | undefined) =
     queryKey: ['growth', 'read', `channel:${channel}`, month ?? 'last', 'campaigns,series'],
     queryFn: ({ signal }) =>
       api.get<GrowthRead>(`/api/v2/growth/read?${qs({ scope: `channel:${channel}`, detail: 'campaigns,series', period: month })}`, { signal }),
-    ...quiet,
   });
 
 /** A message to the Growth Manager in its chat (POST /api/v2/chat/{bot}, backend/thread_api.py), sent from the page. */
@@ -805,7 +782,6 @@ export interface Segment {
 export const segmentsQuery = queryOptions({
   queryKey: ['growth', 'segments'],
   queryFn: ({ signal }) => api.get<{ segments: Segment[] }>('/api/v2/growth/segments', { signal }),
-  ...quiet,
 });
 
 export interface PageOwnerRow {
@@ -861,7 +837,6 @@ export const draftsQuery = (kind: DocKind, as?: string) =>
       const d = await api.get<{ bills?: DocRow[]; invoices?: DocRow[] }>(viewAs(`/api/v2/finance/${DOCS[kind]}?status=draft&limit=200`, as), { signal });
       return (kind === 'bill' ? d.bills : d.invoices) ?? [];
     },
-    ...quiet,
   });
 
 /** One bill or invoice with its lines, payments and approvals (GET /api/v2/finance/bills/{id}, /invoices/{id}). */
@@ -869,7 +844,6 @@ export const docQuery = (kind: DocKind, id: string, as?: string) =>
   queryOptions({
     queryKey: ['finance', DOCS[kind], 'one', id, ...asKey(as)],
     queryFn: ({ signal }) => api.get<Doc>(viewAs(`/api/v2/finance/${DOCS[kind]}/${enc(id)}`, as), { signal }),
-    ...quiet,
   });
 
 /** What the Transactions filter holds: the source, a status, a line. */
@@ -886,7 +860,6 @@ export const txFilteredQuery = (f: TxFilter, as?: string) =>
     queryKey: ['finance', 'transactions', 'filtered', { src: f.src, status: f.status, line: f.line }, ...asKey(as)],
     queryFn: ({ signal }) =>
       api.get<FinanceTransactions>(viewAs(`${TRANSACTIONS_URL}&${qs({ source: f.src, status: f.status, account_id: f.line })}`, as), { signal }),
-    ...quiet,
     // another filter keeps the last rows on screen until the answer comes, rather than the list's loading state
     placeholderData: keepPreviousData,
   });
@@ -895,7 +868,6 @@ export const txFilteredQuery = (f: TxFilter, as?: string) =>
 export const customersQuery = queryOptions({
   queryKey: ['finance', 'contacts', 'customer'],
   queryFn: ({ signal }) => api.get<FinanceContacts>('/api/v2/finance/contacts?kind=customer&limit=200', { signal }),
-  ...quiet,
 });
 
 /** The lines the person may put a bill or an invoice on (GET /api/v2/finance/chart?for=bill|invoice). */
@@ -903,7 +875,6 @@ export const docChartQuery = (kind: DocKind) =>
   queryOptions({
     queryKey: ['finance', 'chart', kind],
     queryFn: ({ signal }) => api.get<FinanceChart>(`/api/v2/finance/chart?for=${kind}`, { signal }),
-    ...quiet,
   });
 
 /** A card as the cards list last read it, in any view. */

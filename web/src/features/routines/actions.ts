@@ -1,20 +1,16 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import { defineAction, s, type Ctx } from '@/actions';
 import { meQuery } from '@/data';
-import { ApiError } from '@/api/client';
 import { ACTS, applyFlow, dropItem, flowOf, putItem, routineBoard, type Part } from './board';
 import {
   addDue,
   addOrgRule,
   addRuleSource,
-  createEndpoint,
   createInbox,
-  endpointsQuery,
   fillTemplate,
   RUN_RANGES,
   RUN_STATUSES,
   setFlow,
-  updateEndpoint,
   addStageRule,
   createHook,
   updateHook,
@@ -631,82 +627,6 @@ export const removeWebhook = defineAction({
     await panelOff(router);
   },
   did: () => 'Removed the webhook',
-});
-
-// ---------------------------------------------------------------- outgoing endpoints
-
-const header = s.object({ name: s.string({ min: 1, max: 64 }), value: s.optional(s.string({ max: 1000 })), secret: s.optional(s.boolean()) });
-const endpointFields = {
-  name: s.string({ min: 1, max: 100 }),
-  url: s.string({ min: 8, max: 2000, pattern: /^https?:\/\/\S+$/i, what: 'an http(s) address' }),
-  // ['*'] for every event
-  events: s.array(s.string({ min: 1, max: 100 }), { max: 200 }),
-  allowHttp: s.optional(s.boolean()),
-  headers: s.optional(s.array(header, { max: 10 })),
-};
-const endpointBody = (i: { name: string; url: string; events: string[]; allowHttp?: boolean; headers?: { name: string; value?: string; secret?: boolean }[] }) => ({
-  name: i.name.trim(),
-  url: i.url.trim(),
-  events: i.events.length ? i.events : ['*'],
-  allow_http: /^http:/i.test(i.url.trim()) && !!i.allowHttp,
-  // a secret header sent with no value keeps the value it has
-  ...(i.headers ? { headers: i.headers.map((h) => (h.secret && !h.value ? { name: h.name, secret: true } : { name: h.name, value: h.value ?? '', secret: !!h.secret })) } : {}),
-});
-
-export const addEndpoint = defineAction({
-  id: 'webhooks.addEndpoint',
-  title: 'Add an outgoing webhook',
-  kind: 'change',
-  // Its signing secret is made now and shown once: the person's own press.
-  tico: false,
-  input: s.object(endpointFields),
-  run: (_ctx, i) => {
-    if (!i.events.length) throw Object.assign(new Error('Pick at least one event'), { code: 'bad_input: Pick at least one event' });
-    return said(createEndpoint(endpointBody(i)));
-  },
-  did: (_i, out) => (out?.approval ? 'Sent for approval' : 'Added the endpoint'),
-});
-
-/** A destination change while secret headers are saved: where it sent, where it would send, which ones. */
-export interface Held {
-  from: string;
-  to: string;
-  credentials: string[];
-}
-
-export const updateEndpointAction = defineAction({
-  id: 'webhooks.updateEndpoint',
-  title: 'Change an outgoing webhook',
-  kind: 'change',
-  input: s.object({
-    endpoint: id,
-    ...endpointFields,
-    // after a destination change was held: send the saved secret headers to the new address, or clear them
-    credentials: s.optional(s.oneOf(['keep', 'clear'] as const)),
-  }),
-  // Tico may rename it or change its events. Where the company's events are sent (the address), a secret header's
-  // value, and where saved ones go are the person's own; an endpoint not read yet is refused too.
-  can: (ctx, i) => {
-    if (ctx.via !== 'tico') return true;
-    if (i.credentials || (i.headers ?? []).some((h) => h.secret && h.value)) return false;
-    const was = ctx.queryClient.getQueryData(endpointsQuery.queryKey)?.find((h) => h.id === i.endpoint);
-    return !!was && was.url === i.url.trim() && !(i.allowHttp && !was.allow_http);
-  },
-  run: async (ctx, i) => {
-    const was = ctx.queryClient.getQueryData<{ id: string; revision: number }[]>(endpointsQuery.queryKey)?.find((h) => h.id === i.endpoint);
-    try {
-      await updateEndpoint(i.endpoint, { ...endpointBody(i), ...(was ? { expected_revision: was.revision } : {}), ...(i.credentials ? { credentials: i.credentials } : {}) });
-    } catch (e) {
-      // The person's own press gets the choice back; Tico's run is refused with the reason.
-      if (ctx.via !== 'tico' && e instanceof ApiError && e.code === 'destination_change') {
-        const at = (k: string) => String((e.extra[k] as { address?: string } | undefined)?.address ?? '');
-        return { held: { from: at('old'), to: at('new'), credentials: (e.extra.credentials as string[] | undefined) ?? [] } satisfies Held };
-      }
-      return said(Promise.reject(e));
-    }
-    return { held: null };
-  },
-  did: (_i, out) => (out?.held ? 'Needs a choice' : 'Saved'),
 });
 
 // ---------------------------------------------------------------- rules: views

@@ -263,8 +263,8 @@ describe('Copies of an agent', () => {
     const follows = await screen.findByRole('link', { name: /Ana/ });
     expect(follows.getAttribute('href')).toBe('/team/ana');
     expect(await screen.findByRole('button', { name: 'Copy: Your copy' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Status/ }).textContent).toContain('Active');
-    expect(screen.getByRole('button', { name: /Profile/ }).textContent).toContain('Does the work');
+    expect(screen.getByRole('combobox', { name: 'Status' }).textContent).toContain('Active');
+    expect(screen.getByRole('combobox', { name: 'Profile' }).textContent).toContain('Does the work');
   });
 
   it('makes a planned copy when I have no computer for it, then opens it on Settings @s650', async () => {
@@ -309,7 +309,7 @@ describe('Computer screen @s685', () => {
 });
 
 describe('Computer performance @s686', () => {
-  it("shows one status line and the day's CPU, memory and load on the computer's page", async () => {
+  it("says how it is doing in one status line, CPU and memory among it, on the computer's page", async () => {
     serve((url) =>
       url.includes('/computers/r1/performance')
         ? ok({ points: [[1, 10, 12, 40, 41, 0.5, 0, 0, 0], [2, 30, 35, 50, 52, 1.25, 0, 0, 1]] })
@@ -317,9 +317,8 @@ describe('Computer performance @s686', () => {
     );
     show(<TeamWho who="ana" tab="computer" />, '/team/ana?tab=computer');
     expect(await screen.findByText('Online')).toBeTruthy();
-    expect(await screen.findByText('30%')).toBeTruthy();
-    expect(screen.getByText('50%')).toBeTruthy();
-    expect(screen.getByText('1.3')).toBeTruthy();
+    expect(await screen.findByText('CPU 30%')).toBeTruthy();
+    expect(screen.getByText('Memory 50%')).toBeTruthy();
   });
 });
 
@@ -336,16 +335,13 @@ describe('Move agent, and Change model settings @s715', () => {
     await waitFor(() => expect(posted('/bots/ana/transitions')?.body).toMatchObject({ kind: 'model', model: 'm-two', expected_generation: 2, expected_revision: 3 }));
   });
 
-  it('moves it to another computer the same way', async () => {
+  it('moves it to another computer the same way, on pick', async () => {
     serve((url, method) => (method === 'POST' && url.includes('/transitions') ? ok({ id: 'tr2' }) : undefined));
     show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');
-    fireEvent.click(await screen.findByRole('button', { name: /^Computer/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Computer' });
-    fireEvent.click(within(dialog).getByRole('combobox'));
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Computer' }));
     const o = await screen.findByRole('option', { name: 'Annex' });
     fireEvent.pointerDown(o, { pointerType: 'mouse' });
     fireEvent.click(o);
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(posted('/bots/ana/transitions')?.body).toMatchObject({ kind: 'machine', runner_id: 'r2', expected_generation: 2, expected_revision: 3 }));
   });
 });

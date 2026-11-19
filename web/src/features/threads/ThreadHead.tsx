@@ -3,12 +3,14 @@ import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { Outline } from '@/conversation';
 import { ThreadCallHead } from '@/features/calls/exports';
+import { taskDetailQuery } from '@/features/task/exports';
 import { Count } from '@/kit/Count';
 import { Icon } from '@/kit/Icon';
-import { MenuItem, MenuRule } from '@/kit/Menu';
+import { IconButton } from '@/kit/IconButton';
+import { MenuItem } from '@/kit/Menu';
 import { ItemHead, PageMore } from '@/pagekinds';
 import { AddPeople, Members } from './Members';
-import { isDm, isMuted, othersOf } from './model';
+import { isDm, othersOf } from './model';
 import { Face, press, useMe, useTitle } from './people';
 import { threadQuery } from './queries';
 import { Settings } from './Settings';
@@ -24,7 +26,6 @@ export function ThreadHead({ id }: { id: string }) {
   const [open, setOpen] = useState<'people' | 'add' | 'settings' | 'outline' | null>(null);
   const close = () => setOpen(null);
   const people = t ? othersOf(t, me) : [];
-  const muted = isMuted(t);
   const manage = t?.me?.can_manage !== false;
   const other = t && isDm(t) ? people[0] : undefined;
 
@@ -32,11 +33,8 @@ export function ThreadHead({ id }: { id: string }) {
     <PageMore>
       <MenuItem label="Rename" icon="edit" disabled={!manage} onSelect={() => setEditing(true)} />
       <MenuItem label="People" icon="people" onSelect={() => setOpen('people')} />
-      <MenuItem label={muted ? 'Unmute' : 'Mute'} icon="asleep" onSelect={() => void press('threads.mute', { thread: id, muted: !muted })} />
       <MenuItem label="Outline" icon="list" onSelect={() => setOpen('outline')} />
       <MenuItem label="Settings" icon="gear" onSelect={() => setOpen('settings')} />
-      <MenuRule />
-      <MenuItem label="Archive thread" icon="archive" disabled={!manage} onSelect={() => void press('threads.archive', { thread: id })} />
     </PageMore>
   );
 
@@ -47,7 +45,14 @@ export function ThreadHead({ id }: { id: string }) {
         target={`thread:${id}`}
         back={{ to: '/threads', label: 'Threads' }}
         lead={other ? <Face actor={other} /> : undefined}
-        actions={t ? <ThreadCallHead thread={id} members={people} canPost={t.me?.can_post !== false} /> : undefined}
+        actions={
+          t && (
+            <>
+              <ThreadCallHead thread={id} members={people} canPost={t.me?.can_post !== false} />
+              {manage && <IconButton icon="archive" label="Archive" onClick={() => void press('threads.archive', { thread: id })} />}
+            </>
+          )
+        }
         more={more}
         onRename={manage ? (next) => void press('threads.rename', { thread: id, title: next }) : undefined}
         renaming={editing}
@@ -63,16 +68,7 @@ export function ThreadHead({ id }: { id: string }) {
               ))}
               {people.length > FACES && <Count n={people.length - FACES} className="ab-n" label={`${people.length - FACES} more`} />}
             </button>
-            <button type="button" className="ab-chip ab-add" onClick={() => setOpen('add')}>
-              <Icon name="plus" />
-              Add people
-            </button>
-            {t.task_id && (
-              <Link className="ab-chip" to="/task/$task" params={{ task: String(t.task_id) }} data-target={`task:${t.task_id}`}>
-                <Icon name="tasks" />
-                Task
-              </Link>
-            )}
+            {t.task_id && <TaskChip task={String(t.task_id)} />}
           </div>
         </div>
       )}
@@ -81,5 +77,18 @@ export function ThreadHead({ id }: { id: string }) {
       {t && open === 'settings' && <Settings thread={t} onClose={close} />}
       <Outline id={id} open={open === 'outline'} onOpenChange={(o) => setOpen(o ? 'outline' : null)} />
     </>
+  );
+}
+
+/** The task the thread belongs to: its code and stage ("E604 Build"), from the task's own read. */
+function TaskChip({ task }: { task: string }) {
+  const { data } = useQuery(taskDetailQuery(task));
+  const code = data?.label || (data?.number != null ? `#${data.number}` : 'Task');
+  return (
+    <Link className="ab-chip" to="/task/$task" params={{ task }} data-target={`task:${task}`}>
+      <Icon name="tasks" />
+      <span>{code}</span>
+      {data?.status === 'open' && data.stage?.name && <em>{data.stage.name}</em>}
+    </Link>
   );
 }

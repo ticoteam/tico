@@ -34,10 +34,14 @@ export interface ComposerProps {
   onSend: (text: string, files: File[]) => void;
   /** Words to put back in the box (a failed message taken back); a new object each time. */
   fill?: { text: string } | null;
+  /** The box's words in place of "Message <to>" ("Reply to Sam Lee"). */
+  label?: string;
+  /** false: no files (a mail reply attaches none). */
+  attach?: boolean;
 }
 
 /** Where you type. Enter sends, Shift+Enter breaks the line; the draft survives a reload. */
-export function Composer({ id, me, to, onSend, fill }: ComposerProps) {
+export function Composer({ id, me, to, onSend, fill, label: own, attach = true }: ComposerProps) {
   const [text, setText] = useState(() => readDraft(me, id));
   const [files, setFiles] = useState<File[]>([]);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -84,7 +88,7 @@ export function Composer({ id, me, to, onSend, fill }: ComposerProps) {
     send();
   };
 
-  const label = `Message ${to}`;
+  const label = own ?? `Message ${to}`;
   return (
     <>
       {files.map((f, i) => (
@@ -108,19 +112,23 @@ export function Composer({ id, me, to, onSend, fill }: ComposerProps) {
           }}
           onKeyDown={onKey}
         />
-        <input
-          ref={picker}
-          type="file"
-          multiple
-          tabIndex={-1}
-          aria-hidden="true"
-          onChange={(e) => {
-            const picked = [...(e.target.files ?? [])];
-            e.target.value = '';
-            if (picked.length) setFiles([...files, ...picked].slice(0, 10));
-          }}
-        />
-        <IconButton icon="attach" label="Attach a file" size="sm" onClick={() => picker.current?.click()} />
+        {attach && (
+          <>
+            <input
+              ref={picker}
+              type="file"
+              multiple
+              tabIndex={-1}
+              aria-hidden="true"
+              onChange={(e) => {
+                const picked = [...(e.target.files ?? [])];
+                e.target.value = '';
+                if (picked.length) setFiles([...files, ...picked].slice(0, 10));
+              }}
+            />
+            <IconButton icon="attach" label="Attach a file" size="sm" onClick={() => picker.current?.click()} />
+          </>
+        )}
         <button className={ready ? 'send is-ready' : 'send'} type="button" aria-label="Send" disabled={!ready} onClick={send}>
           <Icon name="send" />
         </button>

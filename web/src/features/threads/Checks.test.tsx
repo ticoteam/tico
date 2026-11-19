@@ -7,12 +7,15 @@ import { run } from '@/actions';
 // eslint-disable-next-line no-restricted-imports -- the test lends its router to dispatch, as the shell's ActionsRoot does
 import { bind } from '@/actions/bind';
 import { timelineQuery } from '@/conversation';
-import { queryClient } from '@/data';
+import { configQuery, queryClient } from '@/data';
+import { groupsQuery } from '@/features/team/exports';
+import { Browse } from './Browse';
 import { ChatSheet } from './ChatSheet';
 import { LearnedPage } from './LearnedPage';
 import { MailPage, MessagingPage } from './MailPage';
 import type { Thread } from './model';
 import { learnedQuery, mailboxesQuery, threadKeys, viewersQuery } from './queries';
+import { ThreadHead } from './ThreadHead';
 import { ThreadsPage } from './ThreadsPage';
 import { UpdatesPage } from './UpdatesPage';
 
@@ -45,7 +48,8 @@ function serve(reply: (url: string, method: string) => Reply | undefined = () =>
     return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
   });
 }
-const sent = (method: string, path: string) => calls.find((c) => c.method === method && c.url.split('?')[0]!.endsWith(path));
+const all = (method: string, path: string) => calls.filter((c) => c.method === method && c.url.split('?')[0]!.endsWith(path));
+const sent = (method: string, path: string) => all(method, path)[0];
 
 function show(node: ReactNode, at: string) {
   const root = createRootRoute({ component: () => node });
@@ -229,29 +233,123 @@ describe('Mail @s159', () => {
 });
 
 describe('Mailboxes @s1203', () => {
-  it('offers a pick between mailboxes, even from an empty one, and picking one reads it', async () => {
+  it('offers a pick between mailboxes under the filter, even from an empty one, and picking one reads it', async () => {
     serve((url) => (url.includes('/mail/messages') ? ok({ messages: [] }) : undefined));
     queryClient.setQueryData(mailboxesQuery.queryKey, [{ address: 'help@example.test' }, { address: 'sales@example.test' }]);
     const router = show(<MailPage />, '/threads/mail');
-    expect(await screen.findByRole('combobox', { name: 'Mailbox' })).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button', { name: 'Mailbox' }));
+    expect(await screen.findByRole('menuitem', { name: 'sales@example.test' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'No mail' })).toBeTruthy();
     expect((await run('mail.pickBox', { box: 'sales@example.test' }, { via: 'click' })).ok).toBe(true);
     await waitFor(() => expect(router.state.location.search).toMatchObject({ box: 'sales@example.test' }));
   });
+
+  it('with no mailbox yet, says so and offers Connect mail @s159', async () => {
+    serve();
+    queryClient.setQueryData(mailboxesQuery.queryKey, []);
+    show(<MailPage />, '/threads/mail');
+    expect(await screen.findByRole('heading', { name: 'No mail yet' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Connect mail' })).toBeTruthy();
+  });
+});
+
+const box = { address: 'help@example.test', agent_bot: 'qa', may: { send: true, organize: true } };
+const openMail = (extra: Record<string, unknown> = {}) =>
+  serve((url, method) =>
+    method === 'POST' && url.endsWith('/mail/drafts')
+      ? ok({ draft: 'd1', thread: 'th1' })
+      : method === 'POST'
+        ? ok({})
+        : url.includes('/mail/threads/th1')
+          ? ok({ messages: [letter({ body: 'Can I change the size?', attachments: [{ name: 'corner.jpg', size: 2_200_000 }], ...extra })] })
+          : url.includes('/mail/messages')
+            ? ok({ messages: [letter()] })
+            : undefined,
+  );
+
+describe('An open mail @s159', () => {
+  it('heads with the sender, their address, the agent and Archive; letters show the full date and their files', async () => {
+    openMail({ epoch: Date.UTC(2026, 10, 18, 17, 21) / 1000 });
+    queryClient.setQueryData(mailboxesQuery.queryKey, [box]);
+    show(<MailPage box="help@example.test" open="th1" />, '/threads/mail?box=help%40example.test&open=th1');
+    expect(await screen.findByText('Can I change the size?')).toBeTruthy();
+    expect(screen.getByText('sam@example.test', { selector: '.lt-addr' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Chat with QA' }).getAttribute('href')).toContain('chat=agent%3Aqa');
+    expect(screen.getByText(/^Wed, Nov 18, \d+:21 [AP]M$/)).toBeTruthy();
+    expect(screen.getByText('corner.jpg')).toBeTruthy();
+    expect(screen.getByText('2.1 MB')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(sent('POST', '/api/v2/mail/messages/organize')?.body).toEqual({ mailbox: 'help@example.test', action: 'archive', ids: ['l1'] }));
+  });
+
+  it('replies from the box: drafted in the thread, then sent through the send gate', async () => {
+    openMail();
+    queryClient.setQueryData(mailboxesQuery.queryKey, [box]);
+    show(<MailPage box="help@example.test" open="th1" />, '/threads/mail?box=help%40example.test&open=th1');
+    const reply = await screen.findByRole('textbox', { name: 'Reply to Sam Lee' });
+    expect(screen.queryByRole('button', { name: 'Attach a file' })).toBeNull();
+    fireEvent.change(reply, { target: { value: 'Yes, done.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(sent('POST', '/api/v2/email/sends')?.body).toEqual({ mailbox: 'help@example.test', draft_id: 'd1', thread_id: 'th1' }));
+    expect(sent('POST', '/api/v2/mail/drafts')?.body).toEqual({ mailbox: 'help@example.test', body: 'Yes, done.', reply_to: 'th1' });
+  });
+
+  it('has no reply box or Archive where the person may only read', async () => {
+    openMail();
+    queryClient.setQueryData(mailboxesQuery.queryKey, [{ ...box, may: { send: false, organize: false } }]);
+    show(<MailPage box="help@example.test" open="th1" />, '/threads/mail?box=help%40example.test&open=th1');
+    expect(await screen.findByText('Can I change the size?')).toBeTruthy();
+    expect(screen.queryByRole('textbox', { name: /Reply to/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Archive' })).toBeNull();
+  });
+});
+
+describe('Mail: search @s159', () => {
+  const found = [letter({ labels: ['INBOX', 'UNREAD', 'IMPORTANT'], has_attachment: true })];
+  it('asks the server for the words searched, and marks an attachment with an icon, not pills @s159', async () => {
+    serve((url) => (url.includes('/mail/messages') ? ok({ messages: found, next_cursor: null }) : undefined));
+    queryClient.setQueryData(mailboxesQuery.queryKey, [{ address: 'help@example.test' }]);
+    show(<MailPage box="help@example.test" q="invoice" />, '/threads/mail?box=help%40example.test&q=invoice');
+    const row = await screen.findByTitle('Sam Lee: Invoice question');
+    const asked = new URL(calls.find((c) => c.url.includes('/mail/messages'))!.url, 'http://x');
+    expect(asked.searchParams.get('q')).toBe('invoice');
+    expect(within(row).getByRole('img', { name: 'Attachment' })).toBeTruthy();
+    expect(within(row).queryByText('Important')).toBeNull();
+    // An opened mail keeps the words it was found by.
+    expect(row.getAttribute('href')).toBe('/threads/mail?box=help%40example.test&q=invoice&open=th1');
+    expect((screen.getByRole('textbox', { name: 'Find mail' }) as HTMLInputElement).value).toBe('invoice');
+  });
+
+  it('searches through the address, and says nothing matches when a narrowing finds nothing @s159', async () => {
+    serve((url) => (url.includes('/mail/messages') ? ok({ messages: url.includes('q=nothing') ? [] : found, next_cursor: null }) : undefined));
+    queryClient.setQueryData(mailboxesQuery.queryKey, [{ address: 'help@example.test' }]);
+    const router = show(<MailPage box="help@example.test" q="nothing" />, '/threads/mail?box=help%40example.test&q=nothing');
+    expect(await screen.findByRole('heading', { name: 'No matches' })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Find mail' })).toBeTruthy();
+    expect((await run('mail.find', { box: 'help@example.test', q: 'refund' }, { via: 'tico' })).ok).toBe(true);
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ box: 'help@example.test', q: 'refund' }));
+  });
 });
 
 describe('Messaging @s160', () => {
-  it('lists the texts the company received and reads the open one', async () => {
+  it('lists one row per contact and reads their texts in full, a break at each day', async () => {
+    const text = (id: string, from: string, min: number, preview: string) => ({ message_id: id, received_at: ago(min), from, preview });
     serve((url) =>
       url.includes('/inbound/messages/x1')
         ? ok({ text: 'Is Friday fine for the visit?', message_id: 'x1' })
-        : url.includes('/inbound/messages')
-          ? ok({ messages: [{ message_id: 'x1', received_at: ago(4), from: '+1 555 0100', preview: 'Is Friday fine' }], next: null })
-          : undefined,
+        : url.includes('/inbound/messages/x2')
+          ? ok({ text: 'Also, bring the long ladder.', message_id: 'x2' })
+          : url.includes('/inbound/messages')
+            ? ok({ messages: [text('x2', '+1 555 0100', 4, 'Also'), text('x3', '+1 555 0199', 6, 'Hello'), text('x1', '+1 555 0100', 3000, 'Is Friday')], next: null })
+            : undefined,
     );
-    show(<MessagingPage open="x1" />, '/threads/messaging?open=x1');
-    expect((await screen.findByTitle('+1 555 0100: Is Friday fine')).getAttribute('href')).toBe('/threads/messaging?open=x1');
+    show(<MessagingPage open="+1 555 0100" />, '/threads/messaging?open=%2B1+555+0100');
+    expect((await screen.findByTitle('+1 555 0199')).getAttribute('href')).toBe('/threads/messaging?open=%2B1+555+0199');
+    expect(screen.getAllByTitle('+1 555 0100').find((el) => el.tagName === 'A')).toBeTruthy();
     expect(await screen.findByText('Is Friday fine for the visit?')).toBeTruthy();
+    expect(await screen.findByText('Also, bring the long ladder.')).toBeTruthy();
+    expect(screen.getByText('Today')).toBeTruthy();
+    expect(calls.some((c) => c.url.includes('from=%2B1+555+0100'))).toBe(true);
   });
 });
 
@@ -322,13 +420,123 @@ describe('An update, open @s992', () => {
   });
 });
 
-describe('Learned: what readers see @s213', () => {
-  it('turns on that agents reading the chat also read what Tico learned', async () => {
-    serve((url, method) => (method === 'PUT' && url.endsWith('/viewers/learned') ? ok({ bots: [{ bot: 'qa', slug: 'qa', name: 'QA' }], include_learned: true }) : undefined));
-    queryClient.setQueryData(learnedQuery.queryKey, { personal: [], company: null });
-    queryClient.setQueryData(viewersQuery.queryKey, { bots: [{ bot: 'qa', slug: 'qa', name: 'QA' }], include_learned: false });
+describe('Learned @s213', () => {
+  it("names the company's section after the company, and adds a reader from the head's ⋯", async () => {
+    serve();
+    queryClient.setQueryData(configQuery.queryKey, { company_name: 'Fernhill', app_name: 'Tico' } as never);
+    queryClient.setQueryData(learnedQuery.queryKey, {
+      personal: [],
+      company: { entries: [{ id: 'c1', layer: 'company', text: 'Ships on Tuesdays.', created_at: ago(60) }] },
+    });
+    queryClient.setQueryData(viewersQuery.queryKey, { bots: [], include_learned: false });
     show(<LearnedPage />, '/learned');
-    fireEvent.click(await screen.findByRole('switch', { name: 'Include what Tico learned' }));
-    await waitFor(() => expect(sent('PUT', '/api/v2/assistant/viewers/learned')?.body).toEqual({ include_learned: true }));
+    expect(await screen.findByText('Fernhill')).toBeTruthy();
+    expect(screen.queryByRole('switch')).toBeNull();
+    fireEvent.click(screen.getAllByRole('button', { name: 'More' })[0]!);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Add an agent' }));
+    expect(await screen.findByRole('dialog', { name: 'Add an agent' })).toBeTruthy();
+  });
+});
+
+describe('Threads head and Catch up @s156 @s179', () => {
+  it('counts Catch up on the Threads tab, writes with a pencil, and Mark read is the filled button', async () => {
+    serve();
+    queryClient.setQueryData(threadKeys.catchUp, { count: 25, items: [{ thread: thread(), messages: [msg('m1', 'bot:qa', 'Ready.')], new_count: 1 }] });
+    show(<ThreadsPage pane="catch-up" open />, '/threads/catch-up');
+    expect(await screen.findByText('24 more')).toBeTruthy();
+    expect(screen.getByRole('link', { name: /^Threads/ }).textContent).toContain('25');
+    expect(screen.getByRole('button', { name: 'New message' }).textContent).toBe('');
+    expect(screen.getByRole('button', { name: 'Mark read' }).className).toContain('fill');
+  });
+
+  it('offers New message when there are no threads yet', async () => {
+    serve();
+    queryClient.setQueryData(threadKeys.list, { pages: [{ rows: [], next: null }], pageParams: [null] });
+    const router = show(<ThreadsPage pane="catch-up" />, '/threads');
+    expect(await screen.findByRole('heading', { name: 'No threads yet' })).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'New message' }).find((b) => b.textContent === 'New message')!);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/threads/new'));
+  });
+});
+
+describe('A thread head @s157', () => {
+  it('puts Archive before ⋯, names the task by code and stage, and has no Add people or Mute', async () => {
+    serve((url) =>
+      url.includes('/api/v2/tasks/k1') ? ok({ task: { id: 'k1', title: 'Fix it', label: 'E604', number: 604, status: 'open', stage: { name: 'Build' } }, comments: [], events: [], children: [] }) : undefined,
+    );
+    queryClient.setQueryData(threadKeys.view('t1'), thread({ task_id: 'k1' }));
+    show(<ThreadHead id="t1" />, '/threads/t1');
+    const chip = await screen.findByRole('link', { name: /E604/ });
+    await waitFor(() => expect(chip.textContent).toBe('E604Build'));
+    expect(screen.getByRole('button', { name: 'Archive' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Add people/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    await screen.findByRole('menuitem', { name: 'Settings' });
+    expect(screen.queryByRole('menuitem', { name: /Mute/ })).toBeNull();
+  });
+});
+
+describe('Thread settings @s178', () => {
+  beforeEach(() => queryClient.setQueryData(groupsQuery.queryKey, [{ id: 'g1', name: 'Design', parent: '', lead: '', bots: [], people: [] }]));
+
+  it('lets a team be chosen as its reader @s178', async () => {
+    serve();
+    queryClient.setQueryData(threadKeys.view('t1'), thread());
+    show(<ThreadHead id="t1" />, '/threads/t1');
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Settings' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    fireEvent.click(within(dialog).getByRole('combobox', { name: 'Who can read' }));
+    const o = await screen.findByRole('option', { name: 'Design' });
+    fireEvent.pointerDown(o, { pointerType: 'mouse' });
+    fireEvent.click(o);
+    await waitFor(() => expect(all('PATCH', '/api/v2/threads/t1').at(-1)?.body).toEqual({ audience: 'team', audience_group_id: 'g1' }));
+  });
+
+  it('a team reader needs the team, and Tico may not open it wider @s178', async () => {
+    serve();
+    show(<span />, '/threads/t1');
+    expect((await run('threads.whoCanRead', { thread: 't1', audience: 'team' }, { via: 'click' })).ok).toBe(false);
+    expect((await run('threads.whoCanRead', { thread: 't1', audience: 'team', team: 'g1' }, { via: 'tico' })).ok).toBe(false);
+    expect(all('PATCH', '/api/v2/threads/t1')).toHaveLength(0);
+  });
+});
+
+describe('Browse threads @s176', () => {
+  it('opens a thread from its name, to read it before joining @s176', async () => {
+    serve((url) => (url.includes('/threads/browse') ? ok({ threads: [{ ...thread({ id: 't5', title: 'Hiring' }), member_count: 3 }], next_cursor: null }) : undefined));
+    const onClose = vi.fn();
+    const router = show(<Browse onClose={onClose} />, '/threads');
+    const dialog = await screen.findByRole('dialog', { name: 'Browse threads' });
+    fireEvent.click(await within(dialog).findByRole('link', { name: 'Hiring' }));
+    expect(onClose).toHaveBeenCalled();
+    await waitFor(() => expect(router.state.location.pathname).toBe('/threads/t5'));
+    expect(all('POST', '/api/v2/threads/t5/join')).toHaveLength(0);
+  });
+});
+
+describe('Updates: search, weeks and an opened update @s972 @s985 @s992', () => {
+  it('finds updates by their words, and Weekly reads a section a week', async () => {
+    serve((url) =>
+      url.includes('/api/v2/updates')
+        ? ok({ updates: [update('u1', 'weekly', '2026-01-07', 'Cash is up'), update('u2', 'weekly', '2026-01-05', 'Ads cost less')], unread: 0, next_before: null })
+        : undefined,
+    );
+    show(<UpdatesPage tab="weekly" />, '/updates/weekly');
+    const feed = await screen.findByRole('feed', { name: 'Updates' });
+    await within(feed).findByTitle('Cash is up');
+    expect(within(feed).getByText('Mon, Jan 5')).toBeTruthy();
+    expect(within(feed).queryByText('Wed, Jan 7')).toBeNull();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Find an update' }), { target: { value: 'ads' } });
+    await waitFor(() => expect(within(feed).queryByTitle('Cash is up')).toBeNull());
+    expect(within(feed).getByTitle('Ads cost less')).toBeTruthy();
+  });
+
+  it('reads its body as written, headings kept, and dates it in full', async () => {
+    const u = update('u1', 'daily', '2026-01-02', 'Cash summary\n\n## What changed\n\nRefunds doubled.', { created_at: '2026-01-02T15:00:00.000Z' });
+    serve((url) => (url.includes('/api/v2/updates/u1') ? ok({ update: u }) : url.includes('/api/v2/updates?') ? ok({ updates: [u], unread: 0, next_before: null }) : undefined));
+    show(<UpdatesPage open="u1" />, '/updates?open=u1');
+    expect(await screen.findByRole('heading', { name: 'What changed' })).toBeTruthy();
+    expect(screen.getByText(/^Fri, Jan 2, \d+:00 [AP]M$/)).toBeTruthy();
   });
 });

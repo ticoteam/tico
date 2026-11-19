@@ -54,8 +54,15 @@ html[data-layout="cards"] .tk-item>.tk-more{display:none}
 /* a stage head's "+" and "⋯" show under a pointer (parts.css .ib-ghost), and stay while their menu is open */
 .stage-head .ib-ghost[aria-expanded="true"]{opacity:1}
 
-/* Flow with nothing waiting: the Dot stands in the middle, as an empty body does */
+/* the head's Flow button (parts-kit.js playBtn: playDot(22)) */
+
+/* nothing in the pipeline: the stages stay, then one line and one button under them (list.js listBody, boardBody) */
 .pk-body:has(>.empty){display:flex;flex-direction:column;-webkit-mask-image:none;mask-image:none}
+.board:has(.empty){overflow:visible;-webkit-mask-image:none;mask-image:none}
+.board-in:has(>.empty){width:auto;flex-direction:column}
+.tk-heads{display:flex;gap:calc(var(--s-2) + var(--s-0))}
+.tk-heads>.col{flex:1 1 0;width:auto;min-width:0}
+.tk-heads .col-head{position:static;padding:0 0 0 var(--s-3);box-shadow:0 1px 0 var(--line)}
 
 /* Archived: a row names its stage (list.css) */
 .is-arch .row-title{color:var(--ink-2)}
@@ -79,7 +86,7 @@ html[data-layout="cards"] .tk-item>.tk-more{display:none}
 .ps.is-side .field{font-weight:var(--w-text)}
 .ps.is-add>.ps-node{left:6px;top:calc(var(--ctl-lg)/2 - 8px);width:16px;height:16px;display:grid;place-items:center;box-shadow:none;color:var(--muted)}
 .ps.is-add .ps-node .ico{width:14px;height:14px;stroke-width:2}
-.ps.is-add .ps-row{width:100%;border:0;background:none;font:inherit;cursor:pointer;transition:background var(--dur-fast) var(--ease)}
+.ps.is-add .ps-row{width:100%;border:0;background:none;font:inherit;cursor:pointer}
 .ps.is-add .ps-row:hover{--surface:var(--hover);background:var(--hover)}
 .ps.is-add .ps-name{font-weight:var(--w-text);color:var(--muted)}
 .ps.is-add .ps-row:hover .ps-name{color:var(--ink)}
@@ -92,10 +99,12 @@ html[data-layout="cards"] .tk-item>.tk-more{display:none}
 .ps.is-open .ps-chev .ico{transform:rotate(90deg)}
 .ps.is-open>.ps-in{margin:var(--s-1) 0 var(--s-2);padding:var(--s-0) 0 var(--s-4);border-block:1px solid var(--line)}
 .ps-body{padding:var(--s-1h) var(--s-2) 0}
-/* the pipeline's facts and an open stage's facts (more.css), as a narrow sheet draws them: goal and manager on lines of
-   their own, the short fields beside each other */
-.pe-facts{display:grid;grid-template-columns:minmax(0,1fr) 88px;gap:var(--s-3);margin-bottom:var(--s-4)}
-.pe-facts .w-pgoal,.pe-facts .w-manager,.pe-facts .w-pname{grid-column:1/-1}
+/* the pipeline's facts in a row under the head (more.css): goal, manager, factory, prefix; New pipeline puts its name
+   first, the goal beside it, the rest under them. A phone stacks them. */
+.pe-facts{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr) minmax(0,1.4fr) 88px;gap:var(--s-3);margin-bottom:var(--s-4)}
+.pe-facts .w-pname+.w-pgoal{grid-column:span 3}
+html[data-layout="cards"] .pe-facts{grid-template-columns:minmax(0,1fr) 88px}
+html[data-layout="cards"] .pe-facts :is(.w-pgoal,.w-manager,.w-pname){grid-column:1/-1}
 .pe-facts .f,.ps-facts .f{justify-items:stretch}
 .ps-facts{display:grid;grid-template-columns:64px;gap:var(--s-3);align-items:end;margin-bottom:var(--s-2)}
 .ps-facts .w-goal,.ps-facts .w-owner{grid-column:1/-1}
@@ -120,5 +129,3 @@ html[data-layout="cards"] .stage-fold a{min-height:var(--ctl);display:inline-fle
 .rq-line{margin:0;font-size:var(--t-sm);color:var(--muted)}
 .rq-form{display:grid;gap:var(--s-3)}
 
-/* The ask: on a phone the head's face stays (marked for the phone) and opens a pipeline agent's chat card */
-.tk-ask{display:contents}

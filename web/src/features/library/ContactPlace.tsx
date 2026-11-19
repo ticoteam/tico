@@ -7,7 +7,7 @@ import { Pill } from '@/kit/Pill';
 import { Section } from '@/pagekinds';
 import { contactRulesQuery, usQuery, type Card, type CardLink, type PlaceInfo, type Us } from './queries';
 
-/* A place's Rules (the mock's first section; old directory-entity.ts rules card), and what a place adds: its kind,
+/* A contact's Rules (the mock's first section; old directory-entity.ts rules card), and what a place adds: its kind,
    what it is inside, who governs it, the bodies over it, what sits in it, and why its rules bind us. */
 
 type Href = (id: string, type?: string) => string;

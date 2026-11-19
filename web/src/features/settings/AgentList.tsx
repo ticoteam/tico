@@ -665,7 +665,8 @@ interface Group {
   slugs: string[];
 }
 
-export function AgentList({ open }: { open?: string }) {
+/** `section`: Agents (grouped as the person picks) or Computers (always by computer, one folding section each). */
+export function AgentList({ open, section = 'agents' }: { open?: string; section?: 'agents' | 'computers' }) {
   const navigate = useNavigate();
   const dir = useQuery(directoryQuery);
   const subs = useQuery(subscriptionsQuery);
@@ -673,7 +674,8 @@ export function AgentList({ open }: { open?: string }) {
   const bots = useQuery({ ...botsQuery, retry: false });
   const mayRestore = useMayRestore();
   const [q, setQ] = useState('');
-  const [by, setBy] = useState<By>(open?.startsWith('computer:') ? 'computer' : 'team');
+  const fixed = section === 'computers';
+  const [by, setBy] = useState<By>(fixed || open?.startsWith('computer:') ? 'computer' : 'team');
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const [changing, setChanging] = useState(false);
   const [editing, setEditing] = useState<Change | null>(null);
@@ -797,10 +799,12 @@ export function AgentList({ open }: { open?: string }) {
                 <span className="tools-n">{agentsWord(shown.length)}</span>
               </>
             )}
-            <span className="fl-by">
-              <span>Group by</span>
-              <Segmented label="Group by" options={BY} value={by} onValueChange={setBy} />
-            </span>
+            {!fixed && (
+              <span className="fl-by">
+                <span>Group by</span>
+                <Segmented label="Group by" options={BY} value={by} onValueChange={setBy} />
+              </span>
+            )}
           </div>
           <div className="tbl-head g-bots g-fleet" aria-hidden="true">
             <span />
@@ -824,7 +828,7 @@ export function AgentList({ open }: { open?: string }) {
                 m && (
                   <Link
                     to="/settings/$section"
-                    params={{ section: 'agents' }}
+                    params={{ section }}
                     search={opened === m.id ? {} : { open: `computer:${m.id}` }}
                     className={opened === m.id ? 'fl-sum is-on' : 'fl-sum'}
                     aria-label={`Open ${m.label || m.id}`}
@@ -851,8 +855,8 @@ export function AgentList({ open }: { open?: string }) {
           })}
         </div>
       )}
-      {opened && <ComputerPanel id={opened} onClose={() => void navigate({ to: '/settings/$section', params: { section: 'agents' }, search: {} })} />}
-      {retired.length > 0 && (
+      {opened && <ComputerPanel id={opened} onClose={() => void navigate({ to: '/settings/$section', params: { section }, search: {} })} />}
+      {!fixed && retired.length > 0 && (
         <Section name="Retired" count={retired.length} defaultOpen={false} target="setting:retired">
           {retired.map((b) => {
             const key = b.id ?? b.slug ?? '';

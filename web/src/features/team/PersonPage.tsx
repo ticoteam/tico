@@ -14,7 +14,7 @@ import { Facts, LabelValue } from '@/kit/LabelValue';
 import { FiguresStrip, Record as RecordPage, Section, type PageState } from '@/pagekinds';
 import { bareId, slackTitle, startOfMonth, teamOf } from './model';
 import { AccessDialog, GiveTaskDialog, PasswordDialog } from './dialogs';
-import { AllTasks, ConfirmDialog, EditDialog, Foot, Fold, MateRow, OwnRow, OwnRows, PickDialog, SecLink, waitsOn } from './parts';
+import { AllTasks, ConfirmDialog, EditDialog, Foot, Fold, MateRow, OwnRow, OwnRows, PickLine, SecLink, waitsOn } from './parts';
 import {
   accessQuery,
   agentsQuery,
@@ -165,6 +165,11 @@ function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: He
   );
 }
 
+const PERMISSIONS = [
+  { value: 'member', label: 'Member' },
+  { value: 'admin', label: 'Admin' },
+];
+
 function PersonSettings({ actor, id, head }: { actor: Actor; id: string; head: Head }) {
   const { data: me } = useQuery(meQuery);
   const { data: config } = useQuery(configQuery);
@@ -174,7 +179,7 @@ function PersonSettings({ actor, id, head }: { actor: Actor; id: string; head: H
   const actors = useActors();
   const remove = useAction('people.remove');
   const reach = useQuery(teammateAccessQuery('person', id)).data;
-  const [editing, setEditing] = useState<'' | 'title' | 'team' | 'boss' | 'github' | 'role' | 'remove' | 'access' | 'password'>('');
+  const [editing, setEditing] = useState<'' | 'title' | 'github' | 'remove' | 'access' | 'password'>('');
   const close = (o: boolean) => !o && setEditing('');
 
   const p = people.data?.find((x) => x.id === id);
@@ -199,16 +204,31 @@ function PersonSettings({ actor, id, head }: { actor: Actor; id: string; head: H
             <LabelValue label="Role" onEdit={admin || self ? () => setEditing('title') : undefined}>
               {title || 'None'}
             </LabelValue>
-            <LabelValue label="Team" onEdit={admin ? () => setEditing('team') : undefined}>
-              {team?.name ?? 'None'}
-            </LabelValue>
-            <LabelValue label="Reports to" onEdit={manage ? () => setEditing('boss') : undefined}>
-              {boss?.name ?? 'Nobody'}
-            </LabelValue>
+            <PickLine
+              label="Team"
+              options={(groups.data ?? []).map((g) => ({ value: g.id, label: g.name }))}
+              value={team?.id ?? ''}
+              shown="None"
+              action={admin ? 'team.move' : undefined}
+              input={(t) => ({ kind: 'person', id, team: t })}
+            />
+            <PickLine
+              label="Reports to"
+              options={(people.data ?? []).filter((x) => x.id !== id).map((x) => ({ value: x.id, label: x.name }))}
+              value={p?.reports_to ?? ''}
+              shown={boss?.name ?? 'Nobody'}
+              action={manage ? 'people.setReportsTo' : undefined}
+              input={(b) => ({ person: id, boss: b })}
+            />
             {role && (
-              <LabelValue label="Permissions" onEdit={admin && role.role !== 'owner' && !self ? () => setEditing('role') : undefined}>
-                {role.role === 'owner' ? 'Owner' : role.role === 'admin' ? 'Admin' : 'Member'}
-              </LabelValue>
+              <PickLine
+                label="Permissions"
+                options={role.role === 'owner' ? [{ value: 'owner', label: 'Owner' }] : PERMISSIONS}
+                value={role.role}
+                shown="Member"
+                action={admin && role.role !== 'owner' && !self ? 'people.setRole' : undefined}
+                input={(r) => ({ person: id, role: r })}
+              />
             )}
             {reach?.you?.manage && (
               <LabelValue label="Access" onEdit={() => setEditing('access')}>
@@ -245,15 +265,6 @@ function PersonSettings({ actor, id, head }: { actor: Actor; id: string; head: H
             action="people.setTitle"
             input={(t) => ({ person: id, title: t })}
           />
-          <PickDialog
-            open={editing === 'boss'}
-            onOpenChange={close}
-            title="Reports to"
-            options={(people.data ?? []).filter((x) => x.id !== id).map((x) => ({ value: x.id, label: x.name }))}
-            value={p?.reports_to ?? ''}
-            action="people.setReportsTo"
-            input={(b) => ({ person: id, boss: b })}
-          />
           <EditDialog
             open={editing === 'github'}
             onOpenChange={close}
@@ -262,27 +273,6 @@ function PersonSettings({ actor, id, head }: { actor: Actor; id: string; head: H
             value={p?.github ?? ''}
             action="people.setGithub"
             input={(t) => ({ person: id, login: t })}
-          />
-          <PickDialog
-            open={editing === 'team'}
-            onOpenChange={close}
-            title="Team"
-            options={(groups.data ?? []).map((g) => ({ value: g.id, label: g.name }))}
-            value={team?.id ?? ''}
-            action="team.move"
-            input={(t) => ({ kind: 'person', id, team: t })}
-          />
-          <PickDialog
-            open={editing === 'role'}
-            onOpenChange={close}
-            title="Permissions"
-            options={[
-              { value: 'member', label: 'Member' },
-              { value: 'admin', label: 'Admin' },
-            ]}
-            value={role?.role ?? 'member'}
-            action="people.setRole"
-            input={(r) => ({ person: id, role: r })}
           />
           <ConfirmDialog
             open={editing === 'remove'}

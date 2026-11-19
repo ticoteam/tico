@@ -16,16 +16,13 @@ import {
   proposalsQuery,
   skillDetailUsageQuery,
   skillQuery,
-  skillsElsewhereQuery,
   skillsQuery,
-  skillSuggestionsQuery,
   skillTextQuery,
   skillUsageQuery,
 } from './queries';
 import { SkillsPage } from './SkillsPage';
 
-/* The tier-2 gap rows for Skills and an outside doc: removing an install, an admin's Suggestions and Not in directory,
-   a proposal's Withdraw, Screen again and decided state, the Function filter, and an outside doc's links and commit.
+/* The tier-2 gap rows for Skills and an outside doc: removing an install, a proposal's Withdraw, Screen again and decided state, the Waiting filter, and an outside doc's links and commit.
    Made-up skills, agents and sources only. */
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -123,46 +120,21 @@ describe('a skill', () => {
   });
 });
 
-describe('Skills for an admin', () => {
-  const ideas = [
-    { id: 'sks_1', kind: 'remove', name: 'old-report', target: { type: 'Bot', id: 'b1', name: 'Mail helper' }, uses_30d: 0, bots: 0 },
-    { id: 'sks_2', kind: 'promote', name: 'pack-a-box', target: { type: 'Bot', id: 'b2', name: 'Desk helper' }, uses_30d: 14, bots: 2 },
-  ];
-  const elsewhere = [{ name: 'label-printer', uses: 9, bots: [{ type: 'Bot', id: 'b2', name: 'Desk helper' }], bots_count: 1 }];
-
-  it('shows Suggestions and Not in directory under the list, each answered from its ⋯ @s804', async () => {
-    const sent = serve((url) => (url === '/api/v2/skills/suggestions' ? { suggestions: ideas } : url.startsWith('/api/v2/skills/usage') ? { skills: [], popular_elsewhere: elsewhere } : undefined));
-    owner();
-    list([skill('triage', 'operations')]);
-    queryClient.setQueryData(skillSuggestionsQuery.queryKey, ideas as never);
-    queryClient.setQueryData(skillsElsewhereQuery.queryKey, elsewhere as never);
-    at('/library/skills', <SkillsPage search={{}} />);
-    expect(await screen.findByText('Suggestions')).toBeTruthy();
-    expect(screen.getByText('Unused')).toBeTruthy();
-    expect(screen.getByText('Not in directory')).toBeTruthy();
-    expect(screen.getByText('label-printer')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'More on pack-a-box' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Ask to submit' }));
-    await waitFor(() => expect(writes(sent).map((w) => w.url)).toEqual(['/api/v2/messages', '/api/v2/skills/suggestions/sks_2/asked']));
-    expect(writes(sent)[0]?.body).toMatchObject({ to: 'bot:b2', text: expect.stringContaining('tico skill submit pack-a-box') });
-
-    fireEvent.click(screen.getByRole('button', { name: 'More on old-report' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove' }));
-    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Remove from Mail helper' })).getByRole('button', { name: 'Remove' }));
-    await waitFor(() => expect(writes(sent).at(-1)).toEqual({ url: '/api/v2/skills/suggestions/sks_1/remove', method: 'POST', body: {} }));
-
-    expect(await tico('skills.dismissSuggestion', { suggestion: 'sks_9' })).toMatchObject({ ok: true });
-    expect(writes(sent).at(-1)?.url).toBe('/api/v2/skills/suggestions/sks_9/dismiss');
-  });
-
-  it('a member sees neither section, and nothing asks the server for them @s804', async () => {
-    const sent = serve();
-    list([skill('triage', 'operations')]);
-    at('/library/skills', <SkillsPage search={{}} />);
+describe('the Skills filter', () => {
+  it('narrows the one list to the changes that wait, in the address @s804', async () => {
+    serve();
+    list([skill('triage', null)]);
+    const waiting = { id: 'skp_1', name: 'new-one', status: 'pending', description: 'Does new-one', note: null, base_version: null, version: null, proposed_by: { type: 'Bot', id: 'b1' }, task_id: null, created_at: '2026-11-19T00:00:00Z', updated_at: '2026-11-19T00:00:00Z' };
+    queryClient.setQueryData(proposalsQuery.queryKey, [waiting] as never);
+    const router = at('/library/skills', <SkillsPage search={{}} />);
     expect(await screen.findByText('triage')).toBeTruthy();
-    expect(screen.queryByText('Suggestions')).toBeNull();
-    expect(sent.some((x) => x.url.includes('/suggestions'))).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Filter' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Waiting' }));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ waiting: 1 }));
+    cleanup();
+    at('/library/skills?waiting=1', <SkillsPage search={{ waiting: 1 }} />);
+    expect(await screen.findByText('new-one')).toBeTruthy();
+    expect(screen.queryByText('triage')).toBeNull();
   });
 });
 

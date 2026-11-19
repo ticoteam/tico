@@ -106,6 +106,8 @@ export interface Letter {
   labels?: string[];
   has_attachment?: boolean;
   body?: string;
+  /** With the body (an open mail): each file's name and bytes. */
+  attachments?: { name: string; type?: string; size?: number }[];
 }
 
 /** A mail row: one per Gmail thread, its newest letter, and how many letters it holds in what is loaded. */
@@ -173,19 +175,24 @@ export function updateTitle(u: Update): string {
   return line || u.slides?.goal || (u.kind === 'weekly' ? 'Weekly update' : 'Daily update');
 }
 
-/** The update's paragraphs after the title line, as plain text. */
-export function updateParagraphs(u: Update): string[] {
-  const blocks = (u.body ?? '').split(/\n\s*\n/).map((b) => b.replace(/^[#>\s]+/gm, '').trim()).filter(Boolean);
-  return blocks.slice(1);
+/** What an update says after its title line, as written (markdown). */
+export function updateRest(u: Update): string {
+  return (u.body ?? '').split(/\n\s*\n/).slice(1).join('\n\n').trim();
 }
 
 const dayKey = (u: Update) => u.day || u.created_at.slice(0, 10);
+/** The Monday of a day's week ("2026-01-05" for any day Jan 5 to 11). */
+const weekOf = (day: string) => {
+  const d = new Date(`${day}T12:00:00`);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 
-/** Newest day first, each day's updates newest first. */
-export function byDay(list: Update[]): { day: string; rows: Update[] }[] {
+/** Newest day (or, `week`, newest week, named by its Monday) first, each group's updates newest first. */
+export function byDay(list: Update[], week = false): { day: string; rows: Update[] }[] {
   const days = new Map<string, Update[]>();
   for (const u of list) {
-    const k = dayKey(u);
+    const k = week ? weekOf(dayKey(u)) : dayKey(u);
     days.set(k, [...(days.get(k) ?? []), u]);
   }
   return [...days.entries()]

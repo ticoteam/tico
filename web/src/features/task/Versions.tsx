@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { run } from '@/actions';
 import type { TaskDocument } from '@/api/schema';
 import { Empty } from '@/kit/Empty';
@@ -7,7 +7,7 @@ import { Icon } from '@/kit/Icon';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { fmtDate } from '@/lib';
 import { frameDoc, markChanges, parsePage } from './changes';
-import { DocFrame, PAGE_SANDBOX } from './FileView';
+import { DocFrame, PageBones, PAGE_SANDBOX } from './FileView';
 import { PageMenu } from './Files';
 import { pageVersionQuery } from './queries';
 
@@ -42,13 +42,13 @@ export function useVersions(doc: TaskDocument | undefined, v?: number, vs?: numb
   const older = useQuery({ ...pageVersionQuery(file, before ?? 0), enabled: !!doc && !!before });
   const newer = useQuery({ ...pageVersionQuery(file, shown), enabled: !!doc && (!!before || !newest) });
   const md = doc?.kind === 'markdown';
-  const marked = useMemo(() => {
-    if (older.data == null || newer.data == null) return null;
+  let marked: { count: number; html: string } | null = null;
+  if (older.data != null && newer.data != null) {
     const page = parsePage(newer.data, md);
     const count = markChanges(parsePage(older.data, md), page);
-    return { count, html: frameDoc(page, true) };
-  }, [older.data, newer.data, md]);
-  const plain = useMemo(() => (newer.data == null || newest ? null : frameDoc(parsePage(newer.data, md))), [newer.data, newest, md]);
+    marked = { count, html: frameDoc(page, true) };
+  }
+  const plain = newer.data == null || newest ? null : frameDoc(parsePage(newer.data, md));
   if (!doc) return null;
   const on = named;
   return {
@@ -128,7 +128,11 @@ export function PageView({ task, vs, at }: { task: string; vs: Versions; at: num
   if (vs.failed) return <Empty icon="alert" title={`${name} did not load`} />;
   return (
     <div className="frame is-inset">
-      {vs.html && <iframe ref={frame} srcDoc={vs.html} title={`${name}, v${vs.shown}`} sandbox={PAGE_SANDBOX} referrerPolicy="no-referrer" />}
+      {vs.html ? (
+        <iframe ref={frame} srcDoc={vs.html} title={`${name}, v${vs.shown}`} sandbox={PAGE_SANDBOX} referrerPolicy="no-referrer" />
+      ) : (
+        <PageBones />
+      )}
     </div>
   );
 }

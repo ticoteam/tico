@@ -317,7 +317,6 @@ describe('Webhooks', () => {
               : nothing(),
     );
     queryClient.setQueryData(hooksQuery.queryKey, []);
-    queryClient.setQueryData(['routines', 'endpoints'], []);
     show('/company/routines?tab=webhooks');
     fireEvent.click((await screen.findAllByRole('button', { name: 'Add webhook' }))[0]!);
     const dialog = await screen.findByRole('dialog', { name: 'Add webhook' });

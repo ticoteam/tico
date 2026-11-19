@@ -5,16 +5,6 @@
 .q-try{width:100%;margin-top:calc(var(--s-5) + var(--s-0));padding:0 0 0 calc(var(--s-4) + var(--s-0));text-align:left;color:var(--ink-2);line-height:var(--lh-read);display:grid;gap:var(--s-1)}
 .q-try li::marker{color:var(--faint)}
 
-/* ---------- Needs you: one line a row. The title, then what is asked quiet beside it (as tasks.css .row-stage), the
-   face, the age. The rows share one grid, so the faces stand in one column; the age column is as wide as the widest
-   age ("Nov 12" is wider than the kit's 38px, which the mock sized for "4m") with the standard 8px between it and the
-   face. What is asked takes at most 40% of the row and ellipses; the title has the rest. ---------- */
-.st-needs{display:grid;grid-template-columns:24px minmax(0,1fr) fit-content(40%) var(--av-sm) minmax(38px,auto)}
-.st-needs>.task{grid-column:1/-1;grid-template-columns:subgrid}
-.st-needs .row-pills{min-width:0;overflow:hidden}
-.st-needs .row-age{padding-left:var(--s-2)}
-.row-stage{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-
 /* ---------- Welcome (9-first-run): a dialog of a few steps. Where you are, one title, one thing to do. ---------- */
 .modal.wl{width:440px;padding:var(--s-6);gap:var(--s-5)}
 .wl-head{display:flex;align-items:center;gap:var(--s-2);height:28px}
@@ -44,12 +34,6 @@
 .wl-row.radio.is-on b{color:var(--ink)}
 
 :where(html[data-layout="cards"]){
-  /* a phone task row puts its pills on a second line (parts.css): here what is asked stays beside the title */
-  .st-needs{grid-template-columns:20px minmax(0,1fr) fit-content(40%) var(--av-sm) minmax(34px,auto)}
-  .st-needs>.row.task{grid-template-areas:none}
-  .st-needs>.row.task>*{grid-area:auto}
-  .st-needs .task .row-pills:empty{display:block}
-  .st-needs .task .row-pills{padding:0 var(--s-2) 0 0}
   .modal.wl{width:auto;padding:var(--s-6) var(--s-4) var(--s-4)}
   .wl-row{min-height:60px}
   .wl-row.radio{min-height:52px}

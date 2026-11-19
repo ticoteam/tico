@@ -14,7 +14,7 @@ import { Select } from '@/kit/Select';
 import { SidePanel } from '@/pagekinds';
 import { ROUTINES } from './actions';
 import { useNamer } from './CompanyRules';
-import { Face, press, RemoveItem, useConfirmRemove, Verb, Word } from './parts';
+import { Face, PanelRead, press, RemoveItem, useConfirmRemove, Verb, Word } from './parts';
 import { dueOneQuery, orgRulesQuery } from './queries';
 import type { DueDetail, DueMark, Repeats } from './types';
 import { agentWords, dayWords } from './words';
@@ -60,7 +60,7 @@ function DueView({ id, onClose }: { id: string; onClose: () => void }) {
   if (!d || d.retired_at || d.ended_on) {
     return (
       <SidePanel className="rr" title="Due date" onClose={onClose}>
-        {!q.isPending && !moved && <Empty icon="alert" title="This due date is gone" />}
+        {q.isSuccess ? !moved && <Empty icon="alert" title="This due date is gone" /> : <PanelRead q={q} what="This due date" />}
       </SidePanel>
     );
   }

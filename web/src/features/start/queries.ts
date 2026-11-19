@@ -1,18 +1,14 @@
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
 import type {
-  CalendarOccurrence,
   GetConfigResponse,
-  GetNeedsYouResponse,
   GitHubApp,
   GitHubAppDisconnected,
   GitHubAppFinished,
   GitHubAppSetup,
   GitHubAuthorizeLink,
   GitHubLostKeyReplaced,
-  ListCalendarEventsResponse,
   ModelSubscriptionList,
-  NeedsYouItem,
 } from '@/api/schema';
 import { configQuery, keys, meQuery, queryClient, quietRoot, write } from '@/data';
 
@@ -25,7 +21,7 @@ export type StartConfig = GetConfigResponse & { onboarding_needed?: boolean };
 
 export const needsSetup = (config: GetConfigResponse | undefined | null): boolean => !!(config as StartConfig | null | undefined)?.onboarding_needed;
 
-/** Signed in: the start page, with the first run open over it while setup is owed. Not signed in: null (the root's gate answers). */
+/** Signed in: Tasks, with the first run open over it while setup is owed. Not signed in: null (the root's gate answers). */
 export async function landing(qc: QueryClient): Promise<{ setup: boolean } | null> {
   try {
     await qc.ensureQueryData(meQuery);
@@ -51,84 +47,6 @@ export function screenFor(error: unknown): StartScreenKind | null {
 export function retryStart(): void {
   void queryClient.refetchQueries({ queryKey: keys.me() });
   void queryClient.refetchQueries({ queryKey: keys.directory() });
-}
-
-/* ---------------------------------------------------------------- the start page */
-
-export interface Need {
-  id: string;
-  kind: NeedsYouItem['kind'];
-  title: string;
-  /** Quiet, beside the title on the same line: what is asked when the title is the task's, or the task a message is on. */
-  sub: string | undefined;
-  /** The page it opens: its task, else its thread. */
-  href: string | undefined;
-  at: string;
-  /** Who asked: an agent or a person id the directory answers. */
-  from: string | undefined;
-}
-
-/** A task's page when it has one; a mention or a question outside a task opens its thread. */
-export function needHref(item: NeedsYouItem & { task_ids?: string[] }): string | undefined {
-  const task = item.task_id || item.task_ids?.[0];
-  if (task) return `/task/${enc(task)}`;
-  const thread = item.root_id || item.conversation_id;
-  return thread ? `/threads/${enc(thread)}` : undefined;
-}
-
-/**
- * A need's one line. An OK or a task's wait (`ask`, `task`) has the requirement's name for its line ("Spec", "Release
- * report"), the same on every task in that stage, so the task's title is the title and the line is quiet beside it; a
- * task filed for the OK alone is titled by its kind, and then `about` says what it is about (views.py needs_items). A
- * question or an @ has the message itself for its line, which is already its own: it stays the title, with its task
- * beside it. A Paused cause stands for several tasks: its line alone.
- */
-export function needLine(it: NeedsYouItem): { title: string; sub: string | undefined } {
-  const task = it.task?.title?.trim() || undefined;
-  const line = it.line.trim();
-  const pair = (title: string, sub: string | undefined) => ({ title, sub: sub && sub !== title ? sub : undefined });
-  if (it.kind === 'ask' || it.kind === 'task') {
-    const name = it.about?.trim() || task;
-    return name ? pair(name, line) : pair(line, undefined);
-  }
-  if (it.kind === 'question' || it.kind === 'mention') return line ? pair(line, task) : pair(task ?? '', undefined);
-  return pair(line, undefined);
-}
-
-export function adaptNeeds(data: GetNeedsYouResponse): { count: number; items: Need[] } {
-  const items = 'items' in data && Array.isArray(data.items) ? data.items : [];
-  return {
-    count: ('count' in data && typeof data.count === 'number' ? data.count : 0) || items.length,
-    items: items.map((it) => ({
-      id: it.id,
-      kind: it.kind,
-      ...needLine(it),
-      href: needHref(it),
-      at: it.since ?? new Date().toISOString(),
-      from: it.from_id || undefined,
-    })),
-  };
-}
-
-/** What waits on the person: approvals and questions, one record per item, oldest first (GET /api/v2/needs-you). Read
-    again on the `needs` signal. */
-export const needsQuery = queryOptions({
-  queryKey: ['needs', 'start'] as const,
-  queryFn: async ({ signal }) => adaptNeeds(await api.get<GetNeedsYouResponse>('/api/v2/needs-you?limit=50', { signal })),
-});
-
-/** Today's events and dues on the person's calendar, in order. Refetched on the `calendar` signal. */
-export function todayQuery(now = new Date()) {
-  const from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const to = new Date(from.getFullYear(), from.getMonth(), from.getDate() + 1);
-  return queryOptions({
-    queryKey: ['calendar', 'today', from.toISOString()] as const,
-    queryFn: async ({ signal }): Promise<CalendarOccurrence[]> => {
-      const q = `from=${enc(from.toISOString())}&to=${enc(to.toISOString())}&kinds=event,due`;
-      const data = await api.get<ListCalendarEventsResponse>(`/api/v2/calendar/events?${q}`, { signal });
-      return [...data.occurrences].sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
-    },
-  });
 }
 
 /* ---------------------------------------------------------------- first run (GET/PUT /api/v2/setup) */

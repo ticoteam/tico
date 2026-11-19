@@ -3,7 +3,7 @@ import { MessagingPage } from '@/features/threads/exports';
 import { textListQuery } from '@/features/threads/routing';
 
 interface MessagingSearch {
-  /** The open text. */
+  /** The open contact: who the texts came from. */
   open?: string;
 }
 

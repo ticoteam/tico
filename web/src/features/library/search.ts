@@ -25,14 +25,13 @@ export interface DocsSearch {
 export const docsSearch = (raw: Record<string, unknown>): DocsSearch =>
   clean({ q: str(raw.q), tab: raw.tab === 'sources' ? ('sources' as const) : undefined, panel: str(raw.panel), archived: flag(raw.archived) });
 
-/** A doc: `edit`, or an old version `v`. An outside doc: `revision`, the commit it was read at. */
+/** A doc: an old version `v`. An outside doc: `revision`, the commit it was read at. */
 export interface DocSearch {
-  edit?: 1;
   v?: number;
   revision?: string;
 }
 const commit = (v: unknown) => (typeof v === 'string' && /^[0-9a-f]{4,64}$/i.test(v) ? v : undefined);
-export const docSearch = (raw: Record<string, unknown>): DocSearch => clean({ edit: flag(raw.edit), v: num(raw.v), revision: commit(raw.revision) });
+export const docSearch = (raw: Record<string, unknown>): DocSearch => clean({ v: num(raw.v), revision: commit(raw.revision) });
 
 /** `kind`: one library kind; `task`: where an upload lands; `file` (and `v`): the file open in the page. */
 export interface FilesSearch {
@@ -51,6 +50,8 @@ export const filesSearch = (raw: Record<string, unknown>): FilesSearch =>
  */
 export interface SkillsSearch {
   q?: string;
+  /** Only the changes that wait for an OK. */
+  waiting?: 1;
   skill?: string;
   proposal?: string;
   connect?: string;
@@ -58,7 +59,7 @@ export interface SkillsSearch {
 /** `setup`, or a code in the helper's shape (eight letters and digits, maybe split by a dash); nothing else. */
 const connectWord = (v: unknown) => (v === 'setup' || (typeof v === 'string' && /^[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}$/.test(v)) ? v : undefined);
 export const skillsSearch = (raw: Record<string, unknown>): SkillsSearch =>
-  clean({ q: str(raw.q), skill: str(raw.skill), proposal: str(raw.proposal), connect: connectWord(raw.connect) });
+  clean({ q: str(raw.q), waiting: flag(raw.waiting), skill: str(raw.skill), proposal: str(raw.proposal), connect: connectWord(raw.connect) });
 
 /** The words GitHub's install and sign-in returns carry (backend/github_app.py). */
 export const GITHUB_RETURNS = ['connected', 'installed', 'authorized', 'pending', 'declined', 'finish', 'again', 'expired'] as const;

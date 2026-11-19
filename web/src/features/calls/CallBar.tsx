@@ -1,12 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useRouterState } from '@tanstack/react-router';
-import { desktop, useCallWindow } from '@/desktop';
+import { useCallWindow } from '@/desktop';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { CallBars } from '@/tico/dot';
-import { BarMore } from './CallMore';
 import { running } from './model';
-import { Face, inCall, press, SMALL_WINDOW, useCards, useMe, useNameOf, useNow } from './parts';
+import { Face, inCall, press, useCards, useMe, useNameOf, useNow } from './parts';
 import { callQuery } from './queries';
 import { canShare, isActive, useCall, type CallState } from './session';
 import './calls.css';
@@ -114,12 +113,10 @@ function Bar({ room, s }: { room: string; s: CallState }) {
         <Link to="/call/$room" params={{ room }} className="ib" aria-label="Open call" title="Open call">
           <Icon name="popout" />
         </Link>
-        {desktop() && <IconButton icon="shrink" label={SMALL_WINDOW} onClick={() => void press('shell.openCallWindow', { id: room })} />}
         <button type="button" className="btn btn-sm cb-leave" onClick={() => void press('calls.leave', {})}>
           <Icon name="leave" />
           Leave
         </button>
-        <BarMore room={room} c={c} me={s.me ?? me} />
       </div>
     </header>
   );

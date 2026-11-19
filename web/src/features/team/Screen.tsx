@@ -6,7 +6,6 @@ import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { IconButton } from '@/kit/IconButton';
 import { Segmented } from '@/kit/Segmented';
-import { Section } from '@/pagekinds';
 import { MateRow } from './parts';
 import { screenSocket, type Computer, type ScreenSession } from './queries';
 
@@ -53,7 +52,7 @@ export function ScreenTools({ c, mode, onMode }: { c: Computer; mode: ScreenMode
   );
 }
 
-/** Who is on it now, then the picture. */
+/** Who is on it now, as bare rows, then the picture (blank until it connects). */
 export function Screen({ c, mode }: { c: Computer; mode: ScreenMode }) {
   const actors = useActors();
   const setScreen = useAction('computers.setScreen');
@@ -74,13 +73,9 @@ export function Screen({ c, mode }: { c: Computer; mode: ScreenMode }) {
   const busy = actors.filter((a) => a.kind === 'agent' && a.working && c.bots?.includes(a.id.slice(a.id.indexOf(':') + 1)));
   return (
     <>
-      {busy.length > 0 && (
-        <Section name="On it now" count={busy.length}>
-          {busy.map((a) => (
-            <MateRow key={a.id} actor={a} />
-          ))}
-        </Section>
-      )}
+      {busy.map((a) => (
+        <MateRow key={a.id} actor={a} />
+      ))}
       <Live key={`${c.id}:${control}:${attempt}`} c={c} control={control} onReconnect={() => setAttempt((n) => n + 1)} />
     </>
   );
@@ -152,7 +147,6 @@ function Live({ c, control, onReconnect }: { c: Computer; control: boolean; onRe
   return (
     <div className="scr" data-target={`screen:${c.id}`} style={shape} aria-label={`The screen of ${c.label}`}>
       <div className="scr-view" ref={box} />
-      {phase.is === 'connecting' && <p className="scr-msg" role="status">Connecting…</p>}
       {phase.is === 'ended' && (
         <div className="scr-msg" role="status">
           <span>{phase.line}</span>

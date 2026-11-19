@@ -52,8 +52,8 @@ import type {
 } from '@/api/schema';
 
 /* Company, Strategy, Products and Risk. None of these has a live topic: each root is read again after the person's
-   own writes, on reconnect and on open when older than 60 s. Three widgets on Company read other areas' endpoints
-   under those areas' roots (finance, usage, needs) and Market reads Listening's stats under `listening`. */
+   own writes, on reconnect and on open when older than 60 s. Two figures on Company read other areas' endpoints
+   under those areas' roots (finance, usage) and Market reads Listening's stats under `listening`. */
 
 for (const root of ['company', 'goals', 'kpis', 'strategy', 'brand', 'market', 'products', 'risks', 'groups', 'finance', 'usage', 'needs', 'listening']) quietRoot(root);
 
@@ -69,7 +69,6 @@ export type Stage = Pipeline['stages'][number];
 export const floorQuery = queryOptions({
   queryKey: ['company', 'floor'],
   queryFn: ({ signal }) => api.get<CompanyFloor>('/api/v2/company/floor', { signal }),
-  ...quiet,
 });
 
 /** The open tasks in one stage, as the stage panel lists them. A task-list key, so the stream keeps it current. */
@@ -95,13 +94,6 @@ export const revenueQuery = queryOptions({
       return null;
     }
   },
-  ...quiet,
-});
-
-export const needsQuery = queryOptions({
-  queryKey: ['needs', 'summary'],
-  queryFn: ({ signal }) => api.get<{ total: number; this_week: number }>('/api/v2/needs-you/summary', { signal }),
-  ...quiet,
 });
 
 const day = (d: Date) => d.toISOString().slice(0, 10);
@@ -117,6 +109,12 @@ export const spendQuery = queryOptions({
       return null;
     }
   },
+});
+
+/** Each page's owner (the agent its chat opens). Same key and shape the settings and library features read. */
+export const pageOwnersQuery = queryOptions({
+  queryKey: ['settings', 'page-owners'],
+  queryFn: async ({ signal }) => (await api.get<{ pages?: Record<string, { bot: string | null }> }>('/api/v2/page-owners', { signal })).pages ?? {},
   ...quiet,
 });
 
@@ -150,7 +148,6 @@ export interface Strategy {
 export const strategyQuery = queryOptions({
   queryKey: ['strategy'],
   queryFn: ({ signal }) => api.get<Strategy>('/api/v2/strategy', { signal }),
-  ...quiet,
 });
 
 /** One row of the history: every save that changed something is a version (GET /api/v2/strategy/versions). */
@@ -163,7 +160,6 @@ export interface VersionRow {
 export const strategyVersionsQuery = queryOptions({
   queryKey: ['strategy', 'versions'],
   queryFn: ({ signal }) => api.get<VersionRow[]>('/api/v2/strategy/versions?limit=50', { signal }),
-  ...quiet,
 });
 /** One version whole, with its bets as they were. A published version never changes. */
 export type StrategySnapshot = StrategyVersion & { bets: Bet[] };
@@ -173,18 +169,6 @@ export const strategyVersionQuery = (n: number) =>
     queryFn: ({ signal }) => api.get<StrategySnapshot>(`/api/v2/strategy/versions/${n}`, { signal }),
     staleTime: Infinity,
   });
-/** What changed between two versions (backend/strategy.py diff): field keys are `summary`, `sections.<key>`, `sections.extra.<key>`. */
-export interface StrategyDiff {
-  fields: { key: string; from: unknown; to: unknown }[];
-  bets: { added: Bet[]; retired: Bet[]; changed: { id: string; from: Bet; to: Bet }[] };
-}
-export const strategyDiffQuery = (from: number, to: number) =>
-  queryOptions({
-    queryKey: ['strategy', 'diff', from, to],
-    queryFn: ({ signal }) => api.get<StrategyDiff>(`/api/v2/strategy/diff?from=${from}&to=${to}`, { signal }),
-    staleTime: Infinity,
-  });
-
 // Market: the latest briefing, the market's spend and players, its value chain, and Listening's posts a day. None of
 // the market reads is in the schema; these are their shapes as backend/market_spend.py, market.py and
 // market_briefing.py send them (the fields the pages read).
@@ -286,35 +270,29 @@ export interface ListeningStats {
 export const marketSpendQuery = queryOptions({
   queryKey: ['market', 'spend'],
   queryFn: ({ signal }) => api.get<MarketSpend>('/api/v2/market/spend?dimension=offering', { signal }),
-  ...quiet,
 });
 export const marketBriefingQuery = queryOptions({
   queryKey: ['market', 'briefing'],
   queryFn: ({ signal }) => api.get<MarketBriefing>('/api/v2/market/briefings/latest', { signal }),
-  ...quiet,
 });
 export const valueChainQuery = queryOptions({
   queryKey: ['market', 'chain'],
   queryFn: ({ signal }) => api.get<ValueChain>('/api/v2/market/value-chain', { signal }),
-  ...quiet,
 });
 /** How many organizations the market holds: none means it was never set up. */
 export const marketCountQuery = queryOptions({
   queryKey: ['market', 'count'],
   queryFn: async ({ signal }) => (await api.get<{ total?: number | null; entities?: unknown[] }>('/api/v2/market/entities?status=active&limit=1', { signal })).total ?? 0,
-  ...quiet,
 });
 export const marketNoteQuery = (id: string) =>
   queryOptions({
     queryKey: ['market', 'note', id],
     queryFn: ({ signal }) => api.get<MarketNote>(`/api/v2/market/entities/${enc(id)}?names=true`, { signal }),
-    ...quiet,
   });
 /** The owner's answers to Market's four set-up questions so far, and the research task they filed. */
 export const marketSetupQuery = queryOptions({
   queryKey: ['market', 'setup'],
   queryFn: async ({ signal }) => (await api.get<LibrarianSetup>('/api/v2/librarian/setup', { signal })).market,
-  ...quiet,
 });
 export type MarketSetupState = LibrarianMarketSetup;
 export type MarketAnswer = keyof LibrarianMarketSetup['answers'];
@@ -371,7 +349,6 @@ export const listeningStatsQuery = queryOptions({
       return null;
     }
   },
-  ...quiet,
 });
 
 // ---------------------------------------------------------------- Org: the factories and who may make one
@@ -387,20 +364,20 @@ export const factoriesQuery = queryOptions({
       return null;
     }
   },
-  ...quiet,
 });
 
-/** The reader's company role as Access gives it ('owner', 'admin'); null for a member, whom Access refuses. */
-export const companyRoleQuery = queryOptions({
-  queryKey: ['company', 'role'],
+/** The reader's company role ('owner', 'admin') and the company owner's person id, as Access gives them; nulls for a
+    member, whom Access refuses. */
+export const accessQuery = queryOptions({
+  queryKey: ['company', 'access'],
   queryFn: async ({ signal }) => {
     try {
-      return (await api.get<{ you?: string }>('/api/v2/access', { signal })).you ?? null;
+      const r = await api.get<{ you?: string; owner?: { person?: string | null } }>('/api/v2/access', { signal });
+      return { you: r.you ?? null, owner: r.owner?.person ?? null };
     } catch {
-      return null;
+      return { you: null, owner: null };
     }
   },
-  ...quiet,
 });
 
 /** A new factory, shown at once at the end of the list. Only the company's owner and Admins (403 for anyone else; 409
@@ -421,7 +398,6 @@ export type Team = Group & { lead?: string };
 export const groupsQuery = queryOptions({
   queryKey: ['groups'],
   queryFn: ({ signal }) => api.get<Team[]>('/api/v2/groups', { signal }),
-  ...quiet,
 });
 
 /** A teammate into another group (it leaves the one it was in), or out of its group when `to` is empty. People go by
@@ -468,7 +444,6 @@ export interface Brand {
 export const brandQuery = queryOptions({
   queryKey: ['brand'],
   queryFn: ({ signal }) => api.get<Brand>('/api/v2/brand', { signal }),
-  ...quiet,
 });
 export const brandVersionQuery = (n: number) =>
   queryOptions({
@@ -505,21 +480,18 @@ export type TreeGoal = GoalTree['goals'][number];
 export const goalsTreeQuery = queryOptions({
   queryKey: ['goals', 'tree'],
   queryFn: ({ signal }) => api.get<GoalTree>('/api/v2/goals/tree', { signal }),
-  ...quiet,
 });
 
 export const goalQuery = (gid: string) =>
   queryOptions({
     queryKey: ['goals', 'detail', gid],
     queryFn: ({ signal }) => api.get<GoalResult>(`/api/v2/goals/${enc(gid)}`, { signal }),
-    ...quiet,
   });
 
 export const kpiQuery = (kid: string) =>
   queryOptions({
     queryKey: ['kpis', 'detail', kid],
     queryFn: ({ signal }) => api.get<KpiDetail>(`/api/v2/kpis/${enc(kid)}`, { signal }),
-    ...quiet,
   });
 
 const treeKey = goalsTreeQuery.queryKey;
@@ -696,7 +668,6 @@ export interface PlacedKpi {
 export const placedKpisQuery = queryOptions({
   queryKey: ['kpis', 'placed'],
   queryFn: async ({ signal }) => (await api.get<{ kpis?: PlacedKpi[] }>('/api/v2/growth/kpis', { signal })).kpis ?? [],
-  ...quiet,
 });
 
 /** What a KPI feeds and its role; one North Star at a time, so naming one moves the role from the old. */
@@ -717,7 +688,6 @@ export type Checkin = GoalCheckinView;
 export const productsQuery = queryOptions({
   queryKey: ['products', 'list'],
   queryFn: ({ signal }) => api.get<ProductList>('/api/v2/products', { signal }),
-  ...quiet,
 });
 
 const productsKey = productsQuery.queryKey;
@@ -751,14 +721,12 @@ export function createProduct(name: string) {
 export const risksQuery = queryOptions({
   queryKey: ['risks', 'list'],
   queryFn: ({ signal }) => api.get<RiskList>('/api/v2/risks', { signal }),
-  ...quiet,
 });
 
 export const riskQuery = (id: string) =>
   queryOptions({
     queryKey: ['risks', 'detail', id],
     queryFn: ({ signal }) => api.get<RiskDetail>(`/api/v2/risks/${enc(id)}`, { signal }),
-    ...quiet,
   });
 
 /** Open matters (under live risks), or every dispute (the Disputes tab). */
@@ -766,7 +734,6 @@ export const mattersQuery = (which: 'open' | 'disputes') =>
   queryOptions({
     queryKey: ['risks', 'matters', which],
     queryFn: ({ signal }) => api.get<MatterList>(`/api/v2/matters?${which === 'open' ? 'open=true' : 'kind=dispute'}&limit=200`, { signal }),
-    ...quiet,
   });
 
 export type { MatterRow };
@@ -803,7 +770,6 @@ export interface RecoveryOption {
 export const goalNeedsQuery = queryOptions({
   queryKey: ['goals', 'needs'],
   queryFn: async ({ signal }) => (await api.get<GetGoalsNeedsYouResponse>('/api/v2/goals/needs-you', { signal })).items,
-  ...quiet,
 });
 
 /** Yes or no on a suggestion that waits on you (a recovery's chosen `option`): it leaves the list at once and comes
@@ -832,7 +798,6 @@ export const waitingTasksQuery = queryOptions({
       return [];
     }
   },
-  ...quiet,
 });
 
 /** A risk's name and page text (the old Edit dialog). */
@@ -883,7 +848,6 @@ export const matterDatesQuery = (risk: string) =>
   queryOptions({
     queryKey: ['risks', 'dates', risk],
     queryFn: async ({ signal }) => (await api.get<{ obligations: RiskDate[] }>(`/api/v2/risk/obligations?risk=${enc(risk)}`, { signal })).obligations,
-    ...quiet,
   });
 
 /** The files on a matter's task. */
@@ -891,7 +855,6 @@ export const matterFilesQuery = (task: string) =>
   queryOptions({
     queryKey: ['risks', 'files', task],
     queryFn: async ({ signal }) => (await api.get<TaskFileList>(`/api/v2/tasks/${enc(task)}/files`, { signal })).files.filter((f) => !f.archived),
-    ...quiet,
   });
 
 /** A file from the person's disk onto the matter's task (POST /api/v2/tasks/{tid}/files). */
@@ -905,14 +868,6 @@ export function addMatterFile(task: string, file: File) {
   });
 }
 
-/** A product's matters (GET /api/v2/matters?product=<key>). */
-export const productMattersQuery = (key: string) =>
-  queryOptions({
-    queryKey: ['risks', 'matters', 'product', key],
-    queryFn: async ({ signal }) => (await api.get<MatterList>(`/api/v2/matters?product=${enc(key)}&limit=200`, { signal })).matters,
-    ...quiet,
-  });
-
 /** The team's repositories, for a product's Code (null when they cannot be read: a name is typed instead). */
 export const repositoriesQuery = queryOptions({
   queryKey: ['products', 'repositories'],
@@ -923,7 +878,6 @@ export const repositoriesQuery = queryOptions({
       return null;
     }
   },
-  ...quiet,
 });
 
 export type ProductListField = 'agreements' | 'repositories' | 'depends_on';
@@ -959,7 +913,6 @@ export interface BrandProposal {
 export const brandProposalsQuery = queryOptions({
   queryKey: ['brand', 'proposals'],
   queryFn: async ({ signal }) => (await api.get<{ proposals?: BrandProposal[] }>('/api/v2/proposals', { signal })).proposals?.filter((p) => p.kind === 'brand_draft' && p.may_decide !== false) ?? [],
-  ...quiet,
 });
 
 /** Add a suggested change to the draft, or decline it; the draft is read again. */

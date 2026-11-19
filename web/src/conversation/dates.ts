@@ -3,6 +3,13 @@
 const time = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' });
 const day = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 const dayYear = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+const full = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+/** "Wed, Nov 18, 9:21 AM": when a letter or an update was written. */
+export const stamp = (at: Date | string | undefined) => {
+  const d = at instanceof Date ? at : parse(at);
+  return d && Number.isFinite(d.getTime()) ? full.format(d) : '';
+};
 
 const parse = (iso: string | undefined) => {
   const t = iso ? Date.parse(iso) : NaN;

@@ -8,12 +8,12 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { ContextMenu, Menu, MenuItem } from '@/kit/Menu';
 import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
+import { Pill } from '@/kit/Pill';
 import type { Stage, TaskItem } from './queries';
 import { chatAddress } from '@/lib';
 
-const FLOW_PLAY = 'M16 5.5C8 4 4.5 12 5 24 4.5 36 8 44 16 42.5 27 40 45 32 45 24 45 16 27 8 16 5.5Z';
-
-/** The head's Flow button: the play mark and how many tasks wait on you (parts-kit.js playBtn). On Flow it goes back. */
+/** The head's Flow button: the play mark and how many tasks wait on you (parts-kit.js playBtn). On Flow it goes back.
+    It stays in a phone's head. */
 export function FlowButton({ on, count }: { on: boolean; count: number }) {
   return (
     <Link
@@ -23,17 +23,9 @@ export function FlowButton({ on, count }: { on: boolean; count: number }) {
       aria-label="Flow"
       title="Flow"
       data-target="tasks:flow"
+      data-phone
     >
-      <span className={on ? 'flow-mark live' : 'flow-mark'} style={{ width: 22 }} aria-hidden="true">
-        <svg viewBox="0 0 48 48" focusable="false">
-          <g className="f1">
-            <path d={FLOW_PLAY} transform="translate(-.5 7.2) scale(.7)" />
-          </g>
-          <g className="f2">
-            <path d={FLOW_PLAY} transform="translate(10.5 7.2) scale(.7)" />
-          </g>
-        </svg>
-      </span>
+      <FlowMark play live={on} />
       {count > 0 && <b>{count}</b>}
     </Link>
   );
@@ -109,4 +101,10 @@ export function Movable({
       <Menu trigger={<IconButton icon="more" label="Move to" size="sm" className="tk-more" />}>{items}</Menu>
     </div>
   );
+}
+
+/** "Blocks E613, E633": the open tasks this one holds up, by their label (or number). */
+export function Blocks({ t }: { t: { blocks?: readonly { label?: string | null; number: number | null }[] } }) {
+  const names = (t.blocks ?? []).map((b) => b.label ?? (b.number != null ? `#${b.number}` : null)).filter(Boolean);
+  return names.length ? <Pill>Blocks {names.join(', ')}</Pill> : null;
 }

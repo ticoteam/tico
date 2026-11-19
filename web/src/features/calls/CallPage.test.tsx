@@ -15,6 +15,8 @@ import { callQuery, ringingQuery } from './queries';
 import { RingCard } from './RingCard';
 import { callState, resetCall } from './session';
 
+// The stage's file preview is the library's: not under test here.
+vi.mock('@/features/library/exports', () => ({ FilePreview: () => null }));
 vi.mock('@/tico/dot', () => ({
   Dot: () => <span className="dot" />,
   CallBars: () => <span className="lvl" />,
@@ -405,7 +407,7 @@ describe('The desktop app’s small call window', () => {
     show(`/call/${ROOM}?window=1`);
     await waitFor(() => expect(posted.some((u) => u.endsWith(`/calls/${ROOM}/join`))).toBe(true));
     expect(await screen.findByRole('button', { name: 'Leave' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Minimize' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Back to bar' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Open in a small window' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Keep on top' }));

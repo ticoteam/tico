@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
-import { Conversation, ticoRoomQuery } from '@/conversation';
+import { Conversation, MessageBones, ticoRoomQuery } from '@/conversation';
 import { Button } from '@/kit/Button';
 import { Fault } from '@/kit/Fault';
 import { Sheet, SheetHead } from '@/shell';
@@ -25,20 +25,22 @@ export function TicoSheet() {
         <TicoOff canTurnOn={power.can_turn_on} />
       ) : room.data ? (
         <Conversation id={room.data} variant="tico" page={{ path, title: name }} />
-      ) : (
+      ) : room.isError ? (
+        // The grey fault, then the one way out (the kit's empty-state row).
         <div className="chat-body">
-          {room.isError ? (
-            // The grey fault, then the one way out (the kit's empty-state row).
-            <div className="empty">
-              <Fault label="Tico did not load" size={16} />
-              <div className="q-row">
-                <Button onClick={() => void room.refetch()}>Try again</Button>
-              </div>
+          <div className="empty">
+            <Fault label="Tico did not load" size={16} />
+            <div className="q-row">
+              <Button onClick={() => void room.refetch()}>Try again</Button>
             </div>
-          ) : room.data === null ? (
-            <Fault label="Tico has no chat yet" />
-          ) : null}
+          </div>
         </div>
+      ) : room.data === null ? (
+        <div className="chat-body">
+          <Fault label="Tico has no chat yet" />
+        </div>
+      ) : (
+        <MessageBones label="Loading Tico" />
       )}
     </Sheet>
   );

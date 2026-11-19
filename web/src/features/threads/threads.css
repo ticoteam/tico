@@ -3,25 +3,28 @@
    longhands. The list column, tabs, head and states are the ListAndItem and List kinds'; this is what the pages add. */
 
 /* ---------- the reading column of a conversation ---------- */
-.conv-col{max-width:744px;margin:0 auto}
+.conv-col{max-width:var(--bare-w);margin:0 auto}
 .conv-foot>.conv-col{flex:1;min-width:0;display:flex;flex-direction:column;gap:var(--s-2)}
 .conv-head .av{margin-right:var(--s-2)}
 .conv-head .btn-fill{margin:0 var(--s-1) 0 var(--s-2)}
 .conv-n{margin-left:var(--s-2);position:relative;top:1px}
+/* what sits right after an item's title (a count, an address): the head's grow moves after it */
+.conv-head:has(>.conv-n,>.lt-addr)>.grow{display:none}
+.conv-head>.conv-n,.conv-head>.lt-addr{margin-right:auto}
 .conv.is-empty{-webkit-mask-image:none;mask-image:none}
 .conv.is-empty .conv-body{display:flex;-webkit-mask-image:none;mask-image:none}
 .conv.is-empty .conv-col{flex:1;display:flex}
 
 /* ---------- what a conversation is about: who is in it, the task it belongs to ---------- */
 .conv-about{flex:none;margin-top:calc(var(--s-2) * -1);padding:0 0 0 var(--s-6);border-bottom:1px solid var(--line)}
-.ab-row{height:42px;display:flex;align-items:center;gap:calc(var(--s-1) + var(--s-0));padding-right:calc(var(--s-8) + var(--s-1));overflow-x:auto;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 44px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 44px),transparent)} /* stylelint-disable-line color-no-hex -- mask */
+.ab-row{height:calc(var(--ctl-lg) + var(--s-0));display:flex;align-items:center;gap:calc(var(--s-1) + var(--s-0));padding-right:calc(var(--s-8) + var(--s-1));overflow-x:auto;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 44px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 44px),transparent)} /* stylelint-disable-line color-no-hex -- mask */
 .ab-people{flex:none;gap:calc(var(--s-1) + 1px);padding-left:0;margin-right:calc(var(--s-1) + var(--s-0))}
 .ab-people .av{flex:none;margin-left:0;box-shadow:none}
-.ab-chip{flex:none;display:inline-flex;align-items:center;gap:calc(var(--s-1) + var(--s-0));height:26px;padding:0 calc(var(--s-2) + 1px) 0 calc(var(--s-1) + 3px);border-radius:var(--r-chip);background:var(--well);color:var(--ink-2);font-size:var(--t-sm);white-space:nowrap;transition:background var(--dur-fast) var(--ease)}
+.ab-chip{flex:none;display:inline-flex;align-items:center;gap:calc(var(--s-1) + var(--s-0));height:calc(var(--ctl-sm) - var(--s-0));padding:0 calc(var(--s-2) + 1px) 0 calc(var(--s-1) + 3px);border-radius:var(--r-chip);background:var(--well);color:var(--ink-2);font-size:var(--t-sm);white-space:nowrap}
 .ab-chip:hover{background:var(--well-2);color:var(--ink)}
 .ab-chip .ico{width:13px;height:13px;color:var(--muted)}
+.ab-chip em{font-style:normal;color:var(--muted)}
 .ab-n{flex:none;margin:0 calc(var(--s-1) + var(--s-0)) 0 calc((var(--s-1) + var(--s-0)) * -1)}
-.ab-add{flex:none;border:0;font-family:inherit}
 .app-tico .conv-head:has(+.conv-about){border-bottom:0}
 
 /* ---------- the list of threads ---------- */
@@ -50,7 +53,7 @@
 .to{min-height:44px;display:flex;align-items:center;flex-wrap:wrap;gap:calc(var(--s-1) + var(--s-0));padding:calc(var(--s-1) + var(--s-0)) var(--s-2) calc(var(--s-1) + var(--s-0)) calc(var(--s-3) + var(--s-0));border-radius:var(--r-card);background:var(--well);box-shadow:inset 0 0 0 1px var(--line)}
 .to:focus-within{background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--focus)}
 .to+.to{margin-top:var(--s-2)}
-.to-label{width:44px;flex:none;color:var(--muted)}
+.to-label{width:calc(var(--s-10) + var(--s-1));flex:none;color:var(--muted)}
 .to-chip{display:inline-flex;align-items:center;gap:calc(var(--s-1) + var(--s-0));height:28px;padding:0 var(--s-0) 0 calc(var(--s-1) + var(--s-0));border-radius:var(--r-chip);background:var(--well-2);white-space:nowrap}
 .to-chip button{width:22px;height:22px;border:0;border-radius:var(--r-chip);background:none;color:var(--muted);display:grid;place-items:center;position:relative}
 .to-chip button:hover{color:var(--ink)}
@@ -64,7 +67,6 @@
 .to-list .sr em{font-style:normal;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 
 /* ---------- a mail row: a face, who it is from, what it is about, the age ---------- */
-.page-thread.is-mail .tl{width:360px}
 .ml-row{grid-template-columns:var(--av-sm) minmax(0,1fr) auto 12px;column-gap:var(--s-2);color:var(--ink-2)}
 .ml-main{min-width:0;display:flex;align-items:baseline;gap:var(--s-2);white-space:nowrap;margin-left:var(--s-0)}
 .ml-from{flex:0 1 auto;min-width:0;max-width:58%;overflow:hidden;text-overflow:ellipsis}
@@ -83,7 +85,12 @@
 .lt{padding:var(--s-4) 0 calc(var(--s-4) + var(--s-0));border-bottom:1px solid var(--line)}
 .lt:last-child{border-bottom:0}
 .lt .msg-meta{margin-bottom:calc(var(--s-1) + var(--s-0));display:flex;align-items:baseline;gap:var(--s-2)}
-.lt .msg-meta time{margin-left:auto}
+.lt .msg-meta time,.lt .msg-meta .pill{margin-left:auto}
+.lt .file{margin-top:var(--s-3)}
+.lt .file+.file{margin-left:calc(var(--s-1) + var(--s-0))}
+/* a reply waiting in Gmail as a draft: the same letter, inside a line */
+.lt.is-draft{margin-top:var(--s-4);padding:calc(var(--s-3) + var(--s-0)) calc(var(--s-3) + var(--s-0)) var(--s-4) var(--s-3);border-bottom:0;border-radius:var(--r-card);box-shadow:inset 0 0 0 1px var(--line-strong)}
+.conv-head .lt-addr{flex:0 1000 auto;margin-left:var(--s-2);color:var(--muted);font-size:var(--t-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .lt-to{flex:0 1000 auto;color:var(--muted);font-size:var(--t-sm);min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .lt-body{white-space:pre-wrap;overflow-wrap:anywhere}
 
@@ -113,11 +120,11 @@
   .to-chip{height:32px}
   .to-chip button::before{content:"";position:absolute;inset:-11px}
   .to-list .sr{padding:0 var(--s-2)}
-  .page-thread.is-mail .tl{width:auto}
   .ml-row{padding:0 var(--s-2) 0 var(--s-3)}
   .lt-top{padding:calc(var(--s-2) + var(--s-0)) var(--s-4) 0}
   .lt .msg-meta{flex-wrap:wrap}
   .lt-to{flex:1 1 100%;order:3}
+  .conv-head .lt-addr{display:none}
 }
 
 /* ---------- People, Settings, Browse: dialogs the mocks do not draw, built from the kit's ---------- */
@@ -133,21 +140,26 @@ button.ab-people{display:flex;align-items:center;border:0;background:none;paddin
 .lr-body{padding-top:var(--s-1)}
 .lr-sec+.lr-sec{margin-top:var(--s-4)}
 .lr-sec .stage-head{padding-left:var(--s-2)}
-.lr-row{display:grid;grid-template-columns:minmax(0,1fr) var(--av-sm) 64px 28px;column-gap:var(--s-3);align-items:start;min-height:var(--row);padding:var(--s-1h) var(--s-1) var(--s-1h) var(--s-2);border-radius:var(--r-row);transition:background var(--dur-fast) var(--ease)}
+.lr-row{display:grid;grid-template-columns:minmax(0,1fr) var(--av-sm) 64px 28px;column-gap:var(--s-3);align-items:start;min-height:var(--row);padding:var(--s-1h) var(--s-1) var(--s-1h) var(--s-2);border-radius:var(--r-row)}
 .lr-row:hover{background:var(--hover)}
 .lr-row.is-on{background:var(--selected)}
 .lr-text{line-height:22px;max-width:68ch;text-wrap:pretty}
 .lr-row .row-age{line-height:22px}
 .lr-row .tl-kind{height:22px}
-.lr-more{width:28px;height:22px;display:grid;place-items:center;color:var(--muted);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
+.lr-more{width:var(--ctl-sm);height:var(--av-sm);display:grid;place-items:center;color:var(--muted);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
 .lr-row:hover .lr-more,.lr-more:focus-within,.lr-more:has([aria-expanded="true"]){opacity:1}
 .lr-row.is-who{grid-template-columns:var(--av-sm) minmax(0,1fr) 64px 28px}
 a.lr-row{color:inherit}
 :where(html[data-layout="cards"]){
-  .lr-row{grid-template-columns:minmax(0,1fr) var(--av-sm) 52px 28px;padding:calc(var(--s-2) + 3px) var(--s-2)}
-  .lr-row.is-who{grid-template-columns:var(--av-sm) minmax(0,1fr) 52px 28px}
+  .lr-row{grid-template-columns:minmax(0,1fr) var(--av-sm) 52px var(--ctl-sm);padding:calc(var(--s-2) + 3px) var(--s-2)}
+  .lr-row.is-who{grid-template-columns:var(--av-sm) minmax(0,1fr) 52px var(--ctl-sm)}
+  .lr-more{height:var(--ctl-sm);margin:calc((var(--ctl-sm) - var(--av-sm)) / -2) 0}
   .lr-more{opacity:1}
 }
 
 /* ---------- a mail row's attachment: a quiet paperclip after the subject ---------- */
 .ml-main>.ico{flex:none;align-self:center;color:var(--muted)}
+
+/* Messaging: one contact's texts, a break at each day (the chat's own .day) */
+.mg-list{padding-bottom:var(--s-4)}
+.mg-list>.btn{margin:var(--s-3) auto 0;display:flex}

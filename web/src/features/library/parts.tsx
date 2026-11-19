@@ -1,14 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
-import { useEffect, useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { refusal, run } from '@/actions';
 import { useActor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
-import { Search } from '@/kit/Field';
+import { SettledSearch } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
-import { IconButton } from '@/kit/IconButton';
 import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
-import { useCards } from '@/kit/Popover';
 import { toast } from '@/kit/Toast';
 import { pageOwnersQuery } from './queries';
 import { chatAddress } from '@/lib';
@@ -35,19 +33,13 @@ export function Who({ actor, name, className = 'doc-owner' }: { actor: string | 
 }
 
 /**
- * The page owner's face in the head (backend/page_owners.py: docs and contacts default to the Librarian, skills to
- * BotOps, tools to the Tools owner). It opens their chat beside the page; nothing when the page has no owner. `phone`
- * keeps it in a phone's head (pagekinds.css keeps only `data-phone` controls there), as the Roadmap's face is kept.
+ * The page owner's face in the head (backend/page_owners.py: docs, files and contacts default to the Librarian, skills
+ * to BotOps, tools to the Tools owner). It opens their chat beside the page; nothing when the page has no owner. A
+ * phone's head leaves it out (search, the filled button and ⋯ only).
  */
-export function OwnerButton({ page, phone }: { page: 'docs' | 'skills' | 'contacts' | 'tools'; phone?: boolean }) {
+export function OwnerButton({ page }: { page: 'docs' | 'skills' | 'contacts' | 'tools' }) {
   const bot = useQuery(pageOwnersQuery).data?.[page]?.bot ?? null;
-  const face = <ChatWith actor={bot && !bot.includes(':') ? `bot:${bot}` : bot} />;
-  if (!phone || !bot) return face;
-  return (
-    <span className="lib-ask" data-phone>
-      {face}
-    </span>
-  );
+  return <ChatWith actor={bot && !bot.includes(':') ? `bot:${bot}` : bot} />;
 }
 
 /** A teammate's face that opens their chat beside the page (a file's maker, a page's owner). */
@@ -69,23 +61,11 @@ export function ChatWith({ actor }: { actor: string | null }) {
 /** The head's search (the page kind's `search` slot): a button until pressed, then the field; on a phone, where it has its
     own line, the field. Typing narrows the page after a short pause. */
 export function Find({ label, value, onFind }: { label: string; value: string | undefined; onFind: (q: string | undefined) => void }) {
-  const cards = useCards();
-  const [open, setOpen] = useState(!!value);
-  const [words, setWords] = useState(value ?? '');
-  // Cleared or set from elsewhere (Tico, Back): the field follows the address.
-  const [seen, setSeen] = useState(value);
-  if (seen !== value) {
-    setSeen(value);
-    setWords(value ?? '');
-  }
-  useEffect(() => {
-    if (words.trim() === (value ?? '')) return;
-    const t = setTimeout(() => onFind(words.trim() || undefined), 250);
-    return () => clearTimeout(t);
-  }, [words, value, onFind]);
-  if (!open && !cards) return <IconButton icon="search" label="Search" onClick={() => setOpen(true)} />;
-  return <Search label={label} value={words} onValueChange={setWords} placeholder="Search" autoFocus={!cards} />;
+  return <SettledSearch label={label} value={value ?? ''} onSettle={(q) => onFind(q || undefined)} placeholder="Search" button="Search" />;
 }
+
+/** A page's state for a read that failed: one the server refused (403) is not shared, with nothing to try again. */
+export const refused = (e: unknown): 'no-access' | 'fault' => ((e as { status?: number } | null)?.status === 403 ? 'no-access' : 'fault');
 
 /** Run an action from a control and say why when it is refused (`run` itself shows nothing). */
 export async function press(id: string, input: unknown, failed = 'That did not work'): Promise<boolean> {

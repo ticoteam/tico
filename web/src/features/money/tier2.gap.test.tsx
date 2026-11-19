@@ -91,7 +91,8 @@ describe('View as @s456', () => {
   it('View on Access lands on the teammate’s P&L, not on Access @s456', async () => {
     serve(finance);
     const router = show('finance', '/company/finance?tab=access');
-    fireEvent.click(await screen.findByRole('button', { name: 'View as' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'View as' }));
     const dialog = await screen.findByRole('dialog', { name: 'View as' });
     fireEvent.click(within(dialog).getByRole('combobox', { name: 'Teammate' }));
     const sam = await screen.findByRole('option', { name: 'Sam' });

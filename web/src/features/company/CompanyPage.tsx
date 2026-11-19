@@ -1,15 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
+import { useAction } from '@/actions';
 import { directoryQuery, meQuery, useActor } from '@/data';
+import { Button } from '@/kit/Button';
 import { Sparkline } from '@/kit/Chart';
 import { FlowMark } from '@/kit/FlowMark';
+import { MenuItem } from '@/kit/Menu';
 import { FoldButton } from '@/kit/SectionHead';
 import { LatePill } from '@/kit/Pill';
 import { chatAddress, fmtAge } from '@/lib';
-import { Dashboard, FiguresStrip, SidePanel, type Figure } from '@/pagekinds';
-import { Face, Go, NameOf, PanelLink, usd } from './parts';
-import { floorQuery, goalsTreeQuery, needsQuery, revenueQuery, spendQuery, stageTasksQuery, type Pipeline, type Stage } from './queries';
+import { Dashboard, FiguresStrip, PageMore, SidePanel, type Figure } from '@/pagekinds';
+import { Face, Go, NameOf, PanelLink, readState, usd } from './parts';
+import { floorQuery, revenueQuery, spendQuery, stageTasksQuery, type Pipeline, type Stage } from './queries';
 import './company.css';
 
 /* Company (pages/3-company/company.js companyPage): a Dashboard, Floor variant. Figures across the top, each from its
@@ -28,8 +31,9 @@ export function CompanyPage({ search }: { search: CompanySearch }) {
   const navigate = useNavigate();
   const open = parseStage(search.panel);
   const close = () => void navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, panel: undefined }) as never });
+  // Set up: the owner's first-run steps (setup.open), for a new company and again from the ⋯.
+  const setup = useAction('setup.open', {});
   const halls = (floor.data?.factories ?? []) as Factory[];
-  const state = floor.isPending ? 'loading' : floor.isError ? 'fault' : halls.length ? 'ready' : 'empty';
   const pipeline = open && halls.flatMap((h) => h.pipelines).find((p) => p.id === open.pipeline);
   const stage = pipeline && pipeline.stages.find((s) => s.id === open.stage);
   return (
@@ -37,9 +41,23 @@ export function CompanyPage({ search }: { search: CompanySearch }) {
       title="Company"
       path="/company"
       className="co"
-      state={state}
+      more={
+        setup.can && (
+          <PageMore target="company:more">
+            <MenuItem label="Set up" onSelect={() => void setup.run()} />
+          </PageMore>
+        )
+      }
+      state={readState(floor, !halls.length)}
       onRetry={() => void floor.refetch()}
-      empty={{ title: 'Nothing is running yet' }}
+      empty={{
+        title: 'Nothing is running yet',
+        action: setup.can && (
+          <Button onClick={() => void setup.run()} data-target="company:setup">
+            Set up
+          </Button>
+        ),
+      }}
       figures={<CompanyFigures />}
       chart={
         <div className="floor">
@@ -58,31 +76,19 @@ function parseStage(panel: string | undefined) {
   return pipeline && stage ? { pipeline, stage } : null;
 }
 
-/** Four figures, each read from its own area and opening that area's page. One a person may not read is left out. */
+/** The mock's figures, each read from its own area and opening that area's page: Revenue and Agent spend. One a
+    person may not read is left out; Orders and First reply are left out until the server has them. */
 function CompanyFigures() {
-  const revenue = useQuery(revenueQuery);
-  const goals = useQuery(goalsTreeQuery);
-  const needs = useQuery(needsQuery);
-  const spend = useQuery(spendQuery);
+  const revenue = useQuery(revenueQuery).data;
+  const spend = useQuery(spendQuery).data;
   const figures: Figure[] = [];
-  const rev = revenue.data?.value;
-  if (typeof rev === 'number')
-    figures.push({ label: 'Revenue', value: <Go to="/company/finance">{usd(revenue.data?.unit === 'minor' ? rev / 100 : rev)}</Go>, sub: 'last 7 days', target: 'figure:revenue' });
-  if (goals.data) {
-    const all = goals.data.goals;
-    figures.push({
-      label: 'Goals behind',
-      value: <Go to="/company/strategy/goals">{all.filter((g) => g.status === 'red').length}</Go>,
-      sub: `of ${all.length}`,
-      target: 'figure:goals',
-    });
-  }
-  if (needs.data) figures.push({ label: 'Needs you', value: <Go to="/flow">{needs.data.total}</Go>, sub: `${needs.data.this_week} this week`, target: 'figure:needs' });
-  if (spend.data) {
-    const days = (spend.data.rows ?? []).map((r) => Number((r as { est_cost_usd?: number | null }).est_cost_usd ?? 0));
+  if (typeof revenue?.value === 'number')
+    figures.push({ label: 'Revenue', value: <Go to="/company/finance">{usd(revenue.unit === 'minor' ? revenue.value / 100 : revenue.value)}</Go>, sub: 'this week', target: 'figure:revenue' });
+  if (spend) {
+    const days = (spend.rows ?? []).map((r) => Number((r as { est_cost_usd?: number | null }).est_cost_usd ?? 0));
     figures.push({
       label: 'Agent spend',
-      value: <Go to="/company/usage">{usd(spend.data.totals.est_cost_usd ?? 0)}</Go>,
+      value: <Go to="/company/usage">{usd(spend.totals.est_cost_usd ?? 0)}</Go>,
       sub: 'last 30 days',
       spark: days.length > 1 ? <Sparkline points={days} /> : undefined,
       target: 'figure:spend',
@@ -193,7 +199,7 @@ function StagePanel({ pipeline, stage, onClose }: { pipeline: Pipeline; stage: S
       onClose={onClose}
       foot={
         <Go to={`/tasks/${encodeURIComponent(pipeline.id)}`} className="btn">
-          All tasks
+          Open in Tasks
         </Go>
       }
     >
@@ -212,10 +218,6 @@ function StagePanel({ pipeline, stage, onClose }: { pipeline: Pipeline; stage: S
             </span>
           </div>
         )}
-        <div className="fact">
-          <span>Tasks</span>
-          <span className="fact-v">{stage.count}</span>
-        </div>
         {stage.needs_you > 0 && (
           <div className="fact">
             <span>Waits on you</span>
@@ -227,7 +229,14 @@ function StagePanel({ pipeline, stage, onClose }: { pipeline: Pipeline; stage: S
         )}
       </section>
       <section className="rail-sec" aria-label="Tasks">
-        {tasks.isError && <p className="pt-none">Tasks did not load</p>}
+        {tasks.isError && (
+          <p className="pt-none">
+            Tasks did not load{' '}
+            <Button variant="quiet" onClick={() => void tasks.refetch()}>
+              Try again
+            </Button>
+          </p>
+        )}
         {list.map((t) => (
           <Go key={t.id} to={t.number != null ? `/tasks/${encodeURIComponent(pipeline.id)}/${t.number}` : `/task/${encodeURIComponent(t.id)}`} className="pt" data-target={`task:${t.number ?? t.id}`}>
             <span className="pt-mark">{mine(t) && <FlowMark size={10} />}</span>

@@ -12,7 +12,7 @@ import { Select } from '@/kit/Select';
 import { ValueButton } from '@/kit/ValueButton';
 import { Section } from '@/pagekinds';
 import { bareId } from './model';
-import { ConfirmDialog, MateRow, PickDialog } from './parts';
+import { ConfirmDialog, MateRow, PickLine } from './parts';
 import { agentsQuery, branchesQuery, computersQuery, profilesQuery, type Branch, type Branches } from './queries';
 
 /* A copy of an agent follows its original: it keeps its own status, profile, computer and chat, and takes everything
@@ -53,7 +53,8 @@ export function CopyPick({ slug, botId }: { slug: string; botId: string }) {
       >
         <MenuItem label="Original" on={b.original === botId} onSelect={() => original && void open.run({ who: original.slug })} />
         {copies.map((x) => (
-          <MenuItem key={x.id} label={label(x)} on={x.id === botId} disabled={x.status === 'archived'} onSelect={() => void open.run({ who: x.slug })} />
+          // A copy opens on Settings: what is its own to change, then what follows the original (t-copy).
+          <MenuItem key={x.id} label={label(x)} on={x.id === botId} disabled={x.status === 'archived'} onSelect={() => void open.run({ who: x.slug, tab: 'settings' })} />
         ))}
         {canMake && (
           <>
@@ -119,18 +120,16 @@ export function CopyFacts({ slug, botId, manage }: { slug: string; botId: string
   const { b, original, copies } = useCopies(slug);
   const profiles = useQuery({ ...profilesQuery, enabled: !!b && b.original !== botId }).data ?? [];
   const setProfile = useAction('agents.setProfile');
-  const [editing, setEditing] = useState<'' | 'status' | 'profile' | 'drop'>('');
+  const [dropping, setDropping] = useState(false);
   const [wanted, setWanted] = useState('');
   const me = copies.find((x) => x.id === botId);
   if (!b || !me || b.original === botId) return null;
-  const close = (o: boolean) => !o && setEditing('');
-  const status = STATUS.find((x) => x.value === me.status)?.label ?? 'Active';
   const prof = me.profile?.name ?? '';
   const send = async (profile: string, dropRules?: boolean) => {
     const r = await setProfile.run({ slug, profile, ...(dropRules ? { dropRules } : {}) });
     if (!r.ok && r.error === 'conflict') {
       setWanted(profile);
-      setEditing('drop');
+      setDropping(true);
     }
   };
   return (
@@ -145,74 +144,30 @@ export function CopyFacts({ slug, botId, manage }: { slug: string; botId: string
           'The original'
         )}
       </LabelValue>
-      <LabelValue label="Status" onEdit={manage ? () => setEditing('status') : undefined}>
-        {status}
-      </LabelValue>
-      <LabelValue label="Profile" onEdit={manage ? () => setEditing('profile') : undefined}>
-        {me.profile?.summary || me.profile?.label || profiles.find((p) => p.name === prof)?.label || 'None'}
-      </LabelValue>
-      <PickDialog
-        open={editing === 'status'}
-        onOpenChange={close}
-        title="Status"
+      <PickLine
+        label="Status"
         options={STATUS}
         value={me.status ?? 'active'}
-        action="agents.setStatus"
+        shown="Active"
+        action={manage ? 'agents.setStatus' : undefined}
         input={(v) => ({ slug, status: v })}
       />
-      <ProfilePick open={editing === 'profile'} onOpenChange={close} value={prof} options={profiles.map((p) => ({ value: p.name, label: p.label }))} onPick={(p) => void send(p)} />
+      <PickLine
+        label="Profile"
+        options={profiles.map((p) => ({ value: p.name, label: p.label }))}
+        value={prof}
+        shown={me.profile?.summary || me.profile?.label || 'None'}
+        onPick={manage ? (p) => void send(p) : undefined}
+      />
       <ConfirmDialog
-        open={editing === 'drop'}
-        onOpenChange={close}
+        open={dropping}
+        onOpenChange={setDropping}
         title="Leave Custom?"
         text="Its own wake rules from the Custom profile are deleted."
         verb="Leave Custom"
         onConfirm={() => void send(wanted, true)}
       />
     </>
-  );
-}
-
-function ProfilePick({
-  open,
-  onOpenChange,
-  value,
-  options,
-  onPick,
-}: {
-  open: boolean;
-  onOpenChange: (o: boolean) => void;
-  value: string;
-  options: { value: string; label: string }[];
-  onPick: (p: string) => void;
-}) {
-  const [pick, setPick] = useState(value);
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => {
-        if (o) setPick(value);
-        onOpenChange(o);
-      }}
-      title="Profile"
-      actions={
-        <>
-          <Button onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button
-            variant="primary"
-            disabled={!pick || pick === value}
-            onClick={() => {
-              onOpenChange(false);
-              onPick(pick);
-            }}
-          >
-            Save
-          </Button>
-        </>
-      }
-    >
-      <Select label="Profile" labelHidden options={options} value={pick || null} onValueChange={setPick} />
-    </Dialog>
   );
 }
 

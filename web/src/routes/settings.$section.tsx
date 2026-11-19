@@ -3,11 +3,11 @@ import { SettingsPage } from '@/features/settings/exports';
 import { isSection, loadSection } from '@/features/settings/routing';
 
 /* `/settings/<section>`: one section of Settings. `?open=<id>` is the row opened in it (a person, a computer, a
-   subscription); `?who=<actor>` filters History. An unknown section goes to the list. */
+   subscription); `?who=people|agents` filters History. An unknown section goes to the list. */
 export const Route = createFileRoute('/settings/$section')({
-  validateSearch: (raw: Record<string, unknown>): { open?: string; who?: string } => ({
+  validateSearch: (raw: Record<string, unknown>): { open?: string; who?: 'people' | 'agents' } => ({
     ...(typeof raw.open === 'string' && raw.open ? { open: raw.open } : {}),
-    ...(typeof raw.who === 'string' && /^(bot|human):[^\s]+$/.test(raw.who) ? { who: raw.who } : {}),
+    ...(raw.who === 'people' || raw.who === 'agents' ? { who: raw.who } : {}),
   }),
   beforeLoad: ({ params }) => {
     if (!isSection(params.section)) throw redirect({ to: '/settings' });

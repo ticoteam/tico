@@ -6,11 +6,12 @@ import { directoryQuery, meQuery, useActors } from '@/data';
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
+import { Empty } from '@/kit/Empty';
 import { Search } from '@/kit/Field';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
+import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { useCards } from '@/kit/Popover';
 import { LatePill } from '@/kit/Pill';
 import { TaskRow } from '@/kit/Row';
@@ -19,16 +20,14 @@ import { ValueButton } from '@/kit/ValueButton';
 import { Board, BoardColumn, FilterRow, List, PageMore, Section, type FilterChip, type PageState } from '@/pagekinds';
 import { usePref, writePref } from '@/prefs';
 import { ArchivedSections, useShelves } from './Archived';
-import { AskButton } from './Ask';
 import { BoardFit } from './BoardFit';
 import { Capped, CARD_H, COL_CAP, COL_SHOW, LIST_CAP, LIST_SHOW, moreText, RowMore, ROW_H } from './capped';
 import { useCardDrag } from './drag';
 import { DropDialog } from './DropDialog';
-import { DUE_NAMES, FilterMenu } from './FilterMenu';
+import { DUE_NAMES, FilterItems, FilterMenu } from './FilterMenu';
 import { SelectBar, StageMenu } from './many';
 import { NewTask } from './NewTask';
-import { PipelinePanel } from './PipelinePanel';
-import { Face, FlowButton, isPending, markOf, Movable, taskHref, waitsOnMe } from './parts';
+import { Blocks, Face, FlowButton, isPending, markOf, Movable, OwnerButton, taskHref, waitsOnMe } from './parts';
 import {
   flowQuery,
   isFiltered,
@@ -59,21 +58,13 @@ export function TasksPage({ pipeline, search }: { pipeline: string; search: Task
     if (p) writePref(LAST_PREF, p.id);
   }, [p]);
 
-  const edit = useAction('tasks.editPipeline');
-  const make = useAction('tasks.newPipeline');
-  const panel =
-    search.panel === 'pipeline' && p?.mayChange ? (
-      <PipelinePanel p={p} onClose={() => void edit.run({ pipeline, open: false })} />
-    ) : search.panel === 'new' ? (
-      <PipelinePanel onClose={() => void make.run({ pipeline, open: false })} />
-    ) : undefined;
   const head = {
     path: `/tasks/${pipeline}`,
     after: pipes.data && p && <PipelinePick pipelines={pipes.data} current={p} />,
     className: 'tasks-page',
   };
-  if (view === 'archived') return <ArchivedPage pipeline={pipeline} p={p} pipes={pipes} search={search} head={head} panel={panel} />;
-  return <OpenPage pipeline={pipeline} p={p} pipes={pipes} search={search} view={view} head={head} panel={panel} />;
+  if (view === 'archived') return <ArchivedPage pipeline={pipeline} p={p} pipes={pipes} search={search} head={head} />;
+  return <OpenPage pipeline={pipeline} p={p} pipes={pipes} search={search} view={view} head={head} />;
 }
 
 interface PageProps {
@@ -82,10 +73,9 @@ interface PageProps {
   pipes: UseQueryResult<Pipeline[]>;
   search: TasksSearch;
   head: { path: string; after: ReactNode; className: string };
-  panel: ReactNode;
 }
 
-function OpenPage({ pipeline, p, pipes, search, view, head, panel }: PageProps & { view: 'board' | 'list' }) {
+function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view: 'board' | 'list' }) {
   const filters = filtersOf(search);
   const tasks = useQuery(pipelineTasksQuery(pipeline, filters));
   const me = useQuery(meQuery).data?.id;
@@ -93,6 +83,9 @@ function OpenPage({ pipeline, p, pipes, search, view, head, panel }: PageProps &
   const [folds, setFolds] = usePref<string[]>(`${FOLD_PREF}:${pipeline}`, []);
   const edit = useAction('tasks.editPipeline');
   const [newIn, setNewIn] = useState<{ stage: string | null } | null>(null);
+  // A phone's head has no room for the search: "⋯" › Search brings its line up under the head.
+  const cards = useCards();
+  const [finding, setFinding] = useState(false);
   // Select: null while off; the picked task ids while on. Another pipeline starts with it off.
   const [picked, setPicked] = useState<{ pipeline: string; ids: ReadonlySet<string> } | null>(null);
   const picking = picked?.pipeline === pipeline ? picked.ids : null;
@@ -108,25 +101,24 @@ function OpenPage({ pipeline, p, pipes, search, view, head, panel }: PageProps &
   let state: PageState = 'ready';
   if (pipes.isError || tasks.isError) state = 'fault';
   else if (!pipes.data || !rows) state = 'loading';
-  else if (!p || (!rows.length && !filtered)) state = 'empty';
+  else if (!p) state = 'empty';
+  const onNew = () => setNewIn({ stage: null });
 
   const page = {
     ...head,
     title: 'Tasks',
-    search: <TaskFind search={search} />,
-    actions: <HeadActions pipeline={pipeline} view={view} search={search} flow={flow} p={p} onNew={() => setNewIn({ stage: null })} />,
-    more: p && <MoreMenu p={p} pipes={pipes.data ?? []} onSelect={() => setPicked({ pipeline, ids: new Set() })} />,
+    search: !cards || finding || search.q ? <TaskFind search={search} /> : undefined,
+    actions: <HeadActions pipeline={pipeline} view={view} search={search} flow={flow} p={p} onNew={onNew} />,
+    more: p && (
+      <MoreMenu
+        p={p}
+        pipes={pipes.data ?? []}
+        onSelect={() => setPicked({ pipeline, ids: new Set() })}
+        phone={cards ? { view, search, onNew, onFind: () => setFinding(true) } : undefined}
+      />
+    ),
     state,
-    empty: p
-      ? {
-          title: `Nothing in ${p.name}`,
-          action: (
-            <Button variant="primary" icon="plus" onClick={() => setNewIn({ stage: null })}>
-              New task
-            </Button>
-          ),
-        }
-      : { title: 'No such pipeline', action: <Link to="/tasks">Open Tasks</Link> },
+    empty: { title: 'No such pipeline', action: <Link to="/tasks">Open Tasks</Link> },
     onRetry: () => void (pipes.isError ? pipes.refetch() : tasks.refetch()),
     filter:
       picking && p ? (
@@ -134,7 +126,6 @@ function OpenPage({ pipeline, p, pipes, search, view, head, panel }: PageProps &
       ) : (
         <Chips search={search} />
       ),
-    panel,
   };
   const toggle = picking
     ? (id: string) => {
@@ -149,13 +140,14 @@ function OpenPage({ pipeline, p, pipes, search, view, head, panel }: PageProps &
     p && rows
       ? { p, rows, me, folds, fold, more, cut, countOf, picking, toggle, onNew: (stage) => setNewIn({ stage }), onEdit: () => void edit.run({ pipeline }) }
       : null;
+  const bare = body && !body.rows.length && !filtered && <Bare p={body.p} board={view === 'board'} onNew={onNew} />;
 
   return (
     <>
       {view === 'board' ? (
-        <Board {...page} columns={body ? <Columns {...body} /> : null} />
+        <Board {...page} columns={bare || (body ? <Columns {...body} /> : null)} />
       ) : (
-        <List {...page} sections={body ? <Sections {...body} edit={p?.mayChange} /> : null} />
+        <List {...page} sections={bare || (body ? <Sections {...body} edit={p?.mayChange} /> : null)} />
       )}
       {pipes.data && newIn && (
         <NewTask
@@ -171,7 +163,7 @@ function OpenPage({ pipeline, p, pipes, search, view, head, panel }: PageProps &
   );
 }
 
-function ArchivedPage({ pipeline, p, pipes, search, head, panel }: PageProps) {
+function ArchivedPage({ pipeline, p, pipes, search, head }: PageProps) {
   const filters: Filters = filtersOf(search);
   const shelves = useShelves(pipeline, filters);
   const flow = useQuery(flowQuery).data?.count ?? 0;
@@ -190,7 +182,6 @@ function ArchivedPage({ pipeline, p, pipes, search, head, panel }: PageProps) {
       empty={{ title: p ? `Nothing archived in ${p.name}` : 'No such pipeline' }}
       onRetry={() => void (pipes.isError ? pipes.refetch() : shelves.retry())}
       filter={<Chips search={search} />}
-      panel={panel}
       sections={p ? <ArchivedSections p={p} filters={filters} shelves={shelves} /> : null}
     />
   );
@@ -216,16 +207,42 @@ function PipelinePick({ pipelines, current }: { pipelines: readonly Pipeline[]; 
   );
 }
 
+/** What a phone's "⋯" adds first, since its head keeps only Flow and "⋯" (list.js phoneMore). */
+interface PhoneMore {
+  view: 'board' | 'list';
+  search: TasksSearch;
+  onNew: () => void;
+  onFind: () => void;
+}
+
 /** The page's "⋯" (list.js moreItems): Archived, Select, then Edit pipeline, and New pipeline (not drawn in the mock;
-    quiet here) for whoever may make one: the company's owner, or who may change every pipeline (an Admin). */
-function MoreMenu({ p, pipes, onSelect }: { p: Pipeline; pipes: readonly Pipeline[]; onSelect: () => void }) {
+    quiet here) for whoever may make one: the company's owner, or who may change every pipeline (an Admin). On a phone,
+    New task, Search, Filter and the other view come first. */
+function MoreMenu({ p, pipes, onSelect, phone }: { p: Pipeline; pipes: readonly Pipeline[]; onSelect: () => void; phone?: PhoneMore }) {
   const setView = useAction('tasks.setView');
   const edit = useAction('tasks.editPipeline');
   const make = useAction('tasks.newPipeline');
   const owner = useQuery(meQuery).data?.role === 'owner';
+  const actors = useActors();
+  const tags = useQuery(tagsQuery).data ?? [];
   const mayMake = owner || (pipes.length > 0 && pipes.every((x) => x.mayChange));
   return (
     <PageMore target="tasks:more">
+      {phone && (
+        <>
+          <MenuItem icon="plus" label="New task" onSelect={phone.onNew} />
+          <MenuItem icon="search" label="Search" onSelect={phone.onFind} />
+          <MenuSub icon="filter" label="Filter">
+            <FilterItems filters={phone.search} actors={actors} tags={tags.map((t) => t.key)} />
+          </MenuSub>
+          {phone.view === 'list' ? (
+            <MenuItem icon="columns" label="Columns" onSelect={() => void setView.run({ pipeline: p.id, view: 'board' })} />
+          ) : (
+            <MenuItem icon="list" label="List" onSelect={() => void setView.run({ pipeline: p.id, view: 'list' })} />
+          )}
+          <MenuRule />
+        </>
+      )}
       <MenuItem icon="archive" label="Archived" onSelect={() => void setView.run({ pipeline: p.id, view: 'archived' })} />
       <MenuItem icon="square" label="Select" onSelect={onSelect} />
       {(p.mayChange || mayMake) && <MenuRule />}
@@ -254,10 +271,10 @@ function TaskFind({ search }: { search: TasksSearch }) {
     return () => clearTimeout(t);
   }, [words, search.q, filter]);
   if (!open && !cards) return <IconButton icon="search" label="Search" onClick={() => setOpen(true)} />;
-  return <Search label="Search tasks" value={words} onValueChange={setWords} placeholder="Search" autoFocus={!cards} />;
+  return <Search label="Search tasks" value={words} onValueChange={setWords} placeholder="Search" autoFocus={!search.q} />;
 }
 
-/** Filter, the view switch, New task, Flow, the owner (list.js head); on a phone the owner's face is the ask (Ask.tsx).
+/** Filter, the view switch, New task, Flow, the owner (list.js head). A phone keeps only Flow; the rest is under "⋯".
     Archived keeps the filter. */
 function HeadActions({
   pipeline,
@@ -295,7 +312,7 @@ function HeadActions({
       )}
       {onNew && <IconButton icon="plus" label="New task" onClick={onNew} data-target="tasks:new" />}
       {view !== 'archived' && <FlowButton on={false} count={flow} />}
-      {p && <AskButton p={p} />}
+      {p?.owner && <OwnerButton actor={p.owner} />}
     </>
   );
 }
@@ -369,10 +386,11 @@ function Card({ t, p, me, picked, onPick }: { t: TaskItem; p: Pipeline; me: stri
     <>
       <span className="card-title">{t.title}</span>
       <span className="card-foot">
-        {(mark || t.late) && (
+        {(mark || t.late || t.blocks?.length) && (
           <span className="card-marks">
             {mark}
             {t.late && <LatePill />}
+            <Blocks t={t} />
           </span>
         )}
         <span className="card-end">
@@ -503,6 +521,7 @@ function Sections({ p, rows, me, folds, fold, more, cut, countOf, picking, toggl
                       aria-pressed={picking ? picking.has(t.id) : undefined}
                       onClick={picker(toggle, t.id)}
                       late={!!t.late}
+                      pills={<Blocks t={t} />}
                       avatar={<Face actor={t.owner_id} />}
                       at={t.stage_since ?? t.updated_at}
                     />
@@ -513,18 +532,53 @@ function Sections({ p, rows, me, folds, fold, more, cut, countOf, picking, toggl
             </Section>
           );
         })}
-      {none.length > 0 && (
-        <div className="stage-line">
-          {none.map((s) => (
-            <h2 key={s.id} className="sec-name" data-target={`stage:${s.id}`}>
-              <span className="sec-fold">
-                <span>{s.name}</span>
-                <span className="stage-n">0</span>
-              </span>
-            </h2>
-          ))}
-        </div>
-      )}
+      <StageLine stages={none} />
+    </>
+  );
+}
+
+/** Stages with nothing in them: their names folded on one line under the list. */
+function StageLine({ stages }: { stages: readonly Stage[] }) {
+  if (!stages.length) return null;
+  return (
+    <div className="stage-line">
+      {stages.map((s) => (
+        <h2 key={s.id} className="sec-name" data-target={`stage:${s.id}`}>
+          <span className="sec-fold">
+            <span>{s.name}</span>
+            <span className="stage-n">0</span>
+          </span>
+        </h2>
+      ))}
+    </div>
+  );
+}
+
+/** Nothing in the pipeline: its stages stay (the board's heads, the list's folded line), with one line and New task
+    (list.js listBody, boardBody). */
+function Bare({ p, board, onNew }: { p: Pipeline; board: boolean; onNew: () => void }) {
+  const empty = (
+    <Empty title={`Nothing in ${p.name}`}>
+      <Button icon="plus" onClick={onNew}>
+        New task
+      </Button>
+    </Empty>
+  );
+  if (!board)
+    return (
+      <>
+        {empty}
+        <StageLine stages={p.stages} />
+      </>
+    );
+  return (
+    <>
+      <div className="tk-heads">
+        {p.stages.map((s) => (
+          <BoardColumn key={s.id} name={s.name} target={`stage:${s.id}`} />
+        ))}
+      </div>
+      {empty}
     </>
   );
 }

@@ -1,8 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
+import { useLocation } from '@tanstack/react-router';
 import { refusal, run } from '@/actions';
 import { directoryQuery, meQuery, useActor } from '@/data';
 import { Avatar, type AvatarSize } from '@/kit/Avatar';
+import { OwnerButton } from '@/kit/OwnerButton';
 import { toast } from '@/kit/Toast';
+import { chatAddress } from '@/lib';
 import { titleOf, type Thread } from './model';
 
 const bare = (actor: string) => actor.slice(actor.indexOf(':') + 1);
@@ -36,4 +39,23 @@ export async function press(id: string, input: unknown): Promise<boolean> {
   const r = await run(id, input, { via: 'click' });
   if (!r.ok) toast(refusal(r, "Couldn't save"));
   return r.ok;
+}
+
+/** A teammate's face in a head that opens their chat beside the page (an update's writer, a mailbox's agent). */
+export function ChatWith({ actor }: { actor: string }) {
+  const who = useActor(actor);
+  const me = useMe();
+  // `chat` is the shell's, in no route's search schema: built as an address, it keeps the page's own search.
+  const at = chatAddress(actor, who?.kind);
+  const href = useLocation({
+    select: (l) => {
+      const q = new URLSearchParams(l.searchStr);
+      q.set('chat', at);
+      return `${l.pathname}?${q.toString()}`;
+    },
+  });
+  const on = useLocation({ select: (l) => new URLSearchParams(l.searchStr).get('chat') === at });
+  if (actor === me) return null;
+  const kind = who?.kind ?? (actor.startsWith('bot:') ? 'agent' : 'person');
+  return <OwnerButton name={who?.name ?? bare(actor)} kind={kind} hue={who?.hue} live={who?.working} href={href} on={on} />;
 }

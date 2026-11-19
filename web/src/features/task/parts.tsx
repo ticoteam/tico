@@ -1,20 +1,10 @@
 import { Link, type LinkProps } from '@tanstack/react-router';
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { useActor } from '@/data';
 import { Avatar, type AvatarSize } from '@/kit/Avatar';
 import { Icon } from '@/kit/Icon';
 
-/* Small parts the task view repeats: the Flow mark, a face by actor id, a link to an app address. */
-
-/** The jade mark of what waits on you (parts-kit.js flow). */
-export function FlowMark({ size = 12 }: { size?: number }) {
-  return (
-    <span className="dot flow" style={{ '--d': `${size}px` } as CSSProperties} role="img" aria-label="Waits on you">
-      <i />
-      <b />
-    </span>
-  );
-}
+/* Small parts the task view repeats: a face by actor id, a link to an app address. */
 
 /** A person's or an agent's face, by any id form the directory answers. */
 export function Face({ id, size = 22, decorative }: { id: string | null | undefined; size?: AvatarSize; decorative?: boolean }) {

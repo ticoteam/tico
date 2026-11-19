@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { refusal, run } from '@/actions';
 import { Avatar } from '@/kit/Avatar';
@@ -9,13 +10,20 @@ import { Segmented } from '@/kit/Segmented';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
 import { Line, Verb, act } from './parts';
-import type { AccessFull, AccessPerson } from './queries';
+import { accessQuery, type AccessFull, type AccessPerson } from './queries';
 
 /* What People could do in the old app (ui/app/settings-people.ts) and the first pass left out: who can join, the
    agents a person may have, and the people who left. */
 
+/** The People section's head button: only for owners and admins. */
+export function AddPersonButton() {
+  const access = useQuery({ ...accessQuery, retry: false });
+  const v = access.data as AccessFull | undefined;
+  return v && Array.isArray(v.people) && (v.you === 'owner' || v.you === 'admin') ? <AddPerson v={v} /> : null;
+}
+
 /** Add a person; the server mails them a sign-in link when it can (Invite), else they are only added (Add). */
-export function AddPerson({ v }: { v: AccessFull }) {
+function AddPerson({ v }: { v: AccessFull }) {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -38,7 +46,7 @@ export function AddPerson({ v }: { v: AccessFull }) {
       onOpenChange={setOpen}
       title="Add a person"
       trigger={
-        <Button icon="plus" data-phone>
+        <Button variant="primary" data-phone>
           Add person
         </Button>
       }

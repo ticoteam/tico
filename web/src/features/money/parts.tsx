@@ -1,5 +1,5 @@
 import { Link, useRouter, useSearch } from '@tanstack/react-router';
-import { type MouseEvent, type ReactNode } from 'react';
+import { Fragment, type MouseEvent, type ReactNode } from 'react';
 import { refusal, registry } from '@/actions';
 import { ApiError } from '@/api/client';
 import { runIn } from '@/actions/run';
@@ -133,6 +133,68 @@ export function Who({ id }: { id: string }) {
 export const usePhone = useCards;
 
 /** A read's page state. A refusal (403) is no access, without Try again, as the old app's "Not in your view." was
-    (finance.ts finFail). */
-export const readState = (q: { isPending: boolean; isError: boolean; error: unknown }, empty = false): PageState =>
-  q.isPending ? 'loading' : q.isError ? (q.error instanceof ApiError && q.error.status === 403 ? 'no-access' : 'fault') : empty ? 'empty' : 'ready';
+    (finance.ts finFail). A read paused offline with nothing held is a fault with Try again, not a skeleton that never ends. */
+export const readState = (q: { isPending: boolean; isError: boolean; error: unknown; fetchStatus?: string }, empty = false): PageState =>
+  q.isPending
+    ? q.fetchStatus === 'paused'
+      ? 'fault'
+      : 'loading'
+    : q.isError
+      ? q.error instanceof ApiError && q.error.status === 403
+        ? 'no-access'
+        : 'fault'
+      : empty
+        ? 'empty'
+        : 'ready';
+
+/** One phone row: the name, its words under it, one figure, an optional meter under both (finance.js rowsPhone). */
+export interface Fr {
+  key: string;
+  title: ReactNode;
+  sub?: ReactNode[];
+  fig?: ReactNode;
+  /** `is-quiet`, `is-sub`, `is-total`, `is-selected`. */
+  cls?: string | false;
+  bar?: ReactNode;
+  /** The row's own ⋯, after its figure. */
+  act?: ReactNode;
+}
+
+/** On a phone a wide table becomes rows under group names (the mock's `.fr`), so nothing scrolls sideways at 390. */
+export function PhoneRows({ label, groups, none }: { label: string; groups: { name?: string; count?: number; rows: Fr[] }[]; none?: string }) {
+  const any = groups.some((g) => g.rows.length > 0);
+  return (
+    <div className="frs" role="list" aria-label={label}>
+      {!any && none && <div className="fold">{none}</div>}
+      {groups.map((g, i) =>
+        g.rows.length === 0 && g.name ? null : (
+          <Fragment key={g.name ?? i}>
+            {g.name && (
+              <div className="fr-group" role="presentation">
+                <span>{g.name}</span>
+                {g.count != null && <span className="count">{g.count}</span>}
+              </div>
+            )}
+            {g.rows.map((r) => (
+              <div key={r.key} className={['row fr', r.cls].filter(Boolean).join(' ')} role="listitem">
+                <span className="fr-main">
+                  <span className="row-title">{r.title}</span>
+                  <span className="fr-sub">
+                    {(r.sub ?? []).filter(Boolean).map((w, k) => (
+                      <span key={k}>{w}</span>
+                    ))}
+                  </span>
+                </span>
+                <span className="row-fig">
+                  {r.fig}
+                  {r.act}
+                </span>
+                {r.bar && <span className="fr-bar">{r.bar}</span>}
+              </div>
+            ))}
+          </Fragment>
+        ),
+      )}
+    </div>
+  );
+}

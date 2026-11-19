@@ -12,7 +12,8 @@ import { Popover } from '@/kit/Popover';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { Dashboard, FiguresStrip, Section } from '@/pagekinds';
-import { Meter, Verb, isForbidden, usd } from './parts';
+import { agentsQuery } from '@/features/team/routing';
+import { Meter, NO_ACCESS, PageOwner, Verb, isForbidden, usd } from './parts';
 import {
   agentUsageWhereQuery,
   limitsQuery,
@@ -164,6 +165,8 @@ function AgentOpen({ where, bot }: { where: UsageWhere; bot: string }) {
 function ByAgent({ search, where }: { search: UsageSearch; where: UsageWhere }) {
   const by = useQuery(usageWhereQuery(where, 'bot'));
   const dir = useQuery(directoryQuery);
+  const agents = useQuery(agentsQuery);
+  const modelOf = (slug: string) => (Array.isArray(agents.data) ? agents.data.find((a) => a.slug === slug)?.resolved_model_label : '') ?? '';
   const rows = [...(by.data?.rows ?? [])].sort((a, b) => spent(b) - spent(a));
   const top = Math.max(1e-9, ...rows.map(spent));
   if (rows.length === 0) return <Empty title="No runs in this range" />;
@@ -173,7 +176,7 @@ function ByAgent({ search, where }: { search: UsageSearch; where: UsageWhere }) 
       <div className="tbl-head g-use" aria-hidden="true">
         <span />
         <span>Agent</span>
-        <span>Team</span>
+        <span>Model</span>
         <span className="is-num">Runs</span>
         <span className="is-num">Tokens</span>
         <span />
@@ -196,7 +199,7 @@ function ByAgent({ search, where }: { search: UsageSearch; where: UsageWhere }) 
           >
             <Avatar kind="agent" name={name} hue={who?.hue} decorative />
             <span className="row-title">{name}</span>
-            <span className="row-cell">{who?.team ?? ''}</span>
+            <span className="row-cell">{modelOf(slug)}</span>
             <span className="row-fig">{r.runs}</span>
             <span className="row-fig u-tok">{fmtTok(tokens(r))}</span>
             <Meter pct={(spent(r) / top) * 100} />
@@ -322,13 +325,15 @@ export function UsagePage({ search }: { search: UsageSearch }) {
       title="Usage"
       path="/company/usage"
       className="set-page"
+      after={view}
       actions={
         <>
-          {view}
+          <PageOwner page="usage" />
           {limits && !isForbidden(lim.error) && <AddLimit />}
         </>
       }
-      state={q.isPending ? 'loading' : q.isError && !isForbidden(q.error) ? 'fault' : undefined}
+      state={q.isPending ? 'loading' : isForbidden(q.error) ? 'no-access' : q.isError ? 'fault' : undefined}
+      noAccess={NO_ACCESS}
       onRetry={() => void q.refetch()}
       figures={
         limits ? undefined : (
@@ -343,7 +348,6 @@ export function UsagePage({ search }: { search: UsageSearch }) {
                 label="Usage"
                 figures={[
                   { label: 'API-equivalent', value: usd(spent(t)), spark: spark.length > 1 ? <Sparkline points={spark} label="Spend by day" /> : undefined },
-                  { label: 'On plans', value: usd(t.subscription_equiv_usd) },
                   { label: 'Tokens', value: fmtTok(tokens(t)) },
                   { label: 'Runs', value: t.runs.toLocaleString('en-US') },
                 ]}
@@ -352,12 +356,16 @@ export function UsagePage({ search }: { search: UsageSearch }) {
           </>
         )
       }
-      chart={limits ? undefined : <DayChart where={where} />}
+      chart={
+        limits ? undefined : (
+          <Section name="By day" target="setting:usage-days">
+            <DayChart where={where} />
+          </Section>
+        )
+      }
       panel={limits && search.open && !isForbidden(lim.error) ? <LimitPanel search={search} /> : undefined}
       widgets={
-        isForbidden(q.error) ? (
-          <Empty icon="lock" title="Owners and admins only" />
-        ) : limits ? (
+        limits ? (
           <Limits search={search} />
         ) : (
           <Section

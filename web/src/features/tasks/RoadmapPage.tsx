@@ -15,11 +15,10 @@ import { Row } from '@/kit/Row';
 import { List, PageMore, Section, type PageState } from '@/pagekinds';
 import { usePref } from '@/prefs';
 import { fmtDate } from '@/lib';
-import { AskButton } from './Ask';
 import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
 import { FilterItems, FilterMenu } from './FilterMenu';
 import { NewTask } from './NewTask';
-import { Face, isPending, taskHref, waitsOnMe } from './parts';
+import { Face, isPending, OwnerButton, taskHref, waitsOnMe } from './parts';
 import { isFiltered, loadMore, pipelinesQuery, pipelineTasksQuery, shelfQuery, shelfTotal, tagsQuery, type Filters, type Pipeline, type TaskItem } from './queries';
 import { RequestersDialog } from './Requesters';
 import { byHorizon, HORIZONS, roadmapPipeline, stageName, trackOf, type Horizon } from './roadmap';
@@ -105,9 +104,8 @@ export function RoadmapPage({ search }: { search: RoadmapSearch }) {
   );
 }
 
-/** Filter, New feature, the pipeline's owner (their chat opens beside the page; on a phone, the ask as on Tasks). Share
-    is left out: the public roadmap pages are off on the server. A phone's head keeps New feature and the face; Filter
-    moves into the "⋯". */
+/** Filter, New feature, the pipeline's owner (their chat opens beside the page). Share is left out: the public roadmap
+    pages are off on the server. A phone's head keeps New feature; Filter moves into the "⋯". */
 function HeadActions({ p, search, onNew, none }: { p: Pipeline; search: RoadmapSearch; onNew: () => void; none: boolean }) {
   const actors = useActors();
   const tags = useQuery(tagsQuery).data ?? [];
@@ -115,7 +113,7 @@ function HeadActions({ p, search, onNew, none }: { p: Pipeline; search: RoadmapS
     <>
       {!none && <FilterMenu filters={search} actors={actors} tags={tags.map((t) => t.key)} />}
       {!none && <IconButton icon="plus" label="New feature" onClick={onNew} data-target="tasks:new" data-phone />}
-      <AskButton p={p} />
+      {p.owner && <OwnerButton actor={p.owner} />}
     </>
   );
 }

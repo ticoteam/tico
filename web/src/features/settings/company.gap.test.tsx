@@ -7,7 +7,8 @@ import { ActionsRoot } from '@/actions';
 import { run } from '@/actions/run';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
-import { Computers } from './Agents';
+import { AddComputer } from './Agents';
+import { AddPersonButton } from './People';
 import { Account, General, People, Security } from './Basics';
 import { SettingsPage } from './SettingsPage';
 import { agentsQuery } from '@/features/team/exports';
@@ -136,7 +137,13 @@ describe('General: icon and repositories', () => {
 describe('People: joining, left and adds', () => {
   it('adds a person, and restores someone who left @s1073', async () => {
     serve(() => undefined);
-    show(<People />, '/settings/people');
+    show(
+      <>
+        <AddPersonButton />
+        <People />
+      </>,
+      '/settings/people',
+    );
     fireEvent.click(await screen.findByRole('button', { name: 'Add person' }));
     const dlg = await screen.findByRole('dialog', { name: 'Add a person' });
     fireEvent.change(within(dlg).getByRole('textbox', { name: 'Email' }), { target: { value: 'dee@example.test' } });
@@ -280,7 +287,7 @@ describe('Computers: add one', () => {
   it('Add computer makes a one-time code in the dialog; Tico cannot @s728', async () => {
     queryClient.setQueryData(computersQuery.queryKey, []);
     serve((url, method) => (url === '/api/v2/enrollments' && method === 'POST' ? ok({ code: 'JOIN-4821' }) : undefined));
-    show(<Computers />, '/settings/computers');
+    show(<AddComputer />, '/settings/computers');
     fireEvent.click(await screen.findByRole('button', { name: 'Add computer' }));
     const dlg = await screen.findByRole('dialog', { name: 'Add a computer' });
     fireEvent.change(within(dlg).getByRole('textbox', { name: 'Name' }), { target: { value: 'Studio' } });

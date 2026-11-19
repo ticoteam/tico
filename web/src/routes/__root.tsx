@@ -1,23 +1,29 @@
 import { useInfiniteQuery, useQuery, type QueryClient } from '@tanstack/react-query';
-import { Outlet, createRootRouteWithContext, useLocation, useRouter } from '@tanstack/react-router';
-import { Suspense, lazy, useEffect, useState, type ReactNode } from 'react';
+import { Link, Outlet, createRootRouteWithContext, useLocation, useRouter } from '@tanstack/react-router';
+import { Fragment, Suspense, lazy, useEffect, useState, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
 import { reportCallToDesktop, useCallWindow } from '@/desktop';
 import { ticoRoomQuery } from '@/conversation';
-import { configQuery, directoryQuery, meQuery, recordVisit, useHeldCount, type Actor, type Directory } from '@/data';
+import { configQuery, directoryQuery, meQuery, recordVisit, useActor, useHeldCount, type Actor, type Directory } from '@/data';
 import { TOGGLE_MUTE, isCallActive, ringingQuery, useCall } from '@/features/calls/routing';
 import { useFileOpen } from '@/features/library/routing';
 import { AssetRecovery, PlanLock } from '@/features/notices/exports';
 import { StartScreen, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
-import { flowQuery, pipelinesQuery, roadmapPipeline } from '@/features/tasks/routing';
+import { flowGroups, flowQuery, pipelinesQuery, roadmapPipeline } from '@/features/tasks/routing';
 import { teamSlug, whoHref } from '@/features/team/routing';
 import { catchUpQuery, updateListQuery } from '@/features/threads/routing';
+import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
+import { Empty } from '@/kit/Empty';
+import { FlowMark } from '@/kit/FlowMark';
+import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { MenuItem, MenuRule } from '@/kit/Menu';
+import { Menu as DropMenu, MenuItem, MenuRule } from '@/kit/Menu';
 import { OfflineBar } from '@/kit/OfflineBar';
+import { LatePill } from '@/kit/Pill';
 import { Placeholder } from '@/kit/placeholder/Placeholder';
+import { FoldButton } from '@/kit/SectionHead';
 import { Segmented } from '@/kit/Segmented';
 import { Toasts } from '@/kit/Toast';
 import { startLive, useLiveStatus } from '@/live';
@@ -37,6 +43,8 @@ import {
   isTeammate,
   reportToDesktop,
   useCompanies,
+  useSheet,
+  useTabTitle,
   watchCallWindow,
   type Company,
   type MenuMate,
@@ -143,6 +151,7 @@ function useDesktopReports(signedOut: boolean) {
 }
 
 function App() {
+  useTabTitle();
   const router = useRouter();
   const me = useQuery(meQuery);
   const signedIn = me.isSuccess;
@@ -202,8 +211,11 @@ function App() {
     ) : undefined;
   let widgets: ReactNode;
   let side: ReactNode;
+  let list: ReactNode;
   if (arrangement === 'task') {
     const task = top === 'tasks' ? b : a;
+    // Task and Flow are one view: what waits on you stands in the menu's place, the open task chosen
+    list = task ? <TaskList open={decodeURIComponent(task)} /> : undefined;
     chat = task ? (
       <Sheet kind="chat" label="The task's chat">
         <Suspense fallback={null}>
@@ -245,6 +257,7 @@ function App() {
           menu={<AppMenu note={status === 'offline' ? <OfflineBar held={held} /> : null} />}
           page={page}
           chat={chat}
+          list={list}
           widgets={widgets}
           side={side}
           panel={panel ? <PanelHost /> : undefined}
@@ -448,6 +461,94 @@ function TeammateSheet({ who }: { who: string }) {
       <Suspense fallback={null}>
         <TeammateChat who={who} />
       </Suspense>
+    </Sheet>
+  );
+}
+
+/* ---------------------------------------------------------------- an open task's list */
+
+function ListFace({ id }: { id: string | null }) {
+  const who = useActor(id);
+  return id ? <Avatar decorative kind={who?.kind ?? (id.startsWith('bot:') ? 'agent' : 'person')} name={who?.name ?? 'Teammate'} hue={who?.hue} live={who?.working} size={22} /> : null;
+}
+
+/* Beside an open task, in the menu's place (pages/1-tasks/more.js flowList): every task that waits on you, by pipeline
+   and stage, the open one chosen. The pick goes to a pipeline's board, Flow (pressed) back to Tasks, and Close folds
+   the list to the menu's icons. */
+function TaskList({ open }: { open: string }) {
+  const sheet = useSheet();
+  const { data: flow } = useQuery(flowQuery);
+  const { data: pipes = [] } = useQuery(pipelinesQuery);
+  const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
+  const flip = (key: string) => setShut((was) => (was.has(key) ? new Set([...was].filter((k) => k !== key)) : new Set(was).add(key)));
+  const groups = flowGroups(flow?.items ?? [], pipes);
+  return (
+    <Sheet kind="list" label="Flow">
+      <header className="li-head">
+        <DropMenu
+          align="start"
+          trigger={
+            <button className="li-pick" type="button">
+              All pipelines
+              <Icon name="chevdown" />
+            </button>
+          }
+        >
+          <MenuItem label="All pipelines" on onSelect={() => undefined} />
+          {pipes.map((p) => (
+            <MenuItem key={p.id} label={p.name} onSelect={press('shell.goTo', { to: `/tasks/${encodeURIComponent(p.id)}` })} />
+          ))}
+        </DropMenu>
+        <span className="grow" />
+        <Link to="/tasks" className="li-play is-on" aria-pressed aria-label="Flow" title="Flow">
+          <FlowMark size={22} />
+          {flow?.count ? <b>{flow.count}</b> : null}
+        </Link>
+        {sheet.canFold ? <IconButton icon="close" label="Close" quiet onClick={sheet.toggleFold} /> : null}
+      </header>
+      <div className="nav-scroll li-body">
+        {flow && !groups.length ? <Empty title="Nothing waits on you" /> : null}
+        {groups.map((g) => (
+          <Fragment key={g.key}>
+            <div className="li-sec">
+              <h2 className="sec-name">
+                <FoldButton
+                  name={
+                    <>
+                      {g.pipe}
+                      <Icon name="chevron" className="sec-sep" />
+                      {g.stage}
+                    </>
+                  }
+                  count={g.items.length}
+                  open={!shut.has(g.key)}
+                  onToggle={() => flip(g.key)}
+                />
+              </h2>
+            </div>
+            {shut.has(g.key)
+              ? null
+              : g.items.map((it) => {
+                  const n = String(it.number ?? it.id);
+                  return (
+                    <Link key={it.id} to="/flow/$task" params={{ task: n }} className={n === open || it.id === open ? 'li is-on' : 'li'} title={it.title} data-target={`task:${n}`}>
+                      <span className="li-mark">
+                        <FlowMark size={10} />
+                      </span>
+                      <span className="li-main">
+                        <span className="li-title">{it.title}</span>
+                        {it.late ? <LatePill /> : null}
+                      </span>
+                      <span className="li-who">
+                        <ListFace id={it.owner_id} />
+                        <Ago at={it.since} className="row-age" />
+                      </span>
+                    </Link>
+                  );
+                })}
+          </Fragment>
+        ))}
+      </div>
     </Sheet>
   );
 }

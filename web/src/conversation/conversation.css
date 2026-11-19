@@ -14,6 +14,11 @@
 .day.is-new{color:var(--ink);font-weight:var(--w-strong)}
 .day.is-new::before,.day.is-new::after{background:var(--line-strong)}
 
+/* a chat's bones while it loads (pages/2-threads/threads.css skConv) */
+.msg.is-skeleton{padding-top:calc(var(--s-5) + var(--s-0))}
+.msg.is-skeleton .msg-main{display:grid;gap:calc(var(--s-2) + var(--s-0));padding-top:var(--s-1);justify-items:start}
+.sk-28{width:var(--av-md);height:var(--av-md)}
+
 .ask-said{margin-top:var(--s-1h);font-size:var(--t-xs);color:var(--muted)}
 .msg p .fmark{margin-right:var(--s-0)}
 

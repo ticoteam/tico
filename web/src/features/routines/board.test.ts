@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { applyFlow, boardOf, dropItem, flowOf, putItem, takesTemplate, type Flow } from './board';
-import { eventsValue, eventsWords } from './Endpoints';
 import type { Routine } from './types';
 
 const DESTS = [
@@ -81,23 +80,5 @@ describe('the board', () => {
     const flow = applyFlow(r, { steps: FLOW.steps, destinations: DESTS });
     expect(flow?.steps.at(-1)).toMatchObject({ id: 'l1', type: 'llm', prompt: 'Sort my mail.', as: 'assistant:me', choose: { mode: 'draft', default: 'later' } });
     expect(applyFlow(r, { steps: FLOW.steps, destinations: [] })).toBeNull();
-  });
-});
-
-describe('outgoing webhook events', () => {
-  const types = [
-    { name: 'task.created', label: 'Task created', group: 'task', description: '', example: {}, version: 1 },
-    { name: 'task.done', label: 'Task done', group: 'task', description: '', example: {}, version: 1 },
-    { name: 'bot.paused', label: 'Agent paused', group: 'bot', description: '', example: {}, version: 1 },
-  ];
-
-  it('sends a whole group as group.*, and keeps codes the catalog does not know', () => {
-    expect(eventsValue(types, new Set(['task.created', 'task.done', 'bot.paused']), [])).toEqual(['task.*', 'bot.paused']);
-    expect(eventsValue(types, new Set(['task.done', 'legacy.thing']), ['legacy.thing'])).toEqual(['task.done', 'legacy.thing']);
-  });
-
-  it('says the events in a few words', () => {
-    expect(eventsWords(['*'], types)).toBe('All events');
-    expect(eventsWords(['task.created', 'bot.paused'], types)).toBe('Task created, Agent paused');
   });
 });

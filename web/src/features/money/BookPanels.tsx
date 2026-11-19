@@ -13,11 +13,11 @@ import { DocDecide, LimitDialog, PaidDialog, ScheduleDialog, VoidDialog, WriteOf
 import { useMay, useRun } from './dialogs';
 import { cash } from './model';
 import { Pfig, Prow, usePress, useViewAs, Who } from './parts';
-import { cardsQuery, docQuery, type Card, type DocKind, type Tx } from './queries';
+import { cardsQuery, docQuery, type Card, type DocKind } from './queries';
 import { validateFinanceSearch } from './search';
 
 /* The books tabs' side panels (s475): a bill or an invoice with its lines, payments and decisions; a card with its
-   freeze and limit; a transaction with its attribution. Each opens at its own address, `?panel=<kind>:<id>`. */
+   freeze and limit. Each opens at its own address, `?panel=<kind>:<id>`. A transaction opens in place on its list. */
 
 /** The Finance address as the books tabs read it: the open panel, the balance sheet's day, the Transactions filter. */
 export const useBookSearch = () => validateFinanceSearch(useSearch({ strict: false }) as Record<string, unknown>);
@@ -238,63 +238,6 @@ export function CardPanel({ id }: { id: string }) {
         )}
       </div>
       {c && limit && <LimitDialog card={c} onOpenChange={setLimit} />}
-    </SidePanel>
-  );
-}
-
-/** A transaction: what it was, its line and source, and who it is attributed to (finance-books.ts finTxRail). */
-export function TxPanel({
-  id,
-  t,
-  name,
-  source,
-  lines,
-  onShare,
-}: {
-  id: string;
-  t: Tx | undefined;
-  name: string;
-  source: string;
-  lines: { id: string; account: string }[];
-  onShare?: (line: string) => void;
-}) {
-  const press = usePress();
-  const status = t ? (t.pending ? 'Pending' : t.reversed ? 'Reversed' : t.status ? t.status.charAt(0).toUpperCase() + t.status.slice(1) : '') : '';
-  return (
-    <SidePanel
-      title={name || 'Transaction'}
-      target={`tx:${id}`}
-      onClose={() => void press('finance.closePanel', {})}
-      foot={
-        onShare &&
-        lines.length > 0 &&
-        (lines.length === 1 ? (
-          <Button onClick={() => onShare(lines[0]!.id)}>Attribution</Button>
-        ) : (
-          <Menu trigger={<Button>Attribution</Button>} side="top">
-            {lines.map((l) => (
-              <MenuItem key={l.id} label={l.account || 'Line'} onSelect={() => onShare(l.id)} />
-            ))}
-          </Menu>
-        ))
-      }
-    >
-      <div className="money">
-        {t ? (
-          <>
-            <Pfig big={cash(t.amount, true)} sub={day(t.date)} />
-            <section className="sec facts">
-              <Fact name="Line">{t.account || 'No line'}</Fact>
-              {source && <Fact name="Source">{source}</Fact>}
-              {t.counterparty && t.counterparty !== name && <Fact name="Paid to">{t.counterparty}</Fact>}
-              {status && <Fact name="Status">{status}</Fact>}
-              {t.memo && <Fact name="Memo">{t.memo}</Fact>}
-            </section>
-          </>
-        ) : (
-          <p className="t-read">Not in this list</p>
-        )}
-      </div>
     </SidePanel>
   );
 }

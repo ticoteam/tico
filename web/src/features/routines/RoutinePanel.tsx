@@ -4,7 +4,6 @@ import { useActors } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
-import { Empty } from '@/kit/Empty';
 import { Field } from '@/kit/Field';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
@@ -15,7 +14,7 @@ import { fmtDate, fmtMoney } from '@/lib';
 import { SidePanel } from '@/pagekinds';
 import { BoardItemEditor, BoardView, type ItemRef } from './BoardEditor';
 import { routineBoard, takesTemplate } from './board';
-import { Face, HeadSwitch, press, pressOut, RemoveItem, useConfirmRemove, useName, Verb, Word } from './parts';
+import { Face, HeadSwitch, PanelRead, press, pressOut, RemoveItem, useConfirmRemove, useName, Verb, Word } from './parts';
 import { routineQuery, routinesQuery, runsQuery, versionsQuery } from './queries';
 import { ApplyTemplate } from './Templates';
 import type { Routine, Run, Trigger, Version } from './types';
@@ -46,7 +45,7 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
   if (!r) {
     return (
       <SidePanel className="rr" title="Routine" onClose={onClose}>
-        {one.isError && <Empty icon="alert" title="This routine did not load" />}
+        <PanelRead q={one} what="This routine" />
       </SidePanel>
     );
   }

@@ -4,17 +4,25 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
-import type { ToolIndexRow } from '@/api/schema';
 import { ContactsPage, shown } from './ContactsPage';
 import { cardQuery, contactsQuery, countsQuery, proposalsQuery, removeKey, saveFact, skillsQuery, skillUsageQuery, typesQuery, apiToolQuery, type Card } from './queries';
 import { diffLines, mainText, SkillsPage } from './SkillsPage';
-import { entries } from './ToolsPage';
 import { nameFromUrl, ReplaceLoginDialog } from './AddTool';
 import { replaceLogin } from './queries';
 import { skillsSearch } from './search';
 import { newAddressFor } from '@/oldAddress/map';
 import { forgetHelperCode, heldHelperCode, takeHelperCode } from './helperCode';
 
+// jsdom lays nothing out, so the virtual list would draw no rows: here it draws them all (its own tests cover the rest).
+vi.mock('@/kit/VirtualList', () => ({
+  VirtualList: <T,>({ items, getKey, renderItem, label }: { items: readonly T[]; getKey: (t: T) => string; renderItem: (t: T, i: number) => ReactNode; label?: string }) => (
+    <div role="list" aria-label={label}>
+      {items.map((t, i) => (
+        <div key={getKey(t)}>{renderItem(t, i)}</div>
+      ))}
+    </div>
+  ),
+}));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
 beforeAll(() => queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } }));
@@ -50,23 +58,7 @@ function show(node: ReactNode, at: string) {
 }
 const href = (el: HTMLElement) => decodeURIComponent(el.closest('a')?.getAttribute('href') ?? '');
 
-// Made-up rows only.
-const tool = (o: Partial<ToolIndexRow> & { id: string; name: string }) =>
-  ({ kind: 'api', vendor: null, vendor_name: null, who_total: 0, needs_you: false, status: { tone: 'ok', text: 'Working' }, ...o }) as unknown as ToolIndexRow;
-
 describe('helpers', () => {
-  it('groups a vendor with several tools into one entry, problems first', () => {
-    const out = entries([
-      tool({ id: 'api:1', name: 'Zeta', who_total: 1 }),
-      tool({ id: 'api:2', name: 'Acme mail', vendor: 'acme', vendor_name: 'Acme' }),
-      tool({ id: 'api:3', name: 'Acme files', vendor: 'acme', vendor_name: 'Acme', who_total: 2 }),
-      tool({ id: 'api:4', name: 'Beta', needs_you: true, status: { tone: 'fail', text: 'Key expired' } as ToolIndexRow['status'] }),
-    ]);
-    expect(out.map((e) => e.id)).toEqual(['api:4', 'vendor:acme', 'api:1']);
-    expect(out[0]?.problem).toBe('Key expired');
-    expect(out[1]).toMatchObject({ name: 'Acme', count: 2, inUse: true });
-  });
-
   it('reads a unified diff as headings, added and removed lines', () => {
     const diff = ['--- a/SKILL.md', '+++ b/SKILL.md', '@@ -1,3 +1,3 @@', ' # Steps', '-Ask twice', '+Ask once', ' Done'].join('\n');
     expect(diffLines(diff, false)).toEqual([

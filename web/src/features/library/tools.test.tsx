@@ -9,12 +9,12 @@ import { bind } from '@/actions/bind';
 import type { ToolIndexRow } from '@/api/schema';
 import { queryClient } from '@/data';
 import { FileViewerHost } from './FileViewer';
-import { apiToolQuery, editApiTool, editSource, fileQuery, fileVersionsQuery, saveSetting, setKeyExpiry, sourcesQuery } from './queries';
+import { apiToolQuery, editApiTool, editSource, fileQuery, saveSetting, setKeyExpiry, sourcesQuery } from './queries';
 import { RevealDialog } from './ToolDialogs';
 import { narrow } from './ToolsPage';
 import { viewing } from './viewing';
 
-/* The file viewer, the Tools filter, and the tool changes: what is sent, and that a shown secret is never kept. */
+/* A file from a task or a chat, the Tools filter, and the tool changes: what is sent, and that a shown secret is never kept. */
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
@@ -61,31 +61,28 @@ function at(path: string, node: ReactNode = null) {
 // Made-up file and tools only.
 const file = (o: Record<string, unknown>) => ({ id: 'f1', title: 'Sample notes', name: 'notes.txt', version: 1, library_kind: 'doc', mime: 'text/plain', bot: 'helper', ...o });
 
-describe('the file viewer', () => {
-  it('opens a file over the page in a dialog from files.view, and closes it @s75 @s198', async () => {
-    serve(() => 'plain words');
+describe('a file from a task or a chat', () => {
+  it('opens as its page in Files, never a dialog over the page @s75 @s76', async () => {
+    serve();
     queryClient.setQueryData(fileQuery('f1').queryKey, file({}) as never);
-    queryClient.setQueryData(fileVersionsQuery('f1').queryKey, []);
-    at('/tasks', <FileViewerHost />);
-    expect(screen.queryByRole('dialog')).toBeNull();
+    const router = at('/tasks', <FileViewerHost />);
     await act(async () => {
-      expect((await run('files.view', { file: 'f1' }, { via: 'click' })).ok).toBe(true);
+      expect((await run('files.view', { file: 'f1', version: 2 }, { via: 'click' })).ok).toBe(true);
     });
-    expect(await screen.findByRole('dialog', { name: 'Sample notes' })).toBeTruthy();
-    expect(await screen.findByText('plain words')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Open' })).toBeTruthy();
-    await act(async () => void (await run('files.view', { file: null }, { via: 'click' })));
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Sample notes' })).toBeNull());
+    await waitFor(() => expect(router.state.location.pathname).toBe('/library/files'));
+    expect(router.state.location.search).toEqual({ file: 'f1', v: 2 });
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('shows a picture full size, not in the dialog @s77', async () => {
+  it('a picture shows full size over the page, and closes @s77', async () => {
     serve();
     queryClient.setQueryData(fileQuery('f2').queryKey, file({ id: 'f2', title: 'Shelf photo', name: 'shelf.png', mime: 'image/png', library_kind: 'image' }) as never);
-    queryClient.setQueryData(fileVersionsQuery('f2').queryKey, []);
-    at('/tasks', <FileViewerHost />);
-    act(() => viewing.set({ file: 'f2' }));
-    expect(((await screen.findByAltText('Shelf photo')) as HTMLImageElement).getAttribute('src')).toBe('/api/v2/files/f2/versions/1');
-    expect(screen.queryByRole('button', { name: 'Open' })).toBeNull();
+    const router = at('/tasks', <FileViewerHost />);
+    await act(async () => void (await run('files.view', { file: 'f2' }, { via: 'click' })));
+    expect(((await screen.findByAltText('Shelf photo')) as HTMLImageElement).getAttribute('src')).toBe('/api/v2/files/f2');
+    expect(router.state.location.pathname).toBe('/tasks');
+    await act(async () => void (await run('files.view', { file: null }, { via: 'click' })));
+    await waitFor(() => expect(screen.queryByAltText('Shelf photo')).toBeNull());
   });
 });
 

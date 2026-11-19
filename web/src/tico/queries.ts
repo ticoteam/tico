@@ -3,7 +3,7 @@
 import { queryOptions } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type { Assistant } from '@/api/schema';
-import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
+import { queryClient, quietRoot, write } from '@/data';
 import { ticoRoomQuery } from '@/conversation';
 import { onRefetch } from '@/live';
 
@@ -18,7 +18,6 @@ export const ticoPowerQuery = queryOptions({
     const a = await api.get<Assistant>('/api/v2/assistant', { signal });
     return { available: a.available, bot: a.bot, can_turn_on: a.can_turn_on, state: a.state };
   },
-  staleTime: QUIET_STALE_MS,
 });
 
 /* Someone turned the Assistant on or off: the server sends every stream a `bots` event naming it (backend/events.py

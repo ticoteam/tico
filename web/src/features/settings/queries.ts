@@ -23,7 +23,7 @@ import type {
   UsageFigures,
   UsageLimits,
 } from '@/api/schema';
-import { QUIET_STALE_MS, configQuery, queryClient, quietRoot, write } from '@/data';
+import { configQuery, queryClient, quietRoot, write } from '@/data';
 import type { TaskCaps } from '@/api/schema';
 import type { ProductRepositoryPreview, ProductRepositoryResult, Repository, RepositoryList } from '@/api/schema';
 
@@ -33,7 +33,6 @@ quietRoot('settings');
 quietRoot('usage');
 
 const enc = encodeURIComponent;
-const quiet = { staleTime: QUIET_STALE_MS };
 
 // ---------------------------------------------------------------- people and access (GET /api/v2/access)
 
@@ -67,7 +66,6 @@ export interface AccessView {
 export const accessQuery = queryOptions({
   queryKey: ['settings', 'access'],
   queryFn: ({ signal }) => api.get<AccessView>('/api/v2/access', { signal }),
-  ...quiet,
 });
 
 const patchPerson = (pid: string, change: Partial<AccessPerson>) => (v: AccessView | undefined) =>
@@ -177,7 +175,6 @@ export const directorySyncQuery = queryOptions({
       scim: { ...v.scim },
     } as DirectoryView;
   },
-  ...quiet,
 });
 
 /** `credentials` only when the person typed new ones; they are never read back. */
@@ -219,7 +216,6 @@ export const pageOwnersQuery = queryOptions({
   queryKey: ['settings', 'page-owners'],
   queryFn: async ({ signal }) =>
     (await api.get<{ pages?: Record<string, PageOwnerRow> }>('/api/v2/page-owners', { signal })).pages ?? {},
-  ...quiet,
 });
 
 /** `choice`: 'default', 'none' or an agent's actor id ('bot:<id>'), as the server's `choice` reads. */
@@ -249,7 +245,6 @@ export interface PersonalToken {
 export const tokensQuery = queryOptions({
   queryKey: ['settings', 'tokens'],
   queryFn: ({ signal }) => api.get<{ tokens: PersonalToken[]; can_create: boolean }>('/api/v2/me/tokens', { signal }),
-  ...quiet,
 });
 
 export const createToken = (label: string, days = 90) =>
@@ -278,7 +273,6 @@ export const humansQuery = queryOptions({
   queryKey: ['settings', 'humans'],
   // The list has no v2 address: GET /api/humans (backend/views.py people), each row people.profile with its switches.
   queryFn: async ({ signal }) => (await api.get<{ people?: NoticePerson[] }>('/api/humans', { signal })).people ?? [],
-  ...quiet,
 });
 
 export const setMyNotice = (pid: string, field: 'notify_browser' | 'email_digest', on: boolean) =>
@@ -302,7 +296,6 @@ export interface ScreeningView {
 export const screeningQuery = queryOptions({
   queryKey: ['settings', 'screening'],
   queryFn: ({ signal }) => api.get<ScreeningView>('/api/v2/screening', { signal }),
-  ...quiet,
 });
 
 export const setScreening = (change: ScreeningModes) =>
@@ -323,7 +316,6 @@ export const setScreening = (change: ScreeningModes) =>
 export const supportQuery = queryOptions({
   queryKey: ['settings', 'support'],
   queryFn: ({ signal }) => api.get<CloudSupportView>('/api/v2/cloud-machines/support', { signal }),
-  ...quiet,
 });
 
 export const setSupport = (on: boolean) =>
@@ -350,7 +342,6 @@ export interface BillingView {
 export const billingQuery = queryOptions({
   queryKey: ['settings', 'billing'],
   queryFn: ({ signal }) => api.get<BillingView>('/api/v2/billing', { signal }),
-  ...quiet,
 });
 
 // ---------------------------------------------------------------- history, health, changelog
@@ -364,21 +355,16 @@ export interface HistoryItem {
   result: string;
 }
 
-/** `who`: an actor id from the directory ('bot:<slug>' or 'human:<id>'), as the server's `bot` or `person` filter. */
-export const historyFilter = (who?: string) => {
-  const m = who ? /^(bot|human):(.+)$/.exec(who) : null;
-  return m ? `?${m[1] === 'bot' ? 'bot' : 'person'}=${enc(m[2] ?? '')}` : '';
-};
+type HistoryPage = { items: HistoryItem[]; names: Record<string, string>; next?: string | null };
 
-export const historyFor = (who?: string) =>
+/** One page of the log, newest first. `before`: the page before's `next` cursor; the first page is the section's read. */
+export const historyPage = (before = '') =>
   queryOptions({
-    queryKey: ['settings', 'history', who ?? ''],
-    queryFn: ({ signal }) =>
-      api.get<{ items: HistoryItem[]; names: Record<string, string>; next?: string | null }>(`/api/v2/history${historyFilter(who)}`, { signal }),
-    ...quiet,
+    queryKey: ['settings', 'history', before],
+    queryFn: ({ signal }) => api.get<HistoryPage>(`/api/v2/history${before ? `?before=${enc(before)}` : ''}`, { signal }),
   });
 
-export const historyQuery = historyFor();
+export const historyQuery = historyPage();
 
 export interface HealthCheck {
   id: string;
@@ -402,20 +388,11 @@ export const healthQuery = queryOptions({
     const h = await api.get<Health>('/api/v2/health', { signal });
     return { checked: h.checked, attention: h.attention, checks: h.checks as HealthCheck[], stuck: stuckOf(h) };
   },
-  ...quiet,
 });
 
 export const changelogQuery = queryOptions({
   queryKey: ['settings', 'changelog'],
   queryFn: ({ signal }) => api.get<ChangelogList>('/api/v2/changelog?kind=product&limit=60', { signal }),
-  ...quiet,
-});
-
-/** What agents shipped: each line may name the task it came from, whose outcome opens over the page. */
-export const activityQuery = queryOptions({
-  queryKey: ['settings', 'changelog', 'activity'],
-  queryFn: ({ signal }) => api.get<ChangelogList>('/api/v2/changelog?kind=activity&limit=60', { signal }),
-  ...quiet,
 });
 
 /** A product update by hand (owner): a title and its bullets. */
@@ -436,7 +413,6 @@ export interface SubscriptionAgent {
 export const subscriptionsQuery = queryOptions({
   queryKey: ['settings', 'subscriptions'],
   queryFn: ({ signal }) => api.get<ModelSubscriptionList>('/api/v2/model-subscriptions', { signal }),
-  ...quiet,
 });
 
 export type Subscription = ModelSubscription & { agents?: SubscriptionAgent[] };
@@ -514,7 +490,6 @@ export interface Computer {
 export const computersQuery = queryOptions({
   queryKey: ['settings', 'computers'],
   queryFn: async ({ signal }) => (await api.get<{ machines?: Computer[] }>('/api/v2/operations', { signal })).machines ?? [],
-  ...quiet,
 });
 
 const patchComputer = (rid: string, change: Partial<Computer>) => <C extends { id: string }>(v: C[] | undefined) =>
@@ -567,7 +542,6 @@ export const modelsQuery = queryOptions({
       '/api/v2/models',
       { signal },
     ),
-  ...quiet,
 });
 
 /** GET /api/v2/providers: the model a new agent uses and the one meetings reply on ('' for each agent's own). */
@@ -581,7 +555,6 @@ export interface ProvidersView {
 export const providersQuery = queryOptions({
   queryKey: ['settings', 'providers'],
   queryFn: ({ signal }) => api.get<ProvidersView>('/api/v2/providers', { signal }),
-  ...quiet,
 });
 
 /** The owner's defaults, against the revision on screen; the providers turned on are sent back unchanged. */
@@ -626,7 +599,6 @@ export interface BotListed {
 export const botsQuery = queryOptions({
   queryKey: ['settings', 'bots'],
   queryFn: ({ signal }) => api.get<BotListed[]>('/api/v2/bots?include_archived=1', { signal }),
-  ...quiet,
 });
 
 export const restoreAgent = (bot: string) =>
@@ -670,7 +642,6 @@ export const botAccessQuery = (bot: string) =>
   queryOptions({
     queryKey: ['settings', 'bot-access', bot],
     queryFn: ({ signal }) => api.get<BotAccess>(`/api/v2/bots/${enc(bot)}/access`, { signal }),
-    ...quiet,
   });
 
 export const setBotAccess = (bot: string, change: Pick<BotAccess, 'see' | 'read' | 'write'>) => {
@@ -694,7 +665,6 @@ export const botMailQuery = (bot: string) =>
   queryOptions({
     queryKey: ['settings', 'bot-mail', bot],
     queryFn: ({ signal }) => api.get<BotMail>(`/api/v2/bots/${enc(bot)}/mail-settings`, { signal }),
-    ...quiet,
   });
 
 export const setBotMail = (bot: string, on: boolean) =>
@@ -725,7 +695,6 @@ export const stoppedRunsQuery = (bot: string) =>
   queryOptions({
     queryKey: ['settings', 'stopped-runs', bot],
     queryFn: async ({ signal }) => (await api.get<{ jobs?: StoppedRun[] }>(`/api/v2/bots/${enc(bot)}/execution-review`, { signal })).jobs ?? [],
-    ...quiet,
   });
 
 /** Retrying is safe only when the run stopped before it could have acted. */
@@ -813,7 +782,6 @@ export interface GatewayView {
 export const gatewayQuery = queryOptions({
   queryKey: ['settings', 'gateway'],
   queryFn: ({ signal }) => api.get<GatewayView>('/api/v2/providers/gateway', { signal }),
-  ...quiet,
 });
 
 /** A new key (left out to keep the saved one) and the address ('' for Tico's), against the revision on screen. The
@@ -848,7 +816,6 @@ export interface SleepView {
 export const sleepQuery = queryOptions({
   queryKey: ['settings', 'sleep'],
   queryFn: async ({ signal }) => (await api.get<{ sleep: SleepView }>('/api/v2/sleep', { signal })).sleep,
-  ...quiet,
 });
 
 export const setSleep = (change: { hours: number } | { runners: boolean }) =>
@@ -868,7 +835,6 @@ export interface HostedServer {
 export const hostedQuery = queryOptions({
   queryKey: ['settings', 'hosted'],
   queryFn: ({ signal }) => api.get<{ state: string; servers?: HostedServer[] }>('/api/v2/hosted-servers', { signal }),
-  ...quiet,
 });
 
 export const startServer = (id: string) =>
@@ -890,7 +856,6 @@ export const settingsCatalogQuery = (q: string) =>
     queryKey: ['settings', 'catalog', q],
     queryFn: async ({ signal }) =>
       (await api.get<{ settings?: SettingHit[] }>(`/api/v2/settings/catalog?limit=40&q=${enc(q.slice(0, 200))}`, { signal })).settings ?? [],
-    ...quiet,
   });
 
 // ---- usage (anchor: the Usage builder adds its calls below) ----
@@ -931,7 +896,6 @@ export const usageQuery = (range: UsageRange, group: 'bot' | 'day' | 'model') =>
       const u = await api.get<Usage>(`/api/v2/usage?from=${from}&to=${to}&group=${group}`, { signal });
       return { from: u.from, to: u.to, totals: u.totals, rows: (u.rows ?? []) as unknown as UsageRow[] } satisfies UsageView;
     },
-    ...quiet,
   });
 
 export interface AgentUsage {
@@ -948,13 +912,11 @@ export const agentUsageQuery = (range: UsageRange, bot: string) =>
       const u = await api.get<Usage>(`/api/v2/usage?from=${from}&to=${to}&group=bot&bot=${enc(bot)}`, { signal });
       return { totals: u.totals, tasks: (u.tasks ?? []) as unknown as UsageRow[], models: (u.models ?? []) as unknown as UsageRow[] } satisfies AgentUsage;
     },
-    ...quiet,
   });
 
 export const limitsQuery = queryOptions({
   queryKey: ['usage', 'limits'],
   queryFn: ({ signal }) => api.get<UsageLimits>('/api/v2/usage/limits', { signal }),
-  ...quiet,
 });
 
 /** An agent's monthly limit in dollars; null takes it off (the company's default then holds). */
@@ -978,6 +940,14 @@ export const setDefaultLimit = (monthly: number | null) =>
     send: (idempotencyKey) => api.put('/api/v2/usage/limits', { monthly_usd: monthly }, { idempotencyKey }),
   });
 
+/** Whether plan runs count against the limits (the company default's switch); the amounts keep their values. */
+export const setCountPlanRuns = (on: boolean) =>
+  write({
+    key: limitsQuery.queryKey,
+    optimistic: (v: UsageLimits | undefined) => v && { ...v, default: { ...v.default, count_subscription: on } },
+    send: (idempotencyKey) => api.put('/api/v2/usage/limits', { count_subscription: on }, { idempotencyKey }),
+  });
+
 /** Cancel queued automatic wakes and waits; tasks, people's messages and running work stay. */
 export const purgeQueue = (scope: string) =>
   api.post<{ cancelled: number; kept_people: number; still_running: number }>('/api/v2/usage/queues/purge', { scope });
@@ -994,7 +964,6 @@ export interface RoadmapView {
 export const roadmapQuery = queryOptions({
   queryKey: ['settings', 'roadmap'],
   queryFn: ({ signal }) => api.get<RoadmapView>('/api/v2/roadmaps/settings', { signal }),
-  ...quiet,
 });
 
 export const setRoadmap = (change: Partial<Pick<RoadmapView, 'labels' | 'bot_public_approval'>>) =>
@@ -1015,7 +984,6 @@ export const labelsQuery = queryOptions({
   queryKey: ['settings', 'labels'],
   queryFn: async ({ signal }) =>
     (await api.get<{ tags: TagRow[] }>('/api/v2/tags?is_template=false', { signal })).tags.filter((t) => !t.is_template),
-  ...quiet,
 });
 
 // ---------------------------------------------------------------- contacts: types and their fields (/api/v2/entities)
@@ -1048,14 +1016,12 @@ export const contactTypesQuery = queryOptions({
     const count = new Map(n.counts.map((c) => [c.type, c]));
     return t.types.map((type) => ({ ...type, count: count.get(type.key)?.count ?? 0, approximate: !!count.get(type.key)?.approximate }));
   },
-  ...quiet,
 });
 
 export const contactTypeQuery = (type: string) =>
   queryOptions({
     queryKey: ['settings', 'contact-types', type],
     queryFn: ({ signal }) => api.get<{ attributes: ContactField[] }>(`/api/v2/entities/types/${enc(type)}`, { signal }),
-    ...quiet,
   });
 
 /** The kinds a field can be without a list of options. */
@@ -1144,7 +1110,6 @@ export interface CompanyToken extends PersonalToken {
 export const allTokensQuery = queryOptions({
   queryKey: ['settings', 'all-tokens'],
   queryFn: ({ signal }) => api.get<{ tokens: CompanyToken[] }>('/api/v2/access/tokens', { signal }),
-  ...quiet,
 });
 
 export const revokeAnyToken = (id: string) => {
@@ -1194,7 +1159,6 @@ export interface SupportAccessView {
 export const supportAccessQuery = queryOptions({
   queryKey: ['settings', 'support-access'],
   queryFn: ({ signal }) => api.get<SupportAccessView>('/api/v2/support/access', { signal }),
-  ...quiet,
 });
 
 /** The person's own requests to Tico support: a sign-in is let in against an open one. */
@@ -1203,7 +1167,6 @@ export const supportTicketsQuery = queryOptions({
   queryFn: async ({ signal }) =>
     (await api.get<{ tickets?: { id: string; status: string; created_at: string; pending?: boolean }[] }>('/api/v2/support/tickets', { signal }))
       .tickets ?? [],
-  ...quiet,
 });
 
 export interface SupportLogLine {
@@ -1218,7 +1181,6 @@ export const supportLogQuery = (sid: string) =>
   queryOptions({
     queryKey: ['settings', 'support-log', sid],
     queryFn: async ({ signal }) => (await api.get<{ log?: SupportLogLine[] }>(`/api/v2/support/access/${enc(sid)}/log`, { signal })).log ?? [],
-    ...quiet,
   });
 
 export const startSupportAccess = (ticket: string, tier: 'app' | 'full', hours: number) =>
@@ -1247,7 +1209,6 @@ export type RepoList = Omit<RepositoryList, 'repositories'> & { repositories: Re
 export const repositoriesQuery = queryOptions({
   queryKey: ['settings', 'repositories'],
   queryFn: ({ signal }) => api.get<RepoList>('/api/v2/repositories', { signal }),
-  ...quiet,
 });
 
 const repoPath = (name: string) => name.split('/').map(enc).join('/');
@@ -1316,7 +1277,6 @@ export const usageWhereQuery = (w: UsageWhere, group: 'bot' | 'day' | 'model') =
           const u = await api.get<Usage>(`/api/v2/usage?${q}`, { signal });
           return { from: u.from, to: u.to, totals: u.totals, rows: (u.rows ?? []) as unknown as UsageRow[] } satisfies UsageView;
         },
-        ...quiet,
       })
     : usageQuery(w.range, group);
 
@@ -1330,7 +1290,6 @@ export const agentUsageWhereQuery = (w: UsageWhere, bot: string) =>
           const u = await api.get<Usage>(`/api/v2/usage?${q}`, { signal });
           return { totals: u.totals, tasks: (u.tasks ?? []) as unknown as UsageRow[], models: (u.models ?? []) as unknown as UsageRow[] } satisfies AgentUsage;
         },
-        ...quiet,
       })
     : agentUsageQuery(w.range, bot);
 
@@ -1353,7 +1312,6 @@ export const usageChoicesQuery = (w: UsageWhere) =>
         labels: (u.dimension_labels ?? {}) as Record<string, Record<string, string>>,
       } satisfies UsageChoices;
     },
-    ...quiet,
   });
 
 /** A combined limit: the whole company's, or a team's (its spend counts every agent under it). */
@@ -1399,7 +1357,6 @@ export const setPoolLimit = (scope: string, monthly: number | null) =>
 export const taskCapsQuery = queryOptions({
   queryKey: ['usage', 'task-caps'],
   queryFn: ({ signal }) => api.get<TaskCaps>('/api/v2/task-caps', { signal }),
-  ...quiet,
 });
 
 /** null removes the cap; 0 blocks the pair. An agent's own change comes back as an approval a person decides. */
@@ -1419,25 +1376,6 @@ export const setTaskCap = (sender: string, receiver: string, perDay: number | nu
         ? api.delete(`/api/v2/task-caps?sender=${enc(sender)}&receiver=${enc(receiver)}`, { idempotencyKey })
         : api.put('/api/v2/task-caps', { sender, receiver, per_day: perDay }, { idempotencyKey }),
   });
-
-/** The history read's filters as the server takes them: who, and the page before. */
-export function historyParams(who?: string, before = ''): string {
-  const q = new URLSearchParams(historyFilter(who).slice(1));
-  if (before) q.set('before', before);
-  const s = q.toString();
-  return s ? `?${s}` : '';
-}
-
-/** One page of the log; the first page is `historyFor(who)`. `before`: the page's `next` cursor. */
-export const historyPage = (who?: string, before = '') =>
-  !before
-    ? historyFor(who)
-    : queryOptions({
-        queryKey: ['settings', 'history', who ?? '', before],
-        queryFn: ({ signal }) =>
-          api.get<{ items: HistoryItem[]; names: Record<string, string>; next?: string | null }>(`/api/v2/history${historyParams(who, before)}`, { signal }),
-        ...quiet,
-      });
 
 /** One day's charges. */
 export interface BillingBucket {
@@ -1460,7 +1398,6 @@ export const billingFor = (month = '') =>
     ? queryOptions({
         queryKey: ['settings', 'billing', month],
         queryFn: ({ signal }) => api.get<BillingView>(`/api/v2/billing?month=${enc(month)}`, { signal }),
-        ...quiet,
       })
     : billingQuery;
 
@@ -1472,14 +1409,6 @@ export interface GatewayStatus extends GatewayView {
   working?: boolean;
   message?: string;
 }
-
-const gatewayAnswer = async (p: Promise<GatewayView>) => {
-  const v = await p;
-  queryClient.setQueryData(gatewayQuery.queryKey, v);
-  return v;
-};
-
-export const checkGateway = () => gatewayAnswer(api.post<GatewayView>('/api/v2/providers/gateway/check', {}));
 
 // ---- tier 2 gaps (Tasks, Health, Changelog, Contacts, stopped runs, search): this builder's calls below ----
 
@@ -1503,7 +1432,6 @@ export interface AskView {
 export const askQuery = queryOptions({
   queryKey: ['settings', 'ask'],
   queryFn: ({ signal }) => api.get<AskView>('/api/v2/ask-ingest/settings', { signal }),
-  ...quiet,
 });
 
 /** Save the person's own rules, or the team default (`team`). The next ask uses them; nothing on a plate moves. */
@@ -1521,32 +1449,6 @@ export const resetAsk = () =>
     optimistic: (v: AskView | undefined) => v && { ...v, settings: { ...v.team, own: false } },
     send: (idempotencyKey) => api.delete('/api/v2/ask-ingest/settings', { idempotencyKey }),
   });
-
-/** One ask a replayed day judged: who asked, what it was, why, and what On would have done with it. */
-export interface ReplayRow {
-  asker?: string;
-  asker_name?: string;
-  private?: boolean;
-  title?: string;
-  reason: string;
-  load: number;
-  would: string;
-}
-
-/** What On would have done with one past day (UTC) of agents' asks, every page of it. Nothing on any plate moves. */
-export async function replayDay(person: string, date: string): Promise<ReplayRow[]> {
-  const rows: ReplayRow[] = [];
-  let offset: number | null | undefined = 0;
-  while (offset != null && rows.length < 2000) {
-    const page: { items: ReplayRow[]; next_offset?: number | null } = await api.post<{ items: ReplayRow[]; next_offset?: number | null }>(
-      '/api/v2/ask-ingest/replay',
-      { person, date, offset },
-    );
-    rows.push(...page.items);
-    offset = page.next_offset;
-  }
-  return rows;
-}
 
 /** An agent with queued work that is not starting, or left in setup (backend/health.py `_stuck`). */
 export interface StuckAgent {
@@ -1566,7 +1468,6 @@ export const changelogPage = (offset: number) =>
     : queryOptions({
         queryKey: ['settings', 'changelog', 'page', offset],
         queryFn: ({ signal }) => api.get<ChangelogList>(`/api/v2/changelog?kind=product&limit=60&offset=${offset}`, { signal }),
-        ...quiet,
       });
 
 /** Acknowledge product entries for this person. The list is not read again: what was New stays marked for this visit. */

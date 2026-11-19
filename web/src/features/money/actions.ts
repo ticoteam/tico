@@ -11,6 +11,7 @@ import {
   BOOKS,
   booksSignIn,
   cachedCard,
+  cachedTx,
   connectSource,
   decide,
   disconnectBooks,
@@ -410,20 +411,8 @@ export const openBudget = defineAction({
   target: ({ budget }) => ({ kind: 'budget', id: budget }),
 });
 
-export const newBudget = defineAction({
-  id: 'budget.newRow',
-  title: 'Start a new budget',
-  kind: 'view',
-  input: s.object({}),
-  run: ({ router }) => go(router, FIN, { tab: 'budgets', panel: 'budget:new' }),
-  did: () => 'Opened a new budget',
-  target: () => ({ kind: 'budget', id: 'new' }),
-});
-
 /** The day a month's budgets are read at: today in this month, else the month's first day (finance-budgets.ts:76). */
 const budgetAt = (month?: string) => (!month || month === budgetDay().slice(0, 7) ? budgetDay() : `${month}-01`);
-/** The month Budgets shows now, from the address. */
-const shownMonth = (router: AnyRouter) => validateFinanceSearch(router.state.location.search as Record<string, unknown>).month;
 
 export const addRow = defineAction({
   id: 'budget.addRow',
@@ -442,12 +431,8 @@ export const addRow = defineAction({
     period: s.optional(s.oneOf(['month', 'quarter', 'year'] as const)),
     from: s.optional(ym),
   }),
-  run: async ({ router }, { name, line, amount, under, teammate, vendor, warn, period, from }) => {
-    const done = addBudget(budgetAt(shownMonth(router)), { name, line, cents: Math.round(amount * 100), parent: under, teammate, vendor, warn, period, from });
-    // From New budget, back to the list; from a line's panel, it stays open.
-    if (router.state.location.search.panel === 'budget:new') await go(router, FIN, { tab: 'budgets', panel: undefined });
-    return done;
-  },
+  run: (_ctx, { name, line, amount, under, teammate, vendor, warn, period, from }) =>
+    addBudget(budgetDay(), { name, line, cents: Math.round(amount * 100), parent: under, teammate, vendor, warn, period, from }),
   did: ({ name }) => `Added “${name}”`,
   target: (i) => ({ kind: 'budget', id: tmpBudgetId(i) }),
 });
@@ -485,19 +470,19 @@ export const removeRow = defineAction({
   did: () => 'Removed the budget',
 });
 
-export const setBudgetMonth = defineAction({
-  id: 'budget.setMonth',
-  title: 'Show budgets for a month',
+export const setBudgetPeriod = defineAction({
+  id: 'budget.setPeriod',
+  title: 'Show budgets for this month, quarter or year',
   kind: 'view',
-  input: s.object({ month: ym }),
-  run: ({ router }, { month }) =>
+  input: s.object({ period: s.oneOf(['month', 'quarter', 'year'] as const) }),
+  run: ({ router }, { period }) =>
     go(router, FIN, {
       // My budget keeps its tab; anywhere else it is Budgets.
       tab: validateFinanceSearch(router.state.location.search as Record<string, unknown>).tab === 'mine' ? 'mine' : 'budgets',
-      month: month === budgetDay().slice(0, 7) ? undefined : month,
+      period: period === 'month' ? undefined : period,
       panel: undefined,
     }),
-  did: () => 'Showed the month',
+  did: ({ period }) => `Showed budgets by ${period}`,
   target: () => ({ kind: 'range', id: 'budgets' }),
 });
 
@@ -586,7 +571,7 @@ const words = (max: number) => s.optional(s.string({ max }));
 
 export const openRecord = defineAction({
   id: 'finance.openRecord',
-  title: 'Open a bill, an invoice, a card or a transaction beside its list',
+  title: 'Open a bill, an invoice or a card beside its list, or a transaction in place',
   kind: 'view',
   input: s.object({ kind: s.oneOf(['bill', 'invoice', 'card', 'tx'] as const), record: id }),
   run: ({ router }, { kind, record }) => go(router, FIN, { tab: RECORD_TAB[kind], panel: `${kind}:${record}` }),
@@ -902,4 +887,22 @@ export const setApprover = defineAction({
   run: (_ctx, { approver }) => decide('finance_approver_set', { approver: approver ?? '' }),
   did: (_i, out) => waits(out, 'Saved'),
   target: () => ({ kind: 'tab', id: 'access' }),
+});
+
+/** A bank or card row put on a line, in place on Transactions: its tags stay but the budget, which the new line sets
+    (finance-books.ts finTxLineSave). Ordinary bookkeeping, undone the same way: Tico may. */
+export const setLine = defineAction({
+  id: 'finance.setLine',
+  title: 'Put a bank or card row on a line',
+  kind: 'change',
+  input: s.object({ tx: id, line: id }),
+  run: async ({ router, queryClient: qc }, { tx, line }) => {
+    const tags = { ...((cachedTx(qc, tx)?.lines?.[0]?.tags as Record<string, unknown> | undefined) ?? {}) };
+    delete tags.budget;
+    const done = await decide('categorize', { feed_id: tx, account_id: line, tags });
+    await closeHere(router);
+    return done;
+  },
+  did: (_i, out) => waits(out, 'Saved'),
+  target: ({ tx }) => ({ kind: 'tx', id: tx }),
 });

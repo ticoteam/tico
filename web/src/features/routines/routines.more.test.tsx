@@ -6,12 +6,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { ActionsRoot, run } from '@/actions';
 import { queryClient } from '@/data';
 import { validateRoutinesSearch } from './load';
-import { webhookQuery } from '@/features/library/exports';
-import { endpointsQuery, eventTypesQuery, hooksQuery, routinesQuery, templatesQuery, type Endpoint } from './queries';
+import { routinesQuery, templatesQuery } from './queries';
 import { RoutinesPage } from './RoutinesPage';
 import type { Routine } from './types';
 
-/* Runs across routines, the inbox board's editor, inbox templates and outgoing webhooks. */
+/* Runs across routines, the inbox board's editor and inbox templates. */
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
@@ -66,7 +65,6 @@ function show(at: string, node?: ReactNode) {
   return router;
 }
 const href = (el: HTMLElement) => decodeURIComponent((el.tagName === 'A' ? el : el.closest('a'))?.getAttribute('href') ?? '');
-const inCache = (text: string) => JSON.stringify(queryClient.getQueryCache().getAll().map((q) => [q.queryKey, q.state.data])).includes(text);
 
 const routine = (over: Partial<Routine> = {}) =>
   ({
@@ -157,6 +155,12 @@ describe('Runs', () => {
     show('/company/routines?tab=runs');
     expect(await screen.findByText('Routines did not load')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+  });
+
+  it('names the range and the status it looked at when there are none', async () => {
+    record((url) => (url.includes('/automations/runs?') ? ok({ next: null, since: '2026-11-19T07:00:00Z', runs: [] }) : nothing()));
+    show('/company/routines?tab=runs&status=waiting&range=7d');
+    expect(await screen.findByText('No waiting runs in the last 7 days')).toBeTruthy();
   });
 
   it('keeps only known statuses and ranges in the address', () => {
@@ -289,145 +293,5 @@ describe('Inbox templates', () => {
     expect(await within(dialog).findByText("This template doesn't fit this inbox")).toBeTruthy();
     expect(within(dialog).getByRole('button', { name: 'Apply' }).hasAttribute('disabled')).toBe(true);
     expect(writes(sent)).toHaveLength(0);
-  });
-});
-
-describe('Outgoing webhooks', () => {
-  const TYPES = [
-    { name: 'task.created', label: 'Task created', group: 'task', description: '', example: {}, version: 1 },
-    { name: 'task.done', label: 'Task done', group: 'task', description: '', example: {}, version: 1 },
-  ];
-  const endpoint = (over: Partial<Endpoint> = {}): Endpoint => ({
-    id: 'e1',
-    name: 'Order feed',
-    url: 'https://hooks.example/orders',
-    host: 'hooks.example',
-    events: ['task.created'],
-    enabled: true,
-    can_change: true,
-    allow_http: false,
-    created_at: '2026-11-01T00:00:00Z',
-    created_by: 'human:me',
-    disabled_at: null,
-    disabled_reason: null,
-    filter: {},
-    headers: [{ name: 'Authorization', secret: true, set: true }],
-    last_7_days: { delivered: 12, failed: 0, pending: 0 },
-    old_secret_until: null,
-    paused_reason: '',
-    rate_per_hour: 600,
-    requested_by: null,
-    revision: 3,
-    updated_at: '2026-11-01T00:00:00Z',
-    ...over,
-  });
-  const seed = (list: Endpoint[]) => {
-    queryClient.setQueryData(hooksQuery.queryKey, []);
-    queryClient.setQueryData(endpointsQuery.queryKey, list);
-    queryClient.setQueryData(eventTypesQuery.queryKey, TYPES);
-  };
-  const lists = (url: string) =>
-    url.endsWith('/api/v2/triggers') ? ok({ triggers: [] }) : url.includes('/api/v2/event-types') ? ok({ items: TYPES }) : null;
-
-  it('adds one and shows its signing secret once, in the dialog only @s579', async () => {
-    const secret = 'whsec_made_up_55c1';
-    const sent = record((url, method) =>
-      method === 'POST' && url.endsWith('/api/v2/webhooks')
-        ? ok({ webhook: { ...endpoint({ id: 'e2', name: 'Ship feed', headers: [] }), secret, replayed: false } })
-        : url.includes('/api/v2/webhooks?')
-          ? ok({ items: [] })
-          : (lists(url) ?? nothing()),
-    );
-    seed([]);
-    show('/company/routines?tab=webhooks');
-    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'New outgoing webhook' }));
-    const dialog = await screen.findByRole('dialog', { name: 'New outgoing webhook' });
-    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Name' }), { target: { value: 'Ship feed' } });
-    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Address' }), { target: { value: 'https://hooks.example/ship' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
-    const shown = await screen.findByRole('dialog', { name: 'Signing secret' });
-    expect(within(shown).getByText(secret)).toBeTruthy();
-    expect(writes(sent)[0]!.body).toEqual({ name: 'Ship feed', url: 'https://hooks.example/ship', events: ['*'], allow_http: false, headers: [] });
-    expect(inCache(secret)).toBe(false);
-    fireEvent.click(within(shown).getByRole('button', { name: 'Done' }));
-    await waitFor(() => expect(screen.queryByText(secret)).toBeNull());
-  });
-
-  it('asks before sending saved headers to a new address, then keeps them', async () => {
-    const moved = endpoint({ url: 'https://other.example/in', host: 'other.example', revision: 4 });
-    const sent = record((url, method, n) =>
-      method === 'POST' && url.endsWith('/webhooks/e1/update')
-        ? n === 1
-          ? refused('destination_change', 'Nothing was saved.', { old: { address: 'https://hooks.example/orders' }, new: { address: 'https://other.example/in' }, credentials: ['Authorization'] }, 409)
-          : ok({ webhook: moved })
-        : url.includes('/api/v2/webhooks?')
-          ? ok({ items: [moved] })
-          : (lists(url) ?? nothing()),
-    );
-    seed([endpoint()]);
-    show('/company/routines?tab=webhooks');
-    fireEvent.click(await screen.findByRole('button', { name: 'Order feed' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Edit outgoing webhook' });
-    expect((within(dialog).getByLabelText('Header 1 value') as HTMLInputElement).placeholder).toBe('Saved');
-    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Address' }), { target: { value: 'https://other.example/in' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
-    const ask = await screen.findByRole('alertdialog', { name: 'Send saved headers to the new address?' });
-    expect(within(ask).getByText('Authorization would go to https://other.example/in instead of https://hooks.example/orders.')).toBeTruthy();
-    fireEvent.click(within(ask).getByRole('button', { name: 'Send them' }));
-    await waitFor(() => expect(writes(sent)).toHaveLength(2));
-    expect(writes(sent)[0]!.body).toEqual({
-      name: 'Order feed',
-      url: 'https://other.example/in',
-      events: ['task.created'],
-      allow_http: false,
-      headers: [{ name: 'Authorization', secret: true }],
-      expected_revision: 3,
-    });
-    expect(writes(sent)[1]!.body).toMatchObject({ credentials: 'keep', url: 'https://other.example/in' });
-    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
-  });
-
-  it("opens one on Tools from its ⋯, and a change reads Tools' copy again", async () => {
-    record((url, method) =>
-      method === 'POST' && url.endsWith('/webhooks/e1/update')
-        ? ok({ webhook: endpoint({ name: 'Orders' }) })
-        : url.includes('/api/v2/webhooks?')
-          ? ok({ items: [endpoint({ name: 'Orders' })] })
-          : (lists(url) ?? nothing()),
-    );
-    seed([endpoint()]);
-    const tools = webhookQuery('e1').queryKey;
-    queryClient.setQueryData([...tools], { webhook: { id: 'e1', name: 'Order feed' } });
-    const router = show('/company/routines?tab=webhooks');
-    fireEvent.click(await screen.findByRole('button', { name: 'Order feed' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Edit outgoing webhook' });
-    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Name' }), { target: { value: 'Orders' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(queryClient.getQueryState(tools)?.isInvalidated).toBe(true);
-    const row = (await screen.findByRole('button', { name: 'Orders' })).closest('.hook') as HTMLElement;
-    fireEvent.click(within(row).getByRole('button', { name: 'More' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Open in Tools' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/library/tools'));
-    expect(router.state.location.search).toMatchObject({ tool: 'webhook:e1' });
-  });
-
-  it('keeps secrets and new endpoints from Tico', async () => {
-    record((url, method) => (method === 'POST' && url.endsWith('/webhooks/e1/update') ? ok({ webhook: endpoint({ name: 'Orders' }) }) : (lists(url) ?? nothing())));
-    seed([endpoint()]);
-    show('/company/routines?tab=webhooks');
-    await screen.findByRole('button', { name: 'Order feed' });
-    const base = { name: 'Orders', url: 'https://hooks.example/orders', events: ['task.created'] };
-    expect(await run('webhooks.addEndpoint', base, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect(await run('webhooks.updateEndpoint', { endpoint: 'e1', ...base, headers: [{ name: 'Authorization', value: 'made-up', secret: true }] }, { via: 'tico' })).toMatchObject({
-      ok: false,
-      error: 'not_allowed',
-    });
-    expect(await run('webhooks.updateEndpoint', { endpoint: 'e1', ...base, credentials: 'keep' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    // moving where the events are sent is the person's own
-    expect(await run('webhooks.updateEndpoint', { endpoint: 'e1', ...base, url: 'https://other.example/in' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    // a rename that keeps the saved header as it is stays open to Tico
-    expect(await run('webhooks.updateEndpoint', { endpoint: 'e1', ...base, headers: [{ name: 'Authorization', secret: true }] }, { via: 'tico' })).toMatchObject({ ok: true });
   });
 });

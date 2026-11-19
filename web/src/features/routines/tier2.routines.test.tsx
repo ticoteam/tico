@@ -10,7 +10,6 @@ import { validateListeningSearch, validateRoutinesSearch, validateRulesSearch } 
 import {
   deliveriesQuery,
   dueQuery,
-  endpointsQuery,
   holdsQuery,
   hooksQuery,
   orgRulesQuery,
@@ -273,7 +272,6 @@ describe('Routines', () => {
     record();
     const hook: Hook = { id: 'h1', name: 'Shop orders', url: 'https://in.example/hooks/h1', signed: false, received_24h: 3, automations: [] };
     queryClient.setQueryData(hooksQuery.queryKey, [hook]);
-    queryClient.setQueryData(endpointsQuery.queryKey, []);
     show('/company/routines?tab=webhooks');
     const row = within(await screen.findByRole('region', { name: 'Incoming' })).getByTitle('Shop orders');
     expect(within(row).getByText('Unsigned')).toBeTruthy();
@@ -286,7 +284,6 @@ describe('Routines', () => {
     record();
     const hook: Hook = { id: 'h1', name: 'Shop orders', url: 'https://in.example/hooks/h1', signed: false, automations: [] };
     queryClient.setQueryData(hooksQuery.queryKey, [hook]);
-    queryClient.setQueryData(endpointsQuery.queryKey, []);
     queryClient.setQueryData(deliveriesQuery('h1').queryKey, [{ delivery: 'd1', received_at: '2026-11-18T07:00:00Z', outcome: 'refused', reason: 'Bad signature', stored: true }] as never);
     show('/company/routines?tab=webhooks&panel=hook:h1');
     const panel = await screen.findByRole('complementary', { name: 'Shop orders' });
@@ -345,5 +342,83 @@ describe('Listening', () => {
     const sources = (sent[0]!.body as { trigger: { sources: { kind: string; target: string; site?: string }[] } }).trigger.sources;
     expect(sources).toHaveLength(2);
     expect(sources[1]).toMatchObject({ kind: 'search', target: 'seed kit', site: 'reddit.com' });
+  });
+});
+
+describe('Fix wave: the plan and the checklist', () => {
+  /** Every read the pages make, by address. */
+  function reads(reply: (url: string) => Reply = nothing): string[] {
+    const got: string[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') === 'GET') got.push(String(url));
+      const r = reply(String(url));
+      return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
+    });
+    return got;
+  }
+  const failed = (): Reply => ({ status: 500, body: { error: { code: 'boom', detail: 'boom' } } });
+  const agent = (id: string, name: string) => {
+    const a = { id, kind: 'agent', name };
+    queryClient.setQueryData(['directory'], { actors: [a], byId: { [id]: a } });
+  };
+
+  it('Webhooks lists incoming ones only, and reads nothing of the outgoing ones @s514', async () => {
+    const got = reads();
+    queryClient.setQueryData(hooksQuery.queryKey, [{ id: 'h1', name: 'Shipping', url: 'https://hooks.example/h1', received_24h: 3, automations: [] } as unknown as Hook]);
+    show('/company/routines?tab=webhooks');
+    expect(await screen.findByRole('region', { name: 'Incoming' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Outgoing' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
+    expect(got.some((u) => u.includes('/api/v2/webhooks'))).toBe(false);
+  });
+
+  it('with no routines the head keeps only ⋯, and the empty state holds Add routine @s509', async () => {
+    reads();
+    queryClient.setQueryData(routinesQuery.queryKey, []);
+    show('/company/routines');
+    expect(await screen.findByText('No routines yet')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Add routine' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Filter' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Search' })).toBeNull();
+  });
+
+  it('a routine that did not load says so in its panel, with Try again @s510', async () => {
+    let n = 0;
+    reads((u) => (u.endsWith('/api/v2/automations/r7') ? (n++, failed()) : nothing()));
+    queryClient.setQueryData(routinesQuery.queryKey, []);
+    show('/company/routines?panel=routine:r7');
+    expect(await screen.findByText('This routine did not load')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(n).toBe(2));
+  });
+
+  it('a Rules tab reads only its own data, and a due row names who gets its task @s520', async () => {
+    agent('bot:fin', 'Finance Owner');
+    const got = reads((u) =>
+      u.includes('/api/v2/rules/due')
+        ? ok({ due: [{ id: 'd1', due_on: '2030-01-31', status: 'upcoming', owner: 'bot:fin', task_days: 14, rule: { id: 'o1', text: 'Renew the domain' } }] })
+        : nothing(),
+    );
+    show('/company/rules?tab=due');
+    expect(await screen.findByTitle('Renew the domain, 14 days before, Finance Owner gets a task')).toBeTruthy();
+    expect(got.filter((u) => u.includes('/api/v2/'))).toEqual([expect.stringContaining('/api/v2/rules/due')]);
+  });
+
+  it('a watch with no matches says so in the page, and one that failed has Try again @s540', async () => {
+    let n = 0;
+    reads((u) => (u.includes('/listening/items') ? (n++ ? ok({ items: [] }) : failed()) : nothing()));
+    queryClient.setQueryData(watchQuery('w1').queryKey, routine({ id: 'w1', name: 'Mentions of us', trigger: { type: 'listening', sources: [] } as unknown as Routine['trigger'] }));
+    show('/company/listening?watch=w1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('No matches yet')).toBeTruthy();
+  });
+
+  it("Listening's owner is a face in the head that opens their chat @s516", async () => {
+    agent('bot:auto', 'Automations Owner');
+    reads((u) => (u.includes('/api/v2/page-owners') ? ok({ pages: { listening: { bot: 'auto' } } }) : nothing()));
+    queryClient.setQueryData(watchesQuery.queryKey, []);
+    show('/company/listening');
+    const face = await screen.findByRole('link', { name: 'Chat with Automations Owner' });
+    expect(href(face)).toContain('chat=agent:auto');
   });
 });

@@ -18,7 +18,6 @@ import {
   matterDatesQuery,
   matterFilesQuery,
   mattersQuery,
-  productMattersQuery,
   productsQuery,
   riskQuery,
   risksQuery,
@@ -243,7 +242,6 @@ describe('One product @n:re:product', () => {
   it('adds and removes an agreement, a repository and a vendor, the whole set sent', async () => {
     const sent = serve((_url, method) => (method === 'POST' ? ok({ product }) : nothing()));
     queryClient.setQueryData(productsQuery.queryKey, { products: [product] } as unknown as ProductList);
-    queryClient.setQueryData(productMattersQuery('garden-kit').queryKey, []);
     show((s) => <ProductsPage search={s} />, '/company/products?panel=garden-kit');
     const panel = await screen.findByRole('complementary', { name: 'Garden kit' });
     expect(href(within(panel).getByText('Terms of sale, v4'))).toBe('/library/f1');
@@ -257,15 +255,12 @@ describe('One product @n:re:product', () => {
     await waitFor(() => expect(sent[2]).toEqual({ url: '/api/v2/products/garden-kit', method: 'POST', body: { repositories: [] } }));
   });
 
-  it('renames from ⋯ and lists its matters, each opening its task', async () => {
+  it('renames from ⋯, its record holding Agreement, Code and Depends on only', async () => {
     const sent = serve((_url, method) => (method === 'POST' ? ok({ product: { ...product, name: 'Raised bed kit' } }) : nothing()));
     queryClient.setQueryData(productsQuery.queryKey, { products: [product] } as unknown as ProductList);
-    queryClient.setQueryData(productMattersQuery('garden-kit').queryKey, [matter('t1', 'Refund dispute A'), matter('t2', 'Refund dispute B', { status: 'done' })]);
     show((s) => <ProductsPage search={s} />, '/company/products?panel=garden-kit');
     const panel = await screen.findByRole('complementary', { name: 'Garden kit' });
-    const matters = within(panel).getByRole('region', { name: 'Matters' });
-    expect(href(within(matters).getByText('Refund dispute A'))).toBe('/tasks/p1/7');
-    expect(within(matters).getByText('Closed')).toBeTruthy();
+    expect(within(panel).getAllByRole('region').map((r) => r.getAttribute('aria-label'))).toEqual(['Agreement', 'Code', 'Depends on']);
     fireEvent.click(within(panel).getByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }));
     const name = within(panel).getByRole('textbox', { name: 'Name' });
@@ -440,8 +435,8 @@ describe('Org @s309', () => {
     const g = (id: string, name: string, over: Partial<Team> = {}): Team => ({ id, name, parent: '', order: 0, people: [], bots: [], bot_slugs: [], ...over });
     queryClient.setQueryData(groupsQuery.queryKey, [g('sales', 'Sales', { order: 1, people: ['ana'] }), g('built-in', 'Built-in', { order: 2, bots: ['assistant'], bot_slugs: ['assistant'] })]);
     show(strategy('org'), '/company/strategy/org');
-    const built = await screen.findByRole('treeitem', { name: 'Built-in' });
-    expect(within(screen.getByRole('treeitem', { name: 'Sales' })).getByText('Ana Ruiz')).toBeTruthy();
+    const built = await screen.findByRole('region', { name: 'Built-in' });
+    expect(within(screen.getByRole('region', { name: 'Sales' })).getByText('Ana Ruiz')).toBeTruthy();
     expect(within(built).queryByText('Assistant')).toBeNull();
     fireEvent.click(within(built).getByRole('button', { name: /^Built-in/ }));
     expect(within(built).getByText('Assistant')).toBeTruthy();

@@ -133,13 +133,14 @@ describe('editing a doc', () => {
     });
     queryClient.setQueryData(docQuery('d1').queryKey, full);
     queryClient.setQueryData(docVersionsQuery('d1').queryKey, []);
-    at('/library/d1?edit=1', <DocPage doc="d1" search={{ edit: 1 }} />);
+    at('/library/d1', <DocPage doc="d1" search={{}} />);
+    fireEvent.focus(await screen.findByLabelText('Text'));
     const text = await screen.findByRole('textbox', { name: 'Text' });
     fireEvent.change(text, { target: { value: 'My text' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.blur(text);
     await waitFor(() => expect(queryClient.getQueryData<{ version: number }>(docQuery('d1').queryKey)?.version).toBe(4));
     expect(screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Text' }).value).toBe('My text');
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.blur(screen.getByRole('textbox', { name: 'Text' }));
     await waitFor(() => expect(patches).toHaveLength(2));
     expect(patches).toEqual([
       { version: 3, body: 'My text' },
@@ -186,18 +187,18 @@ describe('docs list', () => {
     expect(repotting.querySelector('.tie')?.textContent).toBe('How to');
   });
 
-  it('keeps the owner’s face in a phone’s head, so Docs and Skills can open a chat', async () => {
+  it('puts the owner’s face in the head, opening their chat; a phone’s head keeps only search, the filled button and ⋯', async () => {
     serve();
     queryClient.setQueryData(['settings', 'page-owners'], { docs: { bot: 'fern-librarian' }, skills: { bot: 'fern-ops' } });
     queryClient.setQueryData(docsListQuery.queryKey, { docs: [doc('d1', 'Fern index')], next_cursor: null });
     at('/library/docs', <DocsPage search={{}} />);
     const face = await screen.findByRole('link', { name: /^Chat with/ });
-    expect(face.closest('[data-phone]')).toBeTruthy();
+    expect(face.closest('[data-phone]')).toBeNull();
     expect(face.getAttribute('href')).toContain('chat=');
     cleanup();
     queryClient.setQueryData(skillsQuery.queryKey, []);
     at('/library/skills', <SkillsPage search={skillsSearch({})} />);
-    expect((await screen.findByRole('link', { name: /^Chat with/ })).closest('[data-phone]')).toBeTruthy();
+    expect((await screen.findByRole('link', { name: /^Chat with/ })).closest('[data-phone]')).toBeNull();
   });
 });
 
@@ -271,16 +272,15 @@ describe('install a skill', () => {
     ]);
   });
 
-  it('offers Install first on a skill nobody has @s831', async () => {
+  it('offers Install from the skill’s ⋯ @s831', async () => {
     serve(() => ({ files: [] }));
     const v = { number: 1, approved_at: '2026-11-01T00:00:00Z', approved_by_id: 'human:me' };
     queryClient.setQueryData(skillQuery('triage').queryKey, { skill: { id: 's1', name: 'triage', description: '', latest: v }, versions: [v], installs: [] } as never);
     queryClient.setQueryData(skillUsageQuery.queryKey, []);
     queryClient.setQueryData(installTargetsQuery.queryKey, { me: { type: 'Human', id: 'me' }, bots: [{ id: 'b1', name: 'Helper' }], people: [], teams: [] });
     at('/library/skills?skill=triage', <SkillsPage search={{ skill: 'triage' }} />);
-    const install = await screen.findByRole('button', { name: 'Install' });
-    expect(install.className).toContain('btn-fill');
-    fireEvent.click(install);
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Install' }));
     expect(await screen.findByRole('dialog', { name: 'Install triage' })).toBeTruthy();
   });
 });

@@ -1,14 +1,15 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { useEffect, useState } from 'react';
-import { Conversation, Message } from '@/conversation';
+import { useState } from 'react';
+import { Conversation, Message, MessageBones } from '@/conversation';
 import { callCard } from '@/features/calls/exports';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Count } from '@/kit/Count';
 import { Empty } from '@/kit/Empty';
-import { Search } from '@/kit/Field';
+import { SettledSearch } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
+import { IconButton } from '@/kit/IconButton';
 import { MenuItem } from '@/kit/Menu';
 import { Row, ThreadRow } from '@/kit/Row';
 import { VirtualList } from '@/kit/VirtualList';
@@ -21,20 +22,18 @@ import { catchUpQuery, threadListQuery, threadQuery, threadSearchQuery, type Cat
 import { ThreadHead } from './ThreadHead';
 import './threads.css';
 
-/** The list's tabs: Threads, Mail and Messaging are one place. `here` keeps Threads on while a thread is open. */
-export function threadTabs(here: string): PageTab[] {
+/** The list's tabs: Threads, Mail and Messaging are one place. `here` keeps Threads on while a thread is open.
+    Threads counts what Catch up holds; the server has no unread count for mail or texts. */
+export function useThreadTabs(here: string): PageTab[] {
+  const n = useQuery(catchUpQuery).data?.count;
   return [
-    { label: 'Threads', to: here, target: 'tab:threads' },
+    { label: 'Threads', to: here, target: 'tab:threads', count: n || undefined },
     { label: 'Mail', to: '/threads/mail', target: 'tab:mail' },
     { label: 'Messaging', to: '/threads/messaging', target: 'tab:messaging' },
   ];
 }
 
-export const NewButton = () => (
-  <Button variant="primary" icon="edit" onClick={() => void press('threads.compose', {})}>
-    New message
-  </Button>
-);
+export const NewButton = () => <IconButton icon="edit" label="New message" data-phone onClick={() => void press('threads.compose', {})} />;
 
 export interface ThreadsPageProps {
   /** What the reading column holds: Catch up, New message, or the thread `thread`. */
@@ -52,21 +51,11 @@ const SEARCH_WAIT_MS = 200;
 export function ThreadsPage({ pane, thread, q = '', open = false }: ThreadsPageProps) {
   const list = useInfiniteQuery(threadListQuery);
   const draft = useNewDraft();
-  const [words, setWords] = useState(q);
+  const tabs = useThreadTabs(pane === 'thread' && thread ? `/threads/${encodeURIComponent(thread)}` : pane === 'new' ? '/threads/new' : '/threads');
   const [browsing, setBrowsing] = useState(false);
   const navigate = useNavigate();
-  useEffect(() => {
-    const next = words.trim();
-    if (next === q) return;
-    const t = setTimeout(
-      () => void navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, q: next || undefined }) as never, replace: true }),
-      SEARCH_WAIT_MS,
-    );
-    return () => clearTimeout(t);
-  }, [words, q, navigate]);
 
   const all = rowsOf(list.data);
-  const here = pane === 'thread' && thread ? `/threads/${encodeURIComponent(thread)}` : pane === 'new' ? '/threads/new' : '/threads';
   const keep = q ? `?q=${encodeURIComponent(q)}` : '';
   const state = list.isPending ? 'loading' : list.isError ? 'fault' : all.length === 0 && !open && !q ? 'empty' : 'ready';
   const more = () => {
@@ -111,13 +100,22 @@ export function ThreadsPage({ pane, thread, q = '', open = false }: ThreadsPageP
           <MenuItem label="Learned" icon="spark" onSelect={() => void press('learned.open', {})} />
         </PageMore>
       }
-      search={<Search label="Find a thread" placeholder="Find a thread" value={words} onValueChange={setWords} wide />}
-      tabs={threadTabs(here)}
+      search={
+        <SettledSearch
+          label="Find a thread"
+          placeholder="Find a thread"
+          value={q}
+          onSettle={(next) => void navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, q: next || undefined }) as never, replace: true })}
+          wait={SEARCH_WAIT_MS}
+          wide
+        />
+      }
+      tabs={tabs}
       list={listNode}
       listLabel="Threads"
       open={open}
       state={state}
-      empty={{ title: 'No threads yet' }}
+      empty={{ title: 'No threads yet', action: <Button onClick={() => void press('threads.compose', {})}>New message</Button> }}
       onRetry={() => void list.refetch()}
       {...item}
     />
@@ -221,38 +219,52 @@ const BACK = { to: '/threads', label: 'Threads' };
 function CatchUpHead() {
   const { data } = useQuery(catchUpQuery);
   const ids = data?.items.map((i) => i.thread.id) ?? [];
+  const [browsing, setBrowsing] = useState(false);
   return (
-    <ItemHead
-      title="Catch up"
-      target="page:/threads/catch-up"
-      back={BACK}
-      actions={
-        <>
-          {!!data?.count && <Count n={data.count} className="conv-n" label={`${data.count} new`} />}
-          {ids.length > 0 && <Button onClick={() => void press('threads.markRead', { threads: ids })}>Mark read</Button>}
-        </>
-      }
-    />
+    <>
+      <ItemHead
+        title="Catch up"
+        target="page:/threads/catch-up"
+        back={BACK}
+        actions={
+          <>
+            {!!data?.count && <Count n={data.count} className="conv-n" label={`${data.count} new`} />}
+            {ids.length > 0 && (
+              <Button variant="primary" onClick={() => void press('threads.markRead', { threads: ids })}>
+                Mark read
+              </Button>
+            )}
+          </>
+        }
+        more={
+          <PageMore>
+            <MenuItem label="Browse threads" icon="search" onSelect={() => setBrowsing(true)} />
+          </PageMore>
+        }
+      />
+      {browsing && <Browse onClose={() => setBrowsing(false)} />}
+    </>
   );
 }
 
 function CatchUpBody() {
   const { data, isPending, isError, refetch } = useQuery(catchUpQuery);
-  if (isPending) return null;
+  if (isPending) return <MessageBones label="Loading Catch up" className="lt-bones" />;
   if (isError)
     return (
       <Empty icon="alert" title="Catch up did not load">
-        <Button onClick={() => void refetch()}>
-          Try again
-        </Button>
+        <Button onClick={() => void refetch()}>Try again</Button>
       </Empty>
     );
   if (data.items.length === 0) return <Empty title="Nothing new" />;
+  // The server sends 20 at most; the rest come in as these are read.
+  const rest = data.count - data.items.length;
   return (
     <div className="cu-list">
       {data.items.map((it) => (
         <CatchUpGroup key={it.thread.id} it={it} />
       ))}
+      {rest > 0 && <p className="tl-more">{rest} more</p>}
     </div>
   );
 }

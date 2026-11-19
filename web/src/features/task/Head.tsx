@@ -6,7 +6,6 @@ import { meQuery, useActor, useActors } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
-import { DatePick } from '@/kit/DatePick';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
@@ -18,7 +17,8 @@ import { PageMore } from '@/pagekinds';
 import { pipelinesQuery } from '@/features/tasks/routing';
 import { whoHref } from '@/features/team/routing';
 import { earlierStages, failedToast, reasonOf, refusalOf, tabAddress, type Refusal } from './model';
-import { Face, FlowMark, Go, Mark } from './parts';
+import { FlowMark } from '@/kit/FlowMark';
+import { Face, Go, Mark } from './parts';
 import { pipelineStagesQuery, waitingQuery, type TaskData } from './queries';
 
 /* The head's controls: the where line (pipeline › stage pick, owner pick, time in the stage, Late), Flow's previous
@@ -243,15 +243,13 @@ export function FlowTop({ t }: { t: TaskData }) {
   );
 }
 
-type Asking = 'due' | 'tags' | 'move' | 'reopen' | 'delete' | null;
+type Asking = 'move' | 'reopen' | 'delete' | null;
 
-/** "⋯": due, tags, done; in Flow, Give to and Move back, after which Flow goes on to the next task. Then the old task
+/** "⋯": snooze, done (the due date and tags edit in Details); in Flow, Give to and Move back, after which Flow goes on to the next task. Then the old task
     window's rest (ui/app/task-props.ts): watch the agent's session, copy the link, move to another pipeline,
     reopen with a reason, delete. Reopen and Delete ask first. */
 export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
   const [asking, setAsking] = useState<Asking>(null);
-  const [due, setDue] = useState<Date | null>(null);
-  const [tags, setTags] = useState('');
   const [why, setWhy] = useState('');
   const [to, setTo] = useState<{ pipeline: string; name: string; stage: string | null } | null>(null);
   const navigate = useNavigate();
@@ -270,8 +268,6 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
   const open = (what: Exclude<Asking, null>) => {
     setError('');
     setWhy('');
-    setDue(t.due_at ? new Date(t.due_at) : null);
-    setTags(t.labels.join(', '));
     setAsking(what);
   };
   const press = async (id: string, input: object) => {
@@ -290,7 +286,6 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
     if (r.ok) order.next();
     else failed(r);
   };
-  const day = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   const close = () => setAsking(null);
   const copyLink = async () => {
     try {
@@ -324,8 +319,6 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
             <MenuRule />
           </>
         )}
-        <MenuItem label="Due date" icon="calendar" onSelect={() => open('due')} />
-        <MenuItem label="Tags" icon="rules" onSelect={() => open('tags')} />
         {t.status === 'open' && (
           <>
             {t.snoozed ? (
@@ -429,39 +422,6 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
         {error && <p className="an-err">{error}</p>}
       </Dialog>
 
-      <Dialog
-        open={asking === 'due'}
-        onOpenChange={(o) => !o && close()}
-        title="Due date"
-        actions={
-          <>
-            {t.due_at && <Button onClick={() => void press('task.setDue', { due: null })}>Clear</Button>}
-            {cancel}
-            <Button variant="primary" busy={busy} disabled={!due || busy} onClick={() => due && void press('task.setDue', { due: day(due) })}>
-              Save
-            </Button>
-          </>
-        }
-      >
-        <DatePick label="Due" labelHidden withTime={false} value={due} onValueChange={setDue} error={!!error} />
-        {error && <p className="an-err">{error}</p>}
-      </Dialog>
-
-      <Dialog
-        open={asking === 'tags'}
-        onOpenChange={(o) => !o && close()}
-        title="Tags"
-        actions={
-          <>
-            {cancel}
-            <Button variant="primary" busy={busy} disabled={busy} onClick={() => void press('task.tag', { labels: tagsOf(tags) })}>
-              Save
-            </Button>
-          </>
-        }
-      >
-        <Field label="Tags" labelHidden wide autoFocus placeholder="bug, checkout" value={tags} onValueChange={setTags} error={error || undefined} />
-      </Dialog>
     </>
   );
 }

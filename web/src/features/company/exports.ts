@@ -6,7 +6,7 @@ export { CompanyPage, type CompanySearch } from './CompanyPage';
 export { StrategyPage, STRATEGY_TABS, strategyTabs, type StrategySearch, type StrategyTab } from './StrategyPage';
 export type { GoalsSearch } from './GoalsPage';
 export { ProductsPage, type ProductsSearch } from './ProductsPage';
-export { RiskPage, riskTabs, type RiskSearch, type RiskView } from './RiskPage';
+export { RiskPage, type RiskSearch, type RiskView } from './RiskPage';
 export { floorQuery, goalsTreeQuery, productsQuery, risksQuery, riskQuery, strategyQuery, type TreeGoal } from './queries';
 export {
   loadCompany,

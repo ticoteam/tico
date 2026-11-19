@@ -15,7 +15,7 @@ import { MenuItem } from '@/kit/Menu';
 import { fmtDate } from '@/lib';
 import { List, PageMore, Record as RecordPage, Section, type PageTab } from '@/pagekinds';
 import { LISTENING } from './actions';
-import { Face, Find, HeadSwitch, press, pressOut, RemoveItem, RuleRow, useConfirmRemove, Verb, Word } from './parts';
+import { Face, Find, HeadSwitch, PageOwner, press, pressOut, RemoveItem, Rows, RuleRow, useConfirmRemove, Verb, Word } from './parts';
 import { matchesQuery, runsQuery, sourcesQuery, watchesQuery, watchQuery } from './queries';
 import { runLink } from './RoutinePanel';
 import type { ListenSource, Match, Routine, WatchSource } from './types';
@@ -73,6 +73,7 @@ function Watches({ q }: { q?: string }) {
       search={<Find label="Search watches" value={q} onFind={(words) => void press('listening.list', { q: words })} />}
       actions={
         <>
+          <PageOwner page="listening" />
           {add}
           <AddWatch open={adding} onOpenChange={setAdding} />
         </>
@@ -149,6 +150,7 @@ function AddWatch({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boo
 function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: string }) {
   const one = useQuery(watchQuery(id));
   const listed = useQuery(watchesQuery).data?.find((w) => w.id === id);
+  const matches = useQuery({ ...matchesQuery(id), enabled: tab !== 'sources' });
   const w = one.data ?? listed;
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -169,12 +171,19 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
     return <RecordPage {...head} state={one.isPending ? 'loading' : 'fault'} onRetry={() => void one.refetch()} />;
   }
   const on = isOn(w);
+  const found = matches.data ?? [];
   return (
     <RecordPage
       {...head}
+      state={tab === 'sources' ? 'ready' : matches.isPending ? 'loading' : matches.isError ? 'fault' : found.length ? 'ready' : 'empty'}
+      onRetry={() => void matches.refetch()}
+      empty={{ title: 'No matches yet' }}
       actions={
         <>
-          <HeadSwitch label={on ? 'On' : 'Paused'} checked={on} disabled={tmp} onChange={(next) => void press(next ? 'listening.resume' : 'listening.pause', { watch: id })} />
+          <PageOwner page="listening" />
+          <span className="rr-phone" data-phone>
+            <HeadSwitch label={on ? 'On' : 'Paused'} checked={on} disabled={tmp} onChange={(next) => void press(next ? 'listening.resume' : 'listening.pause', { watch: id })} />
+          </span>
           <Button variant="primary" onClick={() => setAdding(true)}>
             Add source
           </Button>
@@ -189,7 +198,7 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
           <RemoveItem disabled={tmp} onSelect={() => remove.confirm(w.name || 'this watch', () => void press('listening.remove', { watch: id }))} />
         </PageMore>
       }
-      sections={tab === 'sources' ? <Sources w={w} /> : <Matches id={id} open={match} />}
+      sections={tab === 'sources' ? <Sources w={w} /> : <Matches id={id} list={found} open={match} />}
     />
   );
 }
@@ -202,22 +211,12 @@ function dayOf(iso: string): 'Today' | 'Yesterday' | 'Earlier' {
   return t >= start.getTime() ? 'Today' : t >= start.getTime() - DAY ? 'Yesterday' : 'Earlier';
 }
 
-function Matches({ id, open }: { id: string; open?: string }) {
-  const q = useQuery(matchesQuery(id));
-  const list = q.data ?? [];
-  if (q.isError) return <Word>Matches did not load</Word>;
-  if (q.isPending) return null;
-  if (!list.length) {
-    return (
-      <Section name="Matches" count={0}>
-        <p className="row-sub rr-none">No matches yet</p>
-      </Section>
-    );
-  }
+/** The watch's matches by day; the page draws loading, fault and none. */
+function Matches({ id, list, open }: { id: string; list: Match[]; open?: string }) {
   const groups = (['Today', 'Yesterday', 'Earlier'] as const).map((d) => [d, list.filter((m) => dayOf(m.posted_at ?? m.created_at) === d)] as const).filter(([, ms]) => ms.length);
   return groups.map(([d, ms]) => (
     <Section key={d} name={d} count={ms.length} target={`section:${d}`}>
-      {ms.map((m) => (m.id === open ? <MatchOpen key={m.id} watch={id} m={m} /> : <MatchRow key={m.id} watch={id} m={m} />))}
+      <Rows label={d} items={ms} getKey={(m) => m.id} draw={(m) => (m.id === open ? <MatchOpen key={m.id} watch={id} m={m} /> : <MatchRow key={m.id} watch={id} m={m} />)} />
     </Section>
   ));
 }

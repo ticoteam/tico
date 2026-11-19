@@ -14,6 +14,7 @@ import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { TaskRow } from '@/kit/Row';
 import { Table, Td, Th } from '@/kit/Table';
 import { FilterRow, List, PageMore, Section, type FilterChip, type PageState } from '@/pagekinds';
+import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
 import { NewTask } from './NewTask';
 import { Face, markOf, taskHref } from './parts';
 import { pipelinesQuery, tagKeyOf, tagQuery, tagsQuery, type Pipeline, type TaskItem } from './queries';
@@ -230,12 +231,12 @@ export function TagPage({ tag }: { tag: string }) {
           <>
             {groups.map((g) => (
               <Section key={g.pipe?.id ?? 'none'} name={g.pipe?.name ?? 'Tasks'} count={g.rows.length}>
-                {g.rows.map(row)}
+                <Capped list={g.rows} cap={LIST_CAP} show={LIST_SHOW} height={ROW_H} more={undefined} draw={row} moreRow={(n, open) => <RowMore key="more" n={n} onClick={open} />} />
               </Section>
             ))}
             {done.length > 0 && (
               <Section name="Done" count={done.length} defaultOpen={false}>
-                {done.map(row)}
+                <Capped list={done} cap={LIST_CAP} show={LIST_SHOW} height={ROW_H} more={undefined} draw={row} moreRow={(n, open) => <RowMore key="more" n={n} onClick={open} />} />
               </Section>
             )}
             {detail.data?.next_offset != null && (

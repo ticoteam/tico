@@ -92,8 +92,8 @@ describe('System jobs @s513', () => {
     expect(sent[0]!.body).toEqual({ preset: 'daily' });
     expect(sent[0]!.url).toContain('/api/v2/system-routines/kpi_asks');
 
-    // the time beside Daily at, sent alone
-    await pick('KPI asks time', '14:30');
+    // the time beside Daily at, in 12-hour words, sent alone
+    await pick('KPI asks time', '2:30 PM');
     await waitFor(() => expect(sent).toHaveLength(2));
     expect(sent[1]).toMatchObject({ method: 'PUT', body: { at: '14:30' } });
 

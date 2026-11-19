@@ -23,8 +23,9 @@ export const FINANCE_TAB_IDS = FINANCE_TABS.map(([id]) => id) as unknown as read
 
 export interface FinanceSearch {
   tab?: Exclude<FinanceTab, 'overview'>;
-  /** `line:<account>`, `budget:<id>` or `budget:new`. */
+  /** `line:<account>` or `budget:<id>`. */
   panel?: string;
+  /** The P&L's columns, and the span Budgets reads. */
   period?: Exclude<Period, 'month'>;
   basis?: 'cash';
   /** The statement's first month, YYYY-MM. */
@@ -43,8 +44,6 @@ export interface FinanceSearch {
   status?: TxStatus;
   /** Transactions on one P&L or balance sheet line (its account id). */
   line?: string;
-  /** Budgets and My budget for this month, YYYY-MM; this month when left out. */
-  month?: string;
 }
 
 /** A transaction's status, as GET /api/v2/finance/transactions filters it. */
@@ -93,7 +92,6 @@ export function validateFinanceSearch(raw: Record<string, unknown>): FinanceSear
   if (panel && PANEL.test(panel)) out.panel = panel;
   if (panel && BOOK_PANEL.test(panel)) out.panel = panel;
   if (panel && ADMIN_PANEL.test(panel)) out.panel = panel;
-  if (isYm(raw.month)) out.month = raw.month;
   if (raw.asof === 'month' || raw.asof === 'year') out.asof = raw.asof;
   if (raw.src === 'feed' || raw.src === 'entry') out.src = raw.src;
   const status = TX_STATUSES.find((v) => v === raw.status);

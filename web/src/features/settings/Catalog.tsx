@@ -64,7 +64,7 @@ export function Tasks() {
       <AskSection />
       <Section name="Public roadmap" count={r.labels.length} actions={add} target="setting:roadmap">
         {r.labels.length === 0 ? (
-          <Empty title="Nothing public" text="Tasks with a label added here show on a public page." />
+          <Empty title="Nothing public" />
         ) : (
           r.labels.map((key) => (
             <div key={key} className="row g-road" title={name(key)} data-target={`roadmap:${key}`}>

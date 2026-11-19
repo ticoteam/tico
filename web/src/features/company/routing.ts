@@ -18,9 +18,8 @@ const whole = (v: unknown) => {
   return typeof n === 'number' && Number.isInteger(n) && n > 0 ? n : undefined;
 };
 const yes = (v: unknown) => (v === true || v === 'true' || v === '1' ? true : undefined);
-/** Strategy and its tabs: `?panel=`, and on Strategy and Brand `?v=` a past version, `?compare` marks what changed
-    from the version before, `?edit` the brand draft. */
-export const strategySearch = (s: Record<string, unknown>): StrategySearch => ({ panel: text(s.panel), v: whole(s.v), compare: yes(s.compare), edit: yes(s.edit) });
+/** Strategy and its tabs: `?panel=`, and on Strategy and Brand `?v=` a past version, `?edit` the brand draft. */
+export const strategySearch = (s: Record<string, unknown>): StrategySearch => ({ panel: text(s.panel), v: whole(s.v), edit: yes(s.edit) });
 /** Risk: `?risk=` opens one risk as its own page; `?panel=` a matter or the new-risk form. */
 export const riskSearch = (s: Record<string, unknown>): { risk?: string; panel?: string } => ({ risk: text(s.risk), panel: text(s.panel) });
 /** A Strategy tab from the address; anything else is the Strategy page itself. */

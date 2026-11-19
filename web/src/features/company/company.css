@@ -121,8 +121,8 @@
 .co .bet::before{counter-increment:bet;content:counter(bet);color:var(--muted);font-variant-numeric:tabular-nums}
 .co .bet .pill{margin-top:calc(var(--s-0) / 2)}
 .co .brand-frame{margin-top:0}
-/* Where we play, Competitors, Related news: the market's rows as plain lines, each opening Market or the post (mock .play,
-   without its share column: the server has no number for it) */
+/* Where we play: the market's segments as plain lines, each opening Market (mock .play, without its share column: the
+   server has no number for it) */
 .co .play{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-3h);align-items:center;min-height:var(--row);border-top:1px solid var(--line);color:var(--ink);text-decoration:none}
 .co .play:first-of-type{border-top:0}
 .co .play .row-title{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
@@ -130,16 +130,9 @@
 .co a.play:hover .row-title{text-decoration:underline}
 .co .play-fault{display:flex;align-items:center;gap:var(--s-2);min-height:var(--row)}
 
-/* ---------- versions: the pick and the changes count in the head, the changes marked in place (files.css) ---------- */
-.co .chg-pick,.co .ver-pick{font-variant-numeric:tabular-nums}
-.co .ver-pick{gap:var(--s-1)}
+/* ---------- versions: the pick in the head; who wrote a suggestion and when ---------- */
+.co .ver-pick{gap:var(--s-1);font-variant-numeric:tabular-nums}
 .co .ver-pick .ico{width:14px;height:14px;color:var(--muted)}
-.co .chg-pick[aria-pressed="true"]{background:var(--selected);color:var(--ink)}
-.co .chg{position:relative}
-.co .read .chg+p{margin-top:var(--s-3h)}
-.co .chg:not(.bet)::before,.co .bet.chg::after{content:"";position:absolute;left:calc(-1 * var(--s-3h));top:3px;bottom:3px;width:2px;background:var(--ink-2)}
-.co .read ins{text-decoration:none;background:var(--selected);color:var(--ink);border-radius:var(--r-key);padding:var(--s-0) 0;box-decoration-break:clone}
-.co .read del{color:var(--muted);text-decoration:line-through}
 .co .chg-by{display:flex;align-items:center;gap:var(--s-1h);margin-top:var(--s-1h);color:var(--muted);font-size:var(--t-xs);line-height:var(--lh-meta)}
 .co .chg-by time{font-variant-numeric:tabular-nums}
 
@@ -208,6 +201,7 @@
 .co .oc-root::after,.co .oc-team::before,.co .oc-team::after,.co .oc-kids::before,.co .oc-row::before,.co .oc-sub::before{content:"";position:absolute;background:var(--ol);pointer-events:none}
 .co .oc-root::after{left:18px;top:42px;bottom:0;width:1px}
 .co .oc-me{display:flex;align-items:center;gap:var(--s-3);min-width:0;font-weight:var(--w-strong)}
+.co .oc-tico{display:flex;align-items:center;gap:var(--s-2h);min-width:0}
 .co .oc-team{position:relative;padding:var(--s-2) 0}
 .co .oc-team::before{left:18px;top:0;bottom:0;width:1px}
 .co .oc-team:last-child::before{bottom:auto;height:29px}
@@ -263,9 +257,20 @@
 .co .gk:hover .gk-name{color:var(--ink)}
 .co .gk-fig{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .co .gk-fig b{color:var(--ink);font-weight:var(--w-strong)}
-.co .gk-more,.co .gk-add{display:inline-flex;align-items:center;gap:var(--s-1h);justify-self:start}
-.co .gk-add .ico{width:14px;height:14px}
-.co .gk-more:hover,.co .gk-add:hover{color:var(--ink)}
+.co .gk-more{display:inline-flex;align-items:center;gap:var(--s-1h);justify-self:start}
+.co .gk-more:hover{color:var(--ink)}
+/* the company's top goal over the tree, with its reading on a thin meter (company.css goal-lead, meter) */
+.co .goal-lead{display:grid;grid-template-columns:minmax(0,1fr) 200px;column-gap:var(--s-6);align-items:end;padding:var(--s-1) var(--page-x) var(--s-3h);color:var(--ink)}
+.co .goal-name{display:flex;flex-direction:column;min-width:0}
+.co .goal-co{font-size:var(--t-sm);color:var(--muted)}
+.co .goal-title{margin-top:var(--s-1);font-family:var(--font-display);font-size:var(--t-lg);font-weight:var(--w-title);line-height:var(--lh-display);font-feature-settings:"ss09";letter-spacing:var(--track-title)}
+.co .goal-fig{display:grid;gap:var(--s-2)}
+.co .goal-fig>span:first-child{display:flex;align-items:baseline;justify-content:space-between;font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums}
+.co .goal-fig b{font-family:var(--font-display);font-size:var(--t-fig);font-weight:var(--w-title);line-height:var(--lh-display);font-feature-settings:"ss09";letter-spacing:var(--track-fig);color:var(--ink)}
+.co .meter{display:block;height:var(--s-1);border-radius:var(--r-pill);background:var(--line-strong);overflow:hidden}
+.co .meter i{display:block;width:var(--pct);height:100%;border-radius:var(--r-pill);background:var(--ink-2)}
+.pnl .pnl-title{font-size:var(--t-md);font-weight:var(--w-title);line-height:var(--lh-tight);margin:var(--s-0) 0 var(--s-2h);text-wrap:balance}
+.pnl .pnl-title .pill{display:inline-block;margin-left:var(--s-2);vertical-align:1px;font-weight:var(--w-text)}
 .co .trend{display:block;width:56px;height:16px}
 .co .trend path{fill:none;stroke:var(--muted);stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}
 .co .trend circle{fill:var(--ink-2)}
@@ -329,6 +334,7 @@
 }
 
 :where(html[data-layout="cards"]){
+  .co .goal-lead{grid-template-columns:minmax(0,1fr);row-gap:var(--s-3h)}
   .co .hall{grid-template-columns:minmax(0,1fr);padding:var(--s-3) 0 var(--s-1h)}
   .co .hall-head{flex-direction:row;justify-content:space-between;align-items:center;padding:0 0 var(--s-0)}
   /* The name takes its own line over the row, so the stage line gets the width between the two rates. The line is a

@@ -3,7 +3,7 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
-import { listeningStatsQuery, marketSpendQuery, strategyQuery, strategyVersionsQuery, type ListeningStats, type MarketSpend, type Strategy } from './queries';
+import { marketSpendQuery, strategyQuery, strategyVersionsQuery, type MarketSpend, type Strategy } from './queries';
 import { StrategyPage } from './StrategyPage';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -19,13 +19,6 @@ const spend = {
     { id: 'sg3', name: 'Schools', players: [] },
   ],
 } as unknown as MarketSpend;
-const news: ListeningStats = {
-  recent: [
-    { item_id: 'p1', source: 'reddit', text: 'Best balcony kit for a first garden?', url: 'https://example.test/p1' },
-    { item_id: 'p2', source: 'forum', text: 'A post with no link' },
-  ],
-};
-
 let asked = 0;
 function serve(status: number) {
   asked = 0;
@@ -58,7 +51,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-describe('Strategy: where we play, competitors and news @s304', () => {
+describe('Strategy: where we play @s304', () => {
   it('lists the market’s segments with their sizes, each opening its Market panel @s304', async () => {
     serve(404);
     queryClient.setQueryData(marketSpendQuery.queryKey, spend);
@@ -72,43 +65,18 @@ describe('Strategy: where we play, competitors and news @s304', () => {
     expect(screen.queryByText(/%$/)).toBeNull();
   });
 
-  it('lists each competitor once from the players, linked to its Market note @s304', async () => {
-    serve(404);
-    queryClient.setQueryData(marketSpendQuery.queryKey, spend);
-    show();
-    expect(await screen.findByRole('button', { name: 'Competitors' })).toBeTruthy();
-    const sprout = screen.getAllByText('Sprout Co');
-    expect(sprout).toHaveLength(1);
-    expect(href(sprout[0]!)).toBe('/company/strategy/market?panel=player:e1');
-    expect(href(screen.getByText('Leafbox'))).toBe('/company/strategy/market?panel=player:e2');
-  });
-
-  it('shows Listening’s linked posts as Related news, opening where they were written @s304', async () => {
-    serve(404);
-    queryClient.setQueryData(marketSpendQuery.queryKey, spend);
-    queryClient.setQueryData(listeningStatsQuery.queryKey, news);
-    show();
-    const post = await screen.findByText('Best balcony kit for a first garden?');
-    expect(post.closest('a')?.getAttribute('href')).toBe('https://example.test/p1');
-    expect(screen.getByRole('button', { name: 'Related news' })).toBeTruthy();
-    expect(screen.queryByText('A post with no link')).toBeNull();
-  });
-
-  it('says None yet when the market has no segments, and leaves Related news out when Listening has nothing @s304', async () => {
+  it('says None yet when the market has no segments @s304', async () => {
     serve(404);
     queryClient.setQueryData(marketSpendQuery.queryKey, { segments: [] } as unknown as MarketSpend);
-    queryClient.setQueryData(listeningStatsQuery.queryKey, null);
     show();
     expect(await screen.findByRole('button', { name: 'Where we play' })).toBeTruthy();
-    expect(screen.getAllByText('None yet')).toHaveLength(2);
-    expect(screen.queryByRole('button', { name: 'Related news' })).toBeNull();
+    expect(screen.getAllByText('None yet')).toHaveLength(1);
   });
 
   it('offers Try again when the market did not load, and reads it again @s304', async () => {
     serve(500);
     show();
-    expect(await screen.findByRole('img', { name: 'Market did not load' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Competitors' })).toBeNull();
+    expect(await screen.findByText('Market did not load')).toBeTruthy();
     serve(200);
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByText('Balcony growers')).toBeTruthy();

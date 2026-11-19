@@ -13,6 +13,10 @@
 .mate-name{min-width:0;padding:0 var(--s-4) 0 var(--s-2h);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .mate-now{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted)}
 .mate .count{text-align:right}
+.mate.is-seat .mate-name{color:var(--ink-2)}
+/* an open seat: an agent's shape nobody fills yet, a dashed outline (mates.css) */
+.av.is-seat{background:none;border:1.5px dashed var(--faint)}
+.av-22.is-seat{border-width:1.25px}
 
 /* ---------- history row ---------- */
 .hist{grid-template-columns:24px minmax(0,1fr) auto 64px 60px 168px}
@@ -55,11 +59,9 @@
 .read ul,.read ol{padding-left:var(--s-5);display:grid;gap:var(--s-1)}
 .read li::marker{color:var(--muted)}
 
-/* ---------- seg of words: the model picker's harness and effort ---------- */
-.seg.is-text{display:flex;width:100%;background:var(--dock-field)}
-.seg.is-text button{flex:1 1 auto;width:auto;padding:0 var(--s-2);display:block;font-size:var(--t-sm);white-space:nowrap;text-align:center}
-.seg.is-text .is-on{font-weight:var(--w-strong)}
-.seg.is-text .is-off{opacity:.42;pointer-events:none}
+/* ---------- seg of words filling its row: the model picker's harness and effort ---------- */
+.seg.is-fill{display:flex;width:100%;background:var(--dock-field)}
+.seg.is-fill button{flex:1 1 auto}
 
 /* ---------- a fact that is a link ---------- */
 .fact-link{display:inline-flex;align-items:center;gap:calc(var(--s-1h) + 1px);min-width:0;border-radius:var(--r-chip)}
@@ -191,6 +193,9 @@ button.add-pick:hover,button.add-person:hover,button.tpl:hover,button.tpl.is-on{
 .bm{grid-template-columns:24px var(--av-sm) 196px minmax(0,1fr) auto 208px;column-gap:0}
 .bm .mate-name:hover{text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--faint)}
 .bm .row-pills{padding:0 var(--s-3)}
+/* the "All agents" row: a quiet mark where a face would be */
+.comp-all{display:grid;place-items:center;color:var(--muted)}
+.comp-all .ico{width:var(--ico-sm);height:var(--ico-sm);stroke-width:1.8}
 .m-pick{width:208px;height:var(--ctl-sm);font-size:var(--t-sm)}
 .m-pick .ico{width:14px;height:14px}
 

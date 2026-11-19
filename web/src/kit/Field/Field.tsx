@@ -1,8 +1,9 @@
-import { useRef, type ComponentProps, type PointerEvent, type Ref } from 'react';
+import { useEffect, useEffectEvent, useRef, useState, type ComponentProps, type PointerEvent, type Ref } from 'react';
 import { Field as BaseField } from '@base-ui/react/field';
 import { Input } from '@base-ui/react/input';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { useCards } from '@/kit/Popover';
 
 type IconName = ComponentProps<typeof Icon>['name'];
 
@@ -144,4 +145,37 @@ export function Search({ label, value, onValueChange, placeholder, wide = false,
       )}
     </div>
   );
+}
+
+export type SettledSearchProps = Omit<SearchProps, 'value' | 'onValueChange'> & {
+  /** The words that count now (the address's `?q=`). */
+  value: string;
+  /** The trimmed words, once typing has paused for `wait` ms. */
+  onSettle: (words: string) => void;
+  wait?: number;
+  /** A page head's search: it starts as a search button with this label, and opens into the field when pressed.
+      Words in the address open it at once; a phone, where the field has its own line, always shows the field. */
+  button?: string;
+};
+
+/** A search a step behind the typing: the address (and the server) hear the words once they settle. The field follows
+    `value` when it changes from elsewhere (Back, Tico). */
+export function SettledSearch({ value, onSettle, wait = 250, button, ...rest }: SettledSearchProps) {
+  const cards = useCards();
+  const [open, setOpen] = useState(!button || !!value);
+  const [words, setWords] = useState(value);
+  const [seen, setSeen] = useState(value);
+  if (seen !== value) {
+    setSeen(value);
+    if (value !== words.trim()) setWords(value);
+  }
+  const settle = useEffectEvent(onSettle);
+  useEffect(() => {
+    const next = words.trim();
+    if (next === value) return;
+    const t = setTimeout(() => settle(next), wait);
+    return () => clearTimeout(t);
+  }, [words, value, wait]);
+  if (!open && !cards) return <IconButton icon="search" label={button ?? rest.label} onClick={() => setOpen(true)} />;
+  return <Search autoFocus={!!button && !cards} {...rest} value={words} onValueChange={setWords} />;
 }

@@ -12,8 +12,10 @@ import { Link } from '@/kit/Link';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Row } from '@/kit/Row';
 import { Document, FilterRow, List, Section, type PageState } from '@/pagekinds';
+import { SectionHead } from '@/kit/SectionHead';
+import { VirtualList } from '@/kit/VirtualList';
 import { FileGet, linkOf, Preview } from './FileViewer';
-import { ChatWith, Face, Find, KindGlyph, More, press, size, when, Who } from './parts';
+import { Face, Find, KindGlyph, OwnerButton, press, refused, size, when, Who } from './parts';
 import { fileQuery, fileSearchQuery, filesQuery, fileUrl, fileVersionsQuery, type FileRow } from './queries';
 import type { FilesSearch } from './search';
 import './library.css';
@@ -31,6 +33,8 @@ const KINDS = [
 ] as const;
 
 const DAY = 86_400_000;
+
+type Item = { k: 'head'; name: string; n: number } | { k: 'file'; f: FileRow };
 
 function bucket(at: string, now: number): 'Today' | 'This week' | 'Earlier' {
   const age = now - new Date(at).getTime();
@@ -63,12 +67,20 @@ function FilesList({ search }: { search: FilesSearch }) {
   const searching = !!search.q && search.q.trim().length > 1;
   // Grouped against when the page opened, so the groups do not shift while it is read.
   const [now] = useState(() => Date.now());
-  const groups = (['Today', 'This week', 'Earlier'] as const)
-    .map((name) => [name, rows.filter((f) => bucket(f.last_activity_at, now) === name)] as const)
-    .filter(([, list]) => list.length);
+  const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
+  const items: Item[] = (['Today', 'This week', 'Earlier'] as const).flatMap((name) => {
+    const list = rows.filter((f) => bucket(f.last_activity_at, now) === name);
+    if (!list.length) return [];
+    return [{ k: 'head' as const, name, n: list.length }, ...(folded.has(name) ? [] : list.map((f) => ({ k: 'file' as const, f })))];
+  });
+  const fold = (name: string) => {
+    const next = new Set(folded);
+    if (!next.delete(name)) next.add(name);
+    setFolded(next);
+  };
 
   let state: PageState = 'ready';
-  if (files.isError) state = 'fault';
+  if (files.isError) state = refused(files.error);
   else if (!files.data) state = 'loading';
   else if (!rows.length && !kind && !searching) state = 'empty';
 
@@ -109,6 +121,7 @@ function FilesList({ search }: { search: FilesSearch }) {
                 <MenuItem key={k} label={label} on={k === kind} onSelect={() => void press('files.list', { kind: k, q: search.q })} />
               ))}
             </Menu>
+            <OwnerButton page="docs" />
             <Button variant="primary" icon="plus" onClick={() => input.current?.click()} data-target="files:add">
               Add
             </Button>
@@ -136,16 +149,22 @@ function FilesList({ search }: { search: FilesSearch }) {
               {found.data && !found.data.results.length && <Empty title="Nothing matches" />}
             </Section>
           ) : rows.length ? (
-            <>
-              {groups.map(([name, list]) => (
-                <Section key={name} name={name} count={list.length}>
-                  {list.map((f) => (
-                    <FileLine key={f.id} f={f} href={fileHref(search, f.id)} />
-                  ))}
-                </Section>
-              ))}
-              {files.hasNextPage && <More onClick={() => void files.fetchNextPage()}>More files</More>}
-            </>
+            <VirtualList
+              className="lib-vl"
+              label="Files"
+              items={items}
+              getKey={(it) => (it.k === 'head' ? `head:${it.name}` : it.f.id)}
+              estimateSize={36}
+              measure
+              onReachEnd={() => files.hasNextPage && !files.isFetchingNextPage && void files.fetchNextPage()}
+              renderItem={(it) =>
+                it.k === 'head' ? (
+                  <SectionHead name={it.name} count={it.n} open={!folded.has(it.name)} onToggle={() => fold(it.name)} />
+                ) : (
+                  <FileLine f={it.f} href={fileHref(search, it.f.id)} />
+                )
+              }
+            />
           ) : (
             <Empty title={`No ${kindName?.toLowerCase() ?? 'files'}`} />
           )
@@ -215,7 +234,7 @@ function FilePage({ id, version }: { id: string; version?: number }) {
   const url = fileUrl(id, n);
 
   let state: PageState = 'ready';
-  if (f.isError) state = (f.error as { status?: number }).status === 403 ? 'no-access' : 'fault';
+  if (f.isError) state = refused(f.error);
   else if (!file) state = 'loading';
 
   return (
@@ -227,7 +246,7 @@ function FilePage({ id, version }: { id: string; version?: number }) {
       actions={
         <>
           <FileGet url={url} link={linkOf(file)} />
-          {file?.bot && <ChatWith actor={file.bot.includes(':') ? file.bot : `bot:${file.bot}`} />}
+          <OwnerButton page="docs" />
         </>
       }
       state={state}

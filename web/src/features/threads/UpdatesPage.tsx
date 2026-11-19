@@ -1,19 +1,20 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { useLocation } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
+import { stamp } from '@/conversation';
 import { useActor } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
+import { Empty } from '@/kit/Empty';
+import { Search } from '@/kit/Field';
 import { IconButton } from '@/kit/IconButton';
+import { Markdown } from '@/kit/Markdown';
 import { MenuItem, MenuRule } from '@/kit/Menu';
-import { OwnerButton } from '@/kit/OwnerButton';
 import { Row } from '@/kit/Row';
 import { SectionHead } from '@/kit/SectionHead';
 import { VirtualList } from '@/kit/VirtualList';
-import { chatAddress } from '@/lib';
 import { Document, List, PageMore, type PageTab } from '@/pagekinds';
-import { byDay, dayLabel, updateParagraphs, updateTitle, type Update } from './model';
-import { Face, press, useMe } from './people';
+import { byDay, dayLabel, updateRest, updateTitle, type Update } from './model';
+import { ChatWith, Face, press } from './people';
 import { updateListQuery, updateQuery, type UpdateTab } from './queries';
 import './threads.css';
 
@@ -48,11 +49,15 @@ type Item = { k: 'day'; day: string; n: number } | { k: 'up'; u: Update };
 function UpdatesList({ tab }: { tab: UpdateTab }) {
   const list = useInfiniteQuery(updateListQuery(tab));
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
+  const [words, setWords] = useState('');
   const archive = tab === 'archive';
+  const find = words.trim().toLowerCase();
   // An update archived or moved back stays in the cache flagged until the next read; each list shows its own side.
-  const all = (list.data?.pages.flatMap((p) => p.updates) ?? []).filter((u) => !!u.archived === archive);
-  const unread = all.filter((u) => !u.read).length;
-  const items: Item[] = byDay(all).flatMap((g) => [
+  const loaded = (list.data?.pages.flatMap((p) => p.updates) ?? []).filter((u) => !!u.archived === archive);
+  const all = find ? loaded.filter((u) => (u.body ?? '').toLowerCase().includes(find)) : loaded;
+  const unread = loaded.filter((u) => !u.read).length;
+  // Weekly reads a section a week; the rest a section a day.
+  const items: Item[] = byDay(all, tab === 'weekly').flatMap((g) => [
     { k: 'day' as const, day: g.day, n: g.rows.length },
     ...(folded.has(g.day) ? [] : g.rows.map((u) => ({ k: 'up' as const, u }))),
   ]);
@@ -64,13 +69,14 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
   const more = () => {
     if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
   };
-  const state = list.isPending ? 'loading' : list.isError ? 'fault' : all.length === 0 ? 'empty' : 'ready';
+  const state = list.isPending ? 'loading' : list.isError ? 'fault' : loaded.length === 0 ? 'empty' : 'ready';
   return (
     <List
       title={archive ? 'Archive' : 'Updates'}
       path={pathOf(tab)}
       crumb={archive ? ARCHIVE_CRUMB : undefined}
       tabs={archive ? undefined : TABS}
+      search={<Search label="Find an update" placeholder="Search" value={words} onValueChange={setWords} />}
       actions={
         archive ? undefined : (
           <Button variant="primary" disabled={!unread} onClick={() => void press('updates.markRead', {})}>
@@ -89,6 +95,9 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
       empty={{ title: archive ? 'Nothing archived' : 'No updates yet' }}
       onRetry={() => void list.refetch()}
       sections={
+        find && all.length === 0 ? (
+          <Empty icon="search" title="No matches" />
+        ) : (
         <VirtualList
           className="up-vl"
           label="Updates"
@@ -106,6 +115,7 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
             )
           }
         />
+        )
       }
     />
   );
@@ -129,7 +139,7 @@ function UpdateRow({ u, tab }: { u: Update; tab: UpdateTab }) {
 /** Newer and Older: the next update in the list it was opened from, reading the next page when the list ends. */
 function Steps({ id, tab }: { id: string; tab: UpdateTab }) {
   const list = useInfiniteQuery(updateListQuery(tab));
-  const order = (d = list.data) => byDay(d?.pages.flatMap((p) => p.updates) ?? []).flatMap((g) => g.rows);
+  const order = (d = list.data) => byDay(d?.pages.flatMap((p) => p.updates) ?? [], tab === 'weekly').flatMap((g) => g.rows);
   const rows = order();
   const i = rows.findIndex((u) => u.id === id);
   const go = (u: Update | undefined) => u && void press('updates.open', { update: u.id, ...tabInput(tab) });
@@ -168,7 +178,7 @@ function UpdateOpen({ id, tab }: { id: string; tab: UpdateTab }) {
       )}
     </PageMore>
   );
-  const parts = u ? updateParagraphs(u) : [];
+  const rest = u ? updateRest(u) : '';
   const slides = u?.slides;
   return (
     <Document
@@ -177,7 +187,7 @@ function UpdateOpen({ id, tab }: { id: string; tab: UpdateTab }) {
       crumb={tab === 'archive' ? [...ARCHIVE_CRUMB, { label: 'Archive', to: pathOf(tab) }] : [{ label: 'Updates', to: pathOf(tab) }]}
       actions={
         <>
-          {u && <Writer actor={actorOf(u)} />}
+          {u && <ChatWith actor={actorOf(u)} />}
           <Steps id={id} tab={tab} />
         </>
       }
@@ -191,12 +201,11 @@ function UpdateOpen({ id, tab }: { id: string; tab: UpdateTab }) {
               <Face actor={actorOf(u)} />
               <b>{who?.name ?? ''}</b>
               <span className="grow" />
-              <Ago at={u.created_at} className="row-age" />
+              <time className="row-age" dateTime={u.created_at}>
+                {stamp(u.created_at)}
+              </time>
             </div>
-            {parts[0] && <p className="read-lead">{parts[0]}</p>}
-            {parts.slice(1).map((p, i) => (
-              <p key={i}>{p}</p>
-            ))}
+            {rest && <Markdown text={rest} />}
             {slides &&
               (['done', 'focus', 'blockers'] as const).map(
                 (k) =>
@@ -212,21 +221,4 @@ function UpdateOpen({ id, tab }: { id: string; tab: UpdateTab }) {
       }
     />
   );
-}
-
-/** The writer's face in the head: it opens their chat beside the update (the mock's owner; the old reply box's place). */
-function Writer({ actor }: { actor: string }) {
-  const who = useActor(actor);
-  const me = useMe();
-  // `chat` is the shell's, in no route's search schema: built as an address, it keeps `?open=`.
-  const href = useLocation({
-    select: (l) => {
-      const q = new URLSearchParams(l.searchStr);
-      q.set('chat', chatAddress(actor, who?.kind));
-      return `${l.pathname}?${q.toString()}`;
-    },
-  });
-  if (actor === me) return null;
-  const kind = who?.kind ?? (actor.startsWith('bot:') ? 'agent' : 'person');
-  return <OwnerButton name={who?.name ?? 'the writer'} kind={kind} hue={who?.hue} live={who?.working} href={href} />;
 }

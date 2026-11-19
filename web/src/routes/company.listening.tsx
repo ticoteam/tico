@@ -5,7 +5,7 @@ import { loadListening, validateListeningSearch } from '@/features/routines/rout
 /** Listening: the watches; `?watch=<id>` is one watch, `&tab=sources` its sources, `&match=<id>` one match open. */
 export const Route = createFileRoute('/company/listening')({
   validateSearch: validateListeningSearch,
-  loaderDeps: ({ search }) => search,
+  loaderDeps: ({ search: { watch, tab } }) => ({ watch, tab }),
   loader: ({ context, deps }) => loadListening(context.queryClient, deps),
   component: Page,
 });

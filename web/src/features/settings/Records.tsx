@@ -1,7 +1,5 @@
 import { useQueries, useQuery } from '@tanstack/react-query';
-import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
-import { taskDetailQuery } from '@/features/task/routing';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
@@ -9,7 +7,6 @@ import { Field } from '@/kit/Field';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Link as To } from '@/kit/Link';
-import { Markdown } from '@/kit/Markdown';
 import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import { run } from '@/actions/run';
@@ -17,9 +14,10 @@ import { refusal } from '@/actions';
 import { fmtDate } from '@/lib';
 import { toast } from '@/kit/Toast';
 import { FiguresStrip, Section } from '@/pagekinds';
+import { StateBody } from '@/pagekinds';
 import { fixHref } from './fixes';
-import { Foot, Verb, Word, act, isForbidden, micros } from './parts';
-import { activityQuery, billingFor, changelogQuery, healthQuery, type BillingMonth, type HealthFix } from './queries';
+import { Foot, NO_ACCESS, Verb, Word, act, isForbidden, micros } from './parts';
+import { billingFor, changelogQuery, healthQuery, type BillingMonth, type HealthFix } from './queries';
 import type { ChangelogEntry, ChangelogList } from '@/api/schema';
 import { changelogPage, type HealthCheck, type StuckAgent } from './queries';
 
@@ -135,7 +133,12 @@ export function Billing() {
   const b = billing.data as BillingMonth | undefined;
   if (!b) {
     if (!billing.isError) return null;
-    if (isForbidden(billing.error)) return <Empty icon="lock" title="Owners and admins only" />;
+    if (isForbidden(billing.error))
+      return (
+        <StateBody state="no-access" title="Billing" noAccess={NO_ACCESS} skeleton={null}>
+          {null}
+        </StateBody>
+      );
     return (
       <Empty icon="alert" title="Billing did not load">
         <Button onClick={() => void billing.refetch()}>Try again</Button>
@@ -191,9 +194,6 @@ export function Billing() {
     </>
   );
 }
-
-/* History lives in its own file. */
-export { History } from './HistoryViews';
 
 const SAY: Record<string, string> = { ok: 'Fine', info: 'Note', warn: 'Look', bad: 'Broken' };
 
@@ -349,58 +349,16 @@ function AddUpdate() {
   );
 }
 
-/** What a task an agent shipped came to: its title and its outcome note, over the changelog (?open=<task id>). */
-function Outcome({ task }: { task: string }) {
-  const navigate = useNavigate();
-  const t = useQuery({ ...taskDetailQuery(task), retry: false });
-  const close = () => void navigate({ to: '/settings/$section', params: { section: 'changelog' }, search: {} });
-  const note = (t.data as { note?: string | null } | undefined)?.note?.trim();
-  return (
-    <Dialog
-      open
-      onOpenChange={(o) => !o && close()}
-      title="Reported task outcome"
-      description={t.data?.title ?? (t.isError ? "Couldn't open the task" : undefined)}
-      actions={
-        <Button variant="quiet" onClick={close}>
-          Close
-        </Button>
-      }
-    >
-      {t.data && <Markdown text={note || 'No outcome recorded.'} compact />}
-    </Dialog>
-  );
-}
-
-/** Lines agents shipped; one that came from a task opens its outcome. */
-function Activity() {
-  const log = useQuery(activityQuery);
-  const entries = log.data?.entries ?? [];
-  if (entries.length === 0) return null;
-  return (
-    <Section name="Agent activity" count={entries.length} defaultOpen={false} target="setting:activity">
-      <ul className="cl-list">
-        {entries.map((e) => (
-          <li key={e.id} className="cl-act">
-            <span>{e.title}</span>
-            {e.task_id && <Verb onClick={() => void run('settings.openOutcome', { task: e.task_id }, { via: 'click' })}>View outcome</Verb>}
-          </li>
-        ))}
-      </ul>
-    </Section>
-  );
-}
-
 /** A version's day: when it was published, else the day it shipped (UTC). */
 const versionDay = (e: ChangelogEntry | undefined) => (e ? fmtDate(e.published_at ?? e.shipped_at?.slice(0, 10)) : '');
 
-export function Changelog({ open }: { open?: string }) {
+export function Changelog() {
   const log = useQuery(changelogQuery);
   if (!log.data) return null;
-  return <Versions first={log.data} open={open} />;
+  return <Versions first={log.data} />;
 }
 
-function Versions({ first, open }: { first: ChangelogList; open?: string }) {
+function Versions({ first }: { first: ChangelogList }) {
   // Load older adds the next page's offset; each page is its own read.
   const [offsets, setOffsets] = useState<number[]>([]);
   const older = useQueries({ queries: offsets.map((o) => changelogPage(o)) });
@@ -442,13 +400,10 @@ function Versions({ first, open }: { first: ChangelogList; open?: string }) {
           <Section
             key={version}
             name={
-              list.some((e) => e.unread) ? (
-                <>
-                  {version} <Pill>New</Pill>
-                </>
-              ) : (
-                version
-              )
+              <>
+                {version}
+                {list.some((e) => e.unread) ? <Pill>New</Pill> : version === first.current_version && i > 0 && <Pill>Yours</Pill>}
+              </>
             }
             label={version}
             count={list.length}
@@ -476,11 +431,11 @@ function Versions({ first, open }: { first: ChangelogList; open?: string }) {
               if (failed) void failed.refetch();
               else setOffsets((o) => (o.includes(next) ? o : [...o, next]));
             }}
-          >{loading ? 'Loading' : 'Load older'}</Verb>
+          >
+            Load older
+          </Verb>
         </Foot>
       )}
-      <Activity />
-      {open && <Outcome task={open} />}
     </>
   );
 }

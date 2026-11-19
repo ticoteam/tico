@@ -162,7 +162,7 @@ describe('Roadmap head and Shipped, computer and phone', () => {
     expect(screen.queryByRole('menuitem', { name: 'Filter' })).toBeNull();
   });
 
-  it('a phone folds Shipped to one line, keeps New feature and the face, and moves Filter into the "⋯"', async () => {
+  it('a phone folds Shipped to one line, keeps New feature (not the face), and moves Filter into the "⋯"', async () => {
     document.documentElement.dataset.layout = 'cards';
     serve(() => ({ status: 200, body: {} }));
     seedOwned();
@@ -171,7 +171,7 @@ describe('Roadmap head and Shipped, computer and phone', () => {
     expect(line.getAttribute('href')).toBe('/tasks/feat?view=archived');
     expect(screen.queryByRole('region', { name: 'Shipped' })).toBeNull();
     expect(screen.getByRole('button', { name: 'New feature' }).hasAttribute('data-phone')).toBe(true);
-    expect(screen.getByRole('link', { name: 'Chat with Fern Planner' }).closest('[data-phone]')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Chat with Fern Planner' }).closest('[data-phone]')).toBeNull();
     fireEvent.click(pageMore());
     expect(await screen.findByRole('menuitem', { name: 'Filter' })).toBeTruthy();
   });

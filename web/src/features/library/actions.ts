@@ -38,6 +38,7 @@ import {
   decideDevice,
   declineProposal,
   docsListQuery,
+  fileQuery,
   probeMcp,
   refreshSource,
   removeKey,
@@ -82,8 +83,7 @@ import {
 } from './queries';
 import type { PolicyUpdate, ToolIndex } from '@/api/schema';
 import { viewing } from './viewing';
-import { startResearch } from './queries';
-import { askToSubmit, closeSuggestion, removeInstall, rescreenProposal, withdrawProposal } from './queries';
+import { removeInstall, rescreenProposal, withdrawProposal } from './queries';
 import {
   addMailboxAccess,
   checkInboxes,
@@ -102,7 +102,7 @@ import {
   stopMailbox,
   storeKey,
   was,
-} from './toolKeys';
+} from './queries';
 
 /* Every view and change on the Library pages: Docs, a doc, Files, Skills, Tools, Contacts. Anything that sets a secret,
    adds a file from the person's own disk or answers an approval is the person's own (`tico: false`). */
@@ -157,8 +157,8 @@ export const docsOpen = defineAction({
   id: 'docs.open',
   title: 'Open a doc',
   kind: 'view',
-  input: s.object({ doc: id, edit: s.optional(s.boolean()), version: s.optional(s.number({ int: true, min: 1 })) }),
-  run: ({ router }, i) => go(router, `/library/${encodeURIComponent(i.doc)}`, { edit: i.edit ? 1 : undefined, v: i.version }),
+  input: s.object({ doc: id, version: s.optional(s.number({ int: true, min: 1 })) }),
+  run: ({ router }, i) => go(router, `/library/${encodeURIComponent(i.doc)}`, { v: i.version }),
   show: ({ router }, i) => go(router, `/library/${encodeURIComponent(i.doc)}`),
   target: (i) => ({ kind: 'page', id: `/library/${i.doc}` }),
   offer: ({ queryClient }) =>
@@ -217,10 +217,7 @@ export const docsSave = defineAction({
     body: s.optional(text(200_000)),
     path: s.optional(s.string({ min: 1, max: 300 })),
   }),
-  run: async ({ router }, i) => {
-    await saveDoc(i.doc, { version: i.version, title: i.title, body: i.body, path: i.path });
-    await set(router, { edit: undefined }, true);
-  },
+  run: (_ctx, i) => saveDoc(i.doc, { version: i.version, title: i.title, body: i.body, path: i.path }),
   did: () => 'Saved',
   target: (i) => ({ kind: 'page', id: `/library/${i.doc}` }),
 });
@@ -348,13 +345,18 @@ export const filesOpen = defineAction({
   target: (i) => ({ kind: 'file', id: i.file }),
 });
 
-/** A file over whatever page is open (a task, a chat): a picture full size, anything else in a dialog. */
+/** A file from wherever it shows (a task, a chat): a picture full size over the page, anything else its page in Files. */
 export const filesView = defineAction({
   id: 'files.view',
   title: 'Show a file',
   kind: 'view',
   input: s.object({ file: s.nullable(id), version: s.optional(s.number({ int: true, min: 1 })) }),
-  run: (_ctx, i) => viewing.set(i.file ? { file: i.file, version: i.version } : null),
+  run: async ({ router, queryClient }, i) => {
+    if (!i.file) return viewing.set(null);
+    const f = await queryClient.ensureQueryData(fileQuery(i.file)).catch(() => null);
+    if (f && (f.mime?.startsWith('image/') || f.library_kind === 'image')) return viewing.set({ file: i.file, version: i.version, name: f.title });
+    await go(router, '/library/files', { file: i.file, v: i.version });
+  },
   target: () => null,
 });
 
@@ -375,8 +377,8 @@ export const skillsList = defineAction({
   id: 'skills.list',
   title: 'Open Skills',
   kind: 'view',
-  input: s.object({ q: s.optional(text(200)) }),
-  run: ({ router }, i) => go(router, '/library/skills', { q: i.q }, true),
+  input: s.object({ q: s.optional(text(200)), waiting: s.optional(s.boolean()) }),
+  run: ({ router }, i) => go(router, '/library/skills', { q: i.q, waiting: i.waiting ? 1 : undefined }, true),
   target: () => ({ kind: 'page', id: '/library/skills' }),
 });
 
@@ -548,7 +550,7 @@ export const toolsSetKey = defineAction({
   input: s.object({ tool: id, key: s.optional(id), name: s.optional(text(120)), value: s.string({ min: 1, max: 20_000 }) }),
   run: (_ctx, i) => (i.key ? replaceKey(i.tool, i.key, i.value) : addKey(i.tool, i.name?.trim() || 'Key', i.value)),
   did: (i) => (i.key ? 'Replaced the key' : 'Added a key'),
-  target: (i) => ({ kind: 'tool-keys', id: i.tool }),
+  target: (i) => ({ kind: 'tool-connect', id: `api:${i.tool}` }),
 });
 
 export const toolsRemoveKey = defineAction({
@@ -560,7 +562,7 @@ export const toolsRemoveKey = defineAction({
   tico: false,
   run: (_ctx, i) => removeKey(i.tool, i.key),
   did: () => 'Removed the key',
-  target: (i) => ({ kind: 'tool-keys', id: i.tool }),
+  target: (i) => ({ kind: 'tool-connect', id: `api:${i.tool}` }),
 });
 
 export const toolsCheck = defineAction({
@@ -570,7 +572,7 @@ export const toolsCheck = defineAction({
   input: s.object({ tool: id }),
   run: (_ctx, i) => checkTool(i.tool),
   did: () => 'Checked',
-  target: (i) => ({ kind: 'tool-connect', id: i.tool }),
+  target: (i) => ({ kind: 'tool-connect', id: `api:${i.tool}` }),
 });
 
 export const toolsSetAccess = defineAction({
@@ -583,7 +585,7 @@ export const toolsSetAccess = defineAction({
     LEVEL[i.level] <= LEVEL[ctx.queryClient.getQueryData(apiToolQuery(i.tool).queryKey)?.access.find((a) => a.subject === i.subject)?.level ?? 'none'],
   run: (_ctx, i) => setAccess(i.tool, i.subject, i.level),
   did: (i) => (i.level === 'none' ? 'Removed' : 'Changed'),
-  target: (i) => ({ kind: 'tool-who', id: i.tool }),
+  target: (i) => ({ kind: 'tool-who', id: `api:${i.tool}` }),
 });
 
 /* Adding a tool. Tico may add one when nothing secret is typed (an API's address, an MCP server it signs in to); a
@@ -764,7 +766,7 @@ export const toolsSetKeyExpiry = defineAction({
   input: s.object({ tool: id, key: id, expires_on: day }),
   run: (_ctx, i) => setKeyExpiry(i.tool, i.key, i.expires_on),
   did: (i) => (i.expires_on ? `Ends ${i.expires_on}` : 'No end date'),
-  target: (i) => ({ kind: 'tool-keys', id: i.tool }),
+  target: (i) => ({ kind: 'tool-connect', id: `api:${i.tool}` }),
 });
 
 export const toolsSaveSetting = defineAction({
@@ -774,7 +776,7 @@ export const toolsSaveSetting = defineAction({
   input: s.object({ tool: id, setting: s.optional(id), name: s.string({ min: 1, max: 80, pattern: /^[A-Z_][A-Z0-9_]*$/ }), value: s.string({ min: 1, max: 2000 }) }),
   run: (_ctx, i) => saveSetting(i.tool, { id: i.setting, name: i.name, value: i.value }),
   did: (i) => `Saved ${i.name}`,
-  target: (i) => ({ kind: 'tool-about', id: i.tool }),
+  target: (i) => ({ kind: 'tool-about', id: `api:${i.tool}` }),
 });
 
 export const toolsRemoveSetting = defineAction({
@@ -784,7 +786,7 @@ export const toolsRemoveSetting = defineAction({
   input: s.object({ tool: id, setting: id }),
   run: (_ctx, i) => removeSetting(i.tool, i.setting),
   did: () => 'Removed',
-  target: (i) => ({ kind: 'tool-about', id: i.tool }),
+  target: (i) => ({ kind: 'tool-about', id: `api:${i.tool}` }),
 });
 
 /** A stored key or website password, shown to the person who asked. The value is the result's `out` only. */
@@ -818,7 +820,7 @@ export const toolsPasteKeys = defineAction({
   input: s.object({ tool: id, text: s.string({ min: 1, max: 100_000 }) }),
   run: (_ctx, i) => pasteKeys(i.tool, i.text),
   did: (_i, out) => (out ? `Added ${out.keys} ${out.keys === 1 ? 'key' : 'keys'} and ${out.settings} ${out.settings === 1 ? 'setting' : 'settings'}` : 'Added'),
-  target: (i) => ({ kind: 'tool-keys', id: i.tool }),
+  target: (i) => ({ kind: 'tool-connect', id: `api:${i.tool}` }),
 });
 
 export const toolsEditWebsite = defineAction({
@@ -1031,7 +1033,7 @@ export const toolsSetMailMay = defineAction({
   },
   run: (_ctx, i) => setMailMay(i),
   did: () => 'Saved',
-  target: () => ({ kind: 'tool-set', id: 'mail-may' }),
+  target: () => ({ kind: 'tool-can', id: 'mailbox' }),
 });
 
 export const toolsCheckGoogle = defineAction({
@@ -1041,7 +1043,7 @@ export const toolsCheckGoogle = defineAction({
   input: s.object({}),
   run: () => checkGoogle(),
   did: (_i, out) => ((out as { ok?: boolean } | undefined)?.ok === false ? 'Google did not accept it' : 'Google accepts it'),
-  target: () => ({ kind: 'tool-set', id: 'google' }),
+  target: () => ({ kind: 'tool-connect', id: 'mailbox' }),
 });
 
 /** A setup command for an agent or a terminal to run: it carries a one-time code, so it is the person's own. */
@@ -1064,7 +1066,7 @@ export const toolsUploadGoogleKey = defineAction({
   input: s.object({ domain: s.string({ min: 3, max: 253 }), key: s.string({ min: 2, max: 20000 }) }),
   run: (_ctx, i) => uploadGoogleKey(i.domain.trim().toLowerCase(), JSON.parse(i.key) as Record<string, unknown>),
   did: () => 'Key uploaded',
-  target: () => ({ kind: 'tool-set', id: 'google' }),
+  target: () => ({ kind: 'tool-connect', id: 'mailbox' }),
 });
 
 export const toolsDisconnectGoogle = defineAction({
@@ -1075,7 +1077,7 @@ export const toolsDisconnectGoogle = defineAction({
   input: s.object({}),
   run: () => disconnectGoogle(),
   did: () => 'Disconnected',
-  target: () => ({ kind: 'tool-set', id: 'google' }),
+  target: () => ({ kind: 'tool-connect', id: 'mailbox' }),
 });
 
 /** The person's own Google sign-in: off to Google's page, back to Tico when done. */
@@ -1100,7 +1102,7 @@ export const toolsDisconnectMyGoogle = defineAction({
   input: s.object({}),
   run: () => disconnectMyGoogle(),
   did: () => 'Disconnected',
-  target: () => ({ kind: 'tool-set', id: 'google' }),
+  target: () => ({ kind: 'tool-connect', id: 'mailbox' }),
 });
 
 const capIn = s.optional(s.number({ int: true, min: 0, max: 1_000_000 }));
@@ -1128,7 +1130,7 @@ export const toolsSetSending = defineAction({
   can: (ctx, i) => ctx.via !== 'tico' || !sendsMore(ctx.queryClient.getQueryData(sendingQuery.queryKey)?.effective, i),
   run: (_ctx, i) => setSending(i),
   did: () => 'Saved',
-  target: () => ({ kind: 'tool-set', id: 'sending' }),
+  target: () => ({ kind: 'tool-can', id: 'mailbox' }),
 });
 
 export const toolsSetAgentSending = defineAction({
@@ -1144,7 +1146,7 @@ export const toolsSetAgentSending = defineAction({
   },
   run: (_ctx, i) => setAgentSending(i.bot, i.mode),
   did: (i) => (i.mode ? 'Saved' : 'Uses the company’s rule'),
-  target: (i) => ({ kind: 'tool-set', id: `sending:${i.bot}` }),
+  target: () => ({ kind: 'tool-can', id: 'mailbox' }),
 });
 
 /** Joining the company's shared Inbox: this workspace's mail goes there and the company's comes here. */
@@ -1168,7 +1170,7 @@ export const toolsAcceptQuote = defineAction({
   input: s.object({ request: id, price_micros: s.number({ int: true, min: 0 }) }),
   run: (_ctx, i) => acceptQuote(i.request, i.price_micros),
   did: () => 'Quote accepted',
-  target: () => ({ kind: 'tool-set', id: 'numbers' }),
+  target: () => ({ kind: 'tool-connect', id: 'number' }),
 });
 
 export const toolsCancelNumberRequest = defineAction({
@@ -1178,7 +1180,7 @@ export const toolsCancelNumberRequest = defineAction({
   input: s.object({ request: id }),
   run: (_ctx, i) => cancelNumberRequest(i.request),
   did: () => 'Request canceled',
-  target: () => ({ kind: 'tool-set', id: 'numbers' }),
+  target: () => ({ kind: 'tool-connect', id: 'number' }),
 });
 
 export const toolsSetIntake = defineAction({
@@ -1190,7 +1192,7 @@ export const toolsSetIntake = defineAction({
   can: (ctx, i) => (i.inbox ? ctx.via !== 'tico' && i.senders.length > 0 : true),
   run: (_ctx, i) => setIntake(i.inbox, i.inbox ? i.senders.map((x) => x.trim().toLowerCase()) : []),
   did: (i) => (i.inbox ? 'Saved' : 'Stopped'),
-  target: () => ({ kind: 'tool-set', id: 'intake' }),
+  target: () => ({ kind: 'tool-can', id: 'address' }),
 });
 
 export const toolsSetLetterAccess = defineAction({
@@ -1202,7 +1204,7 @@ export const toolsSetLetterAccess = defineAction({
   can: (ctx, i) => ctx.via !== 'tico' || !i.read,
   run: (_ctx, i) => setLetterGrant(i.type, i.who, i.read),
   did: (i) => (i.read ? 'Can read letters' : 'Removed'),
-  target: () => ({ kind: 'tool-set', id: 'letter-access' }),
+  target: () => ({ kind: 'tool-who', id: 'address' }),
 });
 
 export const toolsSetLegalMail = defineAction({
@@ -1214,7 +1216,7 @@ export const toolsSetLegalMail = defineAction({
   can: (ctx, i) => ctx.via !== 'tico' || i.bot === null,
   run: (_ctx, i) => setLegalMail(i.bot),
   did: () => 'Saved',
-  target: () => ({ kind: 'tool-set', id: 'legal' }),
+  target: () => ({ kind: 'tool-can', id: 'address' }),
 });
 
 const addressIn = s.object({
@@ -1245,7 +1247,7 @@ export const toolsSetLettersOut = defineAction({
   },
   run: (_ctx, i) => setLettersOut(i),
   did: () => 'Saved',
-  target: () => ({ kind: 'tool-set', id: 'letters-out' }),
+  target: () => ({ kind: 'tool-can', id: 'address' }),
 });
 
 export const toolsCheckLetters = defineAction({
@@ -1255,21 +1257,7 @@ export const toolsCheckLetters = defineAction({
   input: s.object({}),
   run: () => checkLetters(),
   did: () => 'Checked',
-  target: () => ({ kind: 'tool-set', id: 'letters-out' }),
-});
-
-// ---------------------------------------------------------------- gap wave: a doc's Research, Files' filters
-
-/** The Librarian researches the web for a doc, or one section of it, and adds what it finds with its sources: one task
-   to it (old docs-editor.ts research). Ordinary work: open to Tico. */
-export const docsResearch = defineAction({
-  id: 'docs.research',
-  title: 'Have the Librarian research for a doc',
-  kind: 'change',
-  input: s.object({ doc: id, section: s.optional(text(300)), instructions: s.string({ min: 1, max: 4000 }) }),
-  run: async (_ctx, i) => (await startResearch({ target: i.doc, section: i.section || undefined, instructions: i.instructions.trim() })).task_id,
-  did: () => 'Research started',
-  target: (i) => ({ kind: 'page', id: `/library/${i.doc}` }),
+  target: () => ({ kind: 'tool-can', id: 'address' }),
 });
 
 // ---------------------------------------------------------------- tools: stored keys, mailboxes, who reads and sees a tool
@@ -1298,8 +1286,8 @@ export const toolsRotateKey = defineAction({
   // Storing a secret is the person's own.
   tico: false,
   input: s.object({ credential: id, value: s.string({ min: 1, max: 100_000 }) }),
-  run: (ctx, i) => {
-    const key = was.vault(ctx.queryClient)?.credentials.find((k) => k.id === i.credential);
+  run: (_ctx, i) => {
+    const key = was.vault()?.credentials.find((k) => k.id === i.credential);
     if (!key) throw new Error('That key is not open');
     return rotateKey(key, i.value);
   },
@@ -1388,7 +1376,7 @@ export const toolsSetMailboxAccess = defineAction({
   // Tico may lower a level or take it away, never raise one.
   can: (ctx, i) =>
     ctx.via !== 'tico' ||
-    LEVEL[i.level] <= LEVEL[was.mailbox(ctx.queryClient, i.mailbox)?.accesses.find((a) => a.id === i.access)?.level ?? 'none'],
+    LEVEL[i.level] <= LEVEL[was.mailbox(i.mailbox)?.accesses.find((a) => a.id === i.access)?.level ?? 'none'],
   run: (_ctx, i) => (i.level === 'none' ? removeMailboxAccess(i.mailbox, i.access) : setMailboxLevel(i.mailbox, i.access, i.level)),
   did: (i) => (i.level === 'none' ? 'Removed' : 'Changed'),
   target: (i) => ({ kind: 'tool-who', id: `mailbox:${i.mailbox}` }),
@@ -1439,7 +1427,7 @@ export const toolsSetInboxReaders = defineAction({
   kind: 'change',
   input: s.object({ inbox: id, audience: s.oneOf(['company', 'team'] as const), group: s.optional(id) }),
   // Tico may narrow it from everyone to one team, never open it wider.
-  can: (ctx, i) => ctx.via !== 'tico' || (i.audience === 'team' && was.inbox(ctx.queryClient, i.inbox)?.audience === 'company'),
+  can: (ctx, i) => ctx.via !== 'tico' || (i.audience === 'team' && was.inbox(i.inbox)?.audience === 'company'),
   run: (_ctx, i) => setInboxReaders(i.inbox, i.audience, i.group ?? null),
   did: () => 'Saved',
   target: (i) => ({ kind: 'tool', id: `tico:${i.inbox}` }),
@@ -1536,46 +1524,13 @@ export const skillsRescreen = defineAction({
   target: (i) => ({ kind: 'proposal', id: i.proposal }),
 });
 
-/** An install nobody used in 30 days, taken off with the rights of uninstalling it. */
-export const skillsRemoveUnused = defineAction({
-  id: 'skills.removeUnused',
-  title: 'Take off a skill nobody uses',
-  kind: 'change',
-  input: s.object({ suggestion: id }),
-  run: (_ctx, i) => closeSuggestion(i.suggestion, 'remove'),
-  did: () => 'Removed',
-  target: () => ({ kind: 'page', id: '/library/skills' }),
-});
-
-export const skillsAskSubmit = defineAction({
-  id: 'skills.askSubmit',
-  title: 'Ask an agent to submit a skill',
-  kind: 'change',
-  input: s.object({ suggestion: id, skill: s.string({ min: 1, max: 120 }), agent: id }),
-  run: (_ctx, i) => askToSubmit(i.suggestion, i.skill, i.agent),
-  did: () => 'Asked',
-  target: () => ({ kind: 'page', id: '/library/skills' }),
-});
-
-/** It comes back only after 30 days, if it still holds. */
-export const skillsDismissSuggestion = defineAction({
-  id: 'skills.dismissSuggestion',
-  title: 'Dismiss a skill suggestion',
-  kind: 'change',
-  input: s.object({ suggestion: id }),
-  run: (_ctx, i) => closeSuggestion(i.suggestion, 'dismiss'),
-  did: () => 'Dismissed',
-  target: () => ({ kind: 'page', id: '/library/skills' }),
-});
-
 // ---------------------------------------------------------------- tools: tier-2 gaps (webhooks, letters, messages)
 
 /* s515 s868 s869 s870 s932. The person's own: deleting an endpoint (cannot be undone), a new signing secret and a
    message's code (each shows a secret). Giving someone Read on an address is a right only the person gives; Tico may
    take it away. A send retried, a letter retried and an address checked are ordinary work: open to Tico. */
 
-// This section's calls live in toolMail.ts.
-import { checkAddresses, deleteWebhook, readCode, retryLetterIn, retryWebhookSend, rotateWebhookSecret, setAddressGrant } from './toolMail';
+import { addWebhook, checkAddresses, deleteWebhook, editWebhook, readCode, webhookQuery, retryLetterIn, retryWebhookSend, rotateWebhookSecret, setAddressGrant } from './queries';
 
 const hookAt = (webhook: string) => ({ kind: 'tool', id: `webhook:${webhook}` });
 
@@ -1671,4 +1626,39 @@ export const toolsRevealCode = defineAction({
   run: (_ctx, i) => readCode(i.message),
   did: () => 'Shown',
   target: () => null,
+});
+
+/* An outgoing webhook's own add and edit (Tools is its only home). */
+
+const hookFields = {
+  name: s.string({ min: 1, max: 120 }),
+  url: s.string({ min: 1, max: 2000, pattern: /^https?:\/\// }),
+  events: s.array(s.string({ min: 1, max: 120 }), { max: 200 }),
+};
+
+export const toolsAddWebhook = defineAction({
+  id: 'tools.addWebhook',
+  title: 'Add an outgoing webhook',
+  kind: 'change',
+  // Its signing secret is made now and shown once: the person's own press.
+  tico: false,
+  input: s.object(hookFields),
+  run: (_ctx, i) => {
+    if (!i.events.length) throw Object.assign(new Error('Pick at least one event'), { code: 'bad_input: Pick at least one event' });
+    return addWebhook({ name: i.name.trim(), url: i.url.trim(), events: i.events, allow_http: /^http:/i.test(i.url.trim()) });
+  },
+  did: (_i, out) => (out?.approval ? 'Sent for approval' : 'Added'),
+  target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+export const toolsEditWebhook = defineAction({
+  id: 'tools.editWebhook',
+  title: 'Change an outgoing webhook',
+  kind: 'change',
+  input: s.object({ webhook: id, name: s.optional(hookFields.name), url: s.optional(hookFields.url), events: s.optional(hookFields.events) }),
+  // Tico may rename it or change its events; where the company's events are sent is the person's own.
+  can: (ctx, i) => ctx.via !== 'tico' || !i.url || ctx.queryClient.getQueryData(webhookQuery(i.webhook).queryKey)?.webhook.url === i.url.trim(),
+  run: (_ctx, i) => editWebhook(i.webhook, { name: i.name?.trim(), url: i.url?.trim(), events: i.events, ...(i.url ? { allow_http: /^http:/i.test(i.url.trim()) } : {}) }),
+  did: () => 'Saved',
+  target: (i) => hookAt(i.webhook),
 });

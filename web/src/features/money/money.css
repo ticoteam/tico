@@ -4,14 +4,8 @@
 /* the date range after the title, with its steps */
 .money .range{display:inline-flex;align-items:center;gap:var(--s-1);color:var(--ink-2);font-size:var(--t-sm);white-space:nowrap;font-variant-numeric:tabular-nums}
 
-/* a wide table scrolls sideways on a phone only, so its head stays put on a desk */
-:where(html[data-layout="cards"]){
-  .money .t-scroll{overflow-x:auto}
-  .money .t-scroll .table{min-width:640px}
-}
-
 /* meter, with a tick for where today is in the period */
-.money .meter{display:block;height:4px;border-radius:var(--r-pill);background:var(--line-strong);position:relative}
+.money .meter{display:block;height:var(--s-1);border-radius:var(--r-pill);background:var(--line-strong);position:relative}
 .money .meter i{display:block;height:100%;border-radius:var(--r-pill);background:var(--ink-2);max-width:100%}
 .money .meter.is-over i{background:var(--ink)}
 .money .meter u{position:absolute;top:-3px;width:1.5px;height:10px;border-radius:var(--r-pill);background:var(--muted);text-decoration:none}
@@ -33,7 +27,7 @@
 :where(html:not([data-layout="cards"])) .money .pk-body .table tr.is-sub td:first-child{padding-left:calc(var(--page-x) + var(--s-4))}
 :where(html:not([data-layout="cards"])) .money .pk-body :is(.ctl-row,.rule,.fold){padding-left:var(--page-x)}
 .money .table tr.is-pct td{color:var(--muted);font-size:var(--t-sm)}
-.money .table tr.is-net td{height:40px;font-family:var(--font-display);font-size:var(--t-base);font-weight:var(--w-title);line-height:1;border-top:1.5px solid var(--ink-2);border-bottom:0}
+.money .table tr.is-net td{height:var(--s-10);font-family:var(--font-display);font-size:var(--t-base);font-weight:var(--w-title);line-height:1;border-top:1.5px solid var(--ink-2);border-bottom:0}
 .money .table tr.is-net:hover td,.money .table tr.is-pct:hover td{background:none}
 .money .table .proj{color:var(--muted)}
 .money .table th.is-now{color:var(--ink);font-weight:var(--w-strong)}
@@ -76,15 +70,25 @@
 .money .two-col>.stage+.stage{margin-top:0;padding-top:0;border-top:0}
 
 /* a rule on one line: what it matches, where it sends it */
-.money .rule{grid-template-columns:minmax(0,1fr) 16px minmax(0,1fr) 72px;column-gap:var(--s-2h);padding:0 var(--s-3)}
+.money .rule{grid-template-columns:minmax(0,1fr) var(--s-4) minmax(0,1fr) var(--s-18);column-gap:var(--s-2h);padding:0 var(--s-3)}
 .money .rule .ico{width:14px;height:14px;color:var(--faint)}
 .money .rule.is-quiet{color:var(--muted)}
-.money .rule.has-act{grid-template-columns:minmax(0,1fr) 16px minmax(0,1fr) 72px var(--s-10)}
+.money .rule.has-act{grid-template-columns:minmax(0,1fr) var(--s-4) minmax(0,1fr) var(--s-18) var(--s-10)}
 .money .rule-to{display:flex;align-items:center;gap:var(--s-2);min-width:0;color:var(--ink-2)}
 .money .rule-to span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-/* a fold: the many rows that say nothing, as one line */
+/* a fold: the many rows that say nothing, as one line; pressed, it opens them */
 .money .fold{height:var(--row);display:flex;align-items:center;gap:var(--s-2h);padding:0 var(--s-3);color:var(--muted);border-radius:var(--r-row)}
+.money button.fold{width:100%;border:0;background:none;font:inherit;text-align:left;cursor:pointer}
+.money button.fold:hover{background:var(--hover)}
+
+/* the mark of what waits on you, before a row's name (finance.js ttl) */
+.money .t-mark{margin-right:var(--s-2);vertical-align:-1px}
+/* a bank row opened in place to be put on a line (the mock's Transactions) */
+.money .tx-edit{display:grid;grid-template-columns:minmax(0,1fr);max-width:calc(var(--s-18) * 4);padding:var(--s-1) 0 var(--s-2h)}
+/* a phone's long Transactions: only the rows in view are drawn */
+.money .tx-long{max-height:70dvh;overflow:auto;scrollbar-width:thin}
+.money .fr .row-fig .ib{margin-left:var(--s-1);vertical-align:middle}
 
 /* a definition: a word and what it means here, one line */
 
@@ -101,7 +105,6 @@
 .money .ptrace .row-sub{white-space:normal;line-height:1.35}
 .money .facts .field{width:84px;height:var(--ctl-sm);padding:0 var(--s-2);font-size:var(--t-sm)}
 .money .facts .field input{text-align:right;font-variant-numeric:tabular-nums}
-.money.new-budget{display:grid;gap:var(--s-3);padding:var(--s-2)}
 
 /* a dialog's fields, the approver a decision waits for, values shown once */
 .money .dlg-form{display:grid;gap:var(--s-4)}
@@ -129,7 +132,7 @@
 .money .once-row code{flex:1;min-width:0;font-family:var(--font-code);font-size:var(--t-sm);line-height:var(--lh-code);color:var(--ink);overflow-wrap:anywhere;user-select:all}
 
 /* on a phone a table becomes rows: the name and its words, one figure, a meter under them (finance.css .fr) */
-.money .fr{grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h);height:auto;min-height:44px;padding:calc(var(--s-2) - 1px) var(--s-2);color:inherit}
+.money .fr{grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h);height:auto;min-height:var(--tap);padding:calc(var(--s-2) - 1px) var(--s-2);color:inherit}
 .money .fr+.fr{box-shadow:0 -1px 0 var(--line)}
 .money .fr-bar{grid-column:1/-1;padding:calc(var(--s-2) - 1px) 0 calc(var(--s-1) - 1px)}
 .money .fr-main{display:grid;gap:calc(var(--s-0) / 2);min-width:0}
@@ -177,5 +180,5 @@
   .money .rule{grid-template-columns:minmax(0,1fr) auto;height:auto;min-height:52px;padding:var(--s-2) var(--s-2)}
   .money .rule>.ico{display:none}
   .money .rule.has-act{grid-template-columns:minmax(0,1fr) auto auto}
-  .money .fold{height:44px;padding:0 var(--s-2)}
+  .money .fold{height:var(--tap);padding:0 var(--s-2)}
 }

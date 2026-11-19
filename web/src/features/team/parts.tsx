@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useAction } from '@/actions';
 import { useActor, type Actor } from '@/data';
 import { firstPipeline, pipelinesQuery } from '@/features/tasks/routing';
@@ -8,7 +8,9 @@ import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
+import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
+import { LabelValue } from '@/kit/LabelValue';
 import { Link as KitLink } from '@/kit/Link';
 import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
 import { Pill } from '@/kit/Pill';
@@ -18,16 +20,6 @@ import { VirtualList } from '@/kit/VirtualList';
 import { whoHref } from './model';
 import type { OwnTask } from './queries';
 import { chatAddress } from '@/lib';
-
-/** Flow's mark: two play-shaped dots (parts-kit.js flow()). Jade lives in dot.css. */
-export function FlowMark({ size = 12 }: { size?: number }) {
-  return (
-    <span className="dot flow" style={{ '--d': `${size}px` } as CSSProperties} role="img" aria-label="Waits on you">
-      <i />
-      <b />
-    </span>
-  );
-}
 
 export const waitsOn = (t: Pick<OwnTask, 'turn'>, me: string | undefined) => !!me && t.turn?.state === 'person' && t.turn.who === me;
 export const taskHref = (t: Pick<OwnTask, 'pipeline_id' | 'number' | 'id'>) =>
@@ -174,52 +166,62 @@ export function EditDialog({
   );
 }
 
-/** One choice from a list, saved through an action. */
-export function PickDialog({
-  open,
-  onOpenChange,
-  title,
+/** A line whose value is picked where it stands: the pick saves at once, through an action. Without `action` (no right
+    to change it), the words alone. */
+export function PickLine({
+  label,
   options,
   value,
+  shown,
   action,
   input,
+  onPick,
+  trail,
 }: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  title: string;
+  label: string;
   options: readonly SelectOption[];
   value: string;
-  action: string;
-  input: (value: string) => unknown;
+  /** The words while nothing in `options` is chosen ("None", "Nobody"). */
+  shown: string;
+  action?: string;
+  input?: (value: string) => unknown;
+  /** In place of `action`: what a pick does, when it needs more than one action's run. */
+  onPick?: (value: string) => void;
+  /** At the line's end, outside the pick (LabelValue's `trail`). */
+  trail?: ReactNode;
 }) {
-  const [pick, setPick] = useState(value);
-  const save = useAction(action);
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => {
-        if (o) setPick(value);
-        onOpenChange(o);
-      }}
-      title={title}
-      actions={
-        <>
-          <Button onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button
-            variant="primary"
-            disabled={!pick || pick === value}
-            onClick={() => {
-              onOpenChange(false);
-              void save.run(input(pick));
-            }}
-          >
-            Save
-          </Button>
-        </>
-      }
-    >
-      <Select label={title} labelHidden options={options} value={pick || null} onValueChange={setPick} />
-    </Dialog>
+  const save = useAction(action ?? '');
+  const words = options.find((o) => o.value === value)?.label ?? shown;
+  const pick = onPick ?? (action && input ? (v: string) => void save.run(input(v)) : undefined);
+  if (!pick)
+    return (
+      <LabelValue label={label} trail={trail}>
+        {words}
+      </LabelValue>
+    );
+  const line = (
+    <div className="fact">
+      <span>{label}</span>
+      <span className="fact-v">
+        <Select
+          label={label}
+          labelHidden
+          look="quiet"
+          options={options}
+          value={value || null}
+          placeholder={shown}
+          onValueChange={(v) => v !== value && pick(v)}
+        />
+      </span>
+    </div>
+  );
+  return trail ? (
+    <div className="fact-more">
+      {line}
+      {trail}
+    </div>
+  ) : (
+    line
   );
 }
 
@@ -261,37 +263,6 @@ export function ConfirmDialog({
         </>
       }
     />
-  );
-}
-
-/** A choice of words that fills its row (mates.css `.seg.is-text`): the model picker's harness and effort. */
-export function WordPick<V extends string>({
-  label,
-  options,
-  value,
-  onValueChange,
-}: {
-  label: string;
-  options: readonly { value: V; label: string; disabled?: boolean }[];
-  value: V;
-  onValueChange: (v: V) => void;
-}) {
-  return (
-    <div className="seg is-text" role="radiogroup" aria-label={label}>
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          role="radio"
-          aria-checked={o.value === value}
-          disabled={o.disabled}
-          className={[o.value === value && 'is-on', o.disabled && 'is-off'].filter(Boolean).join(' ') || undefined}
-          onClick={() => onValueChange(o.value)}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
   );
 }
 

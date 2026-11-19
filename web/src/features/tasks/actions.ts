@@ -21,7 +21,6 @@ import {
 } from './queries';
 import { VIEW_PREF } from './search';
 import { createTag, createTaggedTask, moreTagTasks, saveTag, tagKeyOf } from './queries';
-import { chatAddress } from '@/lib';
 
 const pipeline = s.string({ min: 1, max: 100, what: 'a pipeline id' });
 const task = s.string({ min: 1, max: 100, what: 'a task id' });
@@ -214,30 +213,10 @@ export const editPipeline = defineAction({
   title: 'Edit pipeline',
   kind: 'view',
   input: s.object({ pipeline, open: s.optional(s.boolean()) }),
-  run: async ({ router }, { pipeline, open = true }) => {
-    await router.navigate({
-      to: where(pipeline),
-      search: (prev: Record<string, unknown>) => {
-        const next: Record<string, unknown> = { ...prev, panel: 'pipeline' };
-        if (!open) delete next.panel;
-        return next;
-      },
-    });
-  },
+  // Its own page (`/tasks/<pipeline>/edit`); closing it goes back to the pipeline.
+  run: ({ router }, { pipeline, open = true }) => router.navigate({ to: open ? `${where(pipeline)}/edit` : where(pipeline) }),
   did: ({ open = true }) => (open ? 'Opened Edit pipeline' : 'Closed Edit pipeline'),
-  target: () => ({ kind: 'panel', id: 'pipeline' }),
-});
-
-/** One of a pipeline's agents, asked about it: their chat opens beside the board (on a phone, the chat card comes up). */
-export const chatWith = defineAction({
-  id: 'tasks.chatWith',
-  title: "Open the chat of one of a pipeline's agents",
-  kind: 'view',
-  input: s.object({ pipeline, who: actor }),
-  run: ({ router }, { pipeline, who }) =>
-    router.navigate({ to: where(pipeline), search: (prev: Record<string, unknown>) => ({ ...prev, chat: chatAddress(who) }) }),
-  did: () => 'Opened the chat',
-  target: ({ who }) => ({ kind: 'chat', id: chatAddress(who) }),
+  target: ({ pipeline }) => ({ kind: 'page', id: `${where(pipeline)}/edit` }),
 });
 
 const stageDraft = s.object({
@@ -278,24 +257,16 @@ export const savePipelineStages = defineAction({
   target: ({ pipeline }) => ({ kind: 'page', id: where(pipeline) }),
 });
 
-/** New pipeline: a panel beside the pipeline on screen (`?panel=new`). */
+/** New pipeline: the editor's page, empty (`/tasks/<pipeline>/edit?new=1`; Back goes to the pipeline on screen). */
 export const newPipeline = defineAction({
   id: 'tasks.newPipeline',
   title: 'New pipeline',
   kind: 'view',
   input: s.object({ pipeline, open: s.optional(s.boolean()) }),
-  run: async ({ router }, { pipeline, open = true }) => {
-    await router.navigate({
-      to: where(pipeline),
-      search: (prev: Record<string, unknown>) => {
-        const next: Record<string, unknown> = { ...prev, panel: 'new' };
-        if (!open) delete next.panel;
-        return next;
-      },
-    });
-  },
+  run: ({ router }, { pipeline, open = true }) =>
+    router.navigate({ to: open ? `${where(pipeline)}/edit` : where(pipeline), search: open ? ({ new: true } as never) : undefined }),
   did: ({ open = true }) => (open ? 'Opened New pipeline' : 'Closed New pipeline'),
-  target: () => ({ kind: 'panel', id: 'new-pipeline' }),
+  target: ({ pipeline }) => ({ kind: 'page', id: `${where(pipeline)}/edit` }),
 });
 
 /** Makes a pipeline (the company's owner and Admins; the server says so to anyone else) and opens it. */

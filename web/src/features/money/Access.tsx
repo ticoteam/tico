@@ -2,7 +2,9 @@ import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { directoryQuery, meQuery, useActor } from '@/data';
 import { Button } from '@/kit/Button';
+import { Avatar } from '@/kit/Avatar';
 import { DatePick } from '@/kit/DatePick';
+import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { MenuItem } from '@/kit/Menu';
@@ -12,7 +14,7 @@ import { List, PageMore, Section, SidePanel } from '@/pagekinds';
 import type { AccessList, Grant, Mate, Team } from './caps';
 import { Ask, DefaultsDialog, useAsk } from './dialogs';
 import { ViewAsDialog } from './forms';
-import { FIN, useFinanceHead } from './head';
+import { FIN, FinanceOwner, useFinanceHead } from './head';
 import { budgetDay, count, dayOf, monthSpan } from './model';
 import { ActLink, readState, usePress, useViewAs, Who } from './parts';
 import { accessQuery, balanceQuery, pnlQuery } from './queries';
@@ -66,8 +68,10 @@ export function AccessPage({ search }: { search: FinanceSearch }) {
   const q = useQuery(accessQuery);
   const acc = q.data as AccessList | null | undefined;
   const all = acc?.teammates ?? [];
-  const sees = all.filter((t) => t.default !== 'none' || (t.grants?.length ?? 0) > 0);
-  const rest = all.length - sees.length;
+  const seeing = (t: Mate) => t.default !== 'none' || (t.grants?.length ?? 0) > 0;
+  const [unfolded, setUnfolded] = useState(false);
+  const rest = all.filter((t) => !seeing(t));
+  const sees = unfolded ? all : all.filter(seeing);
   const may = !viewing && all.some((t) => t.may_grant);
   const at = panelOf(search.panel);
   const sel = at?.[0] === 'mate' ? all.find((t) => t.teammate === at[1]) : undefined;
@@ -80,18 +84,17 @@ export function AccessPage({ search }: { search: FinanceSearch }) {
       actions={
         !viewing && (
           <>
-            {acc?.can_view_as && <Button onClick={() => setPicking(true)}>View as</Button>}
-            {acc?.can_edit_defaults && <Button onClick={() => setEditing(true)}>Edit defaults</Button>}
+            <FinanceOwner />
             {may && (
               <Button variant="primary" onClick={() => setGiving('')}>
                 Give access
               </Button>
             )}
-            {acc?.can_edit_defaults && (
-              <PageMore>
-                <MenuItem label="Finance approver" onSelect={() => setApproving(true)} />
-              </PageMore>
-            )}
+            <PageMore>
+              {acc?.can_view_as && <MenuItem label="View as" onSelect={() => setPicking(true)} />}
+              {acc?.can_edit_defaults && <MenuItem label="Edit defaults" onSelect={() => setEditing(true)} />}
+              {acc?.can_edit_defaults && <MenuItem label="Finance approver" onSelect={() => setApproving(true)} />}
+            </PageMore>
             {editing && <DefaultsDialog defaults={acc?.defaults ?? {}} onOpenChange={setEditing} />}
             {picking && <ViewAsDialog onOpenChange={setPicking} />}
             {giving !== null && acc && <GiveDialog acc={acc} teammate={giving} onOpenChange={(o) => !o && setGiving(null)} />}
@@ -129,11 +132,28 @@ export function AccessPage({ search }: { search: FinanceSearch }) {
               ))}
             </tbody>
           </Table>
-          {rest > 0 && <div className="fold">{`${count(rest)} ${rest === 1 ? 'other sees' : 'others see'} nothing`}</div>}
+          {rest.length > 0 && !unfolded && (
+            <button type="button" className="fold" onClick={() => setUnfolded(true)}>
+              <span className="faces">
+                {rest.slice(0, 6).map((t) => (
+                  <Face key={t.teammate} id={t.teammate} />
+                ))}
+              </span>
+              <span>{`${count(rest.length)} ${rest.length === 1 ? 'other sees' : 'others see'} nothing`}</span>
+              <span className="grow" />
+              <Icon name="chevron" />
+            </button>
+          )}
         </>
       }
     />
   );
+}
+
+/** A small face in the fold of those who see nothing. */
+function Face({ id }: { id: string }) {
+  const a = useActor(id);
+  return <Avatar kind={a?.kind ?? (id.startsWith('bot:') ? 'agent' : 'person')} name={a?.name ?? 'Teammate'} hue={a?.hue} size={16} decorative />;
 }
 
 /** One teammate: where they sit, what they see by default and each view given, with Take back for whoever gave it

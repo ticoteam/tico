@@ -3,7 +3,6 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { run } from '@/actions';
 // eslint-disable-next-line no-restricted-imports -- the test lends its router to dispatch, as the shell's ActionsRoot does
 import { bind } from '@/actions/bind';
 import { queryClient } from '@/data';
@@ -13,8 +12,7 @@ import { DocPage } from './DocPage';
 import { DocsPage } from './DocsPage';
 import { archivedDocsQuery, attributesQuery, cardQuery, contactsQuery, countsQuery, docQuery, docsListQuery, docVersionsQuery, sourcesQuery, typesQuery, type Card } from './queries';
 
-/* The gap wave: Docs' full-text search, a doc's Research, its Path and the unsaved-changes guard, Files' filters, and a
-   contact's Rules and a place. Sample rows only. */
+/* Docs' full-text search, a doc typed in place, and a contact's Rules, Links and a place. Sample rows only. */
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
@@ -109,50 +107,34 @@ describe('Docs search', () => {
 });
 
 describe('a doc', () => {
-  it('asks the Librarian to research a section, from the doc’s ⋯ @s774 @s818', async () => {
-    const sent = serve((_url, method) => (method === 'POST' ? { task_id: 't-77', bot: 'librarian', kind: 'research', target: 'd1' } : {}));
+  it('renames from its title in the head, sending only the title and the version it read @s815', async () => {
+    const sent = serve((_url, method) => (method === 'PATCH' ? { doc: full({ title: 'Plan B', version: 4 }) } : { docs: [], next_cursor: null }));
     queryClient.setQueryData(docQuery('d1').queryKey, full());
     queryClient.setQueryData(docVersionsQuery('d1').queryKey, []);
     at('/library/d1', <DocPage doc="d1" search={{}} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Research' }));
-    fireEvent.change(await screen.findByRole('textbox', { name: 'What to find' }), { target: { value: 'Local hiring rules' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Start research' }));
-    expect(await screen.findByText('Research started')).toBeTruthy();
-    expect(writes(sent)).toEqual([{ url: '/api/v2/librarian/research', method: 'POST', body: { target: 'd1', instructions: 'Local hiring rules' } }]);
-    // A section by its heading, and Tico may start it too (ordinary work).
-    expect((await run('docs.research', { doc: 'd1', section: 'Next', instructions: 'Salaries' }, { via: 'tico' })).ok).toBe(true);
-    expect(writes(sent)[1]?.body).toEqual({ target: 'd1', section: 'Next', instructions: 'Salaries' });
-  });
-
-  it('moves a doc by its Path, sending only what changed @s815', async () => {
-    const sent = serve((_url, method) => (method === 'PATCH' ? { doc: full({ path: 'company/plans/plan.md', version: 4 }) } : { docs: [], next_cursor: null }));
-    queryClient.setQueryData(docQuery('d1').queryKey, full());
-    queryClient.setQueryData(docVersionsQuery('d1').queryKey, []);
-    const router = at('/library/d1?edit=1', <DocPage doc="d1" search={{ edit: 1 }} />);
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Path' }), { target: { value: 'company/plans/plan.md' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(await screen.findByRole('heading', { name: 'Plan' }));
+    const title = await screen.findByRole('textbox', { name: 'Title' });
+    fireEvent.change(title, { target: { value: 'Plan B' } });
+    fireEvent.keyDown(title, { key: 'Enter' });
     await waitFor(() => expect(writes(sent)).toHaveLength(1));
-    expect(writes(sent)[0]).toMatchObject({ url: '/api/v2/docs/d1', method: 'PATCH', body: { version: 3, path: 'company/plans/plan.md' } });
-    // the save's own way out is not stopped
-    await waitFor(() => expect(router.state.location.search).toEqual({}));
-    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(writes(sent)[0]).toMatchObject({ url: '/api/v2/docs/d1', method: 'PATCH', body: { version: 3, title: 'Plan B' } });
   });
 
-  it('asks before leaving with unsaved changes: Keep editing stays, Discard leaves @s815', async () => {
-    serve();
+  it('is typed in place, with no edit mode, and saves on leaving the text @s815', async () => {
+    // the write reads the doc again after: the saved text
+    const sent = serve((url) => (url === '/api/v2/docs/d1' ? { doc: full({ body: 'Grow fast.', version: 4 }) } : { docs: [], next_cursor: null, versions: [] }));
     queryClient.setQueryData(docQuery('d1').queryKey, full());
     queryClient.setQueryData(docVersionsQuery('d1').queryKey, []);
-    const router = at('/library/d1?edit=1', <DocPage doc="d1" search={{ edit: 1 }} />);
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Text' }), { target: { value: 'Half a thought' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(await screen.findByRole('alertdialog', { name: 'Discard changes?' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
-    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
-    expect(router.state.location.search).toMatchObject({ edit: 1 });
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
-    await waitFor(() => expect(router.state.location.search).toEqual({}));
+    at('/library/d1', <DocPage doc="d1" search={{}} />);
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    fireEvent.focus(await screen.findByLabelText('Text'));
+    const text = await screen.findByRole('textbox', { name: 'Text' });
+    fireEvent.change(text, { target: { value: 'Grow fast.' } });
+    fireEvent.blur(text);
+    await waitFor(() => expect(writes(sent)).toHaveLength(1));
+    expect(writes(sent)[0]).toMatchObject({ url: '/api/v2/docs/d1', method: 'PATCH', body: { version: 3, body: 'Grow fast.' } });
+    expect(await screen.findByText('Grow fast.')).toBeTruthy();
+    expect(screen.queryByRole('textbox', { name: 'Text' })).toBeNull();
   });
 });
 
@@ -192,12 +174,19 @@ describe('a contact', () => {
     expect(screen.getByText('Block').closest('.pill')).toBeTruthy();
   });
 
-  it('a person has no Rules section @s786', async () => {
-    serve(() => ({ rows: [], next: null }));
+  it('a person has Rules too, and the threads that name them sit in Links @s786', async () => {
+    serve((url) =>
+      url.startsWith('/api/v2/entities/rules')
+        ? { rules: [] }
+        : url.startsWith('/api/v2/threads/search')
+          ? { hits: [{ thread_id: 'th1', title: 'Spring order', excerpt: '', created_at: null }] }
+          : { rows: [], next: null },
+    );
     seed('person', card({}));
     at('/library/contacts?panel=c1', <ContactsPage search={{ panel: 'c1' }} />);
-    expect((await screen.findAllByText('Ada Sample')).length).toBeGreaterThan(0);
-    expect(screen.queryByText('Rules')).toBeNull();
+    expect(await screen.findByText('None apply')).toBeTruthy();
+    expect((await screen.findByText('Spring order')).closest('a')?.getAttribute('href')).toBe('/threads/th1');
+    expect(screen.getByText('Links')).toBeTruthy();
   });
 
   it('shows a place’s kind, what it is in, its bodies, what sits in it, and why its rules bind us @s786 @s810', async () => {

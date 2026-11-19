@@ -6,4 +6,4 @@ export { configQuery } from './config';
 export { recordVisit } from './visits';
 export { write, NeedsConnection, isNetworkError, quietRoot, isQuiet, QUIET_STALE_MS, type Write } from './optimistic';
 export { heldCount, useHeldCount, type HeldCount } from './held';
-export { directoryQuery, useActor, useActors, withStatus, type Actor, type Directory, type StatusLine } from './directory';
+export { directoryQuery, useActor, useActors, useDirectory, withStatus, type Actor, type Directory, type StatusLine } from './directory';

@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { fmtDate } from '@/lib';
 import { Button } from '@/kit/Button';
 import { Lines, Sparkline } from '@/kit/Chart';
+import { FlowMark } from '@/kit/FlowMark';
 import { Table } from '@/kit/Table';
 import { Dashboard, FiguresStrip, List, Section } from '@/pagekinds';
 import { AccessPage } from './Access';
@@ -10,7 +11,7 @@ import { useBooksReturn } from './booksReturn';
 import { BudgetsPage } from './Budgets';
 import { useCaps } from './caps';
 import { axis, cash, connected, dayOf, monShort, monthSpan, nowCol, ymOf } from './model';
-import { FIN, plural, TAB_NAME, useFinanceHead } from './head';
+import { FIN, FinanceOwner, plural, TAB_NAME, useFinanceHead } from './head';
 import { ActLink, readState, usePress, useViewAs } from './parts';
 import { PnlPage } from './Pnl';
 import { SourcesPage } from './Sources';
@@ -109,6 +110,7 @@ function Overview() {
       {...head}
       state={state}
       onRetry={() => void sources.refetch()}
+      actions={<FinanceOwner />}
       empty={{
         title: 'No source connected',
         action: (
@@ -170,6 +172,7 @@ function Overview() {
                   return (
                     <tr key={it.id}>
                       <td className="t-name">
+                        <FlowMark size={12} className="t-mark" />
                         <ActLink to={FIN} search={{ tab, panel: undefined }} action="finance.setTab" input={{ tab }}>
                           {it.label}
                         </ActLink>

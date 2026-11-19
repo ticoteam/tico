@@ -120,7 +120,7 @@ describe('Settings › Tasks @s1077', () => {
     );
     fireEvent.click(within(ask).getByRole('button', { name: 'Everyone' }));
     fireEvent.change(within(ask).getByRole('spinbutton', { name: 'Tighten after' }), { target: { value: '25' } });
-    fireEvent.click(within(ask).getByRole('button', { name: 'Save' }));
+    fireEvent.keyDown(within(ask).getByRole('spinbutton', { name: 'Tighten after' }), { key: 'Enter' });
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ method: 'PUT', body: { budget: 25, team: true } }));
     const lines = screen.getByRole('region', { name: /Ask me about/ });
     expect(within(lines).getByTitle('Spending')).toBeTruthy();

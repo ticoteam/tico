@@ -2,6 +2,7 @@ import { createRouter } from '@tanstack/react-router';
 import { queryClient } from '@/data/query-client';
 import { takeHelperCode } from '@/features/library/routing';
 import { newAddressFor } from '@/oldAddress/map';
+import { PagePending } from '@/pagekinds';
 import { routeTree } from '@/routeTree.gen';
 import { PageFault } from '@/shell/PageFault';
 
@@ -31,8 +32,16 @@ export const router = createRouter({
   // the cache already holds what a hover preloaded; the router need not keep its own copy
   defaultPreloadStaleTime: 0,
   scrollRestoration: true,
+  /* Places are kept per page, not per history step: opening a panel, a chat or a filter (the search) never moves the
+     page, a page opens where it was left (Back included), and a page body never takes over the last page's place. */
+  getScrollRestorationKey: (l) => l.pathname,
+  scrollToTopSelectors: ['[data-scroll-restoration-id="page-body"]'],
   // a page that breaks while drawing shows its fault in its own place; the menu and Tico stay
   defaultErrorComponent: PageFault,
+  // a page not in the cache: the old one stays 150 ms, then the page kind's bars, held at least 250 ms so they never flash
+  defaultPendingComponent: PagePending,
+  defaultPendingMs: 150,
+  defaultPendingMinMs: 250,
 });
 
 declare module '@tanstack/react-router' {

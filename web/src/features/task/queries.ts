@@ -1,7 +1,7 @@
 import { queryOptions, type QueryClient, type QueryKey } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
 import type { NeedsYou, OkPreview, PagePublished, PageShown, PipelineSettingsList, PublishPageBody, TaskDetail, TaskFileList, TaskLinkView, TaskResult } from '@/api/schema';
-import { keys, queryClient, QUIET_STALE_MS, quietRoot, write } from '@/data';
+import { keys, queryClient, quietRoot, write } from '@/data';
 import type { FileLibrary, FileSearch, TaskFileResult, TaskFileView } from '@/api/schema';
 
 /* One open task: its detail (GET /api/v2/tasks/{tid}, kept current by the stream under keys.tasks.detail), the files
@@ -123,7 +123,6 @@ export const pipelineStagesQuery = queryOptions({
       name: p.name,
       stages: p.stages.map((s) => ({ id: s.id, name: s.name, side: s.side })),
     })),
-  staleTime: QUIET_STALE_MS,
 });
 
 export interface Waiting {
@@ -147,7 +146,6 @@ export const waitingQuery = queryOptions({
     }
     return out;
   },
-  staleTime: QUIET_STALE_MS,
 });
 
 /* ---------------------------------------------------------------- writes */
@@ -382,7 +380,6 @@ export const taskGoalQuery = (goal: string) =>
   queryOptions({
     queryKey: ['task-goal', goal] as const,
     queryFn: async ({ signal }) => (await api.get<GoalResult>(`/api/v2/goals/${enc(goal)}`, { signal })).goal.title,
-    staleTime: QUIET_STALE_MS,
   });
 
 /** A field edit (POST /api/v2/tasks/{tid}): shown at once, the server's task in its place. */

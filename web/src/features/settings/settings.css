@@ -45,7 +45,7 @@ div.row{cursor:default}
 .hl-act{display:flex;justify-content:flex-end}
 
 /* a table's head: one quiet line of column words on the rows' own grid */
-.tbl-head{height:30px;display:grid;grid-template-columns:var(--g);column-gap:var(--s-3);align-items:center;padding:0 var(--s-2);box-shadow:inset 0 -1px 0 var(--line);font-size:var(--t-xs);color:var(--muted);white-space:nowrap}
+.tbl-head{height:var(--ctl);display:grid;grid-template-columns:var(--g);column-gap:var(--s-3);align-items:center;padding:0 var(--s-2);box-shadow:inset 0 -1px 0 var(--line);font-size:var(--t-xs);color:var(--muted);white-space:nowrap}
 .tbl-head .is-num{text-align:right}
 
 .g-person{--g:var(--av-sm) minmax(0,1fr) minmax(0,1.1fr) 62px 86px}
@@ -54,8 +54,6 @@ div.row{cursor:default}
 .g-hl{--g:120px minmax(0,1fr) auto 92px}
 .g-door{--g:minmax(0,1fr) 120px}
 .g-cred{--g:minmax(0,1fr) 96px 96px 96px}
-.g-comp{--g:minmax(0,1fr) 120px 96px 118px}
-.g-model{--g:minmax(0,1fr) 120px 96px}
 .g-bots{--g:16px var(--av-sm) minmax(96px,1fr) 176px 124px 44px 140px 48px}
 .g-ret{--g:minmax(0,1fr) auto}
 .g-host{--g:minmax(0,1fr) 118px 72px}
@@ -63,6 +61,7 @@ div.row{cursor:default}
 .g-use{--g:var(--av-sm) minmax(0,1fr) 112px 44px 44px 76px 52px}
 .g-mod{--g:minmax(0,1fr) 136px 44px 44px 76px 52px}
 .g-lim{--g:var(--av-sm) minmax(0,1fr) 150px 60px 60px 48px}
+.g-lim .row-title{padding-inline-start:calc(var(--depth, 0) * var(--s-3h))}
 .g-utask{--g:minmax(0,1fr) 40px 56px 44px 56px 44px}
 .g-road{--g:minmax(0,1fr) minmax(0,1.6fr) 28px}
 .g-ctype{--g:minmax(0,1fr) 96px}
@@ -114,10 +113,15 @@ div.row{cursor:default}
 /* Usage (more.css): the range, the sum of an opened row, its token bar and key */
 .chart-sec{padding:var(--s-0) var(--s-2) var(--s-2h)}
 .u-tools{flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-2);padding:var(--s-1) 0 var(--s-2)}
+/* History: one list that scrolls inside the section, its page read as it nears the end */
+.u-since{margin-left:auto;font-size:var(--t-sm);color:var(--muted)}
+.set-body:has(>.set-vl){display:flex;flex-direction:column;overflow:hidden}
+.set-vl{flex:1;min-height:0;overflow:auto;scrollbar-width:thin}
+.set-vl .row-title b{font-weight:var(--w-strong)}
 .u-sum{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--s-1) var(--s-4);padding:var(--s-0) var(--s-2) var(--s-2);font-size:var(--t-sm);color:var(--ink-2);font-variant-numeric:tabular-nums}
 .u-sum b{color:var(--ink);font-weight:var(--w-strong)}
-.tokbar{display:flex;gap:var(--s-0);height:8px;margin:var(--s-0) var(--s-2) var(--s-2h)}
-.tokbar i{display:block;height:100%;min-width:3px;border-radius:var(--r-chip)}
+.tokbar{display:flex;gap:var(--s-0);height:var(--s-2);margin:var(--s-0) var(--s-2) var(--s-2h)}
+.tokbar i{display:block;height:100%;min-width:var(--s-0);border-radius:var(--r-chip)}
 .tok-key{display:flex;flex-wrap:wrap;gap:var(--s-1) var(--s-5);padding:0 var(--s-2) var(--s-2);font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums}
 .tok-key span{display:inline-flex;align-items:center;gap:var(--s-1h);white-space:nowrap}
 .tok-key i{width:8px;height:8px;border-radius:var(--r-chip);flex:none}
@@ -132,9 +136,8 @@ div.row{cursor:default}
 
 /* Changelog: a section a version, a line a change */
 .cl-list{list-style:none;margin:0;padding:0 var(--s-2) var(--s-1h);display:grid;gap:var(--s-1h)}
-.cl-list li{display:grid;grid-template-columns:52px minmax(0,1fr);align-items:baseline;line-height:1.4;color:var(--ink-2)}
+.cl-list li{display:grid;grid-template-columns:var(--s-12) minmax(0,1fr);align-items:baseline;line-height:1.4;color:var(--ink-2)}
 .cl-kind{font-size:var(--t-xs);color:var(--muted)}
-.cl-list li.cl-act{grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-3)}
 
 /* ---- agents, computers and models (anchor) ---- */
 
@@ -225,8 +228,8 @@ html[data-layout="cards"] .g-hl .row-state{grid-area:word}
 html[data-layout="cards"] .g-hl .hl-act{display:none}
 html[data-layout="cards"] .g-host{--g:minmax(0,1fr) auto auto}
 html[data-layout="cards"] .list-tools .search{max-width:none}
-html[data-layout="cards"] .g-tok,html[data-layout="cards"] .g-comp,html[data-layout="cards"] .g-cred,html[data-layout="cards"] .g-model{--g:minmax(0,1fr) auto}
-html[data-layout="cards"] .g-tok>:nth-child(n+3),html[data-layout="cards"] .g-comp>:nth-child(n+3),html[data-layout="cards"] .g-cred>:nth-child(n+3),html[data-layout="cards"] .g-model>:nth-child(n+3){display:none}
+html[data-layout="cards"] .g-tok,html[data-layout="cards"] .g-cred{--g:minmax(0,1fr) auto}
+html[data-layout="cards"] .g-tok>:nth-child(n+3)>:nth-child(n+3),html[data-layout="cards"] .g-cred>:nth-child(n+3)>:nth-child(n+3){display:none}
 html[data-layout="cards"] .g-fsub{--g:minmax(0,1fr) 116px 28px}
 html[data-layout="cards"] .g-fsub>:nth-child(2),html[data-layout="cards"] .g-fsub>:nth-child(3){display:none}
 html[data-layout="cards"] .g-use{--g:var(--av-sm) minmax(0,1fr) auto}
@@ -245,7 +248,6 @@ html[data-layout="cards"] .g-lim .u-per{grid-area:per;text-align:right}
 html[data-layout="cards"] .g-utask{--g:minmax(0,1fr) 56px 44px}
 html[data-layout="cards"] .g-utask>:nth-child(2),html[data-layout="cards"] .g-utask>:nth-child(4),html[data-layout="cards"] .g-utask>:nth-child(5){display:none}
 html[data-layout="cards"] .cl-list li{grid-template-columns:48px minmax(0,1fr)}
-html[data-layout="cards"] .cl-list li.cl-act{grid-template-columns:minmax(0,1fr) auto}
 /* phone: the search has its own line, edge to edge; the count and the grouping go under it */
 html[data-layout="cards"] .fl-tools .search{flex:1 1 100%}
 /* the row's ⋯ on the 16 gutter, as a head's: its 20px icon sits 12 in from the 44px press, so the press reaches into the

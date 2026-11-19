@@ -13,6 +13,7 @@
 @keyframes glint{0%,100%{transform:rotate(-22deg) translate(0,0)}34%{transform:rotate(-14deg) translate(10%,6%)}68%{transform:rotate(-28deg) translate(-8%,2%)}}
 .av-dot{width:var(--a);height:var(--a);display:inline-grid;place-items:center;flex:none}
 .flow-mark{display:inline-block;width:20px;aspect-ratio:1;flex:none;vertical-align:middle;pointer-events:none}
+.li-play .flow-mark{width:22px}
 .flow-mark svg{display:block;width:100%;height:100%;fill:var(--dot);overflow:visible}
 .flow-mark .f1{fill:color-mix(in srgb,var(--dot) 58%,var(--ground))}
 .flow-mark.live g{animation:fl-ride 3.6s ease-in-out infinite}

@@ -8,7 +8,7 @@ import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { toast } from '@/kit/Toast';
 import { decisionName, decisionOf, reasonOf, tabAddress } from './model';
-import { FlowMark } from './parts';
+import { FlowMark } from '@/kit/FlowMark';
 import { waitingQuery, type TaskData } from './queries';
 
 export interface AnswerProps {

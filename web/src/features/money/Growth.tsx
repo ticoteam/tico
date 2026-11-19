@@ -243,7 +243,7 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
             )}
             <Channels read={d} selected={opened} phone={phone} cac={valueKind(d) !== 'retention'} />
             <Trends read={d} />
-            <Retention rows={d.retention ?? []} />
+            <Retention rows={d.retention ?? []} phone={phone} />
             {!kpisLead ? <Kpis metrics={metrics} /> : metrics.length > 6 && <Kpis metrics={metrics.slice(6)} />}
             <HealthFoot health={d.health} quietOnly={loud.length > 0} />
           </div>
@@ -486,9 +486,10 @@ function KeptCell({ cohort, w, days }: { cohort: GrowthCohort; w: GrowthCohort['
   );
 }
 
-/** Each cohort kept by day 30, 90 and 180. */
-function Retention({ rows }: { rows: readonly GrowthCohort[] }) {
+/** Each cohort kept by day 30, 90 and 180; on a phone, where 180 would push the table sideways, by day 30 and 90. */
+function Retention({ rows, phone }: { rows: readonly GrowthCohort[]; phone: boolean }) {
   if (!rows.length) return null;
+  const windows = phone ? WINDOWS.slice(0, 2) : WINDOWS;
   return (
     <Section name="Retention" target="growth:retention">
       <div className="gr-ret">
@@ -496,9 +497,9 @@ function Retention({ rows }: { rows: readonly GrowthCohort[] }) {
           <colgroup>
             <col />
             <col className="t-n" />
-            <col className="t-col" />
-            <col className="t-col" />
-            <col className="t-col" />
+            {windows.map(([k]) => (
+              <col key={k} className="t-col" />
+            ))}
           </colgroup>
           <thead>
             <tr>
@@ -506,15 +507,11 @@ function Retention({ rows }: { rows: readonly GrowthCohort[] }) {
               <th scope="col" className="num">
                 Customers
               </th>
-              <th scope="col" className="num">
-                Day 30
-              </th>
-              <th scope="col" className="num">
-                Day 90
-              </th>
-              <th scope="col" className="num">
-                Day 180
-              </th>
+              {windows.map(([k, days]) => (
+                <th key={k} scope="col" className="num">
+                  {`Day ${days}`}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -522,7 +519,7 @@ function Retention({ rows }: { rows: readonly GrowthCohort[] }) {
               <tr key={r.cohort}>
                 <td className="t-name">{isYm(r.cohort) ? monthName(r.cohort) : r.cohort}</td>
                 <td className="num">{count(r.entered)}</td>
-                {WINDOWS.map(([k, days]) => (
+                {windows.map(([k, days]) => (
                   <KeptCell key={k} cohort={r} w={r[k]} days={days} />
                 ))}
               </tr>

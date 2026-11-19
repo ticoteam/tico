@@ -10,7 +10,7 @@ import { Pill } from '@/kit/Pill';
 import { Table, Td, Th, Tr } from '@/kit/Table';
 import { fmtAge, fmtDate } from '@/lib';
 import { Dashboard, FiguresStrip, PageMore, Section, SidePanel, type Figure, type PageTab } from '@/pagekinds';
-import { Go, PanelLink, useDo, usdShort } from './parts';
+import { Go, PageOwner, PanelLink, useDo, usdShort } from './parts';
 import {
   listeningStatsQuery,
   marketBriefingQuery,
@@ -71,11 +71,9 @@ export function MarketTab({ head, search }: { head: Head; search: { panel?: stri
   // Never set up: nothing in the market, nothing sized and no briefing yet.
   const blank = count.data === 0 && !segs.length && !items.length;
   const none = <span className="none">None yet</span>;
-  // The mock's four figures, each kept with its empty line until the server has it, so the page keeps its shape.
+  // The mock's four figures. Reachable and Our share are left out until the server has numbers for them.
   const figures: Figure[] = [
     { label: 'Market', value: total != null ? usdShort(total) : none, sub: spend.data?.name ?? undefined, target: 'figure:market' },
-    { label: 'Reachable', value: none, target: 'figure:reachable' },
-    { label: 'Our share', value: none, target: 'figure:share' },
     { label: 'Buyer posts', value: daily.length ? sum(daily.at(-1)?.sources) : none, sub: daily.length ? 'today' : undefined, target: 'figure:posts' },
   ];
   const pending = (spend.isPending && brief.isPending) || (blank && owner && setup.isPending);
@@ -85,6 +83,7 @@ export function MarketTab({ head, search }: { head: Head; search: { panel?: stri
   return (
     <Dashboard
       {...head}
+      actions={<PageOwner page="strategy" />}
       more={
         <PageMore target="market:more">
           <MenuItem label="Definition" onSelect={() => void open.run({ panel: 'definition' })} />
@@ -119,17 +118,17 @@ export function MarketTab({ head, search }: { head: Head; search: { panel?: stri
                     <tr>
                       <Th>Organization</Th>
                       <Th>Sells</Th>
-                      <Th num>Figure</Th>
+                      <Th num>Yearly sales</Th>
                     </tr>
                   </thead>
                   <tbody>
                     {players.map((p, i) => {
-                      const fig = p.figures?.find((f) => f.value != null);
+                      const sales = p.figures?.find((f) => f.metric === 'revenue' && typeof f.value === 'number')?.value;
                       return (
                         <Tr key={`${p.entity_id ?? p.name}:${i}`} className={p.us ? 'is-us' : undefined} linked={!!p.entity_id} selected={kind === 'player' && p.entity_id === ref}>
                           <Td>{p.entity_id ? <PanelLink panel={`player:${p.entity_id}`}>{p.name}</PanelLink> : p.name}</Td>
                           <td className="dim">{p.sells}</td>
-                          <Td num>{typeof fig?.value === 'number' ? usdShort(fig.value) : (fig?.value ?? '')}</Td>
+                          <Td num>{typeof sales === 'number' ? usdShort(sales) : ''}</Td>
                         </Tr>
                       );
                     })}

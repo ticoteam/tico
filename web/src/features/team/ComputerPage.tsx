@@ -4,19 +4,18 @@ import { useAction } from '@/actions';
 import { useActors, type Actor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
-import { Sparkline } from '@/kit/Chart';
 import { Icon } from '@/kit/Icon';
 import { Link } from '@/kit/Link';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Pill } from '@/kit/Pill';
 import { fmtDate } from '@/lib';
-import { FiguresStrip, Record as RecordPage, Section, type PageState } from '@/pagekinds';
+import { Record as RecordPage, Section, type PageState } from '@/pagekinds';
 import { computerStatus, modelLine, whoHref } from './model';
 import { ModelPicker } from './ModelPicker';
 import { ConfirmDialog, Foot } from './parts';
 import { Screen, ScreenTools, type ScreenMode } from './Screen';
 import { SignIns } from './SignIns';
-import { agentsQuery, computersQuery, modelsQuery, performanceQuery, type AgentRow, type Computer, type PerfPoint } from './queries';
+import { agentsQuery, computersQuery, modelsQuery, performanceQuery, type AgentRow, type Computer } from './queries';
 
 const time = (d: Date) => fmtDate(d);
 const pct = (n: number | undefined) => (n === undefined || !Number.isFinite(n) ? '' : `${Math.round(n)}%`);
@@ -92,31 +91,38 @@ function Info({ c, onRestart }: { c: Computer; onRestart: () => void }) {
   const roster = useQuery(agentsQuery);
   const actors = useActors();
   const { data: models } = useQuery(modelsQuery);
-  const perf = useQuery({ ...performanceQuery(c.id), enabled: c.online });
-  const [picking, setPicking] = useState<AgentRow | null>(null);
+  const last = useQuery({ ...performanceQuery(c.id), enabled: c.online }).data?.points?.at(-1);
+  const [picking, setPicking] = useState<AgentRow[] | null>(null);
   const on = (roster.data ?? []).filter((r) => c.bots?.includes(r.id) || r.machine?.runner_id === c.id);
-  const points = perf.data?.points ?? [];
-  const last = points.at(-1);
-  const series = (i: number) => points.map((p: PerfPoint) => p[i] ?? 0);
+  const lines = on.map((r) => modelLine(r, models?.models));
+  const status = [...computerStatus(c, time), ...(c.online && last ? [`CPU ${pct(last[1])}`, `Memory ${pct(last[3])}`] : [])];
+  const pick = (words: string, label: string, rows: AgentRow[]) => (
+    <button className="field is-select m-pick" type="button" aria-haspopup="dialog" aria-label={label} title={words} onClick={() => setPicking(rows)}>
+      <span>{words}</span>
+      <Icon name="chevdown" />
+    </button>
+  );
   return (
     <>
       <p className="status">
-        {computerStatus(c, time).map((x) => (
+        {status.map((x) => (
           <span key={x}>{x}</span>
         ))}
       </p>
-      {points.length > 1 && (
-        <FiguresStrip
-          label="Performance"
-          figures={[
-            { label: 'CPU', value: pct(last?.[1]), spark: <Sparkline points={series(1)} label="CPU over the last day" /> },
-            { label: 'Memory', value: pct(last?.[3]), spark: <Sparkline points={series(3)} label="Memory over the last day" /> },
-            { label: 'Load', value: last ? last[5].toFixed(1) : '', spark: <Sparkline points={series(5)} label="Load over the last day" /> },
-          ]}
-        />
-      )}
       <Section name="Agents on this computer" count={on.length}>
-        {on.map((r) => {
+        {on.length > 1 && (
+          <div className="row bm">
+            <span className="row-mark" />
+            <span className="comp-all" aria-hidden="true">
+              <Icon name="rules" />
+            </span>
+            <span className="mate-name">All agents</span>
+            <span className="mate-now" />
+            <span className="row-pills" />
+            {pick(new Set(lines).size === 1 ? lines[0]! : 'Mixed', 'Model for all agents', on)}
+          </div>
+        )}
+        {on.map((r, i) => {
           const a = actors.find((x) => x.slug === r.slug);
           const name = a?.name ?? r.display_name ?? r.slug;
           return (
@@ -127,11 +133,8 @@ function Info({ c, onRestart }: { c: Computer; onRestart: () => void }) {
                 {name}
               </Link>
               <span className="mate-now">{a?.status ?? ''}</span>
-              <span className="row-pills">{r.status === 'paused' && <Pill flag>Paused</Pill>}</span>
-              <button className="field is-select m-pick" type="button" aria-haspopup="dialog" title="Model" onClick={() => setPicking(r)}>
-                <span>{modelLine(r, models?.models)}</span>
-                <Icon name="chevdown" />
-              </button>
+              <span className="row-pills">{(!c.online || r.status === 'paused') && <Pill flag>Stopped</Pill>}</span>
+              {pick(lines[i]!, `${name}'s model`, [r])}
             </div>
           );
         })}
@@ -153,7 +156,7 @@ function Info({ c, onRestart }: { c: Computer; onRestart: () => void }) {
           </Foot>
         )}
       </Section>
-      {picking && <ModelPicker agent={picking} open onOpenChange={(o) => !o && setPicking(null)} />}
+      {picking?.[0] && <ModelPicker agent={picking[0]} also={picking.slice(1)} open onOpenChange={(o) => !o && setPicking(null)} />}
     </>
   );
 }

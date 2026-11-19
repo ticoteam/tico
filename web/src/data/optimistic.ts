@@ -38,17 +38,19 @@ const keysOf = (key: QueryKey | QueryKey[]): QueryKey[] =>
 
 // ---------------------------------------------------------------- areas with no live topic
 
-/** How old a quiet area's read may be when a page opens (the feature's queries.ts sets it as staleTime). */
+/** How old a quiet area's read may be when a page opens: every key under a quiet root has it as its staleTime. */
 export const QUIET_STALE_MS = 60_000;
 const quiet = new Set<string>();
 
 /**
  * Mark a key root as having no live topic (goals, KPIs, budgets, finance, records: README). Its keys are read
  * again after the person's own writes (below), when the stream is back after being down (live/stream.ts), and on
- * page open when older than QUIET_STALE_MS. Nothing polls.
+ * page open when older than QUIET_STALE_MS. Nothing polls. A query's own staleTime still wins (a version never
+ * changes: Infinity).
  */
 export function quietRoot(root: string): void {
   quiet.add(root);
+  queryClient.setQueryDefaults([root], { staleTime: QUIET_STALE_MS });
 }
 
 export const isQuiet = (key: QueryKey): boolean => typeof key[0] === 'string' && quiet.has(key[0]);

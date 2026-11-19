@@ -1,7 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { ROUTINE_STATES, RULE_TABS, RUNS_RANGE } from './actions';
 import type { ListeningSearch } from './ListeningPage';
-import { allRunsQuery, dueQuery, endpointsQuery, hooksQuery, matchesQuery, orgRulesQuery, reachQuery, routinesQuery, ruleGroupsQuery, RUN_RANGES, RUN_STATUSES, stageRulesQuery, teamsQuery, watchesQuery, watchQuery } from './queries';
+import { allRunsQuery, dueQuery, hooksQuery, matchesQuery, orgRulesQuery, reachQuery, routinesQuery, ruleGroupsQuery, RUN_RANGES, RUN_STATUSES, stageRulesQuery, teamsQuery, watchesQuery, watchQuery } from './queries';
 import type { RoutinesSearch } from './RoutinesPage';
 import type { RulesSearch } from './RulesPage';
 
@@ -65,7 +65,7 @@ const warm = (reads: Promise<unknown>[]) => Promise.all(reads).catch(() => undef
 
 export function loadRoutines(qc: QueryClient, search: RoutinesSearch): Promise<unknown> {
   if (search.tab === 'runs') return warm([qc.ensureInfiniteQueryData(allRunsQuery(search.range ?? RUNS_RANGE, search.status))]);
-  if (search.tab === 'webhooks') return warm([qc.ensureQueryData(hooksQuery), qc.ensureQueryData(endpointsQuery)]);
+  if (search.tab === 'webhooks') return warm([qc.ensureQueryData(hooksQuery)]);
   return warm([qc.ensureQueryData(routinesQuery)]);
 }
 

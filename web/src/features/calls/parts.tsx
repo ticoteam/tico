@@ -48,9 +48,10 @@ export function useNameOf(): (actor: string) => string {
   return (actor) => data?.byId[actor]?.name ?? bare(actor);
 }
 
-/** On now: three ink bars that move (cal.css .live-mark). */
+/** On now: the call's level bars (the Dot's `.lvl`), standing still. */
 export const LiveMark = () => (
-  <span className="live-mark" role="img" aria-label="Live now">
+  <span className="lvl is-on live-mark" role="img" aria-label="Live now">
+    <i />
     <i />
     <i />
     <i />

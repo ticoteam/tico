@@ -8,11 +8,23 @@ import { run } from '@/actions/run';
 import { queryClient } from '@/data';
 import { agentsQuery } from '@/features/team/exports';
 import { Toasts } from '@/kit/Toast';
-import { Gateway } from './Gateway';
-import { agentUsageQuery, billingQuery, gatewayQuery, historyFor, limitsQuery, taskCapsQuery, usageQuery } from './queries';
+import { agentUsageQuery, billingQuery, historyQuery, limitsQuery, taskCapsQuery, usageQuery } from './queries';
 import { SettingsPage } from './SettingsPage';
 import { UsagePage } from './Usage';
 
+// jsdom has no layout: the list draws every row, and End stands for reaching its end.
+vi.mock('@/kit/VirtualList', () => ({
+  VirtualList: <T,>({ items, getKey, renderItem, label, onReachEnd }: { items: readonly T[]; getKey: (t: T) => string; renderItem: (t: T, i: number) => ReactNode; label?: string; onReachEnd?: () => void }) => (
+    <div role="list" aria-label={label}>
+      {items.map((t, i) => (
+        <div key={getKey(t)}>{renderItem(t, i)}</div>
+      ))}
+      <button type="button" onClick={onReachEnd}>
+        End
+      </button>
+    </div>
+  ),
+}));
 vi.mock('@/search', () => ({ SearchDialog: () => null }));
 vi.mock('@/tico/dot', () => ({ Dot: () => null, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
@@ -116,17 +128,16 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('History: older pages', () => {
-  it('Show older reads the next page by its cursor @s1080', async () => {
+  it('reads the next page by its cursor when the list reaches its end @s1080', async () => {
     serve((url) => (url.includes('before=c1') ? ok({ items: [{ id: 'h0', at: '2026-11-01T09:00:00Z', actor: 'human:p1', kind: 'task', subject: 'Older work' }], names: { 'human:p1': 'Ana Sample' }, next: null }) : ok({})));
-    queryClient.setQueryData(historyFor().queryKey, { items: [{ id: 'h1', at: '2026-11-18T09:00:00Z', actor: 'human:p1', kind: 'task', subject: 'New work', result: '' }], names: { 'human:p1': 'Ana Sample' }, next: 'c1' } as never);
+    queryClient.setQueryData(historyQuery.queryKey, { items: [{ id: 'h1', at: '2026-11-18T09:00:00Z', actor: 'human:p1', kind: 'task', subject: 'New work', result: '' }], names: { 'human:p1': 'Ana Sample' }, next: 'c1' } as never);
     show(<SettingsPage section="history" />, '/settings/history');
-    fireEvent.click(await screen.findByRole('button', { name: 'Show older' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'End' }));
     expect(await screen.findByTitle('Ana Sample, Older work')).toBeTruthy();
     expect(screen.getByTitle('Ana Sample, New work')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Show older' })).toBeNull();
+    expect(read.filter((u) => u.includes('before=')).length).toBe(1);
   });
 });
-
 
 describe('Usage › Spend: a filter', () => {
   it('the filter narrows the read by a team or a model, nothing else @s1086', async () => {
@@ -151,7 +162,7 @@ describe('Usage › Limits: company, teams, Add limit, the panel', () => {
     expect((await screen.findByTitle('Whole company')).getAttribute('href')).toContain('open=pool');
     expect(screen.getByTitle('Product')).toBeTruthy();
     const design = screen.getByTitle('Design').querySelector('.row-title') as HTMLElement;
-    expect(design.style.paddingInlineStart).toBe('14px');
+    expect(design.style.getPropertyValue('--depth')).toBe('1');
     fireEvent.click(screen.getByRole('button', { name: 'Add limit' }));
     const dlg = await screen.findByRole('dialog', { name: 'Add limit' });
     await pick(within(dlg).getByRole('combobox', { name: 'For' }), /^Design/);
@@ -175,6 +186,14 @@ describe('Usage › Limits: company, teams, Add limit, the panel', () => {
       ['/api/v2/usage/limits/builder', { monthly_usd: 5 }],
       [expect.stringContaining('/api/v2/usage/limits'), expect.objectContaining({ monthly_usd: 25 })],
     ]);
+  });
+
+  it('Count plan runs is a switch; Tico may turn it on, never off @s1087', async () => {
+    serve(() => ok({}));
+    seedLimits();
+    expect(await run('usage.countPlanRuns', { on: false }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(await run('usage.countPlanRuns', { on: true }, { via: 'tico' })).toMatchObject({ ok: true });
+    expect(sent.map((x) => [x.url, x.body])).toEqual([['/api/v2/usage/limits', { count_subscription: true }]]);
   });
 
   it('an opened agent shows where its money went, its models and its task caps @s368 @s1087', async () => {
@@ -274,19 +293,5 @@ describe('Billing: months, statement, credit', () => {
     const link = await screen.findByRole('link', { name: 'Add credit' });
     expect(link.getAttribute('href')).toBe('https://book.example.test');
     expect(screen.queryByRole('link', { name: 'Change plan' })).toBeNull();
-  });
-});
-
-describe('Tico Gateway: status and Check now', () => {
-  const GW = { connected: true, url: '', default_url: 'https://gw.example.test', editable: true, preview: 'abc…xyz', revision: 2, working: true, message: 'Key works' };
-
-  it('shows the status and checks now @s710', async () => {
-    serve((url) => (url.endsWith('/gateway/check') ? ok({ ...GW, message: 'Checked just now' }) : ok(GW)));
-    queryClient.setQueryData(gatewayQuery.queryKey, GW);
-    show(<Gateway />, '/settings/models');
-    expect(await screen.findByText('Key works')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Check now' }));
-    await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/providers/gateway/check', method: 'POST' }));
-    expect(await screen.findAllByText('Checked just now')).not.toHaveLength(0);
   });
 });

@@ -1,3 +1,4 @@
+import { useLocation } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { Skeleton } from '@/kit/Skeleton';
 import { Page, PageBody, PanelSlot, SkRows } from '@/pagekinds/_parts';
@@ -26,6 +27,20 @@ export function List({ tabs, filter, figures, sections, panel, ...page }: ListPr
         {figures}
         {sections}
       </PageBody>
+    </Page>
+  );
+}
+
+/** The router's page while a new page's reads are on their way. The router holds the old page for 150 ms first
+    (`defaultPendingMs`), so the bars show at once here. The title is the area's name until the page knows its own. */
+export function PagePending() {
+  const path = useLocation({ select: (l) => l.pathname });
+  const area = path.split('/')[1] ?? '';
+  return (
+    <Page kind="list" title={area ? area.charAt(0).toUpperCase() + area.slice(1) : 'Tico'} path={path} skeleton={null}>
+      <div className="pk-loading" role="status" aria-busy="true" aria-label="Loading">
+        <ListSkeleton />
+      </div>
     </Page>
   );
 }

@@ -10,6 +10,7 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { PictureViewer, type Picture } from '@/kit/PictureViewer';
+import { Skeleton, useDelayed } from '@/kit/Skeleton';
 import { toast } from '@/kit/Toast';
 import type { TaskSearch } from './exports';
 import { download } from './Files';
@@ -29,7 +30,19 @@ export function DocFrame({ task, doc }: { task: string; doc: TaskDocument }) {
   const src = page.data?.page.src;
   return (
     <div className="frame is-inset">
-      {src && <iframe src={src} title={doc.title || doc.name} sandbox={PAGE_SANDBOX} referrerPolicy="no-referrer" />}
+      {src ? <iframe src={src} title={doc.title || doc.name} sandbox={PAGE_SANDBOX} referrerPolicy="no-referrer" /> : <PageBones />}
+    </div>
+  );
+}
+
+const BONES = [38, 92, 86, 64, 90, 72, 48];
+
+/** A page's bones while it is read, after 150 ms: a heading and a few lines in the frame. */
+export function PageBones() {
+  const shown = useDelayed(150);
+  return (
+    <div className="tv-bones" role="status" aria-busy="true" aria-label="Loading the page">
+      {shown && BONES.map((w, i) => <Skeleton key={i} width={w} className={i ? undefined : 'sk-title'} />)}
     </div>
   );
 }

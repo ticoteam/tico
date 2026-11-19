@@ -5,7 +5,7 @@ import { loadRoutines, validateRoutinesSearch } from '@/features/routines/routin
 /** Routines: `?tab=webhooks`; one routine, a built-in one or a webhook opens in `?panel=`. */
 export const Route = createFileRoute('/company/routines')({
   validateSearch: validateRoutinesSearch,
-  loaderDeps: ({ search }) => search,
+  loaderDeps: ({ search: { tab, status, range } }) => ({ tab, status, range }),
   loader: ({ context, deps }) => loadRoutines(context.queryClient, deps),
   component: Page,
 });

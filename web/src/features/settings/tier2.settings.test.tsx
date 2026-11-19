@@ -13,7 +13,6 @@ import { Toasts } from '@/kit/Toast';
 import { Computers } from './Agents';
 import { useDestination } from './Destination';
 import {
-  activityQuery,
   botAccessQuery,
   botMailQuery,
   botsQuery,
@@ -298,7 +297,6 @@ describe('Settings › Changelog @s1068', () => {
         { ...ENTRY, kind: 'product', id: 'e3', title: 'Calls ring on the phone', version: '0.0.1' },
       ],
     } as never);
-    queryClient.setQueryData(activityQuery.queryKey, { ...LIST, entries: [] } as never);
     show(<SettingsPage section="changelog" />, '/settings/changelog');
     const newest = await screen.findByRole('region', { name: /0\.0\.2/ });
     expect(within(newest).getByText('Flow asks one at a time')).toBeTruthy();
@@ -311,7 +309,6 @@ describe('Settings › Changelog @s1068', () => {
   it('Add update publishes a title and its bullets @s1120', async () => {
     serve();
     queryClient.setQueryData(changelogQuery.queryKey, { ...LIST, can_add: true, entries: [] } as never);
-    queryClient.setQueryData(activityQuery.queryKey, { ...LIST, entries: [] } as never);
     show(<SettingsPage section="changelog" />, '/settings/changelog');
     fireEvent.click(await screen.findByRole('button', { name: 'Add update' }));
     const dlg = await screen.findByRole('dialog', { name: 'Product update' });
@@ -327,18 +324,6 @@ describe('Settings › Changelog @s1068', () => {
         body: { title: 'Calls on the phone', bullets: ['Ring on the phone', 'Answer from the lock screen'] },
       }),
     );
-  });
-
-  it("an agent's line opens the task's reported outcome over the page @s1119", async () => {
-    serve((url) => (url.startsWith('/api/v2/tasks/t9') ? ok({ task: { id: 't9', title: 'Sample task', note: 'It shipped.' }, runs: [], children: [] }) : undefined));
-    queryClient.setQueryData(changelogQuery.queryKey, { ...LIST, entries: [] } as never);
-    queryClient.setQueryData(activityQuery.queryKey, { ...LIST, entries: [{ ...ENTRY, kind: 'activity', id: 'e1', title: 'Shipped a sample', task_id: 't9' }] } as never);
-    const router = show(<Opened section="changelog" />, '/settings/changelog');
-    fireEvent.click(await screen.findByRole('button', { name: /Agent activity/ }));
-    fireEvent.click(await screen.findByRole('button', { name: 'View outcome' }));
-    await waitFor(() => expect(router.state.location.search).toEqual({ open: 't9' }));
-    const dlg = await screen.findByRole('dialog', { name: 'Reported task outcome' });
-    expect(await within(dlg).findByText('It shipped.')).toBeTruthy();
   });
 });
 

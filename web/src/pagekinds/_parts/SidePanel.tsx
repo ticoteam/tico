@@ -1,5 +1,6 @@
 import { useLayoutEffect, useSyncExternalStore, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { Count } from '@/kit/Count';
 import { Icon } from '@/kit/Icon';
 import { Panel } from '@/kit/Panel';
 import { useCards } from '@/kit/Popover';
@@ -9,6 +10,8 @@ export interface SidePanelProps {
   title: string;
   /** `<kind>:<id>` for Tico's flights; set on the name. */
   target?: string;
+  /** A muted count after the name ("QA 6"). */
+  count?: number;
   /** Before the name: a face or a mark. */
   lead?: ReactNode;
   /** Quiet buttons in the head, before the close button. */
@@ -24,7 +27,7 @@ export interface SidePanelProps {
 
 /** A row opened as its own sheet right of the page (R24): the kit's panel with the name as a flight target. On a phone
     it is a page pushed over the page (layout.md 8): a back arrow stands for the x. */
-export function SidePanel({ title, target, lead, actions, foot, onClose, className, children }: SidePanelProps) {
+export function SidePanel({ title, target, count, lead, actions, foot, onClose, className, children }: SidePanelProps) {
   const cards = useCards();
   return (
     <Panel
@@ -42,6 +45,7 @@ export function SidePanel({ title, target, lead, actions, foot, onClose, classNa
           )}
           {lead}
           <b data-target={target}>{title}</b>
+          {count !== undefined && <Count n={count} />}
           {actions && <span className="grow" />}
           {actions}
         </>

@@ -1,19 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
-import { Button } from '@/kit/Button';
-import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { Markdown } from '@/kit/Markdown';
 import { PictureViewer } from '@/kit/PictureViewer';
-import { ChatWith, press } from './parts';
 import { fileQuery, fileTextQuery, fileUrl, fileVersionsQuery } from './queries';
 import { viewing } from './viewing';
 import './library.css';
 
 /* A file wherever it opens (the old app's viewer.ts and file-review.ts): Files, a task's Details, a link in a chat.
-   A picture opens full size; anything else opens over the page with Download, its maker's chat and the way to its
-   page in Files, where its versions are. */
+   A picture opens full size over the page; anything else opens as its page in Files. */
 
 const TEXT = /^(text\/|application\/(json|xml|csv|x-yaml|yaml|javascript))/;
 const MARKDOWN = /^text\/(x-)?markdown/;
@@ -189,56 +185,9 @@ export function FilePreview({ file, version }: { file: string; version?: number 
   );
 }
 
-const chatOf = (bot: string | undefined) => (bot ? (bot.includes(':') ? bot : `bot:${bot}`) : null);
-
-/** A file over the page. A picture uses the full-size viewer; anything else a wide dialog. */
-export function FileViewer({ file, version, onClose }: { file: string; version?: number; onClose: () => void }) {
-  const f = useQuery(fileQuery(file));
-  const versions = useQuery(fileVersionsQuery(file));
-  const shown = (version && versions.data?.find((v) => v.version === version)) || versions.data?.find((v) => v.current);
-  const n = shown?.version ?? f.data?.version;
-  const mime = shown?.mime ?? f.data?.mime ?? '';
-  const url = fileUrl(file, n);
-  if (f.isError)
-    return (
-      <Dialog open onOpenChange={(o) => !o && onClose()} title="File" actions={<Button onClick={onClose}>Close</Button>}>
-        <Empty title="This file did not load" icon="alert" />
-      </Dialog>
-    );
-  const d = f.data;
-  if (!d) return null;
-  if (mime.startsWith('image/') || d.library_kind === 'image')
-    return <PictureViewer pictures={[{ src: url, name: d.title }]} at={0} onAtChange={(at) => at == null && onClose()} />;
-  const page = () => {
-    onClose();
-    void press('files.open', { file, version: shown && !shown.current ? shown.version : undefined }, 'Not opened');
-  };
-  return (
-    <Dialog
-      open
-      onOpenChange={(o) => !o && onClose()}
-      title={d.title}
-      className="lib fv-dialog"
-      actions={
-        <>
-          <ChatWith actor={chatOf(d.bot)} />
-          <span className="grow" />
-          <FileGet url={url} link={linkOf(d)} />
-          <Button variant="primary" onClick={page}>
-            Open
-          </Button>
-        </>
-      }
-    >
-      <div className="fv-view">
-        <Preview id={file} version={n ?? 1} mime={mime} kind={d.library_kind} title={d.title} url={url} name={shown?.name ?? d.name} link={linkOf(d)} />
-      </div>
-    </Dialog>
-  );
-}
-
-/** Mounted once at the app's root: shows the file `files.view` opened. */
+/** Mounted once at the app's root: the picture `files.view` opened, full size over the page. Any other file opens as
+    its page in Files. */
 export function FileViewerHost() {
   const v = useSyncExternalStore(viewing.subscribe, viewing.get, viewing.get);
-  return v ? <FileViewer key={`${v.file}:${v.version ?? ''}`} file={v.file} version={v.version} onClose={() => viewing.set(null)} /> : null;
+  return v ? <PictureViewer pictures={[{ src: fileUrl(v.file, v.version), name: v.name }]} at={0} onAtChange={(at) => at == null && viewing.set(null)} /> : null;
 }

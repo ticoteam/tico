@@ -83,7 +83,7 @@ describe('Connect GitHub @s1158', () => {
 
   it('hands off to GitHub with the setup, and the setup never enters the cache', async () => {
     answers['GET /api/v2/github/app/manifest'] = { body: SETUP };
-    show(<FirstRun />, '/start?setup=github');
+    show(<FirstRun />, '/tasks?setup=github');
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: 'Connect GitHub' })).toBeTruthy();
     fireEvent.click(within(dialog).getByRole('radio', { name: /An organization/ }));
@@ -103,7 +103,7 @@ describe('Connect GitHub @s1158', () => {
 
   it('a setup page that is not GitHub is never posted to', async () => {
     answers['GET /api/v2/github/app/manifest'] = { body: { ...SETUP, action: 'https://elsewhere.example/apps/new' } };
-    show(<FirstRun />, '/start?setup=github');
+    show(<FirstRun />, '/tasks?setup=github');
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Connect' }));
     expect(await within(dialog).findByRole('alert')).toBeTruthy();
@@ -114,7 +114,7 @@ describe('Connect GitHub @s1158', () => {
   it('a lost key is replaced only after the owner says so', async () => {
     answers['GET /api/v2/github/app/manifest'] = [refusal(409, 'github_key_missing', 'made-up server words'), { body: SETUP }];
     answers['POST /api/v2/github/app/replace-lost-key'] = { body: { replaced: true } };
-    show(<FirstRun />, '/start?setup=github');
+    show(<FirstRun />, '/tasks?setup=github');
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Connect' }));
     expect(await within(dialog).findByText(/Replacing it removes the GitHub app and directory sync keys/)).toBeTruthy();

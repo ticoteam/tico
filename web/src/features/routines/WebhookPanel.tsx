@@ -13,7 +13,7 @@ import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { fmtDate } from '@/lib';
 import { SidePanel } from '@/pagekinds';
-import { press, pressOut, RemoveItem, useConfirmRemove, Verb, Word } from './parts';
+import { PanelRead, press, pressOut, RemoveItem, useConfirmRemove, Verb, Word } from './parts';
 import { deliveriesQuery, hooksQuery, payloadQuery } from './queries';
 import type { Delivery, Hook } from './types';
 import { cap, startsWords } from './words';
@@ -62,7 +62,7 @@ export function WebhookPanel({ id, shown, signing: made, onShown, onClose }: { i
   if (!h) {
     return (
       <SidePanel className="rr" title="Webhook" onClose={onClose}>
-        {!hooks.isPending && <Empty icon="alert" title="This webhook is gone" />}
+        {hooks.isSuccess ? <Empty icon="alert" title="This webhook is gone" /> : <PanelRead q={hooks} what="Webhooks" />}
       </SidePanel>
     );
   }

@@ -2,7 +2,6 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { meQuery, useActor, useActors } from '@/data';
-import { useAction } from '@/actions';
 import type { FactoryMap } from '@/api/schema';
 import { Button } from '@/kit/Button';
 import { Field } from '@/kit/Field';
@@ -10,10 +9,10 @@ import { IconButton } from '@/kit/IconButton';
 import { MenuItem } from '@/kit/Menu';
 import { FoldButton } from '@/kit/SectionHead';
 import { Select } from '@/kit/Select';
-import { toast } from '@/kit/Toast';
 import { List, PageMore, Section, SidePanel, type PageTab } from '@/pagekinds';
-import { Face, Go, NameOf, PanelLink, refusal, teamPath, useDo } from './parts';
-import { companyRoleQuery, factoriesQuery, groupsQuery, type Team } from './queries';
+import { Dot } from '@/tico/dot';
+import { Face, Go, NameOf, PageOwner, PanelLink, readState, teamPath, useDo } from './parts';
+import { accessQuery, factoriesQuery, groupsQuery, type Team } from './queries';
 
 /* Org (pages/3-company/company.js orgPage): who reports to whom, as a light chart. A teammate opens its sheet beside
    the chart (`?panel=mate:<human:id | bot:slug>`, the old ui/app/redesign-org.ts rdoSheet): its group and what it
@@ -33,19 +32,31 @@ const members = (g: Team) => [...g.people.map((p) => (p.includes(':') ? p : `hum
 
 export function OrgTab({ head, search }: { head: Head; search: { panel?: string } }) {
   const q = useQuery(groupsQuery);
-  const me = useQuery(meQuery).data?.id;
+  const me = useQuery(meQuery).data;
+  const access = useQuery(accessQuery).data;
   const actors = useActors();
   const close = useDo('company.closePanel');
   const open = useDo('company.openPanel');
-  const maker = useMayMakeFactory();
+  const add = useDo('shell.addTeammate');
+  // The company's owner and Admins make factories (backend/task_factories_routes.py create).
+  const maker = me?.role === 'owner' || access?.you === 'owner' || access?.you === 'admin';
+  // The root is the company's owner (Access names them to the owner and Admins; a member sees themself there).
+  const root = access?.owner ? `human:${access.owner}` : me?.id;
   const all = q.data ?? [];
   const teams = all.filter((g) => !g.parent).sort((a, b) => a.order - b.order);
-  const state = q.isPending ? 'loading' : q.isError ? 'fault' : teams.length ? 'ready' : 'empty';
   const mate = search.panel?.startsWith('mate:') ? search.panel.slice(5) : null;
   return (
     <List
       {...head}
-      state={state}
+      actions={
+        <>
+          <Button variant={search.panel ? 'plain' : 'primary'} onClick={() => void add.run({})} data-target="org:add">
+            Add teammate
+          </Button>
+          <PageOwner page="strategy" />
+        </>
+      }
+      state={readState(q, !teams.length)}
       more={
         maker && (
           <PageMore target="org:more">
@@ -57,16 +68,20 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
       empty={{ title: 'No teams yet' }}
       sections={
         <>
-          <div className="oc" role="tree" aria-label="Org">
+          <div className="oc" aria-label="Org">
             <header className="oc-root">
-              {me && (
-                <Link to={teamPath(me) as never} className="oc-me">
-                  <Face id={me} size={36} />
+              {root && (
+                <Link to={teamPath(root) as never} className="oc-me">
+                  <Face id={root} size={36} />
                   <span>
-                    <NameOf id={me} />
+                    <NameOf id={root} />
                   </span>
                 </Link>
               )}
+              <span className="oc-tico">
+                <Dot size={28} still />
+                <span>Tico</span>
+              </span>
               <span className="grow" />
               <span className="stage-n">{actors.length} teammates</span>
             </header>
@@ -95,7 +110,7 @@ function OrgTeam({ team, subs, open: picked }: { team: Team; subs: Team[]; open:
   const [open, setOpen] = useState(team.id !== BUILT_IN || (!!picked && members(team).includes(picked)));
   const n = mates.length + subs.reduce((a, s) => a + members(s).length, 0);
   return (
-    <section className="oc-team" role="treeitem" aria-expanded={open} aria-label={team.name}>
+    <section className="oc-team" aria-label={team.name}>
       <header className="oc-node">
         {lead ? (
           <PanelLink panel={`mate:${lead}`} className="oc-face" aria-label={`${team.name} lead`}>
@@ -116,7 +131,7 @@ function OrgTeam({ team, subs, open: picked }: { team: Team; subs: Team[]; open:
         </div>
       </header>
       {open && (
-        <div className={subs.length ? 'oc-kids has-subs' : 'oc-kids'} role="group">
+        <div className={subs.length ? 'oc-kids has-subs' : 'oc-kids'}>
           {mates.length > 0 && <Mates ids={mates} open={picked} />}
           {subs.map((s) => (
             <OrgSub key={s.id} team={s} open={picked} />
@@ -252,13 +267,6 @@ function MateSheet({ who, groups, onClose }: { who: string; groups: readonly Tea
 
 // ---------------------------------------------------------------- the factories
 
-/** The company's owner and Admins make factories (backend/task_factories_routes.py create); Access says who is one. */
-function useMayMakeFactory() {
-  const owner = useQuery(meQuery).data?.role === 'owner';
-  const role = useQuery({ ...companyRoleQuery, enabled: !owner }).data;
-  return owner || role === 'owner' || role === 'admin';
-}
-
 type Box = FactoryMap['pipelines'][number];
 export type FactoryGroup = { id: string; name: string; pipelines: Box[] };
 
@@ -309,22 +317,16 @@ function Factories() {
   );
 }
 
-/** A factory's name and goal. A name a live factory has already is said on the field (409 factory_name). */
+/** A factory's name and goal. A name a live factory has already is refused (409) with the server's reason. */
 function NewFactory({ onClose }: { onClose: () => void }) {
-  const make = useAction('org.newFactory');
+  const make = useDo('org.newFactory');
   const [name, setName] = useState('');
   const [goal, setGoal] = useState('');
   const [tried, setTried] = useState(false);
-  const [taken, setTaken] = useState('');
   const save = async () => {
     setTried(true);
-    if (!name.trim()) return;
-    const r = await make.run({ name: name.trim(), ...(goal.trim() ? { goal: goal.trim() } : {}) });
-    if (r.ok) onClose();
-    else if (r.error === 'factory_name') setTaken(name.trim());
-    else toast(refusal(r));
+    if (name.trim() && (await make.run({ name: name.trim(), ...(goal.trim() ? { goal: goal.trim() } : {}) }))) onClose();
   };
-  const bad = tried && !name.trim() ? 'Name it' : taken && taken === name.trim() ? 'Name taken' : undefined;
   return (
     <SidePanel
       title="New factory"
@@ -348,7 +350,7 @@ function NewFactory({ onClose }: { onClose: () => void }) {
           void save();
         }}
       >
-        <Field label="Name" value={name} onValueChange={setName} autoFocus error={bad} />
+        <Field label="Name" value={name} onValueChange={setName} autoFocus error={tried && !name.trim() ? 'Name it' : undefined} />
         <Field label="Goal" value={goal} onValueChange={setGoal} />
       </form>
     </SidePanel>

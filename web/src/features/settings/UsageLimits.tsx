@@ -17,7 +17,7 @@ import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { refusal } from '@/actions';
 import { Section, SidePanel } from '@/pagekinds';
-import { Foot, Meter, Verb, Word, act, usd } from './parts';
+import { Foot, Meter, SwitchLine, Verb, Word, act, usd } from './parts';
 import { agentUsageQuery, limitsQuery, poolsOf, taskCapsQuery, type UsagePool } from './queries';
 import type { UsageSearch } from './Usage';
 
@@ -176,7 +176,7 @@ function PoolRow({ id, name, pool, depth, search }: { id: string; name: string; 
       title={name}
     >
       <Icon name={id === POOL + COMPANY ? 'company' : 'people'} />
-      <span className="row-title" style={depth ? { paddingInlineStart: `${depth * 14}px` } : undefined}>
+      <span className="row-title" style={depth ? { ['--depth' as string]: depth } : undefined}>
         {name}
         <State blocked={pool.blocked} percent={pool.percent} />
       </span>
@@ -208,7 +208,12 @@ export function Limits({ search }: { search: UsageSearch }) {
             {v.default.monthly_usd != null ? `${usd(v.default.monthly_usd)} a month` : 'No limit'}
           </LabelValue>
           <LabelValue label="When reached">New work waits</LabelValue>
-          <LabelValue label="Count plan runs">{v.default.count_subscription ? 'Yes' : 'No'}</LabelValue>
+          <SwitchLine
+            label="Count plan runs"
+            checked={v.default.count_subscription !== false}
+            disabled={!v.may_edit_default}
+            onChange={(on) => void act('usage.countPlanRuns', { on })}
+          />
         </Facts>
         {v.may_edit_default && <ClearQueue teams={teams} />}
       </Section>

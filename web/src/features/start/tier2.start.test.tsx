@@ -84,6 +84,27 @@ describe('Setup, first run @s1154', () => {
   });
 });
 
+describe('First run @s1154 @s1171', () => {
+  it('opens from the address over the app, with "Have my agent set it up" chosen first', async () => {
+    serve(() => ({}));
+    show(<FirstRun />, '/tasks?setup=path');
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'Set up your company' })).toBeTruthy();
+    expect(within(dialog).getByRole('radio', { name: /Have my agent set it up/ }).getAttribute('aria-checked')).toBe('true');
+    expect(within(dialog).getByRole('radio', { name: /Set it up myself/ }).getAttribute('aria-checked')).toBe('false');
+    expect(within(dialog).getByRole('button', { name: 'Continue' })).toBeTruthy();
+  });
+
+  it('counts the steps by hand', async () => {
+    serve(() => ({}));
+    queryClient.setQueryData(['setup'], { names: { company_name: '' }, answers: {}, selected: {}, completed: null, needed: true });
+    show(<FirstRun />, '/tasks?setup=name');
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('img', { name: 'Step 1 of 3' })).toBeTruthy();
+    expect(within(dialog).getByRole('textbox', { name: 'Company name' })).toBeTruthy();
+  });
+});
+
 describe('Setup dialog, three steps @s1171', () => {
   it('step 1 saves the company name and moves to step 2', async () => {
     serve((method, url) => {
@@ -92,7 +113,7 @@ describe('Setup dialog, three steps @s1171', () => {
       return RECORD;
     });
     queryClient.setQueryData(['setup'], RECORD);
-    const router = show(<FirstRun />, '/start?setup=name');
+    const router = show(<FirstRun />, '/tasks?setup=name');
     const dialog = await screen.findByRole('dialog', { name: 'Name your company' });
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Company name' }), { target: { value: ' Fernhill ' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Continue' }));
@@ -102,16 +123,16 @@ describe('Setup dialog, three steps @s1171', () => {
     expect(within(next).getByRole('img', { name: 'Step 2 of 3' })).toBeTruthy();
   });
 
-  it('step 3 makes the team with the first job picked, then lands on Start with the dialog shut', async () => {
+  it('step 3 makes the team with the first job picked, then lands on Tasks with the dialog shut', async () => {
     serve((method) => (method === 'PUT' ? RECORD : {}));
     queryClient.setQueryData(['setup'], RECORD);
-    const router = show(<FirstRun />, '/start?setup=team');
+    const router = show(<FirstRun />, '/tasks?setup=team');
     const dialog = await screen.findByRole('dialog', { name: 'Pick a team' });
     expect(within(dialog).getByRole('img', { name: 'Step 3 of 3' })).toBeTruthy();
     expect(within(dialog).getByRole('radio', { name: /Build the app/ }).getAttribute('aria-checked')).toBe('true');
     fireEvent.click(within(dialog).getByRole('radio', { name: /Answer customers/ }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Start' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/start'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
     await waitFor(() => expect((router.state.location.search as { setup?: string }).setup).toBeUndefined());
     // the chart as the server laid it out, less the teams off; the picked job's team and a locked one are never off
     expect(sent('PUT', '/api/v2/setup')[0]?.body).toMatchObject({ answers: { first_job: 'support', teams_off: ['Sales'] }, selected: {} });
@@ -120,7 +141,7 @@ describe('Setup dialog, three steps @s1171', () => {
 
   it('a pasted key is a password field held in the step only, never in the cache', async () => {
     serve((_method, url) => (url.startsWith('/api/v2/model-subscriptions') ? { subscriptions: [] } : {}));
-    show(<FirstRun />, '/start?setup=paste');
+    show(<FirstRun />, '/tasks?setup=paste');
     const dialog = await screen.findByRole('dialog', { name: 'Paste a key' });
     const key = within(dialog).getByLabelText('Key') as HTMLInputElement;
     expect(key.type).toBe('password');

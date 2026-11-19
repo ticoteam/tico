@@ -38,7 +38,7 @@ export {
   type ToolsSearch,
 } from './search';
 
-/** A file `files.view` opened is over the page: the root mounts FileViewerHost (and loads its code) from then on. */
+/** A picture `files.view` opened is over the page: the root mounts FileViewerHost (and loads its code) from then on. */
 export const useFileOpen = (): boolean => useSyncExternalStore(viewing.subscribe, () => viewing.get() !== null, () => false);
 
 // What each page needs for its first paint. A read that fails shows the page's own fault state, so a loader never throws.

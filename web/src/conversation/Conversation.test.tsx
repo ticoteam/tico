@@ -87,7 +87,7 @@ const layout: Record<string, PropertyDescriptor> = {
   offsetHeight: { get: () => ROW },
   scrollHeight: {
     get(this: HTMLElement) {
-      return parseFloat((this.querySelector('.vl-space') as HTMLElement | null)?.style.getPropertyValue('--h') ?? '') || VIEW;
+      return parseFloat((this.querySelector('.vl-space') as HTMLElement | null)?.style.height ?? '') || VIEW;
     },
   },
   scrollTop: {
@@ -238,6 +238,27 @@ describe('Message', () => {
     expect(fireEvent.click(link, { metaKey: true })).toBe(true);
     expect(fireEvent.click(link, { button: 1 })).toBe(true);
     expect(ran).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Conversation loading @s157', () => {
+  it('says the chat did not load, keeps the box, and Try again reads it again', async () => {
+    queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } });
+    queryClient.removeQueries({ queryKey: key });
+    let fail = true;
+    serve((url) =>
+      url.includes('/timeline') || url.includes('/messages')
+        ? fail
+          ? { status: 500, body: { detail: 'down' } }
+          : { status: 200, body: { messages: [msg(1, 'bot:qa', 'Back again')], next_cursor: null, read_marks: {} } }
+        : { status: 200, body: [] },
+    );
+    show();
+    expect(await screen.findByRole('heading', { name: 'This chat did not load' })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Message Ana' })).toBeTruthy();
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('Back again')).toBeTruthy();
   });
 });
 

@@ -8,10 +8,11 @@ import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Link } from '@/kit/Link';
 import { Menu, MenuItem } from '@/kit/Menu';
-import { Table, Td, Th, Tr } from '@/kit/Table';
+import { Row } from '@/kit/Row';
+import { VirtualList } from '@/kit/VirtualList';
 import { FilterRow, List, RecordPanel, Section, type PageState, type PageTab } from '@/pagekinds';
 import { ContactRules, PlaceFacts, PlaceSections, useUs } from './ContactPlace';
-import { Face, Find, More, OwnerButton, press, Who } from './parts';
+import { Face, Find, OwnerButton, press, refused, Who } from './parts';
 import {
   attributesQuery,
   cardQuery,
@@ -92,16 +93,13 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
   const countOf = (key: string) => counts.data?.find((c) => c.type === key)?.count;
 
   let state: PageState = 'ready';
-  if (list.isError) state = (list.error as { status?: number } | null)?.status === 403 ? 'no-access' : 'fault';
+  if (list.isError) state = refused(list.error);
   else if (!list.data) state = 'loading';
   else if (!rows.length && !search.q && !search.link) state = 'empty';
   // An empty tab beside full ones names its own kind; with none at all, the page says so.
   const none = !(counts.data ?? []).some((c) => c.count > 0);
   const emptyTitle = none || !kind ? 'No contacts yet' : `No ${kind.plural_name.toLowerCase()} yet`;
 
-  // Organization for people, Domain for organizations, Relationship for both (directory.ts dirTable).
-  const person = type === 'person';
-  const org = type === 'organization';
   const listed = (to: { type?: string; q?: string; link?: string }) => void press('contacts.list', to);
 
   // People, organizations, places: one tab each (records.js contactsPage). People is the page with no `type`.
@@ -122,8 +120,8 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
       search={<Find label="Search contacts" value={search.q} onFind={(q) => void press('contacts.list', { type: search.type, q })} />}
       actions={
         <>
-          {(person || org) && (
-            <Menu trigger={<IconButton icon="filter" label="Relationship" on={!!search.link} />}>
+          {(type === 'person' || type === 'organization') && (
+            <Menu trigger={<IconButton icon="filter" label="Relationship" on={!!search.link} data-phone />}>
               <MenuItem label="All" on={!search.link} onSelect={() => listed({ type: search.type, q: search.q })} />
               {Object.keys(RELATIONS).map((k) => (
                 <MenuItem key={k} label={relation(k)} on={k === search.link} onSelect={() => listed({ type: search.type, q: search.q, link: k })} />
@@ -139,27 +137,16 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
       onRetry={() => void list.refetch()}
       sections={
         rows.length ? (
-          <>
-            <Table label={kind?.plural_name ?? 'Contacts'} stick>
-              <thead>
-                <tr>
-                  <Th>Name</Th>
-                  {person && <Th>Organization</Th>}
-                  {org && <Th>Domain</Th>}
-                  {(person || org) && <Th>Relationship</Th>}
-                  <Th>From</Th>
-                  <Th>Owner</Th>
-                  <Th num>Last</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <ContactLine key={r.id} r={r} search={search} selected={r.id === search.panel} />
-                ))}
-              </tbody>
-            </Table>
-            {list.hasNextPage && <More onClick={() => void list.fetchNextPage()}>More</More>}
-          </>
+          <VirtualList
+            className="lib-vl"
+            label={kind?.plural_name ?? 'Contacts'}
+            items={rows}
+            getKey={(r) => r.id}
+            estimateSize={36}
+            measure
+            onReachEnd={() => list.hasNextPage && !list.isFetchingNextPage && void list.fetchNextPage()}
+            renderItem={(r) => <ContactLine r={r} search={search} selected={r.id === search.panel} />}
+          />
         ) : (
           <Empty title="Nothing matches" />
         )
@@ -169,23 +156,20 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
   );
 }
 
+/** Name, then organization (a person) or domain (an organization), relationship, owner and last touch. On a phone the
+    second column sits under the name and the rest give way to the age. */
 function ContactLine({ r, search, selected }: { r: ContactRow; search: ContactsSearch; selected: boolean }) {
-  const type = search.type ?? 'person';
   return (
-    <Tr selected={selected}>
-      <Td>
-        <Link className="who-cell" href={panelHref(search, r.id)} title={r.name} data-target={`contact:${r.id}`}>
-          <Face actor={null} name={r.name} />
-          <span>{r.name}</span>
-        </Link>
-      </Td>
-      {type === 'person' && <Td>{r.organization?.name ?? ''}</Td>}
-      {type === 'organization' && <Td>{r.primary_domain ?? ''}</Td>}
-      {(type === 'person' || type === 'organization') && <Td>{relationsOf(r).map(relation).join(', ')}</Td>}
-      <Td>{fromWhere(r.sources)}</Td>
-      <Td>{r.owner && <Face actor={r.owner} />}</Td>
-      <Td num>{r.last_activity_at ? <Ago at={r.last_activity_at} /> : null}</Td>
-    </Tr>
+    <Row className="lrow crow" title={r.name} href={panelHref(search, r.id)} selected={selected} target={`contact:${r.id}`}>
+      <span className="lead">
+        <Face actor={null} name={r.name} />
+      </span>
+      <span className="row-title">{r.name}</span>
+      <span className="row-ctx crow-of">{r.type === 'organization' ? (r.primary_domain ?? '') : (r.organization?.name ?? '')}</span>
+      <span className="row-ctx crow-rel">{relationsOf(r).map(relation).join(', ')}</span>
+      <span className="crow-who">{r.owner && <Face actor={r.owner} />}</span>
+      {r.last_activity_at ? <Ago at={r.last_activity_at} className="row-age" /> : <span className="row-age" />}
+    </Row>
   );
 }
 
@@ -316,22 +300,9 @@ function CardSections({ c, search, place }: { c: Card; search: ContactsSearch; p
   return (
     <>
       {c.summary && <p className="rec-summary t-read">{c.summary}</p>}
-      {place && <ContactRules id={c.id} />}
+      <ContactRules id={c.id} />
       {place}
-      {!place && c.links.length > 0 && (
-        <Section name="Links" count={c.links.length}>
-          {c.links.map((l) => (
-            <Link key={l.id} className="row lrow" href={panelHref(search, l.other_id, l.other_type)} title={l.other_name}>
-              <span className="lead">
-                <Icon name="link" />
-              </span>
-              <span className="row-title">{l.other_name}</span>
-              <span className="row-ctx">{l.link_name}</span>
-            </Link>
-          ))}
-        </Section>
-      )}
-      <Threads words={c.primary_email ?? c.name} />
+      <Links links={place ? [] : c.links} search={search} words={c.primary_email ?? c.name} />
       {c.notes.length > 0 && (
         <Section name="Notes" count={c.notes.length}>
           {c.notes.map((n) => (
@@ -350,19 +321,29 @@ function CardSections({ c, search, place }: { c: Card; search: ContactsSearch; p
   );
 }
 
-function Threads({ words }: { words: string }) {
-  const found = useQuery(contactThreadsQuery(words));
-  const rows = found.data ?? [];
-  if (!rows.length) return null;
+/** What a contact is linked to, and the threads that name it, in one section (a place's links are its own sections). */
+function Links({ links, search, words }: { links: Card['links']; search: ContactsSearch; words: string }) {
+  const threads = useQuery(contactThreadsQuery(words)).data ?? [];
+  const n = links.length + threads.length;
+  if (!n) return null;
   return (
-    <Section name="Threads" count={rows.length}>
-      {rows.map((t) => (
+    <Section name="Links" count={n}>
+      {links.map((l) => (
+        <Link key={l.id} className="row lrow" href={panelHref(search, l.other_id, l.other_type)} title={l.other_name}>
+          <span className="lead">
+            <Icon name="link" />
+          </span>
+          <span className="row-title">{l.other_name}</span>
+          <span className="row-ctx">{l.link_name}</span>
+        </Link>
+      ))}
+      {threads.map((t) => (
         <Link key={t.thread_id} className="row lrow" href={`/threads/${encodeURIComponent(t.thread_id)}`} title={t.title ?? t.excerpt}>
           <span className="lead">
             <Icon name="threads" />
           </span>
           <span className="row-title">{t.title ?? t.excerpt}</span>
-          {t.created_at && <Ago at={t.created_at} className="row-age" />}
+          <span className="row-ctx">Thread</span>
         </Link>
       ))}
     </Section>

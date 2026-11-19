@@ -19,6 +19,7 @@ import {
   removePerson,
   removeSubscription,
   setDefaultLimit,
+  setCountPlanRuns,
   setGatewayFallback,
   setLimit,
   startSignIn,
@@ -59,7 +60,6 @@ import {
   syncDirectory,
   saveGateway,
   withDestination,
-  checkGateway,
   limitsQuery,
   poolsOf,
   setPoolLimit,
@@ -88,7 +88,6 @@ import {
   askQuery,
   healthQuery,
   markChangelogRead,
-  replayDay,
   resetAsk,
   roadmapQuery,
   saveAsk,
@@ -843,17 +842,6 @@ export const productUpdate = defineAction({
   target: () => ({ kind: 'page', id: '/settings/changelog' }),
 });
 
-export const openOutcome = defineAction({
-  id: 'settings.openOutcome',
-  title: 'Open the outcome of a task in the changelog',
-  kind: 'view',
-  input: s.object({ task: id('a task id') }),
-  run: ({ router }, { task }) => router.navigate({ to: '/settings/$section', params: { section: 'changelog' }, search: { open: task } }),
-  show: ({ router }, { task }) => router.navigate({ to: '/settings/$section', params: { section: 'changelog' }, search: { open: task } }),
-  did: () => 'Opened the outcome',
-  target: ({ task }) => ({ kind: 'outcome', id: task }),
-});
-
 // ---- usage (anchor: the Usage builder adds its actions below) ----
 
 const money = s.optional(s.number({ min: 0, max: 1_000_000 }));
@@ -899,6 +887,18 @@ export const defaultLimit = defineAction({
   can: (ctx, { monthly }) => ctx.via !== 'tico' || lowers(ctx.queryClient.getQueryData(limitsQuery.queryKey)?.default.monthly_usd, monthly),
   run: (_ctx, { monthly }) => setDefaultLimit(monthly ?? null),
   did: ({ monthly }) => (monthly == null ? 'Limit removed' : `Limit set to $${monthly}`),
+  target: () => ({ kind: 'limit', id: 'default' }),
+});
+
+export const countPlanRuns = defineAction({
+  id: 'usage.countPlanRuns',
+  title: 'Count plan runs against the limits',
+  kind: 'change',
+  input: s.object({ on: s.boolean() }),
+  // Counting less spend raises every limit: budget, the person's own press. Tico may only turn it on.
+  can: (ctx, { on }) => ctx.via !== 'tico' || on,
+  run: (_ctx, { on }) => setCountPlanRuns(on),
+  did: ({ on }) => (on ? 'Plan runs count' : 'Plan runs no longer count'),
   target: () => ({ kind: 'limit', id: 'default' }),
 });
 
@@ -955,18 +955,6 @@ export const restartToUpdate = defineAction({
   run: () => theApp().restartToUpdate(),
   did: () => 'Restarting',
   target: () => setting('updates'),
-});
-
-export const showLog = defineAction({
-  id: 'settings.showLog',
-  title: "Show the desktop app's log",
-  kind: 'view',
-  input: s.object({}),
-  tico: false,
-  can: onDesktop,
-  run: () => theApp().showLog(),
-  did: () => 'Showed the log',
-  target: () => setting('log'),
 });
 
 export const openAtLogin = defineAction({
@@ -1034,16 +1022,6 @@ export const taskCap = defineAction({
   run: (_ctx, { sender, receiver, perDay }) => setTaskCap(sender, receiver, perDay ?? null),
   did: ({ perDay }) => (perDay == null ? 'Cap removed' : perDay === 0 ? 'Blocked' : `Capped at ${perDay} a day`),
   target: ({ sender }) => ({ kind: 'limit', id: sender.replace(/^bot:/, '') }),
-});
-
-export const gatewayCheck = defineAction({
-  id: 'settings.checkGateway',
-  title: 'Check the Tico Gateway key now',
-  kind: 'change',
-  input: s.object({}),
-  run: () => checkGateway(),
-  did: (_input, out) => (out as { message?: string } | undefined)?.message ?? 'Checked',
-  target: () => setting('gateway'),
 });
 
 // ---- company gaps (anchor: General, People, tokens, Security and Tico support add their actions below) ----
@@ -1260,20 +1238,6 @@ export const askReset = defineAction({
   can: (ctx) => !!ctx.queryClient.getQueryData(askQuery.queryKey)?.settings.own,
   run: () => resetAsk(),
   did: () => 'Using the team default',
-  target: () => setting('ask'),
-});
-
-export const askReplay = defineAction({
-  id: 'settings.askReplay',
-  title: 'See what screening would have done with one past day',
-  kind: 'view',
-  input: s.object({ date: s.string({ pattern: /^\d{4}-\d{2}-\d{2}$/, what: 'a day, YYYY-MM-DD' }) }),
-  run: (ctx, { date }) => {
-    const me = ctx.queryClient.getQueryData(meQuery.queryKey);
-    if (!me) throw new Error('Sign in first');
-    return replayDay(me.id, date);
-  },
-  did: (_input, out) => (out ? `${out.length} asks judged` : 'Replayed'),
   target: () => setting('ask'),
 });
 

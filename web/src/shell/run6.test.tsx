@@ -9,7 +9,8 @@ import { arrangementFor } from './arrangement';
 import { Frame } from './Frame';
 import { PhoneCards } from './phone';
 import { Sheet } from './Sheet';
-import { tabTitle } from './title';
+import { showPageName } from '@/tico/pageName';
+import { tabTitle, useTabTitle } from './title';
 
 /* Browser run 6, the shell's part: a page that breaks, the phone's page-owned chats, hidden cards and the tab's
    title. */
@@ -186,23 +187,29 @@ describe('phone: a card out of view takes no focus', () => {
 });
 
 describe('the browser tab’s title', () => {
-  it('names the open page, and follows it', async () => {
-    const shown = (name: string) => (
-      <Frame
-        arrangement="page"
-        tico={<p>Tico</p>}
-        menu={<nav aria-label="Main" />}
-        page={
-          <Sheet kind="page" label={name}>
-            <h1>{name}</h1>
-          </Sheet>
-        }
-      />
+  it('names the open page when its route draws, and when its head renames it; streamed words do not re-read it', async () => {
+    function Shell() {
+      useTabTitle();
+      return <Outlet />;
+    }
+    const page = (name: string) => () => (
+      <main className="pane page">
+        <h1>{name}</h1>
+      </main>
     );
-    const { rerender } = render(shown('Finance'));
+    const root = createRootRoute({ component: Shell });
+    const routes = ['finance', 'strategy'].map((p) => createRoute({ getParentRoute: () => root, path: `/${p}`, component: page(p === 'finance' ? 'Finance' : 'Strategy') }));
+    const router = createRouter({ routeTree: root.addChildren(routes), history: createMemoryHistory({ initialEntries: ['/finance'] }) });
+    render(<RouterProvider router={router} />);
     await waitFor(() => expect(document.title).toBe('Finance - Tico'));
-    rerender(shown('Strategy'));
+    await act(() => router.navigate({ to: '/strategy' as never }));
     await waitFor(() => expect(document.title).toBe('Strategy - Tico'));
+    // a word streamed into the page changes nothing; a rename in the head says so
+    const h1 = screen.getByRole('heading', { name: 'Strategy' });
+    act(() => void (h1.textContent = 'Plan'));
+    expect(document.title).toBe('Strategy - Tico');
+    act(() => showPageName('Plan'));
+    expect(document.title).toBe('Plan - Tico');
   });
 
   it('is plain Tico with no page name, and never uses a middle dot', () => {

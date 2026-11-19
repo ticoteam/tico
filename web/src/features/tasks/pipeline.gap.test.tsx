@@ -7,6 +7,7 @@ import { ActionsRoot, run } from '@/actions';
 import { keys, queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { listParams, pipelineIdFor, pipelinesQuery, type Pipeline } from './queries';
+import { PipelinePage } from './PipelinePage';
 import { TasksPage } from './TasksPage';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -104,7 +105,7 @@ describe('Pipeline editor @s138', () => {
       if (url === '/api/v2/pipelines/ops') return { status: 200, body: { pipeline: { ...REC, settings_version: 6 } } };
       return { status: 200, body: {} };
     });
-    show(<TasksPage pipeline="ops" search={{ panel: 'pipeline' }} />, '/tasks/ops?panel=pipeline');
+    show(<PipelinePage pipeline="ops" fresh={false} />, '/tasks/ops/edit');
     const goal = await screen.findByRole('textbox', { name: 'Goal' });
     expect((goal as HTMLInputElement).value).toBe('Every order out the door');
     fireEvent.change(goal, { target: { value: 'Every order out the same day' } });
@@ -138,7 +139,7 @@ describe('Pipeline editor @s138', () => {
       if (url === '/api/v2/pipelines/ops') return { status: 200, body: { pipeline: { ...theirs, settings_version: 7 } } };
       return { status: 200, body: {} };
     });
-    show(<TasksPage pipeline="ops" search={{ panel: 'pipeline' }} />, '/tasks/ops?panel=pipeline');
+    show(<PipelinePage pipeline="ops" fresh={false} />, '/tasks/ops/edit');
     const prefix = await screen.findByRole('textbox', { name: 'Prefix' });
     fireEvent.change(prefix, { target: { value: 'D' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -161,7 +162,7 @@ describe('Pipeline editor @s138', () => {
       if (url === '/api/v2/pipelines/ops') return { status: 409, body: { error: { code: 'task_changed', detail: 'The pipeline changed since you looked.' } } };
       return { status: 200, body: {} };
     });
-    show(<TasksPage pipeline="ops" search={{ panel: 'pipeline' }} />, '/tasks/ops?panel=pipeline');
+    show(<PipelinePage pipeline="ops" fresh={false} />, '/tasks/ops/edit');
     fireEvent.change(await screen.findByRole('textbox', { name: 'Prefix' }), { target: { value: 'D' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Load theirs' }));
@@ -170,22 +171,23 @@ describe('Pipeline editor @s138', () => {
     expect(posts).toHaveLength(1);
   });
 
-  it('New pipeline sits in the page’s ⋯ and opens its panel in the address @s138', async () => {
+  it('New pipeline sits in the page’s ⋯ and opens the editor’s page @s138', async () => {
     serve(() => ({ status: 200, body: {} }));
     const router = show(<TasksPage pipeline="ops" search={{}} />, '/tasks/ops');
     fireEvent.click(await screen.findByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'New pipeline' }));
-    await waitFor(() => expect(router.state.location.search).toMatchObject({ panel: 'new' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/ops/edit'));
+    expect(router.state.location.search).toMatchObject({ new: true });
   });
 
-  it('the New pipeline panel sends the name, facts and stages @s138', async () => {
+  it('the New pipeline page sends the name, facts and stages @s138', async () => {
     serve((url, method) => {
       if (url === '/api/v2/pipelines' && method === 'GET') return { status: 200, body: { pipelines: [REC] } };
       if (url === '/api/v2/pipelines/returns' && method === 'POST')
         return { status: 200, body: { pipeline: { ...REC, id: 'returns', name: 'Returns', settings_version: 1, stages: [{ ...REC.stages[0], id: 'r1', name: 'Received' }] } } };
       return { status: 200, body: {} };
     });
-    const router = show(<TasksPage pipeline="ops" search={{ panel: 'new' }} />, '/tasks/ops?panel=new');
+    const router = show(<PipelinePage pipeline="ops" fresh />, '/tasks/ops/edit?new=1');
     const save = await screen.findByRole('button', { name: 'Save' });
     expect(save.hasAttribute('disabled') || save.getAttribute('aria-disabled') === 'true').toBe(true);
     fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: 'Returns' } });

@@ -4,14 +4,16 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data/query-client';
 import { Route as root } from '@/routes/__root';
+import { Route as landingRoute } from '@/routes/index';
 import { resetDesktopReports, type TicoDesktop } from '@/desktop';
 import { run } from '@/actions/run';
+import type { flowGroups as FlowGroups } from '@/features/tasks/routing';
 
 /* The root as the app draws it, with the features around the shell stood in: the second chat for Tico support, the
    desktop app's small call window, and what the page tells the desktop app. */
 
 const { gate, q } = vi.hoisted(() => ({
-  gate: { screen: null as string | null },
+  gate: { screen: null as string | null, setup: false },
   q: <T,>(key: string, data: T) => ({ queryKey: [key], queryFn: async () => data, staleTime: Infinity }),
 }));
 
@@ -48,6 +50,7 @@ vi.mock('@/features/start/exports', () => ({ FirstRun: () => null }));
 vi.mock('@/features/start/routing', () => ({
   StartScreen: ({ screen }: { screen: string }) => <p>start: {screen}</p>,
   useStartGate: () => ({ screen: gate.screen, error: null, retry: () => {}, busy: false, firstRun: false }),
+  landing: async () => (gate.screen ? null : { setup: gate.setup }),
 }));
 const call = vi.hoisted(() => ({ phase: 'idle' }));
 vi.mock('@/features/calls/exports', () => ({
@@ -62,8 +65,16 @@ vi.mock('@/features/calls/routing', () => ({
   isCallActive: (c: { phase: string }) => c.phase === 'live',
 }));
 vi.mock('@/features/library/routing', () => ({ useFileOpen: () => false }));
-vi.mock('@/features/tasks/routing', () => ({ flowQuery: q('flow', { count: 4, items: [] }), pipelinesQuery: q('pipelines', []), roadmapPipeline: () => null }));
+vi.mock('@/features/tasks/routing', async () => ({
+  // the real grouping: the open task's list draws Flow's sections from it
+  flowGroups: (await vi.importActual<{ flowGroups: typeof FlowGroups }>('@/features/tasks/routing')).flowGroups,
+  flowQuery: q('flow', { count: 4, items: [] }),
+  pipelinesQuery: q('pipelines', []),
+  roadmapPipeline: () => null,
+  firstPipeline: (p: { id: string }[]) => p[0]?.id ?? null,
+}));
 vi.mock('@/features/team/exports', () => ({ TeammateChat: () => null }));
+vi.mock('@/features/task/exports', () => ({ TaskChat: () => <p>task chat</p> }));
 vi.mock('@/features/team/routing', () => ({ teamSlug: (t: string) => t, whoHref: () => '/' }));
 vi.mock('@/features/threads/exports', () => ({ ChatSheet: () => <p>a teammate chat</p> }));
 vi.mock('@/features/threads/routing', () => ({
@@ -91,7 +102,8 @@ const people = (...actors: { id: string }[]) =>
 function show(at: string) {
   const page = createRoute({ getParentRoute: () => root, path: '/', component: () => <main className="pane page"><h1>Home</h1></main> });
   const call = createRoute({ getParentRoute: () => root, path: '/call/$room', component: () => <main className="pane cw">call page</main> });
-  const router = createRouter({ routeTree: root.addChildren([page, call]), context: { queryClient }, history: createMemoryHistory({ initialEntries: [at] }) });
+  const task = createRoute({ getParentRoute: () => root, path: '/flow/$task', component: () => <main className="pane page"><h1>A task</h1></main> });
+  const router = createRouter({ routeTree: root.addChildren([page, call, task]), context: { queryClient }, history: createMemoryHistory({ initialEntries: [at] }) });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -126,6 +138,7 @@ function fakeDesktop() {
 
 beforeEach(() => {
   gate.screen = null;
+  gate.setup = false;
   queryClient.clear();
   resetDesktopReports();
 });
@@ -178,6 +191,73 @@ describe('the root', () => {
     show('/call/abc');
     expect(await screen.findByText('call page')).toBeTruthy();
     expect(document.querySelector('.shell-frame')?.getAttribute('data-arrangement')).toBe('call');
+  });
+});
+
+describe('the landing address', () => {
+  function land(at: string) {
+    const home = landingRoute.update({ getParentRoute: () => root, id: '/', path: '/' } as never);
+    const board = createRoute({ getParentRoute: () => root, path: '/tasks/$pipeline', component: () => <main className="pane page"><h1>Engineering</h1></main> });
+    const router = createRouter({ routeTree: root.addChildren([home as never, board]), context: { queryClient }, history: createMemoryHistory({ initialEntries: [at] }) });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    return router;
+  }
+
+  it('lands on the Tasks board, with no Start page between', async () => {
+    queryClient.setQueryData(['pipelines'], [{ id: 'eng', name: 'Engineering', stages: [] }]);
+    const router = land('/');
+    expect(await screen.findByRole('heading', { name: 'Engineering' })).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/tasks/eng');
+    expect(router.state.location.search).toEqual({});
+  });
+
+  it('keeps the first run open over the board while setup is owed, and for the old welcome address @s1154', async () => {
+    queryClient.setQueryData(['pipelines'], [{ id: 'eng', name: 'Engineering', stages: [] }]);
+    gate.setup = true;
+    const router = land('/');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng'));
+    expect(router.state.location.search).toEqual({ setup: 'path' });
+    gate.setup = false;
+    const again = land('/?setup=path');
+    await waitFor(() => expect(again.state.location.pathname).toBe('/tasks/eng'));
+    expect(again.state.location.search).toEqual({ setup: 'path' });
+  });
+});
+
+describe('an open task', () => {
+  const at = (w: number) =>
+    act(() => {
+      Object.defineProperty(window, 'innerWidth', { value: w, configurable: true });
+      window.dispatchEvent(new Event('resize'));
+    });
+  const item = (n: number, title: string, stage: string, late = false) => ({ id: `t${n}`, number: n, title, pipeline_id: 'eng', stage_id: stage, owner_id: 'bot:qa', late, stuck: false, since: '2026-11-18T09:00:00Z' });
+  afterEach(() => at(1024));
+
+  it('has Flow in the menu’s place: what waits on you by pipeline and stage, the open task chosen; Close folds it @s135', async () => {
+    at(1600);
+    people(MAYA, QA);
+    queryClient.setQueryData(['pipelines'], [{ id: 'eng', name: 'Engineering', stages: [{ id: 'review', name: 'Review' }, { id: 'qa', name: 'QA' }], done: null }]);
+    queryClient.setQueryData(['flow'], { count: 3, items: [item(7, 'Bulk edit stock', 'qa', true), item(5, 'Rate fallback', 'review'), item(9, 'Postal codes', 'qa')] });
+    show('/flow/7');
+    const list = await screen.findByRole('navigation', { name: 'Flow' });
+    expect(within(list).getAllByRole('button', { name: /Engineering/ }).map((b) => b.textContent)).toEqual(['EngineeringReview1', 'EngineeringQA2']);
+    const open = within(list).getByRole('link', { name: /Bulk edit stock/ });
+    expect(open.classList.contains('is-on')).toBe(true);
+    expect(open.getAttribute('href')).toBe('/flow/7');
+    expect(within(open).getByText('Late')).toBeTruthy();
+    expect(within(list).getByRole('link', { name: /Postal codes/ }).classList.contains('is-on')).toBe(false);
+    expect(within(list).getByRole('link', { name: 'Flow' }).textContent).toBe('3');
+    expect(await screen.findByText('task chat')).toBeTruthy();
+    // a stage's name folds its rows
+    fireEvent.click(within(list).getByRole('button', { name: /EngineeringQA/ }));
+    expect(within(list).queryByRole('link', { name: /Postal codes/ })).toBeNull();
+    // Close folds the list to the menu's icons
+    fireEvent.click(within(list).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('navigation', { name: 'Flow' })).toBeNull());
   });
 });
 

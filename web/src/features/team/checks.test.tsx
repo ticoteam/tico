@@ -216,13 +216,11 @@ describe("A person's page", () => {
     expect(screen.getByRole('button', { name: 'Settings' }).hasAttribute('data-phone')).toBe(true);
   });
 
-  it('changes who they report to and their GitHub, for whoever manages them; Tico never moves them @s625', async () => {
+  it('changes who they report to on pick and their GitHub, for whoever manages them; Tico never moves them @s625', async () => {
     serve(manages('p2'));
     show(<TeamWho who="p2" tab="settings" />, '/team/p2?tab=settings');
     expect(await screen.findByText('kim@example.com')).toBeTruthy();
-    fireEvent.click(await screen.findByRole('button', { name: /Reports to/ }));
     await pick(await screen.findByRole('combobox', { name: 'Reports to' }), 'Pat Doe');
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(sent.find((s) => s.url.endsWith('/api/v2/humans/p2'))?.body).toEqual({ reports_to: 'p1' }));
     fireEvent.click(screen.getByRole('button', { name: /GitHub/ }));
     fireEvent.change(await screen.findByLabelText('GitHub login'), { target: { value: 'kimroe' } });
@@ -299,6 +297,50 @@ describe('Add teammate', () => {
   });
 });
 
+describe('A team', () => {
+  it('has Teammates and Rules tabs, the month’s spend, the mock’s pills and its open seats', async () => {
+    queryClient.setQueryData(agentsQuery.queryKey, [{ ...roster[0], status: 'paused' } as AgentRow]);
+    serve((url) =>
+      url.includes('/api/humans')
+        ? { status: 200, body: { seats: [{ id: 's1', title: 'Security Owner', team: 'g1' }, { id: 's2', title: 'Elsewhere', team: 'g9' }] } }
+        : url.includes('/api/v2/usage')
+          ? { status: 200, body: { totals: { est_cost_usd: 782 } } }
+          : undefined,
+    );
+    show(<TeamWho who="design" />, '/team/design');
+    expect((await screen.findByRole('link', { name: 'Rules' })).getAttribute('href')).toBe('/company/rules?who=group%3Ag1');
+    expect(screen.getByRole('link', { name: 'Teammates' })).toBeTruthy();
+    expect(await screen.findByText('$782')).toBeTruthy();
+    expect(await screen.findByText('Security Owner')).toBeTruthy();
+    expect(screen.queryByText('Elsewhere')).toBeNull();
+    expect(screen.getByText('Stopped')).toBeTruthy();
+  });
+});
+
+describe('Picks save on select', () => {
+  it('shows an agent’s lines read-only to someone who may not manage it', async () => {
+    queryClient.setQueryData(agentsQuery.queryKey, [{ ...roster[0], can_manage: false } as AgentRow]);
+    serve(() => undefined);
+    show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');
+    expect(await screen.findByText('Studio')).toBeTruthy();
+    expect(screen.queryByRole('combobox')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(Role|Model)/ })).toBeNull();
+  });
+
+  it('sets where the conversation compacts from the model picker’s More', async () => {
+    queryClient.setQueryData(modelsQuery.queryKey, { models: [{ id: 'm-one', label: 'Model One' }], harnesses: [] } as never);
+    queryClient.setQueryData(agentsQuery.queryKey, [{ ...roster[0], model: 'm-one' } as AgentRow]);
+    serve((url, method) => (method === 'POST' && url.endsWith('/compact-at') ? { status: 200, body: {} } : undefined));
+    show(<TeamWho who="ana" tab="model" />, '/team/ana?tab=model');
+    const dialog = await screen.findByRole('dialog', { name: 'Model' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'More' }));
+    await pick(within(dialog).getByRole('combobox', { name: 'Compact' }), '400K');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(sent.find((s) => s.url.endsWith('/bots/ana/compact-at'))?.body).toEqual({ compact_at: 400000, expected_revision: 3 }));
+    expect(sent.some((s) => s.url.includes('/transitions'))).toBe(false);
+  });
+});
+
 describe('A computer', () => {
   it('lists its agents and restarts it, asked first, when it is offline @s729', async () => {
     queryClient.setQueryData(computersQuery.queryKey, [{ ...studio, online: false }]);
@@ -310,6 +352,27 @@ describe('A computer', () => {
     const ask = await screen.findByRole('alertdialog', { name: 'Restart Studio?' });
     fireEvent.click(within(ask).getByRole('button', { name: 'Restart' }));
     await waitFor(() => expect(sent.some((s) => s.method === 'POST' && s.url.endsWith('/api/v2/computers/r1/restart'))).toBe(true));
+  });
+
+  it('marks each agent stopped while it is offline, and the All agents row sets one model for every agent @s729', async () => {
+    const bo: Actor = { id: 'bot:0191-bo', kind: 'agent', name: 'Bo', slug: 'bo' };
+    queryClient.setQueryData(directoryQuery.queryKey, directory([ana, bo, pat, kim]));
+    queryClient.setQueryData(agentsQuery.queryKey, [...roster, { id: '0191-bo', slug: 'bo', display_name: 'Bo', revision: 5, model: 'm-two', machine: { runner_id: 'r1', label: 'Studio', generation: 2 } } as AgentRow]);
+    queryClient.setQueryData(computersQuery.queryKey, [{ ...studio, online: false, bots: ['0190-ana', '0191-bo'] }]);
+    queryClient.setQueryData(modelsQuery.queryKey, { models: [{ id: 'm-one', label: 'Model One' }, { id: 'm-two', label: 'Model Two' }], harnesses: [] } as never);
+    serve((url, method) => (method === 'POST' && url.includes('/transitions') ? { status: 200, body: { id: 'tr' } } : undefined));
+    show(<TeamWho who="ana" tab="computer" />, '/team/ana?tab=computer');
+    const on = await screen.findByRole('region', { name: /Agents on this computer/ });
+    expect(within(on).getAllByText('Stopped')).toHaveLength(2);
+    fireEvent.click(within(on).getByRole('button', { name: 'Model for all agents' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Model' });
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Model One' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    // Neither runs Model One yet: both move.
+    await waitFor(() => expect(sent.filter((s) => s.url.includes('/transitions')).map((s) => s.url)).toEqual([
+      expect.stringContaining('/bots/ana/transitions'),
+      expect.stringContaining('/bots/bo/transitions'),
+    ]));
   });
 
   it('adds a sign-in for a tool every agent on it uses @s730', async () => {

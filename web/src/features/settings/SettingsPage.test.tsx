@@ -13,8 +13,9 @@ import {
   agentUsageQuery,
   billingQuery,
   computersQuery,
-  historyFor,
+  historyQuery,
   limitsQuery,
+  modelsQuery,
   screeningQuery,
   sleepQuery,
   subscriptionsQuery,
@@ -24,6 +25,19 @@ import {
 import { SettingsPage } from './SettingsPage';
 import { UsagePage } from './Usage';
 
+// jsdom has no layout: the list draws every row, and End stands for reaching its end.
+vi.mock('@/kit/VirtualList', () => ({
+  VirtualList: <T,>({ items, getKey, renderItem, label, onReachEnd }: { items: readonly T[]; getKey: (t: T) => string; renderItem: (t: T, i: number) => ReactNode; label?: string; onReachEnd?: () => void }) => (
+    <div role="list" aria-label={label}>
+      {items.map((t, i) => (
+        <div key={getKey(t)}>{renderItem(t, i)}</div>
+      ))}
+      <button type="button" onClick={onReachEnd}>
+        End
+      </button>
+    </div>
+  ),
+}));
 vi.mock('@/search', () => ({ SearchDialog: () => null }));
 vi.mock('@/tico/dot', () => ({ Dot: () => null, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
@@ -54,6 +68,7 @@ function show(node: ReactNode, at: string) {
       <Toasts />
     </QueryClientProvider>,
   );
+  return router;
 }
 
 const ACCESS: AccessView = {
@@ -123,14 +138,14 @@ describe('Settings', () => {
     });
     queryClient.setQueryData(accessQuery.queryKey, ACCESS);
     show(<SettingsPage section="general" />, '/settings/general');
-    const sw = await screen.findByRole('switch', { name: 'Agents send reports to Tico support' });
+    const sw = await screen.findByRole('switch', { name: 'Reports to Tico support' });
     expect(sw.getAttribute('aria-checked')).toBe('true');
     fireEvent.click(sw);
-    await waitFor(() => expect(screen.getByRole('switch', { name: 'Agents send reports to Tico support' }).getAttribute('aria-checked')).toBe('false'));
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Reports to Tico support' }).getAttribute('aria-checked')).toBe('false'));
     expect(sent[0]).toMatchObject({ url: '/api/v2/access/rules', method: 'PUT', body: { bot_reports_direct: false } });
     await waitFor(() => expect(refuse).toBeTypeOf('function'));
     await act(async () => refuse());
-    await waitFor(() => expect(screen.getByRole('switch', { name: 'Agents send reports to Tico support' }).getAttribute('aria-checked')).toBe('true'));
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Reports to Tico support' }).getAttribute('aria-checked')).toBe('true'));
     // The short words first, the server's reason second.
     const reason = await screen.findByText('Owners only');
     expect(reason.parentElement?.textContent).toBe("Couldn't save: Owners only");
@@ -139,7 +154,9 @@ describe('Settings', () => {
   it('says when a section is for owners and admins only', async () => {
     serve(() => ({ status: 403, body: { error: { code: 'forbidden', detail: 'Owners and admins' } } }));
     show(<SettingsPage section="billing" />, '/settings/billing');
-    expect(await screen.findByRole('heading', { name: 'Owners and admins only' })).toBeTruthy();
+    expect(await screen.findByText('Owners and admins only.')).toBeTruthy();
+    // The section list stays beside it.
+    expect(screen.getByRole('link', { name: 'General' })).toBeTruthy();
   });
 
   it('names the page and offers Try again when a section does not load', async () => {
@@ -342,12 +359,35 @@ describe('Settings › Security', () => {
     serve(() => ({ status: 200, body: {} }));
     queryClient.setQueryData(screeningQuery.queryKey, { modes: { webhook: 'hold', mail: 'warn' }, layers: { patterns: true, model: true }, sources: [] });
     show(<SettingsPage section="security" />, '/settings/security');
-    fireEvent.click(await screen.findByRole('switch', { name: 'Known patterns' }));
+    fireEvent.click(await screen.findByRole('switch', { name: 'Patterns' }));
     await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/screening', method: 'PUT', body: { patterns: false } }));
     expect(await run('settings.setDetector', { detector: 'model', on: false }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
     expect(await run('settings.setScreening', { door: 'webhook', mode: 'off' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
     expect(await run('settings.setSupport', { on: true }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
     expect(sent).toHaveLength(1);
+  });
+
+  it('When caught sets every door but mail, which has its own row @s1079', async () => {
+    const SCREEN = { modes: { webhook: 'warn', idea: 'warn', mail: 'warn' }, layers: { patterns: true, model: true }, sources: [] };
+    serve(() => ({ status: 200, body: SCREEN }));
+    queryClient.setQueryData(screeningQuery.queryKey, SCREEN as never);
+    show(<SettingsPage section="security" />, '/settings/security');
+    fireEvent.click(within(await screen.findByRole('group', { name: 'When caught' })).getByRole('button', { name: 'Hold' }));
+    await waitFor(() => expect(sent.map((x) => x.body)).toEqual([{ webhook: 'hold' }, { idea: 'hold' }]));
+    expect(within(screen.getByRole('group', { name: 'In mail' })).queryByRole('button', { name: 'Hold' })).toBeNull();
+  });
+});
+
+describe('Settings › Models @s1076 @s710', () => {
+  it('When a plan runs out has each computer’s Gateway switch, which sends at once', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    queryClient.setQueryData(modelsQuery.queryKey, { models: [{ id: 'm1', label: 'Sample Model', provider: 'anthropic' }] } as never);
+    queryClient.setQueryData(computersQuery.queryKey, [{ id: 'r1', label: 'Studio', online: true, gateway_fallback: false }] as never);
+    show(<SettingsPage section="models" />, '/settings/models');
+    const out = await screen.findByRole('region', { name: 'When a plan runs out' });
+    fireEvent.click(within(out).getByRole('switch', { name: 'Studio: use Tico Gateway' }));
+    await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/computers/r1/gateway-fallback', body: { on: true } }));
+    expect(screen.queryByRole('region', { name: 'Anthropic' })).toBeNull();
   });
 });
 
@@ -371,16 +411,20 @@ describe('Settings › Billing and History', () => {
     expect(screen.getByRole('link', { name: 'Change plan' }).getAttribute('href')).toBe('https://billing.example.test');
   });
 
-  it("History lists the changes, one person's when filtered, with its CSV @s1080", async () => {
+  it('History is one list; People and Agents narrow it in the address @s1080', async () => {
     serve(() => ({ status: 200, body: {} }));
-    queryClient.setQueryData(historyFor('human:p2').queryKey, {
-      items: [{ id: 'h1', at: '2026-11-18T10:00:00Z', actor: 'human:p2', kind: 'task', subject: 'Plan the launch', result: 'Done' }],
-      names: { 'human:p2': 'Ben Sample' },
+    queryClient.setQueryData(historyQuery.queryKey, {
+      items: [
+        { id: 'h1', at: '2026-11-18T10:00:00Z', actor: 'human:p2', kind: 'task', subject: 'Plan the launch', result: 'Done' },
+        { id: 'h2', at: '2026-11-18T09:00:00Z', actor: 'bot:builder', kind: 'run', subject: 'Built it', result: '' },
+      ],
+      names: { 'human:p2': 'Ben Sample', 'bot:builder': 'Builder' },
     });
-    queryClient.setQueryData(historyFor().queryKey, { items: [], names: {} });
-    show(<SettingsPage section="history" who="human:p2" />, '/settings/history?who=human:p2');
+    const router = show(<SettingsPage section="history" who="people" />, '/settings/history?who=people');
     expect(await screen.findByTitle('Ben Sample, Plan the launch: Done')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Download CSV' }).getAttribute('href')).toBe('/api/v2/history.csv?person=p2');
+    expect(screen.queryByTitle('Builder, Built it')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Agents' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ who: 'agents' }));
   });
 });
 

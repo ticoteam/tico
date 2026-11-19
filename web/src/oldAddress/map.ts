@@ -291,7 +291,7 @@ export const ROWS: readonly Row[] = [
   { page: "A factory's floor", path: /^#\/overview\/floor\/(.+)$/, to: () => '/company' },
   { page: 'Company page (Share, in Overview)', path: /^#\/overview\/company-page$/, to: () => '/company' },
   { page: 'Team', path: /^#\/team\/([^/]+)(?:\/.*)?$/, to: ([name]) => `/team/${seg(name)}` },
-  { page: 'Welcome (first run)', path: /^#\/welcome$/, to: () => at('/start', { setup: 'path' }) },
+  { page: 'Welcome (first run)', path: /^#\/welcome$/, to: () => at('/', { setup: 'path' }) },
   // The Roadmap ranked the Product pipeline's tasks; that pipeline is on Tasks.
   { page: 'Roadmap', path: /^#\/roadmap$/, to: () => '/roadmap' },
   { page: 'Tags', path: /^#\/tags$/, to: () => '/tags' },

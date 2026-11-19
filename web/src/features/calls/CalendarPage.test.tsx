@@ -131,24 +131,25 @@ describe('Calendar', () => {
     expect(block('Pricing review').classList.contains('mi')).toBe(true);
   });
 
-  it('3 days: three columns from the picked day, stepping by three, the view in the address', async () => {
-    seed('week', [occ({})]);
+  it('3 days stays an address, off the switch (s977 is not drawn): three columns, stepping by three', async () => {
     seed('3day', [occ({})]);
-    const router = show(`/calendar?view=week&date=${DAY}`);
-    await screen.findByText('Nov 15 to Nov 21');
-    fireEvent.click(screen.getByRole('button', { name: '3 days' }));
+    const router = show(`/calendar?view=3day&date=${DAY}`);
     await screen.findByText('Nov 18 to Nov 20');
-    expect(router.state.location.search).toMatchObject({ view: '3day', date: DAY });
-    expect(document.querySelectorAll('.cv-dh')).toHaveLength(3);
+    expect(screen.queryByRole('button', { name: '3 days' })).toBeNull();
     expect([...document.querySelectorAll('.cv-dh')].map((h) => h.textContent)).toEqual(['Wed18', 'Thu19', 'Fri20']);
-    expect(block('Pricing review').classList.contains('ev')).toBe(true);
     const next = screen.getByLabelText('Next 3 days');
     expect(next.getAttribute('href')).toContain('date=2026-11-21');
-    expect(next.getAttribute('href')).toContain('view=3day');
-    expect(screen.getByLabelText('Previous 3 days').getAttribute('href')).toContain('date=2026-11-15');
     fireEvent.click(next);
     await screen.findByText('Nov 21 to Nov 23');
     expect(router.state.location.search).toMatchObject({ view: '3day', date: '2026-11-21' });
+  });
+
+  it('Week keeps the ⋯: Log a meeting and Calendar settings', async () => {
+    seed('week', [occ({})]);
+    show(`/calendar?view=week&date=${DAY}`);
+    const head = (await screen.findByRole('heading', { name: 'Calendar' })).closest('header') as HTMLElement;
+    fireEvent.click(within(head).getByRole('button', { name: 'More' }));
+    expect(await screen.findByRole('menuitem', { name: 'Log a meeting' })).toBeTruthy();
   });
 
   it('Tico can pick 3 days', async () => {
@@ -188,7 +189,8 @@ describe('Calendar', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Pending' }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ review: 'pending' }));
     await waitFor(() => expect(fetches.some((u) => u.endsWith('/api/v2/meetings?review=pending'))).toBe(true));
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Find a meeting' }), { target: { value: 'sync' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Find a meeting' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Find a meeting' }), { target: { value: 'sync' } });
     await waitFor(() => expect(router.state.location.search).toMatchObject({ q: 'sync', review: 'pending' }));
     await waitFor(() => expect(fetches.some((u) => u.endsWith('/api/v2/meetings?review=pending&q=sync'))).toBe(true));
     expect(fetches.some((u) => u.endsWith('/api/v2/calendar/search?q=sync'))).toBe(true);
@@ -234,21 +236,32 @@ describe('Calendar on a phone', () => {
     delete document.documentElement.dataset.layout;
   });
 
-  it('keeps Previous, Next and the ⋯ in the head; the view switch, Start call and New event are in the ⋯', async () => {
+  it('keeps New event filled in the head, the views and the range under it; Start call is in the ⋯', async () => {
     seed('week', [occ({})]);
     seed('month', [occ({})]);
     const router = show(`/calendar?view=week&date=${DAY}`);
     const head = (await screen.findByRole('heading', { name: 'Calendar' })).closest('header') as HTMLElement;
-    expect(within(head).queryByRole('button', { name: 'New event' })).toBeNull();
+    expect(within(head).getByRole('button', { name: 'New event' }).hasAttribute('data-phone')).toBe(true);
     expect(within(head).queryByRole('button', { name: 'Start call' })).toBeNull();
-    fireEvent.click(within(head).getByRole('button', { name: 'More' }));
-    expect(await screen.findByRole('menuitem', { name: /Meeting sources/ })).toBeTruthy();
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'View' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Month' }));
+    expect(screen.getByText('Nov 15 to Nov 21').closest('.cv-rangerow')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Month' }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ view: 'month' }));
     fireEvent.click(within(head).getByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Start call' }));
     expect(await screen.findByRole('dialog', { name: 'Start call' })).toBeTruthy();
+  });
+
+  it('Week is a strip of days with the chosen day under it', async () => {
+    seed('week', [occ({}), occ({ occurrence_id: 'o2', title: 'Garden walk', start: at(34), end: at(35) })]);
+    const router = show(`/calendar?view=week&date=${DAY}`);
+    const strip = (await screen.findByLabelText('Thu, Nov 19')).closest('.cv-strip') as HTMLElement;
+    expect(strip.querySelector('.cv-sd.is-on')?.getAttribute('aria-label')).toBe('Wed, Nov 18');
+    const agenda = document.querySelector('.pk-cal-agenda') as HTMLElement;
+    expect(within(agenda).getByText('Pricing review')).toBeTruthy();
+    expect(within(agenda).queryByText('Garden walk')).toBeNull();
+    fireEvent.click(within(strip).getByLabelText('Thu, Nov 19'));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ date: '2026-11-19' }));
+    expect(await within(agenda).findByText('Garden walk')).toBeTruthy();
   });
 
   it('draws 3 days as the grid, where Week shows the agenda', async () => {
@@ -256,8 +269,7 @@ describe('Calendar on a phone', () => {
     show(`/calendar?view=3day&date=${DAY}`);
     await waitFor(() => expect(document.querySelectorAll('.cv-dh')).toHaveLength(3));
     expect(document.querySelector('.pk-cal')?.classList.contains('has-agenda')).toBe(false);
-    const head = screen.getByRole('heading', { name: 'Calendar' }).closest('header') as HTMLElement;
-    expect(head.querySelector('.cv-range-s')?.textContent).toBe('Nov 18 – 20');
+    expect(screen.getByText('Nov 18 to Nov 20')).toBeTruthy();
   });
 
   it('puts List’s filter under the ⋯', async () => {
@@ -271,11 +283,10 @@ describe('Calendar on a phone', () => {
   it("List's search sits under the head, and stays while it searches", async () => {
     const router = show('/calendar?view=list');
     const head = (await screen.findByRole('heading', { name: 'Calendar' })).closest('header') as HTMLElement;
-    expect(within(head).queryByRole('searchbox')).toBeNull();
-    const box = screen.getByRole('searchbox', { name: 'Find a meeting' });
-    expect(box.closest('.cl-find')).toBeTruthy();
+    expect(within(head).queryByRole('textbox')).toBeNull();
+    const box = screen.getByRole('textbox', { name: 'Find a meeting' });
     fireEvent.change(box, { target: { value: 'sync' } });
     await waitFor(() => expect(router.state.location.search).toMatchObject({ q: 'sync' }));
-    expect(screen.getByRole('searchbox', { name: 'Find a meeting' })).toBe(box);
+    expect(screen.getByRole('textbox', { name: 'Find a meeting' })).toBe(box);
   });
 });
