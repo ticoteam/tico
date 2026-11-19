@@ -224,3 +224,23 @@ def test_a_failing_read_hands_no_lines_instead_of_failing_the_turn(books, monkey
     with books.transaction() as c:
         assert BR.for_turn(c, OWNER, at=AT) is None
         c.execute("SELECT 1").fetchone()  # the claim's transaction is still usable
+
+
+def test_the_on_demand_brief_works_out_its_lines_outside_the_write_lock(books, monkeypatch):
+    """GET /api/v2/finance/brief: working the lines out reads the whole ledger. Inside a write transaction it held the
+    write lock for minutes on a big company, and every other write (an email's preview, an OK) answered `busy`."""
+    with books.transaction() as c:
+        _software(c)
+        spend(c, "6100", 25_000, day="2026-10-10")
+    real, writing = BR.compute, []
+
+    def watched(c, reader, at):
+        writing.append(bool(getattr(c, "write_transaction", False)))
+        return real(c, reader, at)
+
+    monkeypatch.setattr(BR, "compute", watched)
+    first = BR.on_demand(books, OWNER, at=AT)
+    again = BR.on_demand(books, OWNER, at=LATER)
+    assert writing == [False, False], "the lines are read in a snapshot, not under the write lock"
+    assert first["lines"] and again["lines"] == first["lines"]
+    assert again["as_of"] == first["as_of"] == AT, "the brief is still stored, and same numbers keep their time"

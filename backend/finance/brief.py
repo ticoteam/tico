@@ -272,6 +272,17 @@ def brief(c: sqlite3.Connection, reader: str, at: str | None = None) -> Row:
     return _save(c, reader, lines, fingerprint(lines), now, _row(c, reader), deliver=False)
 
 
+def on_demand(store: Any, reader: str, at: str | None = None) -> Row:
+    """`brief` for GET /api/v2/finance/brief: the lines are worked out in a read snapshot, and the write transaction
+    only compares and stores them. Working them out reads the ledger and bank feeds, seconds on a big company; inside
+    the write it held the lock that long, so every other write (an email's preview, an OK) waited and answered `busy`."""
+    now = at or H.now()
+    with store.read_transaction() as c:
+        lines = compute(c, reader, now)
+    with store.transaction() as c:
+        return _save(c, reader, lines, fingerprint(lines), now, _row(c, reader), deliver=False)
+
+
 def for_turn(c: sqlite3.Connection, reader: str, at: str | None = None) -> Row | None:
     """The turn-start hand-off (backend/execution.py): the lines this reader is handed now, or None. Lines are handed
     only when they differ from the fingerprint handed at this reader's last turn start. When they do not, this reads
