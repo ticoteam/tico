@@ -11,7 +11,7 @@ import { FiguresStrip, List, PageMore, Section } from '@/pagekinds';
 import type { AddStep } from './actions';
 import { AddTeammate } from './AddTeammate';
 import { AccessDialog } from './dialogs';
-import { managerOf, memberIds, membersUnder, startOfWeek, subTeams, teamSlug } from './model';
+import { managerOf, memberIds, membersUnder, startOfWeek, subTeams } from './model';
 import { MateRow, OwnerButton, waitsOn } from './parts';
 import {
   agentsQuery,
@@ -28,11 +28,12 @@ import {
 
 export interface TeamPageProps {
   group: Group;
+  path: string;
   add?: AddStep;
 }
 
 /** A team (mates.js teamPage): its manager, its teammates, the teams inside it. Its manager's chat opens beside it. */
-export function TeamPage({ group, add }: TeamPageProps) {
+export function TeamPage({ group, path, add }: TeamPageProps) {
   useFollow({ allTasks: true });
   const { data: me } = useQuery(meQuery);
   // Every member's face and status line: the whole directory.
@@ -115,10 +116,10 @@ export function TeamPage({ group, add }: TeamPageProps) {
     <>
       <List
         title={group.name}
-        path={`/team/${teamSlug(group.name)}`}
+        path={path}
         className="rec"
         tabs={[
-          { label: 'Teammates', to: `/team/${teamSlug(group.name)}` },
+          { label: 'Teammates', to: path },
           { label: 'Rules', to: '/company/rules', search: { who: `group:${group.id}` } },
         ]}
         actions={

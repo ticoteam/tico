@@ -168,7 +168,7 @@ function App() {
   // answer is read from the directory, so an agent's status line does not redraw the shell.
   const who = top === 'team' && a ? decodeURIComponent(a) : '';
   const known = useDirectory((d) => (who ? isTeammate(who, (key) => d.byId[key], me.data?.id) : false));
-  const isActor = (w: string) => known ?? isTeammate(w, undefined, me.data?.id);
+  const isActor = (w: string) => !w.startsWith('team:') && (known ?? isTeammate(w, undefined, me.data?.id));
   const arrangement = arrangementFor(at.path, at.chat ? { chat: at.chat } : {}, isActor);
 
   // One stream, once the person is known and Tico's room is drawn (its follow then rides the first connection).

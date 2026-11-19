@@ -16,6 +16,7 @@ export function TeamWho({ who, tab, add }: { who: string } & TeamSearch) {
   const { data: found } = useSuspenseQuery({ ...directoryQuery, select: (d) => resolveWho(who, d, groups) });
   if (found?.kind === 'agent') return <AgentPage actor={found.actor} tab={tab} />;
   if (found?.kind === 'person') return <PersonPage actor={found.actor} settings={tab === 'settings'} slack={tab === 'slack'} />;
-  if (found?.kind === 'team') return <TeamPage group={found.group} add={add} />;
-  return <RecordPage title="Team" path={`/team/${encodeURIComponent(who)}`} state="empty" empty={{ title: 'No such teammate' }} />;
+  const path = `/team/${encodeURIComponent(who)}`;
+  if (found?.kind === 'team') return <TeamPage group={found.group} path={path} add={add} />;
+  return <RecordPage title="Team" path={path} state="empty" empty={{ title: 'No such teammate' }} />;
 }
