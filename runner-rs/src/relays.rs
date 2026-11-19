@@ -21,7 +21,12 @@ struct HarnessRelay {
     relay: Option<crate::harness_tools::Relay>,
     config: Value,
     default_at: Option<Instant>,
+    /// The run loop's assignments answer the runtimes were last worked out from (Runner::assignments_seen).
+    rows: Option<Arc<Vec<Value>>>,
 }
+
+/// How often the harness relay reads the company's config (its default and Gateway runtimes) on its own.
+const HARNESS_CONFIG_S: f64 = 60.0;
 
 struct Relays {
     logins: Slot<crate::login::Logins>,
@@ -167,18 +172,37 @@ pub fn poll(runner: &Arc<Runner>) {
                 // Install what this computer's bots run on and the optional defaults, including the Gateway
                 // before subscription sign-in. A computer with no bots yet also takes the company default.
                 let changed = CONFIG_CHANGED.swap(false, std::sync::atomic::Ordering::SeqCst);
-                if changed
+                let due = changed
                     || harness
                         .default_at
-                        .is_none_or(|t| t.elapsed().as_secs_f64() >= 60.0)
-                {
-                    harness.default_at = Some(Instant::now());
-                    if let Ok(c) = me.client.get("config").await {
-                        crate::fallback::remember(&c);
-                        harness.config = c;
+                        .is_none_or(|t| t.elapsed().as_secs_f64() >= HARNESS_CONFIG_S);
+                // The bots' runtimes: while the event stream is up, from the run loop's own assignments answer, which
+                // it reads again whenever the server says they changed (and on its backup timer), so this relay asks
+                // for nothing the loop already has; with the stream down, read here every minute as before.
+                // Loaded first: the loop publishes the list before it says so, so `seen` is then the server's answer.
+                // A branch follows its original's runtimes, and the hub tells only the original's computer when they
+                // change: a computer that runs a branch keeps reading here every minute.
+                let loaded = me.events.live() && me.assignments_read();
+                let seen = me.assignments_seen();
+                let shared = loaded && !has_branch(&seen);
+                if due || (shared && moved(harness.rows.as_ref(), &seen)) {
+                    if due {
+                        harness.default_at = Some(Instant::now());
+                        if let Ok(c) = me.client.get("config").await {
+                            crate::fallback::remember(&c);
+                            harness.config = c;
+                        }
                     }
-                    if let Ok(rows) = me.client.get("runners/assignments").await {
-                        let rows = rows.as_array().cloned().unwrap_or_default();
+                    let rows = if shared {
+                        Some(seen)
+                    } else {
+                        me.client
+                            .get("runners/assignments")
+                            .await
+                            .ok()
+                            .map(|rows| Arc::new(rows.as_array().cloned().unwrap_or_default()))
+                    };
+                    if let Some(rows) = rows {
                         let runtimes = harness_runtimes(&rows);
                         let default = harness_defaults(
                             &runtimes,
@@ -187,6 +211,7 @@ pub fn poll(runner: &Arc<Runner>) {
                         );
                         let runtimes: Vec<String> = runtimes.into_iter().collect();
                         tools.lock().unwrap().want(&runtimes, &default);
+                        harness.rows = shared.then_some(rows);
                     }
                 }
                 // Read at the moment of a switch, not here: a turn can start while `tick` waits on the server.
@@ -204,6 +229,18 @@ pub fn poll(runner: &Arc<Runner>) {
             note("harness", result, "harness step");
         });
     }
+}
+
+/// Whether any of these bots is a branch of another bot (backend/shared_bots.py `shared_from`).
+fn has_branch(rows: &[Value]) -> bool {
+    rows.iter()
+        .any(|row| !text_of(&row["config"]["shared_from"]).is_empty())
+}
+
+/// Whether the run loop's assignments answer is another than the one the harness runtimes were worked out from: it
+/// replaces the list whole on each full pass, so a new pass is a new pointer.
+fn moved(last: Option<&Arc<Vec<Value>>>, seen: &Arc<Vec<Value>>) -> bool {
+    last.is_none_or(|rows| !Arc::ptr_eq(rows, seen))
 }
 
 /// Optional computer defaults: the first bot's runtime and the Gateway runtime the company chose.
@@ -239,4 +276,29 @@ pub fn harness_runtimes(rows: &[Value]) -> HashSet<String> {
     }
     found.remove("");
     found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn the_harness_relay_reworks_runtimes_only_when_the_loop_read_assignments_again() {
+        let first = Arc::new(vec![json!({"bot": "a", "config": {"runtime": "claude"}})]);
+        assert!(moved(None, &first), "nothing worked out yet");
+        let kept = Some(first.clone());
+        assert!(!moved(kept.as_ref(), &first.clone()), "the same answer");
+        // A full pass replaces the list whole, even with the same rows: worked out again.
+        let again = Arc::new((*first).clone());
+        assert!(moved(kept.as_ref(), &again));
+    }
+
+    #[test]
+    fn a_computer_that_runs_a_branch_reads_its_assignments_itself() {
+        let own = vec![json!({"bot": "a", "config": {"runtime": "claude"}})];
+        assert!(!has_branch(&own));
+        let branch = json!({"bot": "b", "config": {"runtime": "claude", "shared_from": "a"}});
+        assert!(has_branch(&[own[0].clone(), branch]));
+    }
 }

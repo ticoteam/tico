@@ -410,7 +410,8 @@ SCHEMAS.update(
             },
         ),
         "TaskResult": obj(
-            {"task": ref("Task"), "private_readers": "s"},
+            # answer_id: an answer's or an OK's, which takes it back (POST /api/v2/answers/{id}/undo).
+            {"task": ref("Task"), "private_readers": "s", "answer_id": "n"},
             ["task"],
         ),  # private_readers: a private task's filer is told who else reads it (backend/private_readers.py)
         "TaskMergeResult": obj({"task": ref("Task"), "closed": ref("Task"), "note": "s"}),

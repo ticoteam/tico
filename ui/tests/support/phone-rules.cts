@@ -365,7 +365,12 @@ async function closeAndReopen(page: Page, screen: Screen, hub: Hub): Promise<{ru
     if ((await openDialogs(page)).includes(id)) return [{rule: 5, element: 'dialog ' + id, why: 'the modal cannot be closed: no close control worked and Escape did nothing'}];
     return [{rule: 5, element: 'dialog ' + id, why: 'the modal has no close control a finger can reach (only Escape closes it)'}];
   }
-  if (await screen.open(page, hub) === false || !(await openDialogs(page)).includes(id)) {
+  // A modal opened from a read (the task's ask) can come after settle's fixed wait: the server answers one person's
+  // identical reads at most once a second (backend/shared_reads.py), and the same steps just read the same paths.
+  const reopened = await screen.open(page, hub) !== false && await page.waitForFunction(
+    want => [...document.querySelectorAll('dialog[open]')].some(d => (d.id || d.className) === want), id, {timeout: t(5000)},
+  ).then(() => true, () => false);
+  if (!reopened) {
     return [{rule: 5, element: 'dialog ' + id, why: 'once closed, the same steps do not open the modal again'}];
   }
   const lost: {rule: number; element: string; why: string}[] = [];

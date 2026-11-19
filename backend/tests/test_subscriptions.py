@@ -204,3 +204,44 @@ def test_a_login_whose_turns_cannot_save_a_session_names_the_folder_not_a_sign_i
     assert [(row['bot'], row['signed_in'], row['problem']) for row in machine['bot_connections']] == [
         ('ops', None, problem)
     ]
+
+
+def test_a_heartbeat_that_reports_the_profile_signed_in_clears_only_this_computers_refusals(api):
+    # The refusals of every bot the computer hosts are read in one go (subscriptions.refusals); the result is the same
+    # as asking for each: a bot blocked here on a profile now signed in is cleared, one blocked on another computer or
+    # on a profile the computer does not report signed in keeps its refusal.
+    r = runner(api)
+    for slug in ('ops', 'cpo', 'finance'):
+        assign(api, r, slug)
+    with api.app.state.store.transaction() as c:
+        bots = sorted(row[0] for row in c.execute('SELECT bot FROM assignments WHERE runner_id=?', (r['runner_id'],)))
+        here, elsewhere, other_profile = bots[:3]
+        for bot, runner_id, profile in (
+            (here, r['runner_id'], 'default'),
+            (elsewhere, 'another-computer', 'default'),
+            (other_profile, r['runner_id'], 'spare'),
+        ):
+            c.execute(
+                'INSERT INTO registry_metadata VALUES(?,?)',
+                (
+                    'subscription-unavailable:' + bot,
+                    json.dumps({'runner_id': runner_id, 'profile': profile, 'runtime': 'claude'}),
+                ),
+            )
+    post(
+        api,
+        'runners/heartbeat',
+        {
+            'version': 'test',
+            'platform': 'test',
+            'readiness': {},
+            'profiles': [{'name': 'default', 'runtimes': {'claude': {'signed_in': True}}}],
+        },
+        token=r['token'],
+    )
+    with api.app.state.store.read() as c:
+        kept = {
+            row[0].removeprefix('subscription-unavailable:')
+            for row in c.execute("SELECT key FROM registry_metadata WHERE key LIKE 'subscription-unavailable:%'")
+        }
+    assert kept == {elsewhere, other_profile}

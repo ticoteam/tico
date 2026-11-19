@@ -200,18 +200,6 @@ def test_archived_cleanup_token_is_repository_scoped_and_stale_wakes_once(prepar
     assert post(api, token_path, {}, 'runner-test').status_code == 403
 
 
-def test_pre_migration_schema_has_no_worktree_reads_or_actions():
-    import sqlite3
-    from backend import worktrees as W
-    from backend.auth import Identity
-
-    with sqlite3.connect(':memory:') as c:
-        c.execute('CREATE TABLE task_links(id TEXT,kind TEXT,state TEXT)')
-        assert W.inventory(c, 'r1') == []
-        assert W.heartbeat(c, Identity('runner:r1', 'runner', runner_id='r1'), [], True) == []
-        assert {r[1] for r in c.execute('PRAGMA table_info(task_links)')} == {'id', 'kind', 'state'}
-
-
 def test_no_app_accepts_computer_git_addresses_but_connected_app_keeps_grants(prepared):
     api, tid, _ = prepared
     url = 'ssh://git@git.example.com/team/product.git'

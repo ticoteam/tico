@@ -238,6 +238,7 @@ class Homes:
     existed. A repository this company's App made, or one a person pointed the bot at, is always its own."""
 
     def __init__(self, c):
+        read_cache.prime_metadata(c, (SELECTION, MADE, CHOSEN, TAKEN, CREATED_ON_GITHUB))
         self.c, self.selection = c, selection(c)
         self.ours = {**metadata(c, MADE), **metadata(c, CHOSEN)}
         self.taken, self.created = metadata(c, TAKEN), metadata(c, CREATED_ON_GITHUB)
@@ -450,6 +451,16 @@ class Reads:
                 part,
             ):
                 self.chosen[r['bot']].append({'full_name': r['full_name'], 'access': r['access']})
+        read_cache.prime_metadata(
+            c,
+            [
+                'repositories-confirmed-missing',
+                'repository-creation-grants',
+                PRODUCT_GRANTS,
+                *(key for _, key, *_ in FLAGS),
+                *ALL_STORED.values(),
+            ],
+        )
         self.missing = unreachable(c)
         self.creation = metadata(c, 'repository-creation-grants')
         self.product_creation = metadata(c, PRODUCT_GRANTS)
@@ -1191,15 +1202,23 @@ def repository_health(service):
     from .github_app import repo_of
 
     with service.store.read() as c:
-        row = service.row(c)
-        org = row['org'] if row else ''
-        own = {str(repo_of(r[0], org) or '').lower() for r in c.execute('SELECT repo FROM bot_config')}
         confirmed = unreachable(c)
-        missing = [
-            r['full_name'] + ' is not reachable'
-            for r in c.execute('SELECT full_name,enabled FROM repositories WHERE reachable=0 ORDER BY full_name')
-            if r['full_name'].lower() in confirmed and r['enabled'] and r['full_name'].lower() not in own
-        ]
+        # Only an enabled repository confirmed missing is named, less the bots' own: every bot's is read only for one.
+        named = (
+            [
+                r['full_name']
+                for r in c.execute('SELECT full_name,enabled FROM repositories WHERE reachable=0 ORDER BY full_name')
+                if r['full_name'].lower() in confirmed and r['enabled']
+            ]
+            if confirmed
+            else []
+        )
+        missing = []
+        if named:
+            row = service.row(c)
+            org = row['org'] if row else ''
+            own = {str(repo_of(r[0], org) or '').lower() for r in c.execute('SELECT repo FROM bot_config')}
+            missing = [name + ' is not reachable' for name in named if name.lower() not in own]
     note_github_token(
         service.store,
         '; '.join(missing) or None,
@@ -1273,8 +1292,8 @@ def queue_sync(service, refresh=False):
                     service.repository_refresh_wanted = False
                 try:
                     if refresh_now:
+                        service.forget_tokens()
                         with service.lock:
-                            service.cache.clear()
                             service.live.clear()
                         service.installation(refresh=True)
                     result = sync(service)

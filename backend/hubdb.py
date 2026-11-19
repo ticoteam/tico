@@ -570,6 +570,9 @@ def connect(path=None):
 
 # The task rows every task read reads, as a table: `SELECT * FROM {TASKS} tasks`. It is the table itself.
 TASKS = "tasks"
+# A registered computer's row: the identity check and the route's own lookup read it with this one text, so a snapshot
+# reads it once (backend/read_cache.py `one`).
+RUNNER_SQL = "SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL"
 # The open snooze of the task aliased `t` (the engine's `snoozes`), for a filter: `NOT {SNOOZED % 't'}` keeps the tasks
 # not snoozed.
 SNOOZED = "EXISTS (SELECT 1 FROM snoozes sz WHERE sz.task_id=%s.id AND sz.ended_at IS NULL)"
