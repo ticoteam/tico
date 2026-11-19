@@ -488,7 +488,8 @@ def test_a_draft_carries_tico_files_and_is_found_again_with_them(api, box):
     # Other files are another draft; no files is the draft (and the Message-ID) a draft without them always had.
     assert post(api, "mail/drafts", {**body, "attachments": [pdf]}, token)["draft"] != first["draft"]
     plain = post(api, "mail/drafts", REPLY, token)
-    key = mail_compose.key("bot:ops", BOX, "", "t1", [], [], "", REPLY["body"])
+    # A reply's key also names the message it answers and whom it goes to.
+    key = mail_compose.key("bot:ops", BOX, "", "t1", [], [], "", REPLY["body"], "answers:m1", [SENDER], [])
     assert mail_compose.message_id("draft", key, BOX).encode() in box.drafts(BOX)[plain["draft"]]
 
 
@@ -691,21 +692,32 @@ def test_a_draft_is_changed_in_place_and_stays_a_reply_with_its_files(api, box):
     assert post(api, "mail/drafts", {**REPLY, "attachments": [pdf]}, token)["draft"] != made["draft"]
 
 
-def test_the_assistant_changes_its_persons_draft_but_a_discard_asks_them(api, box):
+def test_the_assistants_draft_change_meets_the_lint_and_the_reviewer_and_a_discard_asks(api, box, monkeypatch):
+    """An Assistant turn arrives as its person but writes as the Assistant: its change to the person's draft meets the
+    lint and the second reviewer, as a bot's does. A discard (Gmail deletes it for good) is a proposal."""
     from backend import assistant
     from backend.tests.helpers.assistant import assistant_turn
 
     _, attempt = assistant_turn(api, "ana-test", "Tidy my reply to the invoice.")
     made = post(api, "mail/drafts", {"mailbox": BOX, "reply_to": "t1", "body": "Thanks, paid today."})
-    changed = api.patch(
-        f"/api/v2/mail/drafts/{made['draft']}",
-        json={"mailbox": BOX, "body": "Thanks, we paid it today."},
-        headers=headers(attempt["token"]),
-    )
+    path = f"/api/v2/mail/drafts/{made['draft']}"
+    refused = api.patch(path, json={"mailbox": BOX, "body": "Paid."}, headers=headers(attempt["token"]))
+    assert refused.status_code == 422 and refused.json()["error"]["code"] == "lint"
+    assert b"Thanks, paid today." in box.drafts(BOX)[made["draft"]]
+    reviewed = []
+
+    def stop(app, store, snap, review=None):
+        reviewed.append(review)
+        return {"review": False, "review_reason": S.STOPPED["commitment"], "status": "classified"}
+
+    monkeypatch.setattr(S, "classify", stop)
+    words = {"mailbox": BOX, "body": "Thanks for the invoice; we will pay it by Friday.\n\nAna"}
+    changed = api.patch(path, json=words, headers=headers(attempt["token"]))
     assert changed.status_code == 200, changed.text
-    assert b"we paid it today" in box.drafts(BOX)[made["draft"]]
-    # Gmail deletes a discarded draft for good: the Assistant proposes it to its person instead.
-    assert not assistant.write_allowed("DELETE", f"/api/v2/mail/drafts/{made['draft']}")
+    assert (changed.json()["review"], changed.json()["review_reason"]) == ("stop", S.STOPPED["commitment"])
+    assert reviewed and reviewed[0] is not None  # the reviewer read it with the Assistant's context
+    assert b"pay it by Friday" in box.drafts(BOX)[made["draft"]]
+    assert not assistant.write_allowed("DELETE", path)
 
 
 def test_a_send_names_its_draft_by_message_id_and_a_gone_draft_says_so(api, box):
@@ -744,3 +756,111 @@ def test_a_queued_send_prints_its_id_task_and_approval_and_a_retry_asks_no_revie
     key, body = "send-once", {"mailbox": BOX, "draft_id": made["draft"]}
     first = post(api, "email/sends", body, attempt["token"], key=key)["send"]
     assert post(api, "email/sends", body, attempt["token"], key=key)["send"]["id"] == first["id"] and asked == [1]
+
+
+GMAIL_UI_DRAFT = (
+    b"From: ana@acme.example\r\nTo: billing@vendor.example\r\nBcc: books@acme.example\r\nSubject: Statement\r\n"
+    b"MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=outer\r\n\r\n"
+    b"--outer\r\nContent-Type: multipart/alternative; boundary=inner\r\n\r\n"
+    b"--inner\r\nContent-Type: text/plain\r\n\r\nHere is the statement.\r\n"
+    b"--inner\r\nContent-Type: text/html\r\n\r\n<p>Here is the <b>statement</b>.</p>\r\n--inner--\r\n"
+    b"--outer\r\nContent-Type: message/rfc822\r\nContent-Disposition: attachment; filename=original.eml\r\n\r\n"
+    b"From: bank@bank.example\r\nSubject: Your statement\r\n\r\nBalance attached.\r\n--outer--\r\n"
+)
+
+
+def test_a_draft_change_keeps_everything_it_does_not_name_and_refuses_what_it_cannot_apply(api, box):
+    """A subject change to a draft made in Gmail keeps its Bcc, its HTML version and its forwarded .eml byte for byte;
+    new words for it are refused rather than dropping the HTML."""
+    from email import policy
+    from email.parser import BytesParser
+
+    box.put_draft(BOX, "r-900", "dm-ui", "t-ui", GMAIL_UI_DRAFT)
+    path = "/api/v2/mail/drafts/r-900"
+    changed = api.patch(path, json={"mailbox": BOX, "subject": "Statement for October"}, headers=headers())
+    assert changed.status_code == 200, changed.text
+    msg = BytesParser(policy=policy.default).parsebytes(box.drafts(BOX)["r-900"])
+    assert msg["Subject"] == "Statement for October" and msg["Bcc"] == "books@acme.example"
+    assert msg.get_body(preferencelist=("html",)).get_content().strip() == "<p>Here is the <b>statement</b>.</p>"
+    (eml,) = msg.iter_attachments()
+    assert eml.get_filename() == "original.eml" and b"Balance attached." in eml.as_bytes()
+    before = box.drafts(BOX)["r-900"]
+    refused = api.patch(path, json={"mailbox": BOX, "body": "New words."}, headers=headers())
+    assert refused.status_code == 422 and "HTML version" in refused.json()["error"]["detail"]
+    assert box.drafts(BOX)["r-900"] == before
+
+
+def test_a_draft_changed_since_it_was_read_is_never_overwritten_discarded_or_sent(api, box):
+    autonomous(api)
+    made = post(api, "mail/drafts", {"mailbox": BOX, "reply_to": "t1", "body": "Thanks, paid today."})
+    path = f"/api/v2/mail/drafts/{made['draft']}"
+    first = api.patch(
+        path, json={"mailbox": BOX, "body": "Thanks, paid this morning.", "message": made["message"]}, headers=headers()
+    )
+    assert first.status_code == 200, first.text
+    # A second editor still holding the first version is refused: the first edit stays.
+    late = api.patch(path, json={"mailbox": BOX, "subject": "Late", "message": made["message"]}, headers=headers())
+    assert late.status_code == 409 and late.json()["error"]["code"] == "draft_changed"
+    by_old_id = api.patch(
+        f"/api/v2/mail/drafts/{made['message']}", json={"mailbox": BOX, "subject": "Late"}, headers=headers()
+    )
+    assert by_old_id.status_code == 404  # the old message id names no draft any more
+    gone = api.delete(f"{path}?mailbox={BOX}&message={made['message']}", headers=headers())
+    assert gone.status_code == 409 and made["draft"] in box.drafts(BOX)
+    sent = api.post(
+        "/api/v2/email/sends",
+        json={"mailbox": BOX, "draft_id": made["draft"], "draft_message": made["message"]},
+        headers=headers(),
+    )
+    assert sent.status_code == 409 and b"paid this morning" in box.drafts(BOX)[made["draft"]]
+    # The same change asked again under its key answers the first, writing nothing again.
+    key = "edit-once"
+    body = {"mailbox": BOX, "subject": "Paid", "message": first.json()["message"]}
+    once = api.patch(path, json=body, headers=headers(key=key)).json()
+    edits = box.box(BOX)["edits"]
+    again = api.patch(path, json=body, headers=headers(key=key))
+    assert again.status_code == 200 and again.json() == once and box.box(BOX)["edits"] == edits
+
+
+def test_a_lost_send_answer_replays_after_the_draft_is_changed_or_gone(api, box):
+    autonomous(api)
+    made = post(api, "mail/drafts", {"mailbox": BOX, "reply_to": "t1", "body": "Thanks, paid today."})
+    body = {"mailbox": BOX, "draft_id": made["draft"]}
+    first = post(api, "email/sends", body, key="send-1")["send"]
+    api.patch(f"/api/v2/mail/drafts/{made['draft']}", json={"mailbox": BOX, "body": "Changed."}, headers=headers())
+    assert post(api, "email/sends", body, key="send-1")["send"]["id"] == first["id"]
+    api.delete(f"/api/v2/mail/drafts/{made['draft']}?mailbox={BOX}", headers=headers()).raise_for_status()
+    box.down.add(BOX)  # and Gmail is down: the replay never reads it
+    assert post(api, "email/sends", body, key="send-1")["send"]["id"] == first["id"]
+    box.down.discard(BOX)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM email_sends").fetchone()[0] == 1
+
+
+def test_the_same_words_after_a_newer_message_are_a_new_reply_to_its_sender(api, box):
+    first = post(api, "mail/drafts", {"mailbox": BOX, "reply_to": "t1", "body": "Thanks, noted."})
+    box.add(
+        BOX,
+        "m9",
+        thread="t1",
+        sender="ap@vendor.example",
+        subject="Re: Invoice 4471",
+        body="Paid?",
+        epoch=1_783_368_900,
+    )
+    second = post(api, "mail/drafts", {"mailbox": BOX, "reply_to": "t1", "body": "Thanks, noted."})
+    assert second["draft"] != first["draft"] and second["to"] == ["ap@vendor.example"]
+    assert b"To: ap@vendor.example" in box.drafts(BOX)[second["draft"]]
+
+
+def test_a_draft_past_many_pages_is_found_by_its_message_and_a_thread_list_pages(api, box, monkeypatch):
+    from backend import gmail_live
+
+    monkeypatch.setattr(gmail_live, "DRAFT_PAGE", 1)  # one draft a page: the oldest is fourteen pages in
+    for n in range(14):
+        box.put_draft(BOX, f"r-{800 + n}", f"dm-{n}", "t1" if n < 2 else f"t-{n}", OLD_TOOL_DRAFT)
+    assert get(api, f"mail/drafts/dm-0?mailbox={BOX}")["draft_id"] == "r-800"
+    page = get(api, f"mail/drafts?mailbox={BOX}&thread=t1&limit=1")
+    nxt = get(api, f"mail/drafts?mailbox={BOX}&thread=t1&limit=1&cursor={page['next_cursor']}")
+    assert [page["drafts"][0]["draft_id"], nxt["drafts"][0]["draft_id"]] == ["r-801", "r-800"]
+    assert nxt["next_cursor"] is None

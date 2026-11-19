@@ -71,6 +71,7 @@ for _spec in hubtools_org.TOOLS:
 # A write the Assistant may make on its own (backend/assistant.py write_allowed): anything else it proposes.
 ASSISTANT_WRITES = {
     "tico_email_cancel",
+    "tico_email_draft_update",  # changing a draft delivers nothing (backend/assistant.py)
     "tico_goal_read_back",
     "tico_goal_save",
     "tico_goal_create",
