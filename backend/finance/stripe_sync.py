@@ -245,8 +245,11 @@ def connection(
             stripe_post.stale(load(c, now))
             banking.refresh_connection_openings(load(c, now), cid)  # the pass's balance and rows agree now
         fields: dict[str, object] = {"last_sync_at": now, "updated_at": now}
-        if due:
-            fields["next_sync_at"] = _after(now, POLL_MINUTES * 60)
+        # A first backfill still under way is due again at once (the worker steps it after sync.BACKFILL_PAUSE), not a
+        # poll later; a step that failed waits the poll.
+        going = not problems and not _settings(SK.get(c, "fin_connections", cid)).get("backfilled")
+        if due or going:
+            fields["next_sync_at"] = now if going else _after(now, POLL_MINUTES * 60)
         if problems:
             fields.update({"status": "error", "last_error": problems[0][:300]})
             banking.sync_failed(load(c, now), cid, str(row["status"]), problems[0])

@@ -29,6 +29,7 @@ from .store import tico
 log = logging.getLogger(__name__)
 
 SWEEP = 300.0  # seconds between sweeps without a ring
+BACKFILL_PAUSE = 2.0  # seconds between sweeps while a first backfill has its next step due
 POLL_MINUTES = 15  # how often a connection is read without a webhook
 BACKFILL_PAGES = 4  # /transactions pages per step: the first backfill is paced across steps
 POSTING_LAG_DAYS = 30  # Mercury's `start` reads the day a row was made; one made this long before posting is still read
@@ -1120,6 +1121,32 @@ def stop() -> None:
     _worker["thread"] = None
 
 
+def pause(store: Any, at: str | None = None) -> float:
+    """How long the worker waits before its next sweep: BACKFILL_PAUSE while an active connection's first backfill has
+    its next step due (Mercury, Stripe or Brex: `backfilled` not yet set), so a large history comes in step after step
+    and not one step a SWEEP; else SWEEP. A step that failed (a 429, an error) leaves its connection in error and due a
+    poll later, so a failing backfill falls back to SWEEP and never loops tight. Each sweep still steps every connection
+    in turn, the outbox with them."""
+    now = at or _now()
+    try:
+        with store.read() as c:
+            if not is_set_up(c):
+                return SWEEP
+            rows = SK.connections(c)
+    except Exception:
+        log.exception("Finance sync could not read its connections")
+        return SWEEP
+    for row in rows:
+        if (
+            str(row["provider"]) in ("mercury", "stripe", "brex")
+            and str(row["status"]) == "active"
+            and not _settings(row).get("backfilled")
+            and (not row["next_sync_at"] or str(row["next_sync_at"]) <= now)
+        ):
+            return BACKFILL_PAUSE
+    return SWEEP
+
+
 def _loop(store: Any, vault: Any, rehearsal: bool, make: Make | None, halt: threading.Event) -> None:
     while not halt.is_set():
         seen = BELL.rung
@@ -1128,4 +1155,4 @@ def _loop(store: Any, vault: Any, rehearsal: bool, make: Make | None, halt: thre
         except Exception:
             log.exception("Finance sync failed")
         FIRST_PASS.set()
-        BELL.wait(seen, SWEEP)
+        BELL.wait(seen, SWEEP if rehearsal else pause(store))
