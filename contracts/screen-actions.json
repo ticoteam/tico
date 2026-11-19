@@ -291,6 +291,26 @@
       }
     },
     {
+      "id": "agents.newRule",
+      "title": "Start a new rule for an agent",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "an agent's slug"
+          }
+        },
+        "required": [
+          "slug"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "agents.pause",
       "title": "Pause an agent",
       "kind": "change",
@@ -1063,6 +1083,55 @@
       }
     },
     {
+      "id": "budget.setMonth",
+      "title": "Show budgets for a month",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "month": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+            "description": "a month, 2026-11"
+          }
+        },
+        "required": [
+          "month"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "budget.updateRow",
+      "title": "Change a budget from a month on (this one when left out)",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "budget": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "amount": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000000000
+          },
+          "month": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+            "description": "a month, 2026-11"
+          }
+        },
+        "required": [
+          "budget",
+          "amount"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "calls.add",
       "title": "Add to a call",
       "kind": "change",
@@ -1124,6 +1193,43 @@
           "meeting",
           "section",
           "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "calls.cancel",
+      "title": "Cancel a booked call",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a call id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "calls.captions",
+      "title": "Show or hide captions in the call bar",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "on"
         ],
         "additionalProperties": false
       }
@@ -1361,12 +1467,80 @@
       }
     },
     {
+      "id": "calls.hideChat",
+      "title": "Close the call’s chat beside the page",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "calls.hideItem",
+      "title": "Hide a call’s action item",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a call id"
+          },
+          "owner": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "id",
+          "owner",
+          "title"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "calls.leave",
       "title": "Leave the call",
       "kind": "change",
       "input": {
         "type": "object",
         "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "calls.linkTask",
+      "title": "Link a task to a meeting",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "meeting": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a meeting id"
+          },
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "a task: #123, its id or its link"
+          }
+        },
+        "required": [
+          "meeting",
+          "task"
+        ],
         "additionalProperties": false
       }
     },
@@ -1411,6 +1585,37 @@
             "type": "boolean"
           }
         },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "calls.makeItemTask",
+      "title": "Make a task from a call’s action item",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a call id"
+          },
+          "owner": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "id",
+          "owner",
+          "title"
+        ],
         "additionalProperties": false
       }
     },
@@ -1464,6 +1669,38 @@
         },
         "required": [
           "mine"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "calls.moveCall",
+      "title": "Change a booked call’s time",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a call id"
+          },
+          "start": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T",
+            "description": "an ISO time, 2026-11-18T10:30:00Z"
+          },
+          "minutes": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 1440
+          }
+        },
+        "required": [
+          "id",
+          "start",
+          "minutes"
         ],
         "additionalProperties": false
       }
@@ -1577,6 +1814,75 @@
       }
     },
     {
+      "id": "calls.schedule",
+      "title": "Book a voice call",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "with": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 200,
+              "pattern": "^(human|bot):[^\\s]+$",
+              "description": "human:<id> or bot:<id>"
+            },
+            "maxItems": 50
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "start": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T",
+            "description": "an ISO time, 2026-11-18T10:30:00Z"
+          },
+          "minutes": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 1440
+          }
+        },
+        "required": [
+          "with",
+          "start",
+          "minutes"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "calls.sendMeeting",
+      "title": "Send a meeting to an agent",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "meeting": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a meeting id"
+          },
+          "agent": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 200,
+            "pattern": "^bot:[^\\s]+$",
+            "description": "bot:<id>"
+          }
+        },
+        "required": [
+          "meeting",
+          "agent"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "calls.setImporter",
       "title": "Turn a meeting importer on or off",
       "kind": "change",
@@ -1602,6 +1908,30 @@
         "required": [
           "source",
           "on"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "calls.setPrivate",
+      "title": "Make a meeting private or the team’s",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "meeting": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a meeting id"
+          },
+          "private": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "meeting",
+          "private"
         ],
         "additionalProperties": false
       }
@@ -1644,12 +1974,113 @@
       }
     },
     {
+      "id": "calls.showFile",
+      "title": "Show a Tico file to everyone on the call",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a call id"
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a file id"
+          }
+        },
+        "required": [
+          "id",
+          "file"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "calls.stopShow",
+      "title": "Stop showing on the call",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a call id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "calls.syncGranola",
       "title": "Sync Granola now",
       "kind": "change",
       "input": {
         "type": "object",
         "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "calls.takeOut",
+      "title": "Take an agent out of the call",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a call id"
+          },
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "the agent’s id in the call"
+          }
+        },
+        "required": [
+          "id",
+          "agent"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "calls.unlinkTask",
+      "title": "Unlink a task from a meeting",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "meeting": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a meeting id"
+          },
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a task id"
+          }
+        },
+        "required": [
+          "meeting",
+          "task"
+        ],
         "additionalProperties": false
       }
     },
@@ -1808,6 +2239,10 @@
           "q": {
             "type": "string",
             "maxLength": 200
+          },
+          "link": {
+            "type": "string",
+            "maxLength": 60
           }
         },
         "additionalProperties": false
@@ -1982,6 +2417,75 @@
           "chat",
           "message",
           "rating"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "conversation.react",
+      "title": "React to a message",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "chat": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a chat id"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a message id"
+          },
+          "emoji": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "chat",
+          "message",
+          "emoji"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "conversation.reply",
+      "title": "Reply to a message",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "chat": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a chat id"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a message id"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          }
+        },
+        "required": [
+          "chat",
+          "message",
+          "text"
         ],
         "additionalProperties": false
       }
@@ -2174,6 +2678,34 @@
       }
     },
     {
+      "id": "docs.lock",
+      "title": "Lock or unlock a doc",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "locked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "doc",
+          "version",
+          "locked"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "docs.new",
       "title": "Start a new doc",
       "kind": "view",
@@ -2229,6 +2761,35 @@
       }
     },
     {
+      "id": "docs.research",
+      "title": "Have the Librarian research for a doc",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "section": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "instructions": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "doc",
+          "instructions"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "docs.restore",
       "title": "Bring back an old version of a doc",
       "kind": "change",
@@ -2276,12 +2837,74 @@
           "body": {
             "type": "string",
             "maxLength": 200000
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
           }
         },
         "required": [
           "doc",
           "version"
         ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "files.filter",
+      "title": "Filter Files",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "kind": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "role": {
+            "type": "string",
+            "maxLength": 60
+          },
+          "agent": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "writer": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "linked": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "team": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "task": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "days": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3650
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "clear": {
+            "type": "boolean"
+          }
+        },
         "additionalProperties": false
       }
     },
@@ -2354,6 +2977,156 @@
         "required": [
           "file"
         ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "finance.addBill",
+      "title": "Enter a bill from a vendor, as a draft",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "vendor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "a day, 2026-01-01"
+          },
+          "due": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "a day, 2026-01-01"
+          },
+          "number": {
+            "type": "string",
+            "maxLength": 60
+          },
+          "memo": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "line": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "amount": {
+            "type": "number",
+            "minimum": 0.01,
+            "maximum": 1000000000
+          },
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        },
+        "required": [
+          "vendor",
+          "date",
+          "line",
+          "amount"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "finance.addContact",
+      "title": "Add a vendor or a customer",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "kind": {
+            "enum": [
+              "vendor",
+              "customer"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "kind"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "finance.addEntry",
+      "title": "Post a journal entry of two balanced lines or more",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "a day, 2026-01-01"
+          },
+          "memo": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "line": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "amount": {
+                  "type": "number",
+                  "minimum": -1000000000,
+                  "maximum": 1000000000
+                },
+                "tags": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                }
+              },
+              "required": [
+                "line",
+                "amount"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 50
+          }
+        },
+        "required": [
+          "date",
+          "lines"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "finance.addSource",
+      "title": "Connect a Finance source",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {},
         "additionalProperties": false
       }
     },
@@ -2435,6 +3208,187 @@
       }
     },
     {
+      "id": "finance.exportBalance",
+      "title": "Download the balance sheet as a CSV",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "finance.filterTransactions",
+      "title": "Filter transactions by source (bank or entries), status or line",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "src": {
+            "anyOf": [
+              {
+                "enum": [
+                  "feed",
+                  "entry"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "new",
+                  "matched",
+                  "posted",
+                  "pending",
+                  "ignored",
+                  "failed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "finance.freezeCard",
+      "title": "Freeze a card",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "card": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "card"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "finance.mapSource",
+      "title": "Choose the balance sheet line a bank, card or payments account books to",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "account": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "line": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "account",
+          "line"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "finance.newInvoice",
+      "title": "Write an invoice to a customer, as a draft",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "customer": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "a day, 2026-01-01"
+          },
+          "due": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "a day, 2026-01-01"
+          },
+          "number": {
+            "type": "string",
+            "maxLength": 60
+          },
+          "memo": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "line": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "amount": {
+                  "type": "number",
+                  "minimum": 0.01,
+                  "maximum": 1000000000
+                },
+                "taxable": {
+                  "type": "boolean"
+                },
+                "tags": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                }
+              },
+              "required": [
+                "line",
+                "amount"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 50
+          }
+        },
+        "required": [
+          "customer",
+          "date",
+          "lines"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "finance.openLine",
       "title": "Open a P&L line",
       "kind": "view",
@@ -2449,6 +3403,73 @@
         },
         "required": [
           "account"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "finance.openMate",
+      "title": "Open a teammate's Finance access: what they see and why",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "teammate": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^(human|bot):\\S+$",
+            "description": "a teammate, human:… or bot:…"
+          }
+        },
+        "required": [
+          "teammate"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "finance.openRecord",
+      "title": "Open a bill, an invoice, a card or a transaction beside its list",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "bill",
+              "invoice",
+              "card",
+              "tx"
+            ]
+          },
+          "record": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "kind",
+          "record"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "finance.openSource",
+      "title": "Open a Finance source: its accounts, its line in the books, its last sync",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "source"
         ],
         "additionalProperties": false
       }
@@ -2529,6 +3550,27 @@
       }
     },
     {
+      "id": "finance.setAsOf",
+      "title": "Show the balance sheet as of today, the last month end or the last year end",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "asof": {
+            "enum": [
+              "today",
+              "month",
+              "year"
+            ]
+          }
+        },
+        "required": [
+          "asof"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "finance.setBasis",
       "title": "Show the P&L on a cash or accrual basis",
       "kind": "view",
@@ -2571,6 +3613,31 @@
         },
         "required": [
           "address"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "finance.setCardLimit",
+      "title": "Change a card's monthly limit",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "card": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "amount": {
+            "type": "number",
+            "minimum": 0.01,
+            "maximum": 1000000000
+          }
+        },
+        "required": [
+          "card",
+          "amount"
         ],
         "additionalProperties": false
       }
@@ -2625,6 +3692,7 @@
           "tab": {
             "enum": [
               "overview",
+              "mine",
               "pnl",
               "transactions",
               "budgets",
@@ -2641,6 +3709,44 @@
         },
         "required": [
           "tab"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "finance.syncSource",
+      "title": "Sync a Finance source now",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "connection": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "connection"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "finance.takeAccess",
+      "title": "Take back a view of Finance given to a teammate",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "grant": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "grant"
         ],
         "additionalProperties": false
       }
@@ -2831,11 +3937,17 @@
     },
     {
       "id": "growth.askManager",
-      "title": "Open the Growth Manager's chat",
-      "kind": "view",
+      "title": "Ask the Growth Manager",
+      "kind": "change",
       "input": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
         "additionalProperties": false
       }
     },
@@ -2864,60 +3976,6 @@
         },
         "required": [
           "channel"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "growth.openCustomers",
-      "title": "Open the customers behind a retention figure",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "month": {
-            "type": "string",
-            "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
-            "description": "a month, 2026-11"
-          },
-          "day": {
-            "enum": [
-              "30",
-              "90",
-              "180"
-            ]
-          }
-        },
-        "required": [
-          "month",
-          "day"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "growth.openMonth",
-      "title": "Open a channel's month: each number and where it came from",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "channel": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 80,
-            "pattern": "^[\\w-]+$",
-            "description": "a channel slug"
-          },
-          "month": {
-            "type": "string",
-            "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
-            "description": "a month, 2026-11"
-          }
-        },
-        "required": [
-          "channel",
-          "month"
         ],
         "additionalProperties": false
       }
@@ -3420,25 +4478,6 @@
       }
     },
     {
-      "id": "listening.remove",
-      "title": "Remove a listening watch",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "watch": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "watch"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "listening.removeSource",
       "title": "Remove a source from a listening watch",
       "kind": "change",
@@ -3479,6 +4518,36 @@
         "required": [
           "watch"
         ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "mail.find",
+      "title": "Find mail",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "box": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a mailbox address"
+          },
+          "q": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "the words to find"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "a Gmail label id, such as UNREAD or STARRED"
+          },
+          "attach": {
+            "type": "boolean"
+          }
+        },
         "additionalProperties": false
       }
     },
@@ -3916,6 +4985,31 @@
       }
     },
     {
+      "id": "people.setGithub",
+      "title": "Change a person's GitHub login",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "person": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a person's id"
+          },
+          "login": {
+            "type": "string",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "person",
+          "login"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "people.setRole",
       "title": "Change a person's permissions",
       "kind": "change",
@@ -4241,6 +5335,55 @@
       }
     },
     {
+      "id": "routines.endHold",
+      "title": "Release or drop a routine's held runs",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "action": {
+            "enum": [
+              "release",
+              "drop"
+            ]
+          }
+        },
+        "required": [
+          "routine",
+          "action"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "routines.list",
+      "title": "Search or filter the routines",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "state": {
+            "enum": [
+              "on",
+              "failed",
+              "hold",
+              "off"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "routines.new",
       "title": "Start a new routine",
       "kind": "view",
@@ -4346,25 +5489,6 @@
       }
     },
     {
-      "id": "routines.remove",
-      "title": "Remove a routine",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "routine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "routine"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "routines.removeBoardItem",
       "title": "Remove a rule, question or destination from a routine's board",
       "kind": "change",
@@ -4437,6 +5561,25 @@
         },
         "required": [
           "routine"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "routines.runJob",
+      "title": "Run a system job now",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "job": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "job"
         ],
         "additionalProperties": false
       }
@@ -4670,6 +5813,41 @@
         "required": [
           "job",
           "on"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "routines.setJobSchedule",
+      "title": "Pick when a system job runs: a preset, or its daily time",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "job": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "preset": {
+            "enum": [
+              "15m",
+              "hourly",
+              "4h",
+              "daily",
+              "business"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 5,
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+            "description": "a time, HH:MM"
+          }
+        },
+        "required": [
+          "job"
         ],
         "additionalProperties": false
       }
@@ -5591,6 +6769,50 @@
       }
     },
     {
+      "id": "settings.addPerson",
+      "title": "Add a person without sending an email",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 320,
+            "pattern": "^[^\\s@]+@[^\\s@]+$",
+            "description": "an email address"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 120
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.agentLimit",
+      "title": "Change how many agents a person may have",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "limit"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "settings.cancelSignIn",
       "title": "Stop a sign-in",
       "kind": "change",
@@ -5657,6 +6879,26 @@
       }
     },
     {
+      "id": "settings.checkGateway",
+      "title": "Check the Tico Gateway key now",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.checkHosting",
+      "title": "Check Tico file hosting now",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "settings.defaultModel",
       "title": "Change the model a new agent uses",
       "kind": "change",
@@ -5673,6 +6915,16 @@
         "required": [
           "model"
         ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.dropBucket",
+      "title": "Store new files on the server's storage again",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {},
         "additionalProperties": false
       }
     },
@@ -5809,6 +7061,26 @@
       }
     },
     {
+      "id": "settings.newAgentRepos",
+      "title": "Choose the repositories new agents get",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "enum": [
+              "own",
+              "all"
+            ]
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "settings.notify",
       "title": "Change a notification",
       "kind": "change",
@@ -5894,6 +7166,27 @@
       }
     },
     {
+      "id": "settings.previewRepo",
+      "title": "See what a new repository would be",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "pattern": "^[A-Za-z0-9._-]+$",
+            "description": "a repository name"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "settings.productUpdate",
       "title": "Add a product update",
       "kind": "change",
@@ -5919,6 +7212,16 @@
           "title",
           "bullets"
         ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.refreshRepos",
+      "title": "Read the repositories from GitHub again",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {},
         "additionalProperties": false
       }
     },
@@ -5964,6 +7267,32 @@
         "required": [
           "person",
           "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.repoSetup",
+      "title": "Change a repository's setup command",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 200,
+            "pattern": "^[^/\\s]+\\/[^/\\s]+$",
+            "description": "owner/name"
+          },
+          "command": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "repo",
+          "command"
         ],
         "additionalProperties": false
       }
@@ -6021,6 +7350,80 @@
         },
         "required": [
           "agent"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.roadmapApproval",
+      "title": "Ask a person before an agent's words go public",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "on"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.setDetector",
+      "title": "Turn a screening detector on or off",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "detector": {
+            "enum": [
+              "patterns",
+              "model"
+            ]
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "detector",
+          "on"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.setJoining",
+      "title": "Change who can join by signing in",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "allowed": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 320
+            },
+            "maxItems": 500
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253
+            },
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "allowed",
+          "domains"
         ],
         "additionalProperties": false
       }
@@ -6102,6 +7505,38 @@
       }
     },
     {
+      "id": "settings.setScreening",
+      "title": "Change how a door is screened",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "door": {
+            "enum": [
+              "webhook",
+              "mail",
+              "idea",
+              "watcher",
+              "document",
+              "slack"
+            ]
+          },
+          "mode": {
+            "enum": [
+              "off",
+              "warn",
+              "hold"
+            ]
+          }
+        },
+        "required": [
+          "door",
+          "mode"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "settings.setSleep",
       "title": "Sleep the server when idle",
       "kind": "change",
@@ -6116,6 +7551,23 @@
         },
         "required": [
           "hours"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.setSupport",
+      "title": "Let Tico support reach the computers",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "on"
         ],
         "additionalProperties": false
       }
@@ -6142,6 +7594,30 @@
       }
     },
     {
+      "id": "settings.signIn",
+      "title": "Turn a person's sign-in on or off",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "person": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a person id"
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "person",
+          "on"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "settings.sleepComputers",
       "title": "Let agents' computers sleep too",
       "kind": "change",
@@ -6159,21 +7635,45 @@
       }
     },
     {
-      "id": "settings.startServer",
-      "title": "Start a hosted server",
+      "id": "settings.stopSupport",
+      "title": "End Tico support's sign-in now",
       "kind": "change",
       "input": {
         "type": "object",
         "properties": {
-          "server": {
+          "session": {
             "type": "string",
             "minLength": 1,
             "maxLength": 200,
-            "description": "a hosted server id"
+            "description": "a support session id"
           }
         },
         "required": [
-          "server"
+          "session"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.suggestionPrivacy",
+      "title": "Change what suggestions may share",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "field": {
+            "enum": [
+              "share_stats_for_suggestions",
+              "report_suggestion_outcomes"
+            ]
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "field",
+          "on"
         ],
         "additionalProperties": false
       }
@@ -6204,6 +7704,78 @@
         "required": [
           "agent",
           "model"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.testScreening",
+      "title": "Run the screening samples",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.undoChange",
+      "title": "Undo a change to an agent's settings",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "change": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a settings change id from History"
+          }
+        },
+        "required": [
+          "change"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.usageCount",
+      "title": "Send the anonymous usage count",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "on"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.useRepo",
+      "title": "Put a repository in use or take it out",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 200,
+            "pattern": "^[^/\\s]+\\/[^/\\s]+$",
+            "description": "owner/name"
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "repo",
+          "on"
         ],
         "additionalProperties": false
       }
@@ -6722,6 +8294,64 @@
       }
     },
     {
+      "id": "task.archiveFile",
+      "title": "Remove a file from a task",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "archived": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "task",
+          "file",
+          "archived"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "task.archivePage",
+      "title": "Archive a page",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "page": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "archived": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "task",
+          "page",
+          "archived"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "task.ask",
       "title": "Ask someone for an OK",
       "kind": "change",
@@ -6814,6 +8444,42 @@
       }
     },
     {
+      "id": "task.follow",
+      "title": "Follow a task",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "actor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "following": {
+            "type": "boolean"
+          },
+          "notify": {
+            "enum": [
+              "live",
+              "mentions",
+              "digest",
+              "muted"
+            ]
+          }
+        },
+        "required": [
+          "task",
+          "following"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "task.give",
       "title": "Give a task to someone",
       "kind": "change",
@@ -6868,6 +8534,31 @@
         "required": [
           "task",
           "url"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "task.linkPage",
+      "title": "Link a page to a task",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "page": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "task",
+          "page"
         ],
         "additionalProperties": false
       }
@@ -6954,6 +8645,40 @@
       }
     },
     {
+      "id": "task.moveTo",
+      "title": "Move a task to another pipeline",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "pipeline": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "stage": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "why": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "task",
+          "pipeline"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "task.newPage",
       "title": "Write a new page on a task",
       "kind": "change",
@@ -7003,6 +8728,65 @@
         },
         "required": [
           "task"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "task.pageAudience",
+      "title": "Choose who can see a page",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "page": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "everyone": {
+            "type": "boolean"
+          },
+          "people": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 500
+          },
+          "teams": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 500
+          },
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 500
+          }
+        },
+        "required": [
+          "task",
+          "page",
+          "everyone",
+          "people",
+          "teams",
+          "agents"
         ],
         "additionalProperties": false
       }
@@ -7094,6 +8878,31 @@
       }
     },
     {
+      "id": "task.reopen",
+      "title": "Reopen a task",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "task",
+          "why"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "task.setDue",
       "title": "Set when a task is due",
       "kind": "change",
@@ -7126,6 +8935,38 @@
       }
     },
     {
+      "id": "task.setHuman",
+      "title": "Set the person accountable for a task",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "human": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "task",
+          "human"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "task.setParent",
       "title": "Put a task under another",
       "kind": "change",
@@ -7146,6 +8987,163 @@
         "required": [
           "task",
           "parent"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "task.setPublic",
+      "title": "Write a task's public title or summary",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "field": {
+            "enum": [
+              "public_title",
+              "public_summary"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 8000
+          }
+        },
+        "required": [
+          "task",
+          "field",
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "task.setReaders",
+      "title": "Change who else sees a private task",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "add": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 50
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 50
+          }
+        },
+        "required": [
+          "task",
+          "add",
+          "remove"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "task.setRole",
+      "title": "Put people on a task in a role",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "role": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,39}$",
+            "description": "a short name: letters, digits, - or _"
+          },
+          "people": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 50
+          }
+        },
+        "required": [
+          "task",
+          "role",
+          "people"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "task.setSize",
+      "title": "Size a task",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "size": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000000
+          }
+        },
+        "required": [
+          "task",
+          "size"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "task.setVisible",
+      "title": "Change who can see a task",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "to": {
+            "enum": [
+              "team",
+              "public",
+              "private"
+            ]
+          }
+        },
+        "required": [
+          "task",
+          "to"
         ],
         "additionalProperties": false
       }
@@ -7209,6 +9207,39 @@
         "required": [
           "task",
           "version"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "task.snooze",
+      "title": "Snooze a task",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 10,
+                "maxLength": 40,
+                "description": "an ISO date and time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "task",
+          "until"
         ],
         "additionalProperties": false
       }
@@ -7444,6 +9475,125 @@
       }
     },
     {
+      "id": "tasks.createPipeline",
+      "title": "Make a pipeline",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "goal": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "manager_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "description": "an actor id: human:<id> or bot:<slug>"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "factory_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100,
+                "description": "a factory id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prefix": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z]{1,2}$",
+                "description": "one or two letters"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100,
+                  "description": "a saved stage id; leave out for a new stage"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "side": {
+                  "type": "boolean"
+                },
+                "purpose": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "owner": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 120,
+                      "description": "an actor id, assignee (the task's), or pick (one of several, as set)"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "task_limit": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "side"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 40
+          }
+        },
+        "required": [
+          "name",
+          "stages"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "tasks.editPipeline",
       "title": "Edit pipeline",
       "kind": "view",
@@ -7591,46 +9741,6 @@
       }
     },
     {
-      "id": "tasks.merge",
-      "title": "Merge a task into another",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a task id"
-          },
-          "into": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a task id"
-          },
-          "owner": {
-            "anyOf": [
-              {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 120,
-                "description": "an actor id: human:<id> or bot:<slug>"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "task",
-          "into"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "tasks.move",
       "title": "Move a task to a stage",
       "kind": "change",
@@ -7684,6 +9794,29 @@
         "required": [
           "tasks",
           "to"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tasks.newPipeline",
+      "title": "New pipeline",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "pipeline": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a pipeline id"
+          },
+          "open": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pipeline"
         ],
         "additionalProperties": false
       }
@@ -7770,7 +9903,7 @@
     },
     {
       "id": "tasks.savePipeline",
-      "title": "Save a pipeline’s stages",
+      "title": "Save a pipeline",
       "kind": "change",
       "input": {
         "type": "object",
@@ -7780,6 +9913,48 @@
             "minLength": 1,
             "maxLength": 100,
             "description": "a pipeline id"
+          },
+          "goal": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "manager_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "description": "an actor id: human:<id> or bot:<slug>"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "factory_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100,
+                "description": "a factory id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prefix": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z]{1,2}$",
+                "description": "one or two letters"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "stages": {
             "type": "array",
@@ -7799,6 +9974,35 @@
                 },
                 "side": {
                   "type": "boolean"
+                },
+                "purpose": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "owner": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 120,
+                      "description": "an actor id, assignee (the task's), or pick (one of several, as set)"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "task_limit": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -7808,6 +10012,10 @@
               "additionalProperties": false
             },
             "maxItems": 40
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
           },
           "move_to": {
             "type": "object",
@@ -8031,7 +10239,8 @@
               "instructions",
               "model",
               "computer",
-              "screen"
+              "screen",
+              "slack"
             ]
           }
         },
@@ -8437,6 +10646,36 @@
       }
     },
     {
+      "id": "tico.closeEarlier",
+      "title": "Back to Tico's chat",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tico.openEarlier",
+      "title": "Read an earlier chat",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "room": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "an earlier chat's id"
+          }
+        },
+        "required": [
+          "room"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "tools.addApi",
       "title": "Add an API",
       "kind": "change",
@@ -8612,12 +10851,41 @@
       }
     },
     {
+      "id": "tools.checkInbox",
+      "title": "Check the connection for addresses and numbers",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "tools.checkLetters",
       "title": "Check letters can go out",
       "kind": "change",
       "input": {
         "type": "object",
         "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.checkMailbox",
+      "title": "Check a mailbox",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "mailbox": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "mailbox"
+        ],
         "additionalProperties": false
       }
     },
@@ -8754,6 +11022,22 @@
       }
     },
     {
+      "id": "tools.filterWho",
+      "title": "Filter tools by who has access",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "who": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 220
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "tools.open",
       "title": "Open a tool",
       "kind": "view",
@@ -8817,6 +11101,31 @@
         "required": [
           "tool",
           "setting"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.revokeKey",
+      "title": "Take a stored key away from someone",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "credential": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "grant": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "credential",
+          "grant"
         ],
         "additionalProperties": false
       }
@@ -8892,6 +11201,41 @@
       }
     },
     {
+      "id": "tools.setAccountAccess",
+      "title": "Change who may use a website account",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "account": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 220
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tool",
+          "account",
+          "subject",
+          "on"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "tools.setAgentSending",
       "title": "Change what one agent may send by email",
       "kind": "change",
@@ -8921,6 +11265,60 @@
         "required": [
           "bot",
           "mode"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.setEveryoneReads",
+      "title": "Let every agent read a tool",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tool",
+          "on"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.setInboxReaders",
+      "title": "Choose who reads an address or number",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "inbox": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "audience": {
+            "enum": [
+              "company",
+              "team"
+            ]
+          },
+          "group": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "inbox",
+          "audience"
         ],
         "additionalProperties": false
       }
@@ -9153,6 +11551,111 @@
       }
     },
     {
+      "id": "tools.setMailboxAccess",
+      "title": "Change someone's level on a mailbox",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "mailbox": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "access": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "level": {
+            "enum": [
+              "read",
+              "read_write",
+              "none"
+            ]
+          }
+        },
+        "required": [
+          "mailbox",
+          "access",
+          "level"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.setSeenBy",
+      "title": "Choose who can see a tool",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "api",
+              "website"
+            ]
+          },
+          "tool": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "people": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 220
+                    },
+                    "maxItems": 500
+                  },
+                  "teams": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 220
+                    },
+                    "maxItems": 500
+                  },
+                  "bots": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 220
+                    },
+                    "maxItems": 500
+                  }
+                },
+                "required": [
+                  "people",
+                  "teams",
+                  "bots"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "tool",
+          "audience"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "tools.setSending",
       "title": "Change what agents may send by email",
       "kind": "change",
@@ -9236,6 +11739,25 @@
       }
     },
     {
+      "id": "tools.stopMailbox",
+      "title": "Stop using a mailbox",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "mailbox": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "mailbox"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "tools.testWebhook",
       "title": "Send a test to an outgoing webhook",
       "kind": "change",
@@ -9250,6 +11772,25 @@
         },
         "required": [
           "webhook"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.unlinkSlack",
+      "title": "Unlink a thread from Slack",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "link": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "link"
         ],
         "additionalProperties": false
       }
@@ -9341,22 +11882,6 @@
       }
     },
     {
-      "id": "usage.clearQueue",
-      "title": "Clear the automatic queue",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "scope": {
-            "type": "string",
-            "maxLength": 200,
-            "description": "'company' or 'group:<id>'"
-          }
-        },
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "usage.open",
       "title": "Open usage",
       "kind": "view",
@@ -9386,6 +11911,104 @@
             "maxLength": 120
           }
         },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "usage.setDefaultLimit",
+      "title": "Change the monthly limit for a new agent",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "monthly": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000000
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "usage.setLimit",
+      "title": "Change an agent's monthly limit",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "an agent slug"
+          },
+          "monthly": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000000
+          }
+        },
+        "required": [
+          "agent"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "usage.setPoolLimit",
+      "title": "Change the company's or a team's monthly limit",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "'company' or a team's group id"
+          },
+          "monthly": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000000
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "usage.setTaskCap",
+      "title": "Cap the tasks one teammate sends another a day",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "sender": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "'bot:<slug>' or 'person:<id>'"
+          },
+          "receiver": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a manager above the sender, 'bot:<slug>' or 'person:<id>'"
+          },
+          "perDay": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "sender",
+          "receiver"
+        ],
         "additionalProperties": false
       }
     },
