@@ -87,13 +87,10 @@
 .grc-table .grc-n{text-align:right;white-space:nowrap}
 .grc-table .num{text-align:right;white-space:nowrap}
 
-/* Retention: cells shaded by the share kept, from the page's ink to jade; the text stays dark on the light cells */
+/* Retention: cells tinted by the share kept, at most a third of the accent over the card, so the ink reads in both themes */
 .grc-ret{overflow-x:auto;min-width:0}
-.grc-ret{--grr-hi:var(--accent);--grr-lo:var(--g8);--grr-ink:var(--accent-ink)}
-:root[data-theme="light"] .grc-ret{--grr-hi:color-mix(in srgb,var(--accent) 55%,var(--g0));--grr-lo:var(--g0);--grr-ink:var(--g8)}
-@media (prefers-color-scheme:light){:root[data-theme="system"] .grc-ret{--grr-hi:color-mix(in srgb,var(--accent) 55%,var(--g0));--grr-lo:var(--g0);--grr-ink:var(--g8)}}
 .grc-ret-t td.grc-k,.grc-ret-t th.grc-k-h{text-align:center;white-space:nowrap}
-.grc-ret-t td.grc-k{min-width:56px;border:2px solid var(--surface);border-radius:4px;color:var(--grr-ink);background:color-mix(in srgb,var(--grr-hi) calc(var(--k,0) * 1%),var(--grr-lo))}
+.grc-ret-t td.grc-k{min-width:56px;border:2px solid var(--surface);border-radius:4px;color:var(--ink);background:color-mix(in srgb,var(--accent) calc(var(--k,0) * .3%),var(--surface))}
 .grc-ret-t td.grc-k-none{background:var(--surface2)}
 
 /* ---------- Brand */
