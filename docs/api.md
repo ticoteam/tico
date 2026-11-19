@@ -40,7 +40,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 |---|---|
 | Session | Who is calling, and how a frontend signs in ([guide](custom-frontend.md)). |
 | Team | This installation's names and settings. |
-| Repositories | Team repositories, product-repository creation (the Owner, or a bot with Create product repositories), and bot repository access. |
+| Repositories | Team repositories, the company's GitHub App connection (the Owner), product-repository creation (the Owner, or a bot with Create product repositories), and bot repository access. |
 | Subscriptions | Provider logins on Computers. Every bot runs each AI tool on its Computer's one login for it. |
 | Team chart | Humans and bots, and who reports to whom. |
 | Bots | The bots a person can see, and their live status. |
@@ -66,7 +66,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Events | The catalog of named events ([guide](routines.md)). |
 | Finance | Budgets, the P&L, expenses, bills, invoices, contacts, reports and the work inbox, as far as the caller sees; Finance actions, committed or sent to one person for approval. |
 | Automations | A trigger and a tree of steps (filter, decide, llm, find, bot_turn, paths, action), saved as versions; one permission rule for UI, CLI and MCP. |
-| Roadmaps | Company roadmap settings and internal requesters ([guide](roadmaps.md)). |
+| Roadmaps | The Roadmap's ranked Product tasks, company roadmap settings and internal requesters ([guide](roadmaps.md)). |
 | Support | Reports to Tico support ([guide](support.md)). |
 | Rules | Org rules: what teammates follow (internal) and what someone outside requires (external), with their due dates and sources. |
 | Risk | Risks: tags of kind risk that any task can carry, the matter facts of each tagged task, and the rules and documents linked to a risk. |

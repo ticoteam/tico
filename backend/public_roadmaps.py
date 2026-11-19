@@ -131,7 +131,10 @@ def public_write(store):
 
 
 def install(app, store, auth, mutate):
-    @app.get('/api/v2/roadmaps/settings', **api_v2("Roadmaps", "getRoadmapSettings", "Company roadmap settings"))
+    @app.get(
+        '/api/v2/roadmaps/settings',
+        **api_v2("Roadmaps", "getRoadmapSettings", "Company roadmap settings", "RoadmapSettingsView"),
+    )
     def read_settings(request: Request):
         auth.domain(request.state.identity)
         with store.read() as c:
@@ -139,7 +142,12 @@ def install(app, store, auth, mutate):
 
     @app.post(
         '/api/v2/roadmaps/settings',
-        **api_v2("Roadmaps", "setRoadmapSettings", "Partially update roadmap settings (owners and admins)"),
+        **api_v2(
+            "Roadmaps",
+            "setRoadmapSettings",
+            "Partially update roadmap settings (owners and admins)",
+            "RoadmapSettingsView",
+        ),
     )
     def write_settings(request: Request, body: RoadmapSettings):
         def work(c):

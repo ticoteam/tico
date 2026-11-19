@@ -27,8 +27,8 @@ VERSION = "2.0.0"
 TAGS = {
     "Session": "Who is calling, and how a frontend signs in (docs/custom-frontend.md).",
     "Team": "This installation's names and settings.",
-    "Repositories": "Team repositories, product-repository creation (the Owner, or a bot with Create product repositories), "
-    "and bot repository access.",
+    "Repositories": "Team repositories, the company's GitHub App connection (the Owner), product-repository creation "
+    "(the Owner, or a bot with Create product repositories), and bot repository access.",
     "Subscriptions": "Provider logins on Computers. Every bot runs each AI tool on its Computer's one login for it.",
     "Team chart": "Humans and bots, and who reports to whom.",
     "Bots": "The bots a person can see, and their live status.",
@@ -65,7 +65,7 @@ TAGS = {
     # Automations (backend/automations.py).
     'Automations': "A trigger and a tree of steps (filter, decide, llm, find, bot_turn, paths, action), saved as versions; "
     "one permission rule for UI, CLI and MCP.",
-    'Roadmaps': "Company roadmap settings and internal requesters (docs/roadmaps.md).",
+    'Roadmaps': "The Roadmap's ranked Product tasks, company roadmap settings and internal requesters (docs/roadmaps.md).",
     'Support': 'Reports to Tico support (docs/support.md).',
     'Rules': "Org rules: what teammates follow (internal) and what someone outside requires (external), with their "
     "due dates and sources.",
