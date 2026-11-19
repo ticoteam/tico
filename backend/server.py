@@ -10,6 +10,12 @@ import signal
 import socket
 import subprocess
 import threading
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from uvicorn import Server as _UvicornServer  # imported lazily at run time (start-up speed)
+else:
+    _UvicornServer = object
 
 
 def _logging_config(log_level):
@@ -54,7 +60,7 @@ def _freeze_startup_heap():
     gc.freeze()
 
 
-class _FreezeAfterStartup:
+class _FreezeAfterStartup(_UvicornServer):
     """Mixed into the uvicorn server: once startup succeeds (the app's lifespan has run and the sockets listen), the
     startup heap is frozen. A failed lifespan raises out of startup (uvicorn exits), and a stop asked for while starting
     skips it; either way nothing is frozen."""
