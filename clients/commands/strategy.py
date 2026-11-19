@@ -967,7 +967,7 @@ _PUSH = {
 
 @tool(
     "tico_growth_rows_push",
-    "Owner, admin or the Growth Manager: cohort rows (anchor signup|customer, period YYYY-MM, segment, channel, "
+    "Owner, admin, Growth Manager, or a channel's owner for its own channels: cohort rows (anchor signup|customer, period YYYY-MM, segment, channel, "
     "campaign, as_of, entered, and counts with their _eligible: activated, paid, kept_d30/d90/d180, net_d90/d180/d365 "
     "as _sum). Replaces the source's rows for the months sent. docs/growth.md has the rules.",
     _PUSH,
@@ -981,7 +981,7 @@ def growth_rows_push(api, args):
 
 @tool(
     "tico_growth_costs_push",
-    "Owner, admin or the Growth Manager: costs (period YYYY-MM, channel, campaign, kind money|promo_cash|"
+    "Owner, admin, Growth Manager, or a channel's owner for its own channels: costs (period YYYY-MM, channel, campaign, kind money|promo_cash|"
     "promo_credits|bot|hours, purpose acquisition|retention, amount, quality actual|estimate). Replaces the source's "
     "costs for the months sent.",
     _PUSH,
@@ -1335,7 +1335,7 @@ CLI = (
     Group("growth rows", "cohort rows: the people in each month's cohort cell"),
     Command(
         "growth rows push",
-        "push a source's cohort rows from a CSV; they replace its rows for those months (owner, admin, Growth Manager)",
+        "push a source's cohort rows from a CSV; they replace its rows for those months (owner, admin, Growth Manager; a channel's owner for its own)",
         args=(Arg("source", "--source", metavar="LABEL"), Arg("csv", "--file", type=text_file, metavar="FILE")),
         omit=("rows",),
         render=_growth_text,
@@ -1344,7 +1344,7 @@ CLI = (
     Group("growth costs", "costs by month, channel, kind and purpose"),
     Command(
         "growth costs push",
-        "push a source's costs from a CSV; they replace its costs for those months (owner, admin, Growth Manager)",
+        "push a source's costs from a CSV; they replace its costs for those months (owner, admin, Growth Manager; a channel's owner for its own)",
         args=(Arg("source", "--source", metavar="LABEL"), Arg("csv", "--file", type=text_file, metavar="FILE")),
         omit=("rows",),
         render=_growth_text,

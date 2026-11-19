@@ -13,7 +13,7 @@ import pytest
 from backend import growth_computed as GX
 from backend.tests.helpers.api import get, post
 from backend.tests.helpers.growth_computed import TODAY
-from backend.tests.test_growth_segments import load, people, team
+from backend.tests.helpers.growth_segments import load, people, team
 
 
 @pytest.fixture(autouse=True)
@@ -183,6 +183,10 @@ def test_tidy_facts_fold_into_rows_that_read_as_the_segment_show_does(api):
             "mismatch": 2,
         }
     )
+    # Rental waits 30 days of inactivity: its September kept_d30 is not yet, as segment show has it.
+    rental = next(m for m in get(api, "growth/segments/rental")["months"] if m["month"] == "2026-09")
+    rental_read = read(api, "scope=segment:rental&period=2026-09&detail=retention")["retention"][0]
+    assert rental["kept_d30"] is None and rental_read["kept_d30"] == {"value": None, "n": 0, "status": "not_yet"}
     june_shown = next(m for m in shown["months"] if m["month"] == "2026-06")
     assert top["ltv"] == {"value": 50.0, "window": "d90", "n": 40, "cohort": "2026-06", "status": "ok"}
     assert top["ltv"]["value"] == june_shown["ltv_observed_d90"]
@@ -194,7 +198,7 @@ def test_tidy_facts_fold_into_rows_that_read_as_the_segment_show_does(api):
     push(api, "rows", "upload", lines("anchor,period,as_of,entered", "signup,2026-09,2026-11-01,5"), expected=422)
 
 
-def test_a_push_replaces_its_source_for_the_months_it_covers_and_folds_campaigns(api):
+def test_a_push_replaces_its_source_for_the_months_it_covers_and_names_ten_campaigns_at_most(api):
     post(api, "growth/channels", {"slug": "meta", "name": "Meta"})
     header = "anchor,period,channel,campaign,as_of,entered"
     first = [header, "customer,2026-09,meta,,2026-10-01,20", "customer,2026-10,meta,,2026-11-01,30"]
@@ -203,14 +207,16 @@ def test_a_push_replaces_its_source_for_the_months_it_covers_and_folds_campaigns
     assert again["replaced"] == 1 and again["periods"] == ["2026-10"]
     series = {m["period"]: m["new_customers"] for m in read(api, "detail=series&period=2026-10")["series"]}
     assert series["2026-09"] == 20 and series["2026-10"] == 35
-    # Another source's push leaves this one alone; its campaigns past ten per channel fold into other.
-    many = [header] + [f"customer,2026-10,meta,ad-{n:02d},2026-11-12,{n + 1}" for n in range(12)]
-    push(api, "rows", "ads", lines(*many))
+    # Past ten named campaigns for a channel in a month, the push is refused: the rest are named other.
+    many = [header] + [f"customer,2026-10,meta,ad-{n:02d},2026-11-12,{n + 1}" for n in range(11)]
+    refused = push(api, "rows", "ads", lines(*many), expected=422)["error"]
+    assert refused["rule"] == "campaigns" and "row 12" in refused["detail"]
+    push(api, "rows", "ads", lines(*many[:11], "customer,2026-10,meta,other,2026-11-12,11"))
     out = read(api, "detail=campaigns&period=2026-10")
-    names = [c["campaign"] for c in out["campaigns"]["meta"]]
-    assert len(names) == 12 and "other" in names and "ad-00" not in names and "ad-11" in names
-    assert next(c for c in out["campaigns"]["meta"] if c["campaign"] == "other")["new"] == 3  # 1 + 2
-    assert out["headline"]["new_customers"]["value"] == 35 + sum(range(1, 13))
+    assert len(out["campaigns"]["meta"]) == 12 and out["headline"]["new_customers"]["value"] == 35 + sum(range(1, 12))
+    # A source holds pushed rows or customer facts, never both, whichever came first.
+    push(api, "rows", "upload", lines(header, "customer,2026-08,meta,,2026-09-01,3"))
+    assert load(api, people(0, 3, date(2026, 8, 1)), expected=422)["error"]["rule"] == "source"
 
 
 def test_a_bad_row_is_refused_by_column_and_row_and_nothing_is_pushed(api):
@@ -234,6 +240,16 @@ def test_a_bad_row_is_refused_by_column_and_row_and_nothing_is_pushed(api):
     detail = refused["detail"]
     assert "kept_d30" in detail and "row 3" in detail and "entered" in detail and "row 4" in detail
     assert "channel" in detail and "row 5" in detail
+    net = "anchor,period,as_of,entered,net_d90_sum,net_d90_eligible"
+    refused = push(
+        api,
+        "rows",
+        "hq",
+        lines(net, "customer,2026-10,2026-11-01,5,0,0", "customer,2026-09,2026-11-01,5,90,0"),
+        expected=422,
+    )
+    assert refused["error"]["rule"] == "net_zero" and "net_d90_sum" in refused["error"]["detail"]
+    assert "row 3" in refused["error"]["detail"]
     assert "lots" not in detail and "secret-channel" not in detail and "50" not in detail
     assert read(api)["headline"]["new_customers"]["status"] == "not_supplied"
     cost = push(api, "costs", "ads", lines("period,kind,amount", "2026-10,dollars,10"), expected=422)["error"]
@@ -286,6 +302,18 @@ def test_each_channel_carries_its_owner_and_budget_and_mine_is_the_callers_chann
         "cac": None,
         "status": "no_spend",
     }
+    # A channel's owner pushes rows and costs for its own channels only.
+    rows = "anchor,period,channel,as_of,entered"
+    push(api, "rows", "seo-bot", lines(rows, "customer,2026-10,seo,2026-11-01,3"), token=owner)
+    refused = push(
+        api,
+        "costs",
+        "seo-bot",
+        lines("period,channel,kind,amount", "2026-10,seo,money,5", "2026-10,meta,money,5"),
+        token=owner,
+        expected=403,
+    )
+    assert "meta" in refused["error"]["detail"]
     nobody = read(api, "scope=mine&period=2026-10")
     assert nobody["channels"] == [] and nobody["headline"]["new_customers"]["status"] == "not_supplied"
 
@@ -316,3 +344,22 @@ def test_metrics_are_the_channels_kpis_with_the_months_latest_reading(api):
     )
     assert shown["Meta refunds"]["value"] is None and shown["Meta refunds"]["channel"] == "meta"
     assert [m["id"] for m in read(api, "scope=channel:meta&period=2026-10")["metrics"]] == [refunds]
+
+
+def test_a_zero_or_tiny_cost_never_divides_by_zero(api):
+    post(api, "growth/channels", {"slug": "free", "name": "Free"})
+    header = "anchor,period,channel,as_of,entered,net_d90_sum,net_d90_eligible"
+    push(
+        api,
+        "rows",
+        "hq",
+        lines(header, "customer,2026-07,free,2026-11-01,50,1500,50", "customer,2026-10,free,2026-11-01,20,,"),
+    )
+    push(api, "costs", "ads", lines("period,channel,kind,amount", "2026-10,free,money,0"))
+    top = read(api, "period=2026-10")["headline"]
+    assert top["ltv"]["value"] == 30.0
+    assert top["cost"] == {"value": None, "status": "no_spend"} and top["cac"]["status"] == "no_spend"
+    assert top["ltv_cac"] == {"value": None, "status": "no_spend"}
+    push(api, "costs", "ads", lines("period,channel,kind,amount", "2026-10,free,money,0.004"))
+    top = read(api, "period=2026-10")["headline"]
+    assert top["cac"]["value"] == 0.0 and top["ltv_cac"]["value"] == 150000.0  # from unrounded CAC

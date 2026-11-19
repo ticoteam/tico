@@ -5,7 +5,7 @@ from (docs/growth.md, "The core").
 Cohort rows (`growth_cohort_rows`). One row is the people in one cohort cell, month grain: the `source` that pushed it,
 the `anchor` (`signup`: people who signed up that month; `customer`: people who reached the segment's customer step that
 month), `period` (YYYY-MM), `segment` and `channel` slugs ('' is No segment and Unknown), `campaign` ('' is none; at
-most 10 per source and channel, the rest `other`), `as_of` (the date the counts were true), `entered`, and per step or
+most 10 named per channel and month: name the rest `other`), `as_of` (the date the counts were true), `entered`, and per step or
 window a count with its eligible count: `activated`, `paid`, `kept_d30`, `kept_d90`, `kept_d180` (kept by the segment's
 own definition), and `net_d90_sum`, `net_d180_sum`, `net_d365_sum` (summed net revenue at that age) with the people
 that old. Counts are whole numbers, `x <= x_eligible <= entered`; blank is not supplied (NULL), never 0. A push replaces
@@ -29,7 +29,8 @@ company-wide costs by its share of the month's new customers who have a segment 
 come from the latest cohort whose eligible count reaches the minimum, and say which cohort. A `retention` segment reads
 a `value` block (kept at day 30 and cost per retained customer) in place of LTV, LTV:CAC and payback.
 
-Who may: everyone signed in reads; the owner, admins and the Growth Manager push (backend/growth_setup.py editor).
+Who may: everyone signed in reads; the owner, admins and the Growth Manager push (backend/growth_setup.py editor), and a
+channel's owner pushes rows and costs for its own channels only.
 """
 
 import csv
@@ -48,14 +49,12 @@ from . import growth as _growth_untyped
 from . import growth_computed as GX
 from . import growth_setup as _setup_untyped
 from . import hubdb as _hubdb_untyped
-from . import kpis as _kpis_untyped
 from . import models as M
 from . import page_owners
 from .store import Problem
 
 G: Any = _growth_untyped
 H: Any = _hubdb_untyped
-K: Any = _kpis_untyped
 may_edit = cast("Callable[[Any, Any, Any], bool]", _setup_untyped.editor)
 Row = dict[str, Any]
 
@@ -67,6 +66,8 @@ AGES = (90, 180, 365)
 KINDS = ("money", "promo_cash", "promo_credits", "bot", "hours")
 MONEY = ("money", "promo_cash", "promo_credits")  # what headline CAC is
 EFFORT = ("bot", "hours")  # what `with_effort` adds
+LOADED = (*MONEY, "bot")  # what `cac_loaded` is: slice 1's spend and bot cost (backend/growth_computed.py)
+COMPANY = "company-wide"  # a cost with no channel, in the campaigns detail
 PURPOSES = ("acquisition", "retention")
 QUALITIES = ("actual", "estimate")
 DETAILS = ("campaigns", "retention", "series")
@@ -88,6 +89,7 @@ ROW_KEY = ("anchor", "period", "segment", "channel", "campaign")
 COST_KEY = ("period", "channel", "campaign", "kind", "purpose")
 TYPED = "typed"  # the source growth_cohorts' typed spend and bot cost read under
 CAMPAIGNS_MAX, OTHER = 10, "other"
+COUNT_MAX = 10**12
 LABEL_MAX = 40
 ROWS_MAX = 20_000
 ROW_NUMBERS_SHOWN = 3
@@ -116,8 +118,8 @@ def last_full_month(on: date) -> str:
 def fold(facts: Iterable[GX.Fact], segs: GX.Segments, channels: set[str], on: date, as_of: dict[str, str]) -> list[Row]:
     """Customer facts as customer-anchor cohort rows, one per (source, month, segment, channel), as of `on`. Pure.
 
-    A kept window counts once the whole month is that old plus the segment's churn_days (growth_computed's eligibility):
-    until then it is 0 of 0 eligible. Net revenue at an age sums the customers that old who carry it; a window no fact
+    A kept window counts once the whole month is that old plus its churn delay (growth_computed's `maturity`): until
+    then it is 0 of 0 eligible. Net revenue at an age sums the customers that old who carry it; a window no fact
     carries anywhere is not supplied."""
     cells: dict[tuple[str, str, str, str], list[GX.Fact]] = {}
     for f in facts:
@@ -132,8 +134,7 @@ def fold(facts: Iterable[GX.Fact], segs: GX.Segments, channels: set[str], on: da
     carried = {days: any(f.net(days) is not None for group in cells.values() for f in group) for days in AGES}
     out: list[Row] = []
     for (source, month, segment, channel), group in cells.items():
-        end = GX.period(group[0].became, "month")[2]
-        wait = int((segs.rows.get(segment) or {}).get("churn_days") or 0)
+        end, wait = GX.period(group[0].became, "month")[2], GX.maturity(group, segs)
         row: Row = {
             **{c: None for c in ROW_COLUMNS},
             "source": source,
@@ -209,13 +210,13 @@ def _text(value: Any) -> str:
 
 
 def _count(value: Any) -> int | None:
-    """A whole number of zero or more; None for blank; ValueError otherwise."""
-    if _text(value) == "":
+    """A whole number from 0 to COUNT_MAX, read exactly; None for blank; ValueError otherwise."""
+    said = _text(value)
+    if said == "":
         return None
-    number = float(value)
-    if not math.isfinite(number) or number < 0 or number != int(number):
+    if isinstance(value, bool) or isinstance(value, float) or not said.isdigit() or int(said) > COUNT_MAX:
         raise ValueError
-    return int(number)
+    return int(said)
 
 
 def _amount(value: Any) -> float | None:
@@ -244,7 +245,7 @@ class _Problems:
         "anchor": "is signup or customer",
         "month": "is not a month like 2026-10",
         "date": "is not a date like 2026-11-18",
-        "count": "is not a whole number of zero or more",
+        "count": "is not a whole number from 0 to 10^12",
         "number": "is not a number",
         "amount": "is not an amount of zero or more",
         "segment": "names no segment (tico growth segment list; blank is No segment)",
@@ -252,6 +253,8 @@ class _Problems:
         "long_label": f"is longer than {LABEL_MAX} characters",
         "pair": "is given without its eligible count, or the other way round",
         "over": "is more than its eligible count, or the eligible count is more than entered",
+        "net_zero": "is not 0 though its eligible count is 0",
+        "campaigns": f"names more than {CAMPAIGNS_MAX} campaigns for one channel in a month: name the rest {OTHER}",
         "kind": "is " + ", ".join(KINDS),
         "purpose": "is acquisition or retention",
         "quality": "is actual or estimate",
@@ -364,10 +367,13 @@ def check_rows(c: sqlite3.Connection, headers: list[str], rows: list[list[Any]],
                 row[eligible] > entered or (not x.endswith("_sum") and row[x] > row[eligible])
             ):
                 bad.add("over", x, n)
+            elif x.endswith("_sum") and row[eligible] == 0 and row[x]:
+                bad.add("net_zero", x, n)
         out.append(row)
     _unique(out, ROW_KEY, first, bad)
+    _campaigns(out, first, bad)
     bad.check()
-    return _fold_campaigns(out, ROW_KEY, "entered", _merge_rows)
+    return out
 
 
 def check_costs(c: sqlite3.Connection, headers: list[str], rows: list[list[Any]], first: int) -> list[Row]:
@@ -403,8 +409,9 @@ def check_costs(c: sqlite3.Connection, headers: list[str], rows: list[list[Any]]
             bad.add("amount", "amount", n)
         out.append(row)
     _unique(out, COST_KEY, first, bad)
+    _campaigns(out, first, bad)
     bad.check()
-    return _fold_campaigns(out, COST_KEY, "amount", _merge_costs)
+    return out
 
 
 def _unique(rows: list[Row], key: Sequence[str], first: int, bad: _Problems) -> None:
@@ -416,38 +423,15 @@ def _unique(rows: list[Row], key: Sequence[str], first: int, bad: _Problems) -> 
         seen.add(k)
 
 
-def _plus(a: Any, b: Any) -> Any:
-    return b if a is None else a if b is None else a + b
-
-
-def _merge_rows(a: Row, b: Row) -> Row:
-    out = {k: _plus(a[k], b[k]) for k in ROW_COLUMNS if k not in (*ROW_KEY, "as_of")}
-    return {**a, **out, "as_of": max(a["as_of"], b["as_of"])}
-
-
-def _merge_costs(a: Row, b: Row) -> Row:
-    return {
-        **a,
-        "amount": a["amount"] + b["amount"],
-        "quality": "estimate" if "estimate" in (a["quality"], b["quality"]) else "actual",
-    }
-
-
-def _fold_campaigns(rows: list[Row], key: Sequence[str], weight: str, merge: Callable[[Row, Row], Row]) -> list[Row]:
-    """At most CAMPAIGNS_MAX campaigns per channel: the biggest by `weight` keep their name, the rest become `other`."""
-    sizes: dict[str, dict[str, float]] = {}
-    for r in rows:
-        if r["campaign"] not in ("", OTHER):
-            per = sizes.setdefault(r["channel"], {})
-            per[r["campaign"]] = per.get(r["campaign"], 0) + float(r[weight] or 0)
-    kept = {ch: set(sorted(per, key=lambda name: (-per[name], name))[:CAMPAIGNS_MAX]) for ch, per in sizes.items()}
-    out: dict[tuple[Any, ...], Row] = {}
-    for r in rows:
-        if r["campaign"] not in ("", OTHER) and r["campaign"] not in kept[r["channel"]]:
-            r = {**r, "campaign": OTHER}
-        k = tuple(r[col] for col in key)
-        out[k] = merge(out[k], r) if k in out else r
-    return list(out.values())
+def _campaigns(rows: list[Row], first: int, bad: _Problems) -> None:
+    """At most CAMPAIGNS_MAX named campaigns per channel and month; the row that names one more is refused."""
+    named: dict[tuple[str, str], set[str]] = {}
+    for n, row in enumerate(rows, start=first):
+        if row.get("campaign") not in (None, "", OTHER):
+            seen = named.setdefault((str(row.get("period")), str(row.get("channel"))), set())
+            seen.add(str(row["campaign"]))
+            if len(seen) > CAMPAIGNS_MAX:
+                bad.add("campaigns", "campaign", n)
 
 
 def _replace(
@@ -468,19 +452,33 @@ def _replace(
     return {"source": source, "rows": len(rows), "periods": periods, "replaced": replaced, "pushed_at": at}
 
 
-def push_rows(c: sqlite3.Connection, actor: str, body: M.GrowthCorePush) -> Row:
+def _own(rows: list[Row], owned: set[str] | None) -> None:
+    """A channel's owner pushes only its own channels' rows (`owned`; None is anyone's)."""
+    if owned is None:
+        return
+    other = next((str(r["channel"]) for r in rows if r["channel"] not in owned), None)
+    if other is not None:
+        said = other or "a blank channel (Unknown or company-wide)"
+        raise Problem(
+            "forbidden", f"Nothing pushed: you push only your own channels' rows, and {said} is not yours.", 403
+        )
+
+
+def push_rows(c: sqlite3.Connection, actor: str, body: M.GrowthCorePush, owned: set[str] | None = None) -> Row:
     if c.execute("SELECT 1 FROM growth_customers WHERE source=? LIMIT 1", (body.source,)).fetchone():
-        refuse("source", "Nothing pushed: customer facts load under that source, and fold into its rows; use another.")
+        refuse("source", "Nothing pushed: that source holds customer facts; a source holds one kind. Use another.")
     rows = check_rows(c, *table(body))
+    _own(rows, owned)
     out = _replace(c, "growth_cohort_rows", body.source, actor, rows, ROW_COLUMNS)
     H.event(c, actor, "growth.rows.push", body.source, {k: out[k] for k in ("rows", "periods", "replaced")})
     return out
 
 
-def push_costs(c: sqlite3.Connection, actor: str, body: M.GrowthCorePush) -> Row:
+def push_costs(c: sqlite3.Connection, actor: str, body: M.GrowthCorePush, owned: set[str] | None = None) -> Row:
     if body.source == TYPED:
         refuse("source", f"Nothing pushed: {TYPED} is the source typed spend reads under; use another.")
     rows = check_costs(c, *table(body))
+    _own(rows, owned)
     out = _replace(c, "growth_costs", body.source, actor, rows, COST_COLUMNS)
     H.event(c, actor, "growth.costs.push", body.source, {k: out[k] for k in ("rows", "periods", "replaced")})
     return out
@@ -519,12 +517,12 @@ def load(c: sqlite3.Connection) -> Data:
     costs: list[Row] = H._rows(c.execute("SELECT * FROM growth_costs"))
     for (slug, month), typed in GX.typed_cohorts(c).items():
         for field, kind in (("spend", "money"), ("bot_cost", "bot")):
-            if slug and typed.get(field) is not None:
+            if typed.get(field) is not None:
                 costs.append(
                     {
                         "source": TYPED,
                         "period": month,
-                        "channel": slug,
+                        "channel": slug or "",  # Finance's unmapped ad spend: real money, company-wide
                         "campaign": "",
                         "kind": kind,
                         "purpose": "acquisition",
@@ -585,20 +583,22 @@ class Scope:
         return self.by_month.get((anchor, month), [])
 
     def entered(self, anchor: str, month: str) -> int | None:
-        """The people who entered that month; None when the scope has no rows of this anchor at all."""
-        if self.first[anchor] is None:
+        """The people who entered that month; None before the scope's first month of this anchor (or with none)."""
+        first = self.first[anchor]
+        if first is None or month < first:
             return None
         return sum(int(r["entered"]) for r in self.at(anchor, month))
 
     def cost(
         self, month: str, kinds: Sequence[str], purpose: str = "acquisition", costs: list[Row] | None = None
     ) -> float | None:
-        found = [
+        """The month's cost of these kinds, unrounded; None when nothing (or only 0) was spent."""
+        total = sum(
             float(k["amount"])
             for k in (self.costs if costs is None else costs)
             if k["period"] == month and k["kind"] in kinds and k["purpose"] == purpose
-        ]
-        return round(sum(found), 2) if found else None
+        )
+        return total or None
 
     def share(self, month: str) -> float:
         """The segment's share of the month's new customers who have a segment (every channel)."""
@@ -610,8 +610,8 @@ class Scope:
         return counts.get(self.slug, 0) / known if known else 0.0
 
     def loaded(self, month: str) -> float | None:
-        """A segment's own money cost plus company-wide money cost by its share of new customers."""
-        direct, company = self.cost(month, MONEY), self.cost(month, MONEY, costs=self.shared)
+        """A segment's own cost plus company-wide cost by its share of new customers (money and bot cost, as slice 1)."""
+        direct, company = self.cost(month, LOADED), self.cost(month, LOADED, costs=self.shared)
         if direct is None and company is None:
             return None
         return (direct or 0) + (company or 0) * self.share(month)
@@ -625,6 +625,20 @@ class Scope:
     def supplied(self, anchor: str, column: str) -> bool:
         return any(r[column] is not None for r in self.rows if r["anchor"] == anchor)
 
+    def cohort_rate(self, anchor: str, month: str, x: str, eligible: str, money: bool = False) -> Row | None:
+        """One cohort's rate: ok at the minimum cohort, else too_few (value null), not_yet with none eligible; None
+        when the cohort does not supply it. `raw` is the unrounded value."""
+        found = self.pair(anchor, month, x, eligible)
+        if not found:
+            return None
+        total, n = found
+        if not n:
+            return {"value": None, "n": 0, "cohort": month, "status": "not_yet"}
+        if n < self.least:
+            return {"value": None, "n": n, "cohort": month, "status": "too_few"}
+        raw = total / n
+        return {"value": round(raw, 2 if money else 3), "n": n, "cohort": month, "status": "ok", "raw": raw}
+
     def rate(self, anchor: str, x: str, eligible: str, upto: str, money: bool = False) -> Row:
         """From the latest cohort up to `upto` whose eligible count reaches the minimum, and which cohort it is."""
         if not self.supplied(anchor, eligible):
@@ -633,55 +647,65 @@ class Scope:
         for month in sorted(
             {r["period"] for r in self.rows if r["anchor"] == anchor and r["period"] <= upto}, reverse=True
         ):
-            found = self.pair(anchor, month, x, eligible)
-            if not found or not found[1]:
+            figure = self.cohort_rate(anchor, month, x, eligible, money)
+            if figure is None or figure["status"] == "not_yet":
                 continue
-            total, n = found
-            if n >= self.least:
-                value = round(total / n, 2) if money else round(total / n, 3)
-                return {"value": value, "n": n, "cohort": month, "status": "ok"}
-            young = young or {"value": None, "n": n, "cohort": month, "status": "too_few"}
+            if figure["status"] == "ok":
+                return figure
+            young = young or figure
         return young or {"value": None, "status": "not_yet"}
 
     def average(self, fn: Callable[[str], float | None], month: str) -> float | None:
         values = [v for v in (fn(shift(month, k)) for k in (1, 2, 3)) if v is not None]
-        return round(sum(values) / len(values), 1) if values else None
+        return sum(values) / len(values) if values else None
 
     def cac(self, month: str) -> float | None:
+        """Unrounded."""
         cost, new = self.cost(month, MONEY), self.entered("customer", month)
-        return round(cost / new, 2) if cost is not None and new else None
+        return cost / new if cost is not None and new else None
+
+
+def _r(value: float | None, digits: int = 2) -> float | None:
+    """Rounded for output only."""
+    return round(value, digits) if value is not None else None
+
+
+def _plain(figure: Row) -> Row:
+    return {k: v for k, v in figure.items() if k != "raw"}
 
 
 def _count_figure(scope: Scope, anchor: str, month: str) -> Row:
     value = scope.entered(anchor, month)
     if value is None:
         return {"value": None, "status": "not_supplied"}
-    first = scope.first[anchor] or month
 
     def prior(m: str) -> float | None:
-        return float(scope.entered(anchor, m) or 0) if m >= first else None
+        found = scope.entered(anchor, m)
+        return float(found) if found is not None else None
 
     average = scope.average(prior, month)
     return {
         "value": value,
-        "vs_3mo": average,
-        "verdict": verdict(value, average, int(max(value, average or 0)), COUNT_FLOOR),
+        "vs_3mo": _r(average, 1),
+        "verdict": verdict(value, average, value, COUNT_FLOOR),
     }
 
 
 def _kept(scope: Scope, month: str) -> Row:
-    """Kept at the first window the scope supplies, of d90, d30 and d180."""
-    for window in (90, 30, 180):
-        if scope.supplied("customer", f"kept_d{window}_eligible"):
-            return {
-                "window": f"d{window}",
-                **scope.rate("customer", f"kept_d{window}", f"kept_d{window}_eligible", month),
-            }
-    return {"value": None, "status": "not_supplied"}
+    """Kept at the first window with a big enough cohort, of d90, d30 and d180; else the first the scope supplies."""
+    figures = [
+        {"window": f"d{w}", **_plain(scope.rate("customer", f"kept_d{w}", f"kept_d{w}_eligible", month))}
+        for w in (90, 30, 180)
+    ]
+    supplied = [f for f in figures if f["status"] != "not_supplied"]
+    if not supplied:
+        return {"value": None, "status": "not_supplied"}
+    return next((f for f in supplied if f["status"] == "ok"), supplied[0])
 
 
 def _ltv(scope: Scope, month: str) -> Row:
-    """Observed net revenue per customer at the longest age with a cohort big enough, else the first supplied."""
+    """Observed net revenue per customer at the longest age with a cohort big enough, else the first supplied. An ok
+    figure keeps `raw`, the unrounded value, for LTV:CAC and payback."""
     figures = [
         (days, scope.rate("customer", f"net_d{days}_sum", f"net_d{days}_eligible", month, money=True)) for days in AGES
     ]
@@ -699,34 +723,35 @@ def headline(scope: Scope, month: str, value_kind: str) -> Row:
     money, effort = scope.cost(month, MONEY), scope.cost(month, EFFORT)
     out: Row = {
         "signups": _count_figure(scope, "signup", month),
-        "activated_rate": scope.rate("signup", "activated", "activated_eligible", month),
-        "paid_rate": scope.rate("signup", "paid", "paid_eligible", month),
+        "activated_rate": _plain(scope.rate("signup", "activated", "activated_eligible", month)),
+        "paid_rate": _plain(scope.rate("signup", "paid", "paid_eligible", month)),
         "new_customers": _count_figure(scope, "customer", month),
     }
-    cost: Row = {"value": money}
+    cost: Row = {"value": _r(money)}
     if money is None:
         cost["status"] = "no_spend"
     if effort is not None:
-        cost["with_effort"] = round((money or 0) + effort, 2)
+        cost["with_effort"] = _r((money or 0) + effort)
     retention = scope.cost(month, MONEY, "retention")
     if retention is not None:
-        cost["retention"] = retention  # never in CAC
+        cost["retention"] = _r(retention)  # never in CAC
     out["cost"] = cost
     n = new or 0
-    cac: Row = {"value": scope.cac(month), "n": n}
+    raw_cac = scope.cac(month)
+    cac: Row = {"value": _r(raw_cac), "n": n}
     if money is None:
         cac["status"] = "no_spend"
     elif not n:
         cac["status"] = "no_customers"
     else:
-        cac.update(verdict=verdict(cac["value"], scope.average(scope.cac, month), n, scope.least), status="ok")
+        cac.update(verdict=verdict(raw_cac, scope.average(scope.cac, month), n, scope.least), status="ok")
     if effort is not None and n:
-        cac["with_effort"] = round(((money or 0) + effort) / n, 2)
+        cac["with_effort"] = _r(((money or 0) + effort) / n)
     out["cac"] = cac
     if scope.kind == "segment" and scope.slug:
         loaded = scope.loaded(month)
         out["cac_loaded"] = (
-            {"value": round(loaded / n, 2)}
+            {"value": _r(loaded / n)}
             if loaded is not None and n
             else {"value": None, "status": "no_spend" if loaded is None else "no_customers"}
         )
@@ -734,19 +759,19 @@ def headline(scope: Scope, month: str, value_kind: str) -> Row:
     if value_kind == "retention":
         out["value"] = _value(scope, month)
         return out
-    ltv = out["ltv"] = _ltv(scope, month)
-    if cac["value"] is None:
+    ltv = _ltv(scope, month)
+    raw_ltv = ltv.pop("raw", None)
+    out["ltv"] = ltv
+    if raw_cac is None:
         out["ltv_cac"] = {"value": None, "status": cac["status"]}
         out["payback_months"] = {"value": None, "status": cac["status"]}
-    elif ltv["value"] is None:
+    elif raw_ltv is None:
         out["ltv_cac"] = out["payback_months"] = {"value": None, "status": ltv["status"]}
     else:
-        out["ltv_cac"] = {"value": round(ltv["value"] / cac["value"], 1)}
-        monthly = ltv["value"] / (
-            int(ltv["window"][1:]) / 30
-        )  # flat net revenue per month over the window: an estimate
+        out["ltv_cac"] = {"value": round(raw_ltv / raw_cac, 1)}
+        monthly = raw_ltv / (int(ltv["window"][1:]) / 30)  # flat net revenue per month over the window: an estimate
         out["payback_months"] = {
-            "value": round(cac["value"] / monthly, 1) if monthly > 0 else None,
+            "value": round(raw_cac / monthly, 1) if monthly > 0 else None,
             "status": "estimate",
         }
     return out
@@ -754,7 +779,7 @@ def headline(scope: Scope, month: str, value_kind: str) -> Row:
 
 def _value(scope: Scope, month: str) -> Row:
     """A retention segment's worth: kept at day 30, and its cohort month's acquisition cost per customer kept."""
-    kept = scope.rate("customer", "kept_d30", "kept_d30_eligible", month)
+    kept = _plain(scope.rate("customer", "kept_d30", "kept_d30_eligible", month))
     out: Row = {"kept_d30": kept}
     if kept["status"] != "ok":
         out["cost_per_retained"] = {"value": None, "status": kept["status"]}
@@ -765,14 +790,14 @@ def _value(scope: Scope, month: str) -> Row:
     money = scope.loaded(cohort) if scope.kind == "segment" and scope.slug else scope.cost(cohort, MONEY)
     effort = scope.cost(cohort, EFFORT)
     figure: Row = {
-        "value": round(money / retained, 2) if money is not None and retained else None,
+        "value": _r(money / retained) if money is not None and retained else None,
         "cohort": cohort,
         "n": retained,
     }
     if money is None:
         figure["status"] = "no_spend"
     if effort is not None and retained:
-        figure["with_effort"] = round(((money or 0) + effort) / retained, 2)
+        figure["with_effort"] = _r(((money or 0) + effort) / retained)
     out["cost_per_retained"] = figure
     return out
 
@@ -789,6 +814,8 @@ def channels(scope: Scope, month: str) -> list[Row]:
     total_cost = scope.cost(month, MONEY) or 0
     out: list[Row] = []
     owned = {ch for ch in scope.owned if not data.lines[ch].get("retired_at")}
+    if scope.kind == "channel" and scope.slug:
+        owned.add(scope.slug)  # the channel shows, with its budget, even in a quiet month
     for slug in sorted(set(new) | spent | owned):
         n = new.get(slug, 0)
         row: Row = {"slug": slug or GX.UNKNOWN, "new": n, "new_share": round(n / total_new, 2) if total_new else None}
@@ -810,21 +837,22 @@ def channels(scope: Scope, month: str) -> list[Row]:
         def cac_of(m: str, own: list[Row] = own, slug: str = slug) -> float | None:
             cost = scope.cost(m, MONEY, costs=own)
             people = sum(int(r["entered"]) for r in scope.at("customer", m) if r["channel"] == slug)
-            return round(cost / people, 2) if cost is not None and people else None
+            return cost / people if cost is not None and people else None
 
-        row["cost"] = money
-        over = round(money - float(budget), 2) if money is not None and budget is not None else None
-        row["over_budget"] = over if over is not None and over > 0 else None
-        row["cac"] = round(money / n, 2) if money is not None and n else None
+        row["cost"] = _r(money)
+        over = money - float(budget) if money is not None and budget is not None else None
+        row["over_budget"] = _r(over) if over is not None and over > 0 else None
+        raw = money / n if money is not None and n else None
+        row["cac"] = _r(raw)
         if money is None:
             row["status"] = "no_spend"
         elif not n:
             row["status"] = "no_customers"
         else:
-            row["cost_share"] = round(money / total_cost, 2) if total_cost else None
-            row["verdict"] = verdict(row["cac"], scope.average(cac_of, month), n, scope.least)
+            row["cost_share"] = _r(money / total_cost) if total_cost else None
+            row["verdict"] = verdict(raw, scope.average(cac_of, month), n, scope.least)
         if effort is not None and n:
-            row["with_effort"] = round(((money or 0) + effort) / n, 2)
+            row["with_effort"] = _r(((money or 0) + effort) / n)
         out.append(row)
     out.sort(key=lambda r: (r["slug"] == GX.UNKNOWN, -int(r["new"]), str(r["slug"])))
     return out
@@ -859,15 +887,15 @@ def series(scope: Scope, month: str, window: str | None) -> list[Row]:
     out: list[Row] = []
     for k in range(SERIES_MONTHS - 1, -1, -1):
         m = shift(month, k)
-        kept = scope.pair("customer", m, f"kept_{window}", f"kept_{window}_eligible") if window else None
+        kept = scope.cohort_rate("customer", m, f"kept_{window}", f"kept_{window}_eligible") if window else None
         out.append(
             {
                 "period": m,
                 "signups": scope.entered("signup", m),
                 "new_customers": scope.entered("customer", m),
-                "cost": scope.cost(m, MONEY),
-                "cac": scope.cac(m),
-                "kept": round(kept[0] / kept[1], 3) if kept and kept[1] >= scope.least else None,
+                "cost": _r(scope.cost(m, MONEY)),
+                "cac": _r(scope.cac(m)),
+                "kept": kept["value"] if kept else None,
             }
         )
     return out
@@ -881,9 +909,9 @@ def retention(scope: Scope, month: str) -> list[Row]:
     for m in cohorts[:RETENTION_COHORTS]:
         row: Row = {"cohort": m, "entered": scope.entered("customer", m)}
         for window in WINDOWS:
-            found = scope.pair("customer", m, f"kept_d{window}", f"kept_d{window}_eligible")
-            if found:
-                row[f"kept_d{window}"] = {"value": round(found[0] / found[1], 3) if found[1] else None, "n": found[1]}
+            figure = scope.cohort_rate("customer", m, f"kept_d{window}", f"kept_d{window}_eligible")
+            if figure:
+                row[f"kept_d{window}"] = {k: figure[k] for k in ("value", "n", "status")}
         out.append(row)
     return out
 
@@ -897,7 +925,7 @@ def campaigns(scope: Scope, month: str) -> dict[str, list[Row]]:
         cell["new"] += int(r["entered"])
     for k in scope.costs:
         if k["period"] == month and k["kind"] in MONEY and k["purpose"] == "acquisition":
-            cell = found.setdefault(k["channel"] or GX.UNKNOWN, {}).setdefault(
+            cell = found.setdefault(k["channel"] or COMPANY, {}).setdefault(
                 k["campaign"] or "none", {"new": 0, "cost": None}
             )
             cell["cost"] = round((cell["cost"] or 0) + float(k["amount"]), 2)
@@ -919,49 +947,67 @@ def campaigns(scope: Scope, month: str) -> dict[str, list[Row]]:
 def metrics(c: sqlite3.Connection, scope: Scope, month: str, hidden: Iterable[str] = ()) -> list[Row]:
     """The KPIs that belong to Growth: linked to a channel (its input or guardrail KPI) or owned by the Growth Manager,
     leaving out those of owners the caller may not read. Scoped to a segment, its channels' KPIs and the manager's; to a
-    channel (or mine), only those channels' KPIs. Each
-    with its latest reading up to the month's end and the reading before it (`vs_prior`)."""
+    channel (or mine), only those channels' KPIs. Each with its latest reading up to the month's end and the reading
+    before it (`vs_prior`)."""
+    segs = scope.data.segs
+    inside: dict[str, Callable[[str], bool]] = {
+        "channel": lambda ch: ch == scope.slug,
+        "mine": lambda ch: ch in scope.owned,
+        "segment": lambda ch: segs.channels.get(ch) == scope.slug,
+    }
+    keep = inside.get(scope.kind, lambda ch: True)
     linked: dict[str, str] = {}
     for slug, *ids in c.execute(
         "SELECT slug, input_kpi_id, guardrail_kpi_id FROM growth_channels WHERE retired_at IS NULL ORDER BY sort, slug"
     ):
-        for kpi_id in ids:
-            if kpi_id:
-                linked.setdefault(str(kpi_id), str(slug))
-    if scope.kind == "channel":
-        linked = {k: ch for k, ch in linked.items() if ch == scope.slug}
-    elif scope.kind == "mine":
-        linked = {k: ch for k, ch in linked.items() if ch in scope.owned}
-    elif scope.kind == "segment":
-        linked = {k: ch for k, ch in linked.items() if scope.data.segs.channels.get(ch) == scope.slug}
+        if keep(str(slug)):
+            for kpi_id in ids:
+                if kpi_id:
+                    linked.setdefault(str(kpi_id), str(slug))
     manager = page_owners.owner(c, "growth", fallback=False) if scope.kind not in ("channel", "mine") else None
     marks = ",".join("?" * len(linked)) or "''"
-    found: list[Row] = H._rows(
-        c.execute(
-            f"SELECT id, name, owner_id FROM kpis WHERE archived_at IS NULL AND (id IN ({marks}) OR owner_id=?) "
-            "ORDER BY created_at",
-            [*linked, manager or ""],
+    blocked = set(hidden)
+    found: list[Row] = [
+        k
+        for k in H._rows(
+            c.execute(
+                f"SELECT id, name, owner_id FROM kpis WHERE archived_at IS NULL AND (id IN ({marks}) OR owner_id=?) "
+                "ORDER BY created_at",
+                [*linked, manager or ""],
+            )
         )
-    )
-    blocked, end = set(hidden), GX.period(date.fromisoformat(month + "-01"), "month")[2].isoformat()
+        if k["owner_id"] not in blocked
+    ][:METRICS_MAX]
+    end = GX.period(date.fromisoformat(month + "-01"), "month")[2].isoformat()
+    ids = [k["id"] for k in found]
+    id_marks = ",".join("?" * len(ids)) or "''"
+    newest: dict[str, list[Row]] = {}
+    for r in H._rows(
+        c.execute(
+            "SELECT kpi_id, value, coalesce(period_end, measured_at) AS period_end, quality FROM ("
+            "SELECT r.*, row_number() OVER (PARTITION BY r.kpi_id "
+            "ORDER BY coalesce(r.period_end, r.measured_at) DESC, r.collected_at DESC, r.created_at DESC) AS nth "
+            f"FROM kpi_readings r WHERE r.kpi_id IN ({id_marks}) "
+            "AND substr(coalesce(r.period_end, r.measured_at), 1, 10) <= ? "
+            "AND NOT EXISTS (SELECT 1 FROM kpi_readings s WHERE s.supersedes=r.id)"
+            ") WHERE nth <= 2 ORDER BY kpi_id, nth",
+            [*ids, end],
+        )
+    ):
+        newest.setdefault(str(r["kpi_id"]), []).append(r)
     out: list[Row] = []
-    for kpi in [k for k in found if k["owner_id"] not in blocked][:METRICS_MAX]:
-        upto = [
-            r
-            for r in K.readings(c, kpi["id"], effective=True)
-            if str(r.get("period_end") or r["measured_at"])[:10] <= end
-        ]
-        newest = K.latest(upto)
-        prior = K.latest([r for r in upto if r is not newest]) if newest else None
+    for kpi in found:
+        latest = [*newest.get(str(kpi["id"]), []), None, None]
+        top, prior = latest[0], latest[1]
         out.append(
             {
                 "id": kpi["id"],
                 "name": kpi["name"],
                 "owner": kpi["owner_id"],
                 "channel": linked.get(str(kpi["id"])),
-                "value": newest["value"] if newest else None,
-                "period_end": str(newest.get("period_end") or newest["measured_at"])[:10] if newest else None,
-                "estimate": bool(newest and newest.get("quality") == "estimate"),
+                "value": top["value"] if top else None,
+                "period_end": str(top["period_end"])[:10] if top else None,
+                "estimate": bool(top and top["quality"] == "estimate"),
                 "vs_prior": prior["value"] if prior else None,
             }
         )
@@ -1046,10 +1092,21 @@ def read(
 
 
 def install(app: Any, store: Any, auth: Any, mutate: Callable[..., Any]) -> None:
-    def editor(c: sqlite3.Connection, who: Any, what: str) -> None:
+    def pusher(c: sqlite3.Connection, who: Any, what: str) -> set[str] | None:
+        """None: the owner, an admin or the Growth Manager, who push anything; else the live channels the caller owns."""
         auth.domain(who)
-        if not may_edit(auth, who, c):
-            raise Problem("forbidden", f"Only the owner, an admin or the Growth Manager {what}", 403)
+        H._writer(c, who.actor)
+        if may_edit(auth, who, c):
+            return None
+        owned = {
+            str(slug)
+            for (slug,) in c.execute(
+                "SELECT slug FROM growth_channels WHERE owner_ref=? AND retired_at IS NULL", (who.actor,)
+            )
+        }
+        if not owned:
+            raise Problem("forbidden", f"Only the owner, an admin, the Growth Manager or a channel's owner {what}", 403)
+        return owned
 
     @app.get("/api/v2/growth/read")
     def growth_read(request: Request, scope: str = "all", period: str | None = None, detail: str = "") -> Row:  # pyright: ignore[reportUnusedFunction]
@@ -1062,29 +1119,29 @@ def install(app: Any, store: Any, auth: Any, mutate: Callable[..., Any]) -> None
 
         who = request.state.identity
         auth.domain(who)
-        with store.read() as c:
+        with store.read_transaction() as c:
             return read(c, scope, period, detail, who.actor, cast("set[str]", routes._hidden_owners(c, auth, who)))
 
     @app.post("/api/v2/growth/rows")
     def growth_rows_push(request: Request, body: M.GrowthCorePush) -> Any:  # pyright: ignore[reportUnusedFunction]
-        """Owner, admin or the Growth Manager: a source's cohort rows, as CSV text or rows. They replace the source's
+        """Owner, admin, the Growth Manager, or a channel's owner for its own channels: a source's cohort rows, as CSV
+        text or rows. They replace the source's
         rows for the months they cover; nothing is pushed when any rule refuses, naming the column and row."""
         who = request.state.identity
 
         def work(c: sqlite3.Connection) -> Row:
-            editor(c, who, "pushes cohort rows")
-            return push_rows(c, who.actor, body)
+            return push_rows(c, who.actor, body, pusher(c, who, "pushes cohort rows"))
 
         return mutate(request, body, work)
 
     @app.post("/api/v2/growth/costs")
     def growth_costs_push(request: Request, body: M.GrowthCorePush) -> Any:  # pyright: ignore[reportUnusedFunction]
-        """Owner, admin or the Growth Manager: a source's costs, as CSV text or rows. They replace the source's costs
+        """Owner, admin, the Growth Manager, or a channel's owner for its own channels: a source's costs, as CSV text or
+        rows. They replace the source's costs
         for the months they cover; nothing is pushed when any rule refuses, naming the column and row."""
         who = request.state.identity
 
         def work(c: sqlite3.Connection) -> Row:
-            editor(c, who, "pushes costs")
-            return push_costs(c, who.actor, body)
+            return push_costs(c, who.actor, body, pusher(c, who, "pushes costs"))
 
         return mutate(request, body, work)

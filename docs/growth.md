@@ -235,7 +235,7 @@ Every Growth number is a sum over two kinds of rows (backend/growth_core.py), re
 - **Cohort rows** (`tico growth rows push --source LABEL --file rows.csv`, MCP `tico_growth_rows_push`). One row is the
   people in one cohort cell: `anchor` (`signup`: signed up that month; `customer`: reached the segment's customer step
   that month), `period` (YYYY-MM), `segment` and `channel` (slug or name; blank is No segment and Unknown),
-  `campaign` (blank is none; past 10 per channel the smallest fold into `other`), `as_of` (when the counts were true),
+  `campaign` (blank is none; at most 10 named per channel and month: name the rest `other`), `as_of` (when the counts were true),
   `entered`, and counts each with its `_eligible`: `activated`, `paid`, `kept_d30`, `kept_d90`, `kept_d180` (by the
   segment's own kept rule), and `net_d90_sum`, `net_d180_sum`, `net_d365_sum` with `net_dN_eligible`. Counts are whole
   numbers with `x <= x_eligible <= entered`; a blank cell is not supplied, never 0. Customer facts fold into
@@ -248,8 +248,8 @@ Every Growth number is a sum over two kinds of rows (backend/growth_core.py), re
   retention`).
 
 A push replaces every row of its source for the months it covers, since cohorts restate as they age. The owner, admins
-and the Growth Manager push; a refusal names the rule, the column and the row numbers, never a value, and nothing is
-pushed. Customer facts' sources (`upload`, `source:<id>`) are not push labels.
+and the Growth Manager push anything; a channel's owner pushes rows and costs for its own channels only; a refusal names the rule, the column and the row numbers, never a value, and nothing is
+pushed. A source holds customer facts or pushed rows, never both.
 
 **The read** (`GET /api/v2/growth/read`, `tico growth read`, MCP `tico_growth_read`; everyone signed in): `--scope`
 `all`, `mine` (the channels the caller owns; none is an empty list), `segment:<slug>` or `channel:<slug>`, `--period`

@@ -6,15 +6,8 @@
 - `growth_segments.value_kind`: revenue (the default) or retention.
 """
 
-# backend/migrations/20261118221359_growth_segments.py's table, word for word: whichever of the two pending migrations
-# runs first makes it, so the schema is the same in either order.
-SEGMENTS = (
-    "CREATE TABLE IF NOT EXISTS growth_segments ("
-    "id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL, customer_rule TEXT NOT NULL DEFAULT '', "
-    "churn_days INTEGER NOT NULL DEFAULT 0, revenue_month REAL, margin_pct REAL, min_cohort INTEGER, "
-    "sort INTEGER NOT NULL DEFAULT 0, owner_ref TEXT, retired_at TEXT, created_at TEXT NOT NULL, "
-    "updated_at TEXT NOT NULL)"
-)
+import importlib
+
 COUNTS = (
     "activated",
     "activated_eligible",
@@ -48,6 +41,9 @@ def up(conn):
         "amount REAL NOT NULL, quality TEXT NOT NULL DEFAULT 'actual', pushed_by TEXT NOT NULL, "
         "pushed_at TEXT NOT NULL, PRIMARY KEY (source, period, channel, campaign, kind, purpose))"
     )
-    conn.execute(SEGMENTS)
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='growth_segments'").fetchone():
+        # Run before 20261118221359_growth_segments.py (pending migrations run in any order): its own up makes the table
+        # (idempotent, so its later run changes nothing), then the column; one schema either way.
+        importlib.import_module("backend.migrations.20261118221359_growth_segments").up(conn)
     if "value_kind" not in {row[1] for row in conn.execute("PRAGMA table_info(growth_segments)")}:
         conn.execute("ALTER TABLE growth_segments ADD COLUMN value_kind TEXT NOT NULL DEFAULT 'revenue'")
