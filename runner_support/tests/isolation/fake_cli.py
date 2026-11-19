@@ -8,6 +8,7 @@ where the runner started it (its user and capabilities, whether it reaches the r
 legacy secrets, and a commit and pull in its working tree as itself).
 """
 
+import fcntl
 import json
 import os
 import subprocess
@@ -72,6 +73,15 @@ def git(cwd, *args):
 
 
 def probe(cwd):
+    # Every harness's turn probes at once, and a control harness really moves a sibling's checkout aside and back
+    # (renamable). A sibling committing in its worktree meanwhile finds no git directory there, so probes take
+    # turns: one exclusive lock on the spec file every turn user can open.
+    with open("/fake/spec.json") as spec:
+        fcntl.flock(spec, fcntl.LOCK_EX)
+        return probe_alone(cwd)
+
+
+def probe_alone(cwd):
     cwd = cwd or os.getcwd()
     caps = next(
         line.split(":", 1)[1].strip()
