@@ -452,8 +452,9 @@ def _replace(
     return {"source": source, "rows": len(rows), "periods": periods, "replaced": replaced, "pushed_at": at}
 
 
-def _own(rows: list[Row], owned: set[str] | None) -> None:
-    """A channel's owner pushes only its own channels' rows (`owned`; None is anyone's)."""
+def _own(c: sqlite3.Connection, table_name: str, source: str, rows: list[Row], owned: set[str] | None) -> None:
+    """A channel's owner pushes only its own channels' rows (`owned`; None is anyone's), and only into a source that
+    holds nobody else's channels for those months, since a push replaces the whole source."""
     if owned is None:
         return
     other = next((str(r["channel"]) for r in rows if r["channel"] not in owned), None)
@@ -462,13 +463,24 @@ def _own(rows: list[Row], owned: set[str] | None) -> None:
         raise Problem(
             "forbidden", f"Nothing pushed: you push only your own channels' rows, and {said} is not yours.", 403
         )
+    periods = sorted({str(r["period"]) for r in rows})
+    held = c.execute(
+        f"SELECT DISTINCT channel FROM {table_name} WHERE source=? AND period IN ({','.join('?' * len(periods))})",
+        [source, *periods],
+    ).fetchall()
+    if any(ch not in owned for (ch,) in held):
+        raise Problem(
+            "forbidden",
+            "Nothing pushed: that source holds other channels' rows for these months; use your own source.",
+            403,
+        )
 
 
 def push_rows(c: sqlite3.Connection, actor: str, body: M.GrowthCorePush, owned: set[str] | None = None) -> Row:
     if c.execute("SELECT 1 FROM growth_customers WHERE source=? LIMIT 1", (body.source,)).fetchone():
         refuse("source", "Nothing pushed: that source holds customer facts; a source holds one kind. Use another.")
     rows = check_rows(c, *table(body))
-    _own(rows, owned)
+    _own(c, "growth_cohort_rows", body.source, rows, owned)
     out = _replace(c, "growth_cohort_rows", body.source, actor, rows, ROW_COLUMNS)
     H.event(c, actor, "growth.rows.push", body.source, {k: out[k] for k in ("rows", "periods", "replaced")})
     return out
@@ -478,7 +490,7 @@ def push_costs(c: sqlite3.Connection, actor: str, body: M.GrowthCorePush, owned:
     if body.source == TYPED:
         refuse("source", f"Nothing pushed: {TYPED} is the source typed spend reads under; use another.")
     rows = check_costs(c, *table(body))
-    _own(rows, owned)
+    _own(c, "growth_costs", body.source, rows, owned)
     out = _replace(c, "growth_costs", body.source, actor, rows, COST_COLUMNS)
     H.event(c, actor, "growth.costs.push", body.source, {k: out[k] for k in ("rows", "periods", "replaced")})
     return out

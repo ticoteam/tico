@@ -314,6 +314,10 @@ def test_each_channel_carries_its_owner_and_budget_and_mine_is_the_callers_chann
         expected=403,
     )
     assert "meta" in refused["error"]["detail"]
+    # A push replaces its whole source, so an owner can't push into a source holding another channel's rows.
+    push(api, "rows", "shared", lines(rows, "customer,2026-10,meta,2026-11-01,2"))
+    clash = push(api, "rows", "shared", lines(rows, "customer,2026-10,seo,2026-11-01,3"), token=owner, expected=403)
+    assert "own source" in clash["error"]["detail"]
     nobody = read(api, "scope=mine&period=2026-10")
     assert nobody["channels"] == [] and nobody["headline"]["new_customers"]["status"] == "not_supplied"
 
