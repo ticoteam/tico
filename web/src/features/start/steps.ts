@@ -2,8 +2,9 @@ import type { ModelSubscriptionList } from '@/api/schema';
 import type { SetupRecord } from './queries';
 
 /* The first run's steps, held in the address (`?setup=<step>`) so Back walks them and a reload resumes where it was.
-   `path` chooses who does the setup; `paste` is the key behind Connect and counts as the model step. */
-export const STEPS = ['path', 'name', 'model', 'paste', 'team'] as const;
+   `path` chooses who does the setup; `paste` is the key behind Connect and counts as the model step. `github` stands
+   alone: Connect GitHub, opened from Tools or by Tico, outside the three counted steps. */
+export const STEPS = ['path', 'name', 'model', 'paste', 'team', 'github'] as const;
 export type SetupStep = (typeof STEPS)[number];
 
 export const setupStep = (v: unknown): SetupStep | null => (STEPS.includes(v as SetupStep) ? (v as SetupStep) : null);

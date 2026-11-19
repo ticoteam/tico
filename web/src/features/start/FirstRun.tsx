@@ -9,8 +9,10 @@ import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { Select } from '@/kit/Select';
+import { Checkbox } from '@/kit/Checkbox';
 import { Dot } from '@/tico/dot';
-import { loginLive, loginQuery, setupQuery, subscriptionsQuery, type KeyKind, type PlanKind } from './queries';
+import { keyLost, pendingSetup, reasonOf } from './handoff';
+import { githubQuery, loginLive, loginQuery, setupQuery, subscriptionsQuery, type KeyKind, type PlanKind } from './queries';
 import { setupStep, stepNumber, type SetupStep } from './steps';
 import './start.css';
 
@@ -27,6 +29,7 @@ const TITLES: Record<SetupStep, string> = {
   model: 'Connect a model',
   paste: 'Paste a key',
   team: 'Pick a team',
+  github: 'Connect GitHub',
 };
 
 export function FirstRun() {
@@ -54,6 +57,7 @@ function Step({ step }: { step: SetupStep }) {
   if (step === 'name') return <NameStep />;
   if (step === 'model') return <ModelStep />;
   if (step === 'paste') return <PasteStep />;
+  if (step === 'github') return <GithubStep />;
   return <TeamStep />;
 }
 
@@ -321,6 +325,129 @@ function TeamStep() {
           <Button variant="primary" busy={finish.pending} onClick={() => void finish.press({ job })}>
             Start
           </Button>
+        }
+      />
+    </>
+  );
+}
+
+/* ---------------------------------------------------------------- Connect GitHub (the hand-off, s1158) */
+
+const GITHUB_ORG = /^[A-Za-z0-9-]{1,39}$/;
+
+/** Where GitHub makes the App, then the hand-off: the browser goes to GitHub and comes back through the server. */
+function GithubStep() {
+  const app = useQuery(githubQuery);
+  if (app.data?.connected) return <GithubConnected org={app.data.org ?? ''} installed={!!app.data.installed} />;
+  return <GithubForm />;
+}
+
+function GithubForm() {
+  const [where, setWhere] = useState<'personal' | 'org'>('personal');
+  const [org, setOrg] = useState('');
+  const [admin, setAdmin] = useState(true);
+  const [lost, setLost] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pending] = useState(pendingSetup);
+  const connect = useAction('github.connect');
+  const replace = useAction('github.replaceKey');
+  const finish = useAction('github.finish');
+  const inOrg = where === 'org';
+  const ready = !inOrg || GITHUB_ORG.test(org.trim());
+  // A personal account always asks for Administration (the server sets it).
+  const input = inOrg ? { org: org.trim(), administration: admin } : { administration: true };
+
+  const press = async (action: typeof connect, i: unknown) => {
+    setError(null);
+    const r = await action.run(i);
+    if (r.ok) return;
+    if (keyLost(r.error)) setLost(true);
+    else setError(reasonOf(r.error));
+  };
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (ready) void press(connect, input);
+  };
+
+  if (lost)
+    return (
+      <>
+        <p className="t-read">The saved key is lost. Replacing it removes the GitHub app and directory sync keys.</p>
+        <Foot
+          error={error}
+          left={
+            <Button variant="quiet" disabled={replace.pending} onClick={() => setLost(false)}>
+              Cancel
+            </Button>
+          }
+          right={
+            <Button variant="primary" busy={replace.pending} onClick={() => void press(replace, input)}>
+              Replace key
+            </Button>
+          }
+        />
+      </>
+    );
+
+  return (
+    <form className="wl-form" onSubmit={submit}>
+      <RadioGroup className="wl-list" value={where} onValueChange={(v) => setWhere(v as 'personal' | 'org')} aria-label="Where">
+        <Choice value="personal" label="My account" on={!inOrg} />
+        <Choice value="org" label="An organization" on={inOrg} />
+      </RadioGroup>
+      {inOrg && (
+        <div className="wl-fields">
+          <Field label="Organization" labelHidden placeholder="Organization" value={org} onValueChange={setOrg} autoComplete="off" autoFocus />
+          <Checkbox label="Let agents create repositories" checked={admin} onCheckedChange={setAdmin} />
+        </div>
+      )}
+      <Foot
+        error={error}
+        left={
+          pending ? (
+            <Button variant="quiet" busy={finish.pending} onClick={() => void press(finish, {})}>
+              Finish
+            </Button>
+          ) : undefined
+        }
+        right={
+          <Button type="submit" variant="primary" busy={connect.pending} disabled={!ready}>
+            Connect
+          </Button>
+        }
+      />
+    </form>
+  );
+}
+
+function GithubConnected({ org, installed }: { org: string; installed: boolean }) {
+  const install = useStepAction('tools.installGithub');
+  return (
+    <>
+      <div className="wl-list">
+        <div className="wl-row">
+          <span className="wl-mark" aria-hidden="true">
+            G
+          </span>
+          <b>{org}</b>
+          <span className="wl-done">
+            {installed ? 'Connected' : 'Not installed'}
+            {installed && <Icon name="check" />}
+          </span>
+        </div>
+      </div>
+      <Foot
+        error={install.error}
+        right={
+          installed ? (
+            <Button variant="primary" onClick={() => void run('setup.close', {}, click)}>
+              Done
+            </Button>
+          ) : (
+            <Button variant="primary" busy={install.pending} onClick={() => void install.press({})}>
+              Install
+            </Button>
+          )
         }
       />
     </>

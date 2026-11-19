@@ -15,7 +15,7 @@ const PENDING = 'GitHub has not finished the install. Install the app on GitHub.
 export const GITHUB_WHY: Partial<Record<GithubReturn, string>> = {
   pending: PENDING,
   declined: 'GitHub access was declined. Nothing changed.',
-  finish: 'GitHub sent the setup back without your sign-in. Ask an agent to finish it.',
+  finish: 'GitHub sent the setup back without your sign-in. Finish it below, or connect again.',
   again: 'GitHub is already connected, so nothing changed. If GitHub made a second app just now, delete it there.',
   expired: 'That GitHub link is used or too old. Connect again.',
 };

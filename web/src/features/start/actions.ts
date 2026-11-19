@@ -1,7 +1,23 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import { defineAction, run, s } from '@/actions';
 import { meQuery, queryClient } from '@/data';
-import { cancelConnect, finishSetup, saveCompanyName, saveKey, sendLoginCode, setupQuery, startConnect, subscriptionsQuery } from './queries';
+import { forgetSetup, goToGithub, handOff, pendingSetup, refused } from './handoff';
+import {
+  cancelConnect,
+  checkGithub,
+  disconnectGithub,
+  finishGithub,
+  finishSetup,
+  githubAuthorizeLink,
+  githubSetup,
+  replaceGithubKey,
+  saveCompanyName,
+  saveKey,
+  sendLoginCode,
+  setupQuery,
+  startConnect,
+  subscriptionsQuery,
+} from './queries';
 import { STEPS, resumeStep, stepBefore, type SetupStep } from './steps';
 
 /** Open the first run at a step, or close it (null). Steps push, so Back walks them. */
@@ -161,4 +177,109 @@ export const finish = defineAction({
   },
   did: () => 'Created the team',
   target: () => ({ kind: 'page', id: '/start' }),
+});
+
+/* ---------------------------------------------------------------- GitHub: the App the agents' repositories live under */
+
+const GITHUB_TARGET = { kind: 'section', id: 'github' } as const;
+
+/** A refusal keeps the server's reason ("code: reason"), so the press can say it. */
+async function withReason<T>(send: () => Promise<T>, onRefused?: (code: string) => void): Promise<T> {
+  try {
+    return await send();
+  } catch (e) {
+    const err = e as { status?: number; code?: string; message?: string };
+    if (err.status === 401 || err.status === 403 || !err.code) throw e;
+    onRefused?.(err.code);
+    throw Object.assign(new Error(err.message), { status: err.status, code: `${err.code}: ${err.message ?? ''}` });
+  }
+}
+
+const where = s.object({
+  org: s.optional(s.string({ min: 1, max: 39, pattern: /^[A-Za-z0-9-]+$/, what: "an organization's GitHub login, or none for your own account" })),
+  administration: s.boolean(),
+});
+
+/* Making the App is the owner's own click on GitHub's page: the browser goes there. */
+export const githubConnect = defineAction({
+  id: 'github.connect',
+  title: 'Connect GitHub',
+  kind: 'change',
+  tico: false,
+  input: where,
+  can: () => isOwner(),
+  run: async (_ctx, { org, administration }) => handOff(await withReason(() => githubSetup(org ?? '', administration))),
+  target: () => GITHUB_TARGET,
+});
+
+/* The key that opens the saved App is lost: replacing it removes the App and the directory sync keys, so only the
+   owner's own press after the question does it. Then the setup goes on as Connect does. */
+export const githubReplaceKey = defineAction({
+  id: 'github.replaceKey',
+  title: 'Replace the lost GitHub key',
+  kind: 'change',
+  tico: false,
+  input: where,
+  can: () => isOwner(),
+  run: async (_ctx, { org, administration }) => {
+    await withReason(replaceGithubKey);
+    handOff(await withReason(() => githubSetup(org ?? '', administration)));
+  },
+  target: () => GITHUB_TARGET,
+});
+
+/* GitHub came back with no session: the setup this tab started is finished here, and the browser goes on to install. */
+export const githubFinish = defineAction({
+  id: 'github.finish',
+  title: 'Finish connecting GitHub',
+  kind: 'change',
+  tico: false,
+  input: s.object({}),
+  can: () => isOwner(),
+  run: async () => {
+    const state = pendingSetup();
+    if (!state) throw refused('github_state', 'Connect again');
+    // A used, old or another person's state never works again.
+    const done = await withReason(() => finishGithub(state), (code) => code === 'github_state' && forgetSetup());
+    forgetSetup();
+    goToGithub(done.install_url);
+  },
+  target: () => GITHUB_TARGET,
+});
+
+export const githubCheck = defineAction({
+  id: 'github.checkPermissions',
+  title: 'Check GitHub permissions again',
+  kind: 'change',
+  input: s.object({}),
+  can: () => isOwner(),
+  run: () => withReason(checkGithub),
+  did: () => 'Checked GitHub',
+  target: () => GITHUB_TARGET,
+});
+
+/* A personal account: the owner lets Tico create repositories there, on GitHub's page. */
+export const githubAuthorize = defineAction({
+  id: 'github.authorize',
+  title: 'Authorize Tico on GitHub',
+  kind: 'change',
+  tico: false,
+  input: s.object({}),
+  can: () => isOwner(),
+  run: async () => goToGithub((await withReason(githubAuthorizeLink)).url),
+  target: () => GITHUB_TARGET,
+});
+
+export const githubDisconnect = defineAction({
+  id: 'github.disconnect',
+  title: 'Disconnect GitHub',
+  kind: 'change',
+  tico: false,
+  input: s.object({}),
+  can: () => isOwner(),
+  run: async () => {
+    await withReason(disconnectGithub);
+  },
+  did: () => 'Disconnected GitHub',
+  target: () => GITHUB_TARGET,
 });

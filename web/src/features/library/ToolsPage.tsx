@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { run } from '@/actions';
 import type { ApiTool, LetterOut, ToolIndexRow, WebsiteTool } from '@/api/schema';
+import { meQuery } from '@/data';
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
@@ -15,6 +16,7 @@ import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
+import { GithubConnection } from '@/features/start/exports';
 import { BrowserDialog } from '@/features/team/exports';
 import { FilterRow, ItemHead, ListAndItem, PageMore, Section, type PageState } from '@/pagekinds';
 import { AddAccountDialog, AddDialog, AddMenu, ReplaceLoginDialog, type Adding } from './AddTool';
@@ -995,15 +997,24 @@ function WebhookView({ id, row }: { id: string; row: ToolIndexRow | undefined })
 /* ---------------------------------------------------------------- Slack, GitHub, meetings... */
 
 function PlainView({ row, kind, problem }: { row: ToolIndexRow | undefined; kind: string; problem?: string | null }) {
+  const owner = useQuery(meQuery).data?.role === 'owner';
   if (!row && !problem) return <Shell name="Tool" kind={kind} state="loading" target={`tool:${kind}`} />;
+  // GitHub: the owner gets the App's own state and fixes; everyone else the plain state.
+  const github = kind === 'github' && owner ? <GithubConnection /> : null;
   // A GitHub return that did not work (useGithubReturn): what happened, and the install when the App waits for it.
   const returned = problem && (
     <Section name="Not connected">
       <p className="t-read">{problem}</p>
-      {row?.kind === 'github' && row.status.tone === 'wait' && <Button onClick={() => void press('tools.installGithub', {})}>Install</Button>}
+      {!github && row?.kind === 'github' && row.status.tone === 'wait' && <Button onClick={() => void press('tools.installGithub', {})}>Install</Button>}
     </Section>
   );
-  if (!row) return <Shell name={KIND[kind] ?? 'Tool'} kind={kind} target={`tool:${kind}`}>{returned}</Shell>;
+  if (!row)
+    return (
+      <Shell name={KIND[kind] ?? 'Tool'} kind={kind} target={`tool:${kind}`}>
+        {returned}
+        {github}
+      </Shell>
+    );
   return (
     <Shell name={row.name} kind={row.kind} problem={bad(row)} target={`tool:${row.id}`}>
       {returned}
@@ -1013,12 +1024,14 @@ function PlainView({ row, kind, problem }: { row: ToolIndexRow | undefined; kind
           {row.detail && <LabelValue label="About">{row.detail}</LabelValue>}
         </Facts>
       </Section>
-      <Section name="How it connects">
-        <Facts>
-          {row.way && <LabelValue label="Through">{row.way}</LabelValue>}
-          <LabelValue label="State">{row.status.text}</LabelValue>
-        </Facts>
-      </Section>
+      {github ?? (
+        <Section name="How it connects">
+          <Facts>
+            {row.way && <LabelValue label="Through">{row.way}</LabelValue>}
+            <LabelValue label="State">{row.status.text}</LabelValue>
+          </Facts>
+        </Section>
+      )}
       {row.who.length > 0 && (
         <Section name="Who may use it" count={row.who_total}>
           {row.who.map((p) => (

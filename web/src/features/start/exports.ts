@@ -6,3 +6,5 @@ export { landing, needsQuery, todayQuery, type StartScreenKind } from './queries
 export { useStartGate, BOOT_WAIT_MS, type StartGate } from './gate';
 export { StartScreen, PartFault, type StartScreenProps } from './Cards';
 export { FirstRun } from './FirstRun';
+// For Tools › GitHub: the App's state and fixes for the owner; Connect opens the dialog over the app (`?setup=github`).
+export { GithubConnection } from './GithubConnection';

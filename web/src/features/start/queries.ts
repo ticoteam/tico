@@ -1,7 +1,20 @@
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
-import type { CalendarOccurrence, GetConfigResponse, GetNeedsYouResponse, ListCalendarEventsResponse, ModelSubscriptionList, NeedsYouItem } from '@/api/schema';
-import { configQuery, keys, meQuery, queryClient, write } from '@/data';
+import type {
+  CalendarOccurrence,
+  GetConfigResponse,
+  GetNeedsYouResponse,
+  GitHubApp,
+  GitHubAppDisconnected,
+  GitHubAppFinished,
+  GitHubAppSetup,
+  GitHubAuthorizeLink,
+  GitHubLostKeyReplaced,
+  ListCalendarEventsResponse,
+  ModelSubscriptionList,
+  NeedsYouItem,
+} from '@/api/schema';
+import { configQuery, keys, meQuery, queryClient, quietRoot, write } from '@/data';
 
 const enc = encodeURIComponent;
 
@@ -272,4 +285,52 @@ export function cancelConnect(): void {
 export async function saveKey(kind: KeyKind, secret: string): Promise<void> {
   await api.post('/api/v2/model-subscriptions', { kind, secret });
   await queryClient.invalidateQueries({ queryKey: subscriptionsQuery.queryKey });
+}
+
+/* ---------------------------------------------------------------- GitHub (backend/github_app.py, docs/github-app.md) */
+
+// No topic carries the App's state: read again after the owner's own changes and on a reconnect.
+quietRoot('github');
+
+/** The company's GitHub App: connected or not, which account, what it may do. The owner only. */
+export const githubQuery = queryOptions({
+  queryKey: ['github', 'app'] as const,
+  queryFn: ({ signal }) => api.get<GitHubApp>('/api/v2/github/app', { signal }),
+});
+
+const rereadGithub = () =>
+  Promise.all([queryClient.invalidateQueries({ queryKey: ['github'] }), queryClient.invalidateQueries({ queryKey: ['tools'] })]);
+
+/** What GitHub makes the App from, with its single-use state. Never cached: the state stays with the press that asked. */
+export function githubSetup(org: string, administration: boolean): Promise<GitHubAppSetup> {
+  const q = new URLSearchParams({ administration: String(administration) });
+  if (org) q.set('org', org);
+  return api.get<GitHubAppSetup>(`/api/v2/github/app/manifest?${q}`);
+}
+
+/** The key that seals the App's secrets is lost: drop what it sealed (the App and directory sync keys). */
+export const replaceGithubKey = () => api.post<GitHubLostKeyReplaced>('/api/v2/github/app/replace-lost-key', {});
+
+/** GitHub came back with no session and its code waits on the server: exchange it. Answers GitHub's install page. */
+export async function finishGithub(state: string): Promise<GitHubAppFinished> {
+  const done = await api.post<GitHubAppFinished>('/api/v2/github/app/finish', { state });
+  await rereadGithub();
+  return done;
+}
+
+/** After accepting a permission on GitHub: GitHub is asked again, and the answer replaces the state held. */
+export async function checkGithub(): Promise<GitHubApp> {
+  const app = await api.post<GitHubApp>('/api/v2/github/app/check-permissions', {});
+  queryClient.setQueryData(githubQuery.queryKey, app);
+  return app;
+}
+
+/** GitHub's page where the owner lets Tico create repositories in a personal account. */
+export const githubAuthorizeLink = () => api.get<GitHubAuthorizeLink>('/api/v2/github/app/authorize-link');
+
+/** Forget the App here; it stays on GitHub until deleted there. */
+export async function disconnectGithub(): Promise<GitHubAppDisconnected> {
+  const done = await api.post<GitHubAppDisconnected>('/api/v2/github/app/disconnect', {});
+  await rereadGithub();
+  return done;
 }
