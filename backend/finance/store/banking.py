@@ -1654,16 +1654,18 @@ def stripe_transit(
 
 
 def stripe_deposits(
-    c: sqlite3.Connection, book_id: str, *, start: str, end: str, amount: int | None, most: int, plain: bool = False
+    c: sqlite3.Connection, book_id: str, *, start: str, end: str, amount: int | None, most: int
 ) -> list[Any]:
     """Bank deposits that look like Stripe's (STRIPE in the counterparty or description) and wait for their payout:
-    new, settled, and not a card's or a request's. `plain` drops the STRIPE text: any such credit (a payout can arrive
-    under the account's own statement descriptor)."""
+    new, settled, not a card's or a request's, and not a Brex cash row still waiting for its connection's sign check
+    (banking._awaiting_sign: its amount is not trusted yet)."""
     return c.execute(
         "SELECT f.* FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id "
+        "LEFT JOIN fin_connections cn ON cn.id=m.connection_id "
         "WHERE m.book_id=? AND m.kind='bank' AND f.status='new' AND f.pending=0 AND f.entry_id IS NULL AND "
         "f.card_id IS NULL AND f.request_id IS NULL AND f.amount>0 AND f.txn_date BETWEEN ? AND ? AND "
-        "(? IS NULL OR f.amount=?) AND (? OR UPPER(f.counterparty) LIKE '%STRIPE%' OR "
-        "UPPER(f.description) LIKE '%STRIPE%') ORDER BY f.txn_date, f.id LIMIT ?",
-        (book_id, start, end, amount, amount, int(plain), most),
+        "(? IS NULL OR f.amount=?) AND (UPPER(f.counterparty) LIKE '%STRIPE%' OR UPPER(f.description) LIKE '%STRIPE%') "
+        "AND NOT (m.provider='brex' AND COALESCE(json_extract(cn.settings, '$.sign'), '')='unverified') "
+        "ORDER BY f.txn_date, f.id LIMIT ?",
+        (book_id, start, end, amount, amount, most),
     ).fetchall()
