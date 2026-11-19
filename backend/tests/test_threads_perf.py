@@ -370,3 +370,44 @@ def test_one_persons_streams_of_a_round_build_needs_you_once_and_each_keeps_its_
     for result, mine in zip(got[:3], held, strict=True):
         assert [t for _, t, _ in result[0]] == ["needs"] and mine["version"] == held[0]["version"]
     assert got[3][0] == []
+
+
+def test_one_persons_streams_of_a_round_build_each_topic_once_and_read_what_each_would_alone(api, monkeypatch):  # noqa: F811
+    import json
+
+    from backend.tests.helpers.api import post, setup_attempt
+
+    after = cursor(api)
+    root = new_thread(api, title="Launch", body="Kickoff")
+    say(api, root["id"], "Who takes the press list?")
+    post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
+    _, _, attempt = setup_attempt(api)
+    with api.app.state.store.transaction() as c:
+        for seq, text in ((1000, "notes"), (1001, "more notes")):
+            c.execute(
+                "INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,?,'delta',?,?)",
+                (attempt["id"], seq, json.dumps({"delta_kind": "text", "text": text}), H.now()),
+            )
+    calls = []
+    for name in ("_tasks", "_threads", "_runs", "_bots"):
+        real = getattr(E, name)
+        monkeypatch.setattr(E, name, lambda *a, _real=real, _name=name, **k: calls.append(_name) or _real(*a, **k))
+    steps = []
+    real_rows = E._Snapshot.step_rows
+    monkeypatch.setattr(
+        E._Snapshot,
+        "step_rows",
+        lambda self, refs: steps.extend(r for r in refs if str(r) not in self.steps) or real_rows(self, refs),
+    )
+    topics = {"topics": ("tasks", "threads", "runs", "bots", "messages")}
+    ana, ben = who(api, "ana-test"), who(api, "ben-test")
+    got = round_of(api, *[(ana, after, topics, lambda: None)] * 5, (ben, after, topics, lambda: None))
+    assert all(not isinstance(result, Exception) for result in got), got
+    for name in ("_tasks", "_threads", "_runs"):
+        assert calls.count(name) == 2, calls  # once for Ana's five streams, once for Ben's
+    assert len(steps) == len(set(steps)) == 2  # each run step read once for both people
+    calls.clear()
+    alone = {person.actor: lone_read(api, person, after, **topics) for person in (ana, ben)}
+    for result, person in zip(got, [ana] * 5 + [ben], strict=True):
+        assert [(s, t, dict(d)) for s, t, d in result[0]] == [(s, t, dict(d)) for s, t, d in alone[person.actor][0]]
+    assert {t for _, t, _ in got[0][0]} >= {"tasks", "threads", "runs"}

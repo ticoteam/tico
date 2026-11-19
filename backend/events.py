@@ -2270,8 +2270,10 @@ def _trashed_visible(c, who, task_id):
 class _Viewer:
     """Per-read caches of what `who` may read, so one batch asks each question once."""
 
-    def __init__(self, c, auth, who, mine=None):
+    def __init__(self, c, auth, who, mine=None, snapshot=None):
         from . import task_privacy as privacy
+
+        self.snapshot = snapshot  # the round's _Snapshot: its stored rows are read once for every stream
 
         self.c, self.auth, self.who, self.privacy = c, auth, who, privacy
         # What this same identity's other streams of the round already worked out in this snapshot (_Snapshot.mine):
@@ -2727,7 +2729,7 @@ def _threads(view, rows, threads_scope=()):
                 "last_unread_seq": found.get("last_unread_seq") or 0,
             }
             entry["message_id"] = shown[-1]
-            count = sum(1 for ref in shown if _activity_unread(view, tid, ref))
+            count = _activity_unread(view, tid, shown)
             entry.update(unread=count > 0, unread_count=count)
             # Enough of the thread for a list that does not hold its row to add one: title, audience, who a DM is with.
             brief = threads.brief(view.c, view.reader, found)
@@ -2785,24 +2787,24 @@ def _threads(view, rows, threads_scope=()):
     return out
 
 
-def _activity_unread(view, thread_id, message_id):
-    """Whether the message an `activity` row is about is unread for this viewer (threads.unread_message_sql: a person's
-    message not their own, or a delivery to them that counts, past their mark), so a list bumps its row without a re-read.
-    One indexed lookup of the message and the viewer's follower row."""
+def _activity_unread(view, thread_id, message_ids):
+    """How many of the messages an `activity` event stands for are unread for this viewer (threads.unread_message_sql:
+    a person's message not their own, or a delivery to them that counts, past their mark), so a list bumps its row
+    without a re-read. One indexed read of those messages and the viewer's follower row."""
     from . import threads
 
     reader = view.reader
     actor = view.who.actor
     floor = threads._backfill_floor(view.c, reader) if isinstance(reader, threads.Viewer) else 0
-    return (
-        view.c.execute(
-            "SELECT 1 FROM messages m LEFT JOIN thread_followers f ON f.thread_id=m.conversation_id AND f.actor=? "
-            f"WHERE m.id=? AND m.conversation_id=? AND m.seq>MAX(COALESCE(f.last_read_seq,0),{int(floor)}) "
-            f"AND {threads.unread_message_sql()}",
-            (actor, message_id, thread_id, actor, actor),
-        ).fetchone()
-        is not None
-    )
+    count = 0
+    for part in H.chunks(list(dict.fromkeys(message_ids))):
+        count += view.c.execute(
+            "SELECT COUNT(*) FROM messages m LEFT JOIN thread_followers f ON f.thread_id=m.conversation_id AND f.actor=? "
+            f"WHERE m.id IN ({','.join('?' * len(part))}) AND m.conversation_id=? "
+            f"AND m.seq>MAX(COALESCE(f.last_read_seq,0),{int(floor)}) AND {threads.unread_message_sql()}",
+            (actor, *part, thread_id, actor, actor),
+        ).fetchone()[0]
+    return count
 
 
 def _activity_shown(view, thread, message_id):
@@ -2844,8 +2846,12 @@ def _step_shown(view, bot, event, watched):
     its payload decoded once (None when it is not a JSON object or list), or None when the reader may not be sent it."""
     # The intact stored text is decoded once: the page and task checks and the event sent read that value. The
     # meeting check reads the row as stored, as every other reader of run output does (run_view, turns).
-    value = H._json(event["payload"], None)
-    decoded = dict(event) | {"payload": value} if isinstance(value, (dict, list)) else None
+    shared = view.snapshot.decoded if view.snapshot is not None else {}
+    key = str(event["id"])
+    if key not in shared:
+        value = H._json(event["payload"], None)
+        shared[key] = dict(event) | {"payload": value} if isinstance(value, (dict, list)) else None
+    decoded = shared[key]  # the same for every reader: never changed
     if not view.privacy.content_readable(view.c, view.principal, event, decoded):
         return None
     if event["kind"] in ("delta", "message"):
@@ -2901,14 +2907,15 @@ def _runs(view, rows, compact=False):
     readable, watched = {}, {}
     out = []
     refs = [row["ref"] for row in picked if row["kind"] == "output"]
-    outputs = (
-        {
+    if not refs:
+        outputs = {}
+    elif view.snapshot is not None:
+        outputs = view.snapshot.step_rows(refs)
+    else:
+        outputs = {
             str(e["id"]): e
             for e in c.execute("SELECT * FROM attempt_events WHERE id IN (" + ",".join("?" * len(refs)) + ")", refs)
         }
-        if refs
-        else {}
-    )
     for row in picked:
         cid, bot, aid = row["conversation_id"], row["bot"], row["subject_id"]
         if cid and not view.conversation(cid):
@@ -3130,6 +3137,9 @@ class _Snapshot:
         self.tail_from = None
         self.tail, self.seqs, self.paths = [], [], {}
         self._mine = {}
+        # Run steps (attempt_events rows by id), their stored sizes and decoded payloads, read once for every stream of
+        # the round that is sent them: stored rows, never anyone's answer. Shared: never change one.
+        self.steps, self.step_sizes, self.decoded = {}, {}, {}
         near = [poll.cursor for poll in polls if self.newest - TAIL_SPAN <= poll.cursor <= self.newest]
         if not near:
             return
@@ -3146,6 +3156,19 @@ class _Snapshot:
                         "SELECT id, path FROM conversations WHERE id IN (%s)" % ",".join("?" * len(part)), part
                     ).fetchall()
                 )
+
+    def step_rows(self, refs):
+        """{id: attempt_events row} of these run steps, each read once in this snapshot."""
+        wanted = [ref for ref in dict.fromkeys(str(ref) for ref in refs) if ref not in self.steps]
+        for part in H.chunks(wanted):
+            self.steps.update({ref: None for ref in part})
+            self.steps.update(
+                (str(e["id"]), e)
+                for e in self.c.execute(
+                    "SELECT * FROM attempt_events WHERE id IN (" + ",".join("?" * len(part)) + ")", part
+                )
+            )
+        return {str(ref): self.steps.get(str(ref)) for ref in refs}
 
     def mine(self, who):
         """What this identity's streams of one round share in this snapshot: {"threads": {thread id: readable},
@@ -3238,7 +3261,7 @@ class _Snapshot:
         return _change_rows(self.c, clauses, args, limit)
 
 
-def _within_budget(c, rows):
+def _within_budget(c, rows, sizes=None):
     """The leading `rows` whose events one read can send, decided before any is checked or built, so a reader behind
     on large run outputs has only what READ_BYTES carries prepared, not the whole batch on every read. A run output
     counts its stored payload's bytes, every row ROW_BYTES more: only run outputs are sized here, so a large message
@@ -3249,14 +3272,16 @@ def _within_budget(c, rows):
     outputs = [str(row["ref"]) for row in rows if row["topic"] == "runs" and row["kind"] == "output"]
     if not outputs:
         return rows
-    sizes, looked, spent = {}, 0, 0
+    # `sizes`: the snapshot's, so a round sizes each step once for all its streams.
+    sizes = {} if sizes is None else sizes
+    looked, spent = 0, 0
     for n, row in enumerate(rows):
         spent += ROW_BYTES
         if row["topic"] == "runs" and row["kind"] == "output":
             ref = str(row["ref"])
             if ref not in sizes and looked < len(outputs):
-                part = outputs[looked : looked + SIZE_CHUNK]
-                looked += len(part)
+                part = [out for out in outputs[looked : looked + SIZE_CHUNK] if out not in sizes]
+                looked += SIZE_CHUNK
                 sizes.update({ref: None for ref in part})
                 sizes.update(
                     (str(found[0]), found[1])
@@ -3389,13 +3414,13 @@ def read_in(
         who, after, limit, topics, conversations, bots, tasks, parties, threads_scope, meetings, places
     )
     more = len(rows) >= limit
-    kept = _within_budget(c, rows)
+    kept = _within_budget(c, rows, snapshot.step_sizes)
     if len(kept) < len(rows):  # the rest are neither checked nor built here: the next read starts at them
         rows, more = kept, True
     cursor = rows[-1]["seq"] if more else newest
     if not rows:
         return [], cursor, False, False
-    view = _Viewer(c, auth, who, snapshot.mine(who))
+    view = _Viewer(c, auth, who, snapshot.mine(who), snapshot)
     by_topic = {}
     authorized_places = {}
     for row in rows:
@@ -3427,20 +3452,34 @@ def read_in(
         by_topic.setdefault(row["topic"], []).append(row)
     picked = []
     if by_topic.get("tasks"):
-        picked += [("tasks", r, e) for r, e in _tasks(view, by_topic["tasks"], task_views, tasks, parties)]
+        picked += _alike(
+            view,
+            "tasks",
+            by_topic["tasks"],
+            (task_views, tasks, parties),
+            lambda: _tasks(view, by_topic["tasks"], task_views, tasks, parties),
+        )
     if by_topic.get("messages"):
         found = _messages(view, by_topic["messages"], shared)
         if visuals:  # a visual on a new message carries this reader's own address (backend/visuals.py)
             visuals(c, who, [e["message"] for _, e in found if not isinstance(e, _SameForAll) and "message" in e])
         picked += [("messages", r, e) for r, e in found]
     if by_topic.get("runs"):
-        picked += [("runs", r, e) for r, e in _runs(view, by_topic["runs"], compact_runs)]
+        picked += _alike(
+            view, "runs", by_topic["runs"], compact_runs, lambda: _runs(view, by_topic["runs"], compact_runs)
+        )
     if by_topic.get("bots"):
-        picked += [("bots", r, e) for r, e in _bots(view, by_topic["bots"])]
+        picked += _alike(view, "bots", by_topic["bots"], None, lambda: _bots(view, by_topic["bots"]))
     if by_topic.get("needs"):
         picked += [("needs", r, e) for r, e in _needs_list(view, by_topic["needs"], task_view, needs_held)]
     if by_topic.get("threads"):
-        picked += [("threads", r, e) for r, e in _threads(view, by_topic["threads"], threads_scope)]
+        picked += _alike(
+            view,
+            "threads",
+            by_topic["threads"],
+            threads_scope,
+            lambda: _threads(view, by_topic["threads"], threads_scope),
+        )
     if by_topic.get("letters"):
         from . import letters
 
@@ -3481,15 +3520,34 @@ def read_in(
                 )
             )
     events, size = [], 0
+    built = view.mine.setdefault("events", {})  # the events of entries _alike shares, built once for this identity
     for topic, row, entry in sorted(picked, key=lambda item: item[1]["seq"]):
-        actor = None if view.hidden_actor(row["actor"], row) else row["actor"]
+        alike = (row["seq"], id(entry)) if id(entry) in view.mine.get("alike_ids", ()) else None
+        data = built.get(alike) if alike else None
+        if data is None:
+            actor = None if view.hidden_actor(row["actor"], row) else row["actor"]
+            data = entry.event(row, actor, shared) if isinstance(entry, _SameForAll) else _event(row, actor, entry)
+            if alike:
+                built[alike] = data
         # The first event always goes, however large; the rest wait for the next read once the budget is spent.
-        data = entry.event(row, actor, shared) if isinstance(entry, _SameForAll) else _event(row, actor, entry)
         size += len(data.encoded)
         if events and size > READ_BYTES:
             return events, events[-1][0], False, True
         events.append((row["seq"], topic, data))
     return events, cursor, False, more
+
+
+def _alike(view, topic, rows, key, build):
+    """`build()`'s (row, entry) pairs for `topic`, as [(topic, row, entry)]: worked out once for all of one identity's
+    streams of a round (_Snapshot.mine) that read the same change rows with the same filters (`key`), as each would
+    alone. Ten open apps of one person build each task's view, bot status and thread entry once a round, not ten
+    times. The entries are shared, so read_in builds each one's event once too (`alike_ids`): never change one."""
+    memo = view.mine.setdefault("alike", {})
+    held = (topic, tuple(row["seq"] for row in rows), key)
+    if held not in memo:
+        memo[held] = [(topic, row, entry) for row, entry in build()]
+        view.mine.setdefault("alike_ids", set()).update(id(entry) for _, _, entry in memo[held])
+    return memo[held]
 
 
 class _Data(dict):
