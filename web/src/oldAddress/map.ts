@@ -370,7 +370,7 @@ export const ROWS: readonly Row[] = [
   { page: "A computer's screen", path: /^#\/computers\/([^/]+)\/screen$/, to: ([id]) => at('/settings/computers', { open: dec(id) }) },
   { page: "A computer's performance", path: /^#\/computers\/([^/]+)\/performance$/, to: ([id]) => at('/settings/computers', { open: dec(id) }) },
   // The style guide was out of the navigation; the new app's galleries are dev-only.
-  { page: 'Style guide', path: /^#\/style-guide$/, to: () => null },
+  { page: 'Style guide', path: /^#\/style-guide$/, to: () => '/settings/style-guide' },
   // Empty: the old app's landing.
   { page: 'Home (empty address)', path: /^#\/?$/, to: () => '/' },
 ];

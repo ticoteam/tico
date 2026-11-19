@@ -163,7 +163,7 @@ const CASES: [old: string, now: string | null][] = [
   ['#/replay', null],
   ['#/computers/pc_1/screen', '/settings/computers?open=pc_1'],
   ['#/computers/pc_1/performance', '/settings/computers?open=pc_1'],
-  ['#/style-guide', null],
+  ['#/style-guide', '/settings/style-guide'],
   ['#/', '/'],
 ];
 
