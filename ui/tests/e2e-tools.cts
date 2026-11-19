@@ -180,10 +180,13 @@ journey('e2e-tools', async ({hub, browser, phone}) => {
   assertClean(page, `${where}: Ledger export`);
   await shots(page, `computer-${where}`);
 
-  // The mailbox's page under Tools.
+  // The mailbox's page under Tools. The mailbox is not connected to Google on this hub, so the page must not ask for its
+  // mail at all: a refused mail read is a bug, and assertClean below catches it.
   await go(page, '#/tools/mailbox/' + MAILBOX);
   await page.locator('[data-ib-detail="mailbox"] [data-ib-detail-body] h1, [data-ib-detail="mailbox"] [data-ib-detail-body] h2')
     .first().waitFor({timeout: t(15000)});
+  // Wait for Recent's line, so assertClean below runs after the page has drawn everything it reads.
+  await page.locator('#tools-inbox [data-mb-recent] p.muted').waitFor({timeout: t(15000)});
   assert.match(await page.locator('#tools-inbox').innerText(), new RegExp(MAILBOX.replace('.', '\\.')), `${where}: the mailbox page`);
   assert.equal(await sideways(page), false, `${where}: the mailbox page has no sideways scroll`);
   assertClean(page, `${where}: mailbox`);

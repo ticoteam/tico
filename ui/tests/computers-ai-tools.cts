@@ -34,8 +34,8 @@ interface Machine {
 }
 // App globals the page defines; the browser flow reads and drives them through page.evaluate.
 declare const S: {me: {id: string; role: string; bot_admin?: boolean}};
-declare const SETTINGS_DATA: {loaded: boolean; people: unknown[]; machines: {id: string; label?: string; update?: {outdated: boolean; server_release: string} | undefined}[]};
-declare const SETTINGS_PRESENCE: {at: number; checking: boolean; pending: unknown; timer: number | undefined};
+declare const SETTINGS_DATA: {loaded: boolean; people: unknown[]; machines: {id: string; label?: string; update?: {outdated: boolean; server_release: string} | undefined}[]; services: {name?: string}[]; issues?: {title: string}[]};
+declare const SETTINGS_PRESENCE: {at: number; checking: boolean; failed: boolean; slow: boolean; pending: unknown; timer: number | undefined; request: number};
 declare function loadSettings(tab?: string): Promise<void>;
 declare function settingsMachinesWatch(): void;
 declare function settingsMachinesRefresh(): Promise<void>;
@@ -90,7 +90,8 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
     const writes: {p: string; body: unknown}[] = [];
     let presenceMode = 'fixed', presenceReads = 0, presenceOffset = 0;
     const heldPresence: Route[] = [];
-    let holdRename = false;
+    let holdRename = false, holdHumans = false;
+    const heldHumans: Route[] = [];
     const heldRenames: (() => Promise<void>)[] = [];
     await page.route('**/*', (route: Route) => {
       const req = route.request(), p = new URL(req.url()).pathname;
@@ -115,6 +116,7 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
       if (p === '/api/employees') return json(['helper', 'ops', 'writer'].map(name => ({name, display_name: name[0]!.toUpperCase() + name.slice(1),
         status: 'active', owner_id: 'ana', can_manage: true, users: [], bot_owners: [], machine: {runner_id: 'box', label: 'Team box', owner_id: 'ana'}})));
       if (p === '/api/issues') return json([]);
+      if (p === '/api/humans' && holdHumans) { heldHumans.push(route); return; }
       if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'cara', name: 'Cara'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
       if (p === '/api/v2/status') return json({bots: []});
@@ -465,11 +467,19 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
     assert.equal(await signIn.evaluate(node => node === document.activeElement), true, 'focus survives check start');
     assert.match(await dialog.locator('[data-computer-status]').innerText(), /checking/);
     presenceOffset = 200000;
-    await page.clock.fastForward(70000);
-    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    await page.clock.fastForward(30000);
+    // Past the deadline the read is kept (not dropped): the list says it is still reading.
+    assert.equal(await page.evaluate(() => SETTINGS_PRESENCE.slow && !!SETTINGS_PRESENCE.pending), true, 'a slow read is kept past its deadline');
     await online();
     assert.match(await row('box').locator('[data-machine-status]').innerText(), /checking/);
     assert.equal(await signIn.evaluate(node => node === document.activeElement), true, 'focus survives deadline repaint');
+    // A read with no answer at all ends as failed at its limit (60 s), so the watch can ask again; the state is kept.
+    await page.clock.fastForward(31000);
+    assert.deepEqual(await page.evaluate(() => [SETTINGS_PRESENCE.failed, !!SETTINGS_PRESENCE.pending, SETTINGS_PRESENCE.slow]), [true, false, false],
+      'a read that never answers ends at its limit');
+    await online();
+    for (const held of heldPresence.splice(0)) await held.fulfill({status: 503, contentType: 'application/json', body: '{"error":"Unavailable"}'});
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
     presenceMode = 'failure';
     await page.evaluate(() => settingsMachinesRefresh());
     await online();
@@ -503,17 +513,56 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
     await page.evaluate(() => {
       SETTINGS_DATA.loaded = false; SETTINGS_DATA.machines = []; SETTINGS_PRESENCE.at = 0;
       (window as unknown as PageWin).initialSettingsLoad = loadSettings();
+      renderSettingsMachines();
     });
+    assert.match(await page.locator('[data-machines-list]').innerText(), /Reading computers/, 'no answer yet is not "No computers yet"');
     await page.clock.fastForward(10001);
     await page.evaluate(() => (window as unknown as PageWin).initialSettingsLoad);
     assert.equal(await page.evaluate(() => SETTINGS_DATA.loaded && SETTINGS_DATA.people.length > 0), true);
     assert.equal(await page.locator('#machine-operator').count(), 1);
-    assert.match(await page.locator('[data-machines-list]').innerText(), /presence unavailable.*checking/);
+    assert.match(await page.locator('[data-machines-list]').innerText(), /Still reading computers/);
     assert.equal(await page.locator('#set-bots > .err, #set-machines > .err').count(), 0);
-    presenceMode = 'live';
-    await page.evaluate(() => settingsMachinesRefresh());
+    // The answer that comes after the deadline is drawn, not thrown away (Chris, Nov 16: Computers never filled in).
     for (const held of heldPresence.splice(0)) await held.fulfill({status: 200, contentType: 'application/json',
-      body: JSON.stringify({machines: [], services: []})});
+      body: JSON.stringify({machines: [box], services: []})});
+    await row('box').waitFor();
+    assert.equal(await page.evaluate(() => SETTINGS_PRESENCE.slow || SETTINGS_PRESENCE.failed), false);
+    // A failed first read (a release restarting the server) says so and tries again in 3 s, not 25.
+    presenceMode = 'failure';
+    await page.evaluate(() => { SETTINGS_DATA.machines = []; SETTINGS_PRESENCE.at = 0; return settingsMachinesRefresh(); });
+    assert.match(await page.locator('[data-machines-list]').innerText(), /Couldn.t reach the server/);
+    presenceMode = 'fixed';
+    const beforeRetry = await page.evaluate(() => { settingsMachinesWatch(); return SETTINGS_PRESENCE.request; });
+    await page.clock.fastForward(3001);
+    assert.equal(await page.evaluate(() => SETTINGS_PRESENCE.request), beforeRetry + 1, 'a failed read is asked again at 3 s, not 25');
+    await row('box').waitFor();
+    // A read that never answers is retried too: it ends at its limit, and the watch asks again 3 s later.
+    presenceMode = 'slow';
+    await page.evaluate(() => { clearTimeout(SETTINGS_PRESENCE.timer); SETTINGS_DATA.machines = []; renderSettingsMachines(); void settingsMachinesRefresh().finally(settingsMachinesWatch); });
+    await page.clock.fastForward(60001);
+    assert.equal(await page.evaluate(() => SETTINGS_PRESENCE.failed && !SETTINGS_PRESENCE.pending), true, 'the hung read ends as failed');
+    presenceMode = 'fixed';
+    const beforeHungRetry = await page.evaluate(() => SETTINGS_PRESENCE.request);
+    await page.clock.fastForward(3001);
+    assert.equal(await page.evaluate(() => SETTINGS_PRESENCE.request), beforeHungRetry + 1, 'the hung read is asked again 3 s after its limit');
+    await row('box').waitFor();
+    for (const held of heldPresence.splice(0)) await held.fulfill({status: 503, contentType: 'application/json', body: '{"error":"Unavailable"}'});
+    // An answer that lands after 10 s but before the rest of Settings has loaded fills in Services and the checks too.
+    presenceMode = 'slow'; holdHumans = true;
+    await page.evaluate(() => {
+      clearTimeout(SETTINGS_PRESENCE.timer); SETTINGS_DATA.loaded = false; SETTINGS_DATA.services = []; SETTINGS_DATA.issues = [];
+      (window as unknown as PageWin).initialSettingsLoad = loadSettings();
+    });
+    await page.clock.fastForward(12000);
+    for (const held of heldPresence.splice(0)) await held.fulfill({status: 200, contentType: 'application/json',
+      body: JSON.stringify({machines: [box], services: [{name: 'late-svc'}], issues: [{kind: 'late', title: 'Late check', detail: 'late'}]})});
+    await page.waitForFunction(() => !SETTINGS_PRESENCE.pending);
+    holdHumans = false; presenceMode = 'fixed';
+    for (const held of heldHumans.splice(0)) await held.fulfill({status: 200, contentType: 'application/json',
+      body: JSON.stringify({people: [{id: 'ana', name: 'Ana'}, {id: 'cara', name: 'Cara'}], teams: {}})});
+    await page.evaluate(() => (window as unknown as PageWin).initialSettingsLoad);
+    assert.deepEqual(await page.evaluate(() => [SETTINGS_DATA.services.map(svc => svc.name), (SETTINGS_DATA.issues || []).map(issue => issue.title)]),
+      [['late-svc'], ['Late check']], 'a late answer before the load ends keeps its Services and checks');
     // Leaving the tab stops its timer; returning starts it and requests fresh presence.
     await page.locator('[data-settings-tab=bots]').click();
     const afterLeaving = presenceReads;
