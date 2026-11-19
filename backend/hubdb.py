@@ -606,9 +606,9 @@ def _rows(cur):
 
 
 def _one(conn, sql, args=()):
-    from .read_cache import one
+    from .read_cache import one_dict
 
-    return _row(one(conn, sql, args))
+    return one_dict(conn, sql, args)
 
 
 # ----------------------------------------------------------------------------- audit
