@@ -12,10 +12,10 @@ from backend.tests.helpers.onboarding import as_person, environment, signed_in  
 from backend.tests.helpers.usage_count import complete_a_bot_turn
 
 RELEASE = {
-    "tag_name": "v0.2.0",
-    "html_url": "https://github.com/ticoteam/tico/releases/tag/v0.2.0",
+    "tag_name": "v0.3.0",
+    "html_url": "https://github.com/ticoteam/tico/releases/tag/v0.3.0",
     "published_at": "2026-10-20T10:00:00Z",
-    "name": "Tico 0.2.0",
+    "name": "Tico 0.3.0",
 }
 ALLOWED = {"install_id", "version", "active_people", "active_bots", "first_result"}
 
@@ -102,7 +102,7 @@ def test_when_off_the_check_goes_to_github_with_no_id(environment, monkeypatch, 
     checker.refresh()
     assert [r.url.host for r in seen] == ["api.github.com"]
     assert not seen[0].url.query and "install" not in str(seen[0].headers)
-    assert checker.view("0.2.13")["latest"] == "0.2.0"  # the update check itself still works
+    assert checker.view("0.2.13")["latest"] == "0.3.0"  # the update check itself still works
 
 
 def test_when_on_hq_gets_the_five_fields_and_a_dead_hq_falls_back_silently(environment, monkeypatch):
@@ -114,11 +114,11 @@ def test_when_on_hq_gets_the_five_fields_and_a_dead_hq_falls_back_silently(envir
     assert set(seen[0].url.params) == ALLOWED
     assert seen[0].url.params["active_people"] == "true" and seen[0].url.params["active_bots"] == "false"
     assert seen[0].url.params["first_result"] == "false"
-    assert checker.view("0.2.13")["latest"] == "0.2.0"
+    assert checker.view("0.2.13")["latest"] == "0.3.0"
     checker, seen = wire(monkeypatch, api, hq=False)
     checker.refresh()
     assert [r.url.host for r in seen] == ["updates.tico.team", "api.github.com"]
-    assert checker.view("0.2.13")["latest"] == "0.2.0"
+    assert checker.view("0.2.13")["latest"] == "0.3.0"
 
 
 @pytest.mark.parametrize("hosted", ["own", "invited"])
