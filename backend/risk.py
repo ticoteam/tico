@@ -261,7 +261,7 @@ def matter_view(c, actor, row):
     for field, column in COLUMNS.items():
         ident = now.get(row.get(column) or "")
         value[column] = ident if ident in seen else None
-        value[field] = {"id": ident, "name": names.get(ident, "")} if ident in seen else None
+        value[field] = {"id": ident, "name": names.get(ident or "", "")} if ident in seen else None
     return value
 
 
@@ -620,6 +620,8 @@ def create(auth, c, who, body):
     if not (who.role in ("owner", "human") or who.actor in (owner, page_bot)):
         raise Problem("forbidden", "A bot adds a risk it owns, or asks the Risk page's owner bot", 403)
     row = H.tag_create(c, who.actor, key, label=body.label, markdown=body.markdown, owner=owner, mover=True, kind=KIND)
+    if row is None:
+        raise Problem("duplicate", f"{key} exists already", 409)
     if page_bot:
         # The page owner was chosen by a person (Settings > page owners), so it is granted here, not by the caller.
         c.execute("UPDATE tags SET bot_writers=? WHERE id=?", (H._dump([page_bot]), row["id"]))
