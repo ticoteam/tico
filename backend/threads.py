@@ -4589,6 +4589,26 @@ def _name_of_actors(c, actors):
     return {a: found.get(a) or groups.get(a[6:]) or a for a in actors}
 
 
+def _prime_names(c, v, rows):
+    """Reads together the names `_name` may give these threads (a home's owner; the people and bots in a root), for a
+    list that names many of them: names.lookup keeps each for the snapshot, so naming each row reads none. Outside a
+    snapshot nothing would be kept, so nothing is read. A titled thread needs no names and is left out."""
+    from . import names as display
+
+    if v is None or read_cache.cache(c) is None:
+        return
+    # A stored subject is the name, unless it is a parent message's line (_shown_title may hide it from this reader).
+    untitled = [r for r in rows if not r.get("subject") or r.get("parent_message_id")]
+    roots = list({root["id"]: root for root in (root_of(c, r) for r in untitled) if root}.values())
+    actors = {home_owner(root) for root in roots if audience_of(root) == "home"}
+    others = [root for root in roots if audience_of(root) != "home"]
+    members = _member_rows(c, v, [root["id"] for root in others])
+    for root in others:
+        # The viewer is never in a name of people they read (_thread_name leaves them out); a Home of theirs is.
+        actors.update(a for a in _dm_members(c, root, members[root["id"]]) if a != v.actor)
+    display.lookup(c, [a for a in actors if a and str(a).startswith(("human:", "bot:"))])
+
+
 def _thread_name(c, v, root, stored):
     """The name of a root with no title, from its member rows `stored`: the people and bots in it and its groups, the
     viewer left out. A reader who is not in the thread is told only of the people they may see (`dm_with`'s rule)."""
@@ -5684,6 +5704,7 @@ def _sidebar_page(c, v, cursor, limit, sort):
     dms = dm_with(c, v, every)
     pins = pin_rows(c, v.actor, [r["id"] for r in every])
     calls = live_calls(c, [r["id"] for r in every])
+    _prime_names(c, v, every)  # each row's name (view -> _name) then reads none
 
     def items_of(rows, more):
         """Each row as its list shows it, up to half a page's bytes, so a long list leaves the other room; and its next
