@@ -10,7 +10,8 @@ export function loadFinance(qc: QueryClient, search: FinanceSearch): Promise<unk
   const ym = budgetDay().slice(0, 7);
   const as = search.as;
   const month = pnlQuery({ ...monthSpan(ym), period: 'month', basis: 'accrual' }, as);
-  const reads: Promise<unknown>[] = [qc.ensureQueryData(sourcesQuery(as))];
+  const reads: Promise<unknown>[] = [];
+  if (search.tab === 'sources') reads.push(qc.ensureQueryData(sourcesQuery(as)));
   if (!search.tab) reads.push(qc.ensureQueryData(month));
   if (search.tab === 'budgets') reads.push(qc.ensureQueryData(budgetsQuery(budgetDay(), as)), qc.ensureQueryData(month));
   if (search.tab === 'pnl') {

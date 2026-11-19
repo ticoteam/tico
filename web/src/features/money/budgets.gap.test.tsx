@@ -187,6 +187,21 @@ describe('Finance tabs @s398 @s402', () => {
 describe('Budgets @s404 @s462 @s463', () => {
   const access = (url: string) => (url.endsWith('/finance/access') ? ok(OWNER) : null);
 
+  it('retries the failed budget list on the quarterly view', async () => {
+    let listReads = 0;
+    serve((url) => {
+      if (url.includes('/finance/budgets')) {
+        if (++listReads === 1) return { status: 500, body: {} };
+        return ok({ budgets: [BUDGET('b1', 'Tools')] });
+      }
+      if (url.includes('budget_vs_actual')) return ok({ columns: [], budgets: [] });
+      return access(url) ?? ok({});
+    });
+    show('/company/finance?tab=budgets&period=quarter');
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('link', { name: 'Tools' })).toBeTruthy();
+  });
+
   it('Month, Quarter and Year: a quarter reads each budget against the quarter that holds today @s404', async () => {
     serve(
       (url) =>

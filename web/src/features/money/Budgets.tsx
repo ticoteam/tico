@@ -71,6 +71,7 @@ export function BudgetsPage({ search, mine = false }: { search: FinanceSearch; m
   const list = useQuery(budgetsQuery(budgetDay(), search.as));
   const span = per === 'month' ? null : spanOf(per);
   const report = useQuery({ ...budgetHistoryQuery(span?.start ?? '', span?.end ?? '', search.as, per), enabled: !!span });
+  const current = span && list.isSuccess ? report : list;
   const pnl = useQuery(pnlQuery({ ...monthSpan(now), period: 'month', basis: 'accrual' }, search.as));
   const pace = span ? paceIn(report.data) : paceOf();
   const lines = pnl.data?.rows ?? [];
@@ -108,8 +109,8 @@ export function BudgetsPage({ search, mine = false }: { search: FinanceSearch; m
   return (
     <List
       {...head}
-      state={readState(span && list.isSuccess ? report : list)}
-      onRetry={() => void (span ? report.refetch() : list.refetch())}
+      state={readState(current)}
+      onRetry={() => void current.refetch()}
       actions={
         <>
           <span data-phone data-target="range:budgets">

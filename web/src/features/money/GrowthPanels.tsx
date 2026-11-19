@@ -54,17 +54,17 @@ function Failed({ what, retry }: { what: string; retry: () => unknown }) {
 const CAMPAIGN: Record<string, string> = { none: 'No campaign', other: 'Other' };
 
 /** One channel, opened (`?panel=channel:<slug>`): its budget and spend, its months and its campaigns by name, from its
-    own read. `row` is the channel as the board shows it, when the board has it. */
+    own read. The board's row supplies the title while the channel-wide read loads. */
 export function ChannelPanel({ slug, month, row }: { slug: string; month: string; row?: GrowthChannel }) {
   const press = usePress();
   const q = useQuery(growthChannelQuery(slug, month));
-  const c = row ?? q.data?.channels.find((x) => x.slug === slug);
+  const c = q.data?.channels.find((x) => x.slug === slug);
   const h = q.data?.headline;
   const cac = c?.cac ?? h?.cac.value ?? null;
   const months = [...(q.data?.series ?? [])].filter((p) => p.new_customers != null || p.cost != null).reverse();
   const camps = q.data?.campaigns?.[slug] ?? [];
   return (
-    <SidePanel title={c?.name ?? (slug === 'unknown' ? 'Unknown' : slug)} target={`channel:${slug}`} onClose={() => void press('growth.closePanel', {})}>
+    <SidePanel title={c?.name ?? row?.name ?? (slug === 'unknown' ? 'Unknown' : slug)} target={`channel:${slug}`} onClose={() => void press('growth.closePanel', {})}>
       <div className="money">
         {q.isPending ? (
           <SkeletonRows rows={4} />
