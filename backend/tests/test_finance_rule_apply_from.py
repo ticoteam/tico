@@ -284,3 +284,79 @@ def test_a_row_that_raises_is_undone_alone_and_the_others_post(books, monkeypatc
         assert (done["reposted"], done["failed"]) == (1, 1)
         assert _feed(c, "cloud-1")[2] == bad[2] and ("6900", 4_000) in _codes(c, bad[2]) and _asks(c, bad[0]) == 1
         assert ("6100", 4_500) in _codes(c, _feed(c, "cloud-2")[2])
+
+
+def _brex_charge(books, line_code=""):
+    """A past Brex card charge on the card's default line: its budget's line when `line_code` gives the card a budget
+    on that line (before the charge comes in), else Other expenses."""
+    from backend.tests.test_finance_brex import FakeBrex, brex_pass, card_txn, connect_brex
+
+    fake = FakeBrex()
+    connect_brex(books, fake)
+    fake.card_txns.append(card_txn("ctx_first", "PURCHASE", -300, day="2026-10-04", merchant="EXAMPLE SHOP"))
+    assert brex_pass(books, fake) == "ok"  # the card comes in with its first charge
+    if line_code:
+        with books.transaction() as c:
+            c.execute(
+                "UPDATE fin_cards SET holder=?, budget_id=(SELECT b.id FROM fin_budgets b JOIN fin_accounts a ON "
+                "a.id=b.account_id WHERE a.code=? LIMIT 1)",
+                (OWNER, line_code),
+            )
+    fake.card_txns.append(card_txn("ctx_made_up", "PURCHASE", -1_200, day="2026-10-05", merchant="EXAMPLE CAFE"))
+    assert brex_pass(books, fake, at="2026-10-15T13:00:00.000000Z") == "ok"
+
+
+def _card_use(c):
+    from backend.finance.store import budgets as SB
+
+    card_id, b = c.execute("SELECT id, budget_id FROM fin_cards").fetchone()
+    return SB.card_used(c, [b], card_id, "2026-10-01", "2026-12-31")
+
+
+def test_apply_from_posts_a_past_card_charge_on_its_default_and_its_card_use_counts_once(books):
+    with books.read() as c:
+        code = c.execute(
+            "SELECT a.code FROM fin_budgets b JOIN fin_accounts a ON a.id=b.account_id WHERE b.at_limit='warn' AND "
+            "a.type='expense' AND a.code NOT IN ('6100', '6900') LIMIT 1"
+        ).fetchone()[0]
+    _brex_charge(books, code)
+    with books.transaction() as c:
+        fid, _status, entry = _feed(c, "ctx_made_up")
+        assert (code, 1_200) in _codes(c, entry)  # the card's default: its budget's line
+        used = _card_use(c)
+        assert used >= 1_200
+        done = _rule(c, "Cafe", "EXAMPLE CAFE", "6100", apply_from="2026-10-01")
+        assert done["reposted"] == 1
+        posted = _feed(c, "ctx_made_up")
+        assert posted[2] != entry and ("6100", 1_200) in _codes(c, posted[2])
+        holder = c.execute(
+            "SELECT t.value FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id JOIN fin_line_tags t ON "
+            "t.line_id=l.id AND t.kind='teammate' WHERE l.entry_id=? AND a.code='6100'",
+            (posted[2],),
+        ).fetchone()
+        assert holder is not None and holder[0] == OWNER  # the card's holder stays on the charge
+        assert _card_use(c) == used  # the reversal and the new entry net: the charge counts once
+        assert c.execute("SELECT count(*) FROM fin_holds WHERE status='held'").fetchone()[0] == 0
+
+
+def test_apply_from_posts_a_past_mercury_debit_card_row_on_the_default(books):
+    _past(
+        books,
+        _txn("dc-1", "acct-chk", -25.0, "debitCardTransaction", day="2026-10-04", counterpartyName="Example Diner"),
+    )
+    with books.transaction() as c:
+        fid, _status, entry = _feed(c, "dc-1")
+        assert ("6900", 2_500) in _codes(c, entry) and _asks(c, fid) == 1
+        assert _rule(c, "Diner", "Example Diner", "6100", apply_from="2026-10-01")["reposted"] == 1
+        posted = _feed(c, "dc-1")
+        assert ("6100", 2_500) in _codes(c, posted[2]) and _asks(c, fid) == 0
+
+
+def test_apply_from_leaves_a_card_charge_a_person_categorized(books):
+    _brex_charge(books)
+    with books.transaction() as c:
+        fid = _feed(c, "ctx_made_up")[0]
+        assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6900")}).status == "committed"
+        kept = _feed(c, "ctx_made_up")[2]
+        assert _rule(c, "Cafe", "EXAMPLE CAFE", "6100", apply_from="2026-10-01")["reposted"] == 0
+        assert _feed(c, "ctx_made_up")[2] == kept
