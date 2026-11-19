@@ -121,6 +121,31 @@ const routine = (id: string, name: string, over: Partial<Routine> = {}) =>
   ({ id, name, enabled: true, paused: false, owner_id: 'bot:growth', trigger: { type: 'schedule', cron: '0 7 * * *', tz: 'UTC' }, steps: [], ...over }) as unknown as Routine;
 
 describe('Search and filter the routines @s509', () => {
+  it('counts a built-in routine as a search match', async () => {
+    record(nothing);
+    queryClient.setQueryData(routinesQuery.queryKey, [routine('r1', 'Old cleanup')]);
+    queryClient.setQueryData(systemJobsQuery.queryKey, []);
+    show('/company/routines?q=System%20jobs');
+    expect(await screen.findByRole('link', { name: /System jobs/ })).toBeTruthy();
+    expect(screen.queryByText('No matches')).toBeNull();
+  });
+
+  it('keeps the search and state filter when opening and closing a routine', async () => {
+    record(nothing);
+    queryClient.setQueryData(routinesQuery.queryKey, [
+      routine('r1', 'Old cleanup', { enabled: false }),
+      routine('r2', 'Morning numbers'),
+    ]);
+    const router = show('/company/routines?q=cleanup&state=off');
+    const link = await screen.findByRole('link', { name: /Old cleanup/ });
+    router.history.push(link.getAttribute('href')!);
+    const panel = await screen.findByRole('complementary', { name: 'Old cleanup' });
+    expect(router.state.location.search).toMatchObject({ q: 'cleanup', state: 'off', panel: 'routine:r1' });
+    expect(screen.queryByTitle('Morning numbers')).toBeNull();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ q: 'cleanup', state: 'off' }));
+  });
+
   it('finds routines by name and filters by state, both in the address @s509', async () => {
     record(nothing);
     queryClient.setQueryData(routinesQuery.queryKey, [

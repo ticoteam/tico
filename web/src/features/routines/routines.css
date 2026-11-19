@@ -85,6 +85,7 @@
 .rr .hold-mark{display:grid;place-items:center;color:var(--muted)}
 .rr .hold-mark .ico{width:var(--ico-sm);height:var(--ico-sm)}
 .rr .rr-addr{font-family:var(--font-code);font-size:var(--t-sm);overflow-wrap:anywhere;color:var(--ink)}
+.rr .fact-t:has(>.rr-addr){white-space:normal}
 .rr .rr-once{display:grid;gap:var(--s-2);justify-items:start}
 .rr-form{display:grid;gap:var(--s-3)}
 .rr-chips{display:flex;flex-wrap:wrap;gap:var(--s-1)}
