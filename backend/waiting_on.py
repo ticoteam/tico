@@ -796,7 +796,6 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
     returned = {str(row["id"]): row for row in rows}
     rows = fresh
     ids = [str(row["id"]) for row in rows]
-    primed.update(ids)
     if not ids:
         return returned
     R.prime(conn, rows)
@@ -833,6 +832,7 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
     unread = [visit_id for visit_id in visits if ("filed_open", visit_id) not in values]
     for visit_id, filed in _filed_open_of(conn, unread).items():
         values.setdefault(("filed_open", visit_id), filed)
+    primed.update(ids)  # only once every read above is kept: one that raised is read again by the next prime
     return returned
 
 

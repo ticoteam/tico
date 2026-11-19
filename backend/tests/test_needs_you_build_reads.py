@@ -481,4 +481,5 @@ def test_tasks_primed_again_in_a_snapshot_read_nothing_more_until_a_write(api):
         read = len(seen)
         waiting_on.prime(c, ids)
         c.set_trace_callback(None)
-        assert any("FROM tasks WHERE id IN" in s for s in seen[read:])
+        # The per-task primes run again too, not only the task rows: the write dropped the set of tasks primed.
+        assert any("FROM task_relations" in s for s in seen[read:]), seen[read:]
