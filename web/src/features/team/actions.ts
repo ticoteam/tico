@@ -4,7 +4,6 @@ import { directoryQuery } from '@/data';
 import { toast } from '@/kit/Toast';
 import {
   addAgent,
-  agentsQuery,
   archiveAgent,
   cancelLogin,
   changeAgent,
@@ -246,13 +245,6 @@ export const worksFor = defineAction({
   title: 'Change who an agent works for',
   kind: 'change',
   input: s.object({ slug, people: s.array(person, { max: 100 }) }),
-  // Whom it works for joins its chat: adding someone widens who reads it, the person's own press. Taking someone off
-  // stays Tico's.
-  can: (ctx, { slug, people }) => {
-    if (ctx.via !== 'tico') return true;
-    const had = ctx.queryClient.getQueryData(agentsQuery.queryKey)?.find((r) => r.slug === slug)?.users?.map((u) => u.id) ?? [];
-    return people.every((p) => had.includes(p));
-  },
   run: (_ctx, { slug, people }) => said("Couldn't change it", () => setWorksFor(slug, people)),
   did: () => 'Changed who it works for',
   target: ({ slug }) => onPage(slug),

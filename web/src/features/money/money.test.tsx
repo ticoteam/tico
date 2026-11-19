@@ -204,15 +204,19 @@ describe('Finance dialogs @s449 @s461 @s453 @s454', () => {
     expect(posted[1]).toEqual({ kind: 'payment_create', payload: { method: 'internal', from_account: 'a1', to_account: 'a2', amount: 10000 } });
   });
 
-  it('a transfer pressed again after a lost answer sends the same key; a changed amount sends a new one', async () => {
+  it('a transfer pressed again after a lost answer sends the same key; after a refusal, or with a changed amount, a new one', async () => {
     const sent: (string | null)[] = [];
+    // What each real send gets: lost, refused (over budget), lost, lost.
+    const answers: ('lost' | 'refused')[] = ['lost', 'refused', 'lost', 'lost'];
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
       const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {};
-      const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } });
       if (init?.method === 'POST' && body.dry_run) return json({ kind: 'payment_create', status: 'committed' });
       if (init?.method === 'POST') {
         sent.push(new Headers(init.headers).get('Idempotency-Key'));
-        throw new TypeError('connection reset'); // the server may have queued it; the answer is lost
+        // the server may have queued it; the answer is lost
+        if (answers[sent.length - 1] === 'lost') throw new TypeError('connection reset');
+        return json({ error: { code: 'over_budget', detail: 'Over budget' } }, 422);
       }
       if (String(url).endsWith('/finance/access')) return json(access);
       if (String(url).endsWith('/finance/pay-from')) return json({ accounts: [{ id: 'a1', name: 'Checking' }, { id: 'a2', name: 'Reserve' }], currency: 'usd', view_version: 1 });
@@ -222,18 +226,22 @@ describe('Finance dialogs @s449 @s461 @s453 @s454', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'New transfer' }));
     const dialog = await screen.findByRole('dialog', { name: 'Transfer' });
     const amount = within(dialog).getByRole('textbox', { name: 'Amount' });
+    const button = within(dialog).getByRole('button', { name: 'Transfer' });
     const press = async (n: number) => {
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Transfer' }));
+      fireEvent.click(button);
       await waitFor(() => expect(sent).toHaveLength(n));
+      await waitFor(() => expect(button.getAttribute('aria-busy')).toBeNull());
       await within(dialog).findByRole('alert');
     };
     fireEvent.change(amount, { target: { value: '100' } });
     await press(1);
     await press(2);
     expect(sent[1]).toBe(sent[0]);
-    fireEvent.change(amount, { target: { value: '200' } });
     await press(3);
-    expect(sent[2]).not.toBe(sent[0]);
+    expect(sent[2]).not.toBe(sent[1]);
+    fireEvent.change(amount, { target: { value: '200' } });
+    await press(4);
+    expect(sent[3]).not.toBe(sent[2]);
   });
 
   it("Stripe's webhook shows its address and secret once", async () => {

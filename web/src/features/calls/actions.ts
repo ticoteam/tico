@@ -487,8 +487,6 @@ export const meetingSettingsAction = defineAction({
   title: 'Change meeting settings',
   kind: 'change',
   input: s.object({ mine: share, team: s.optional(s.oneOf(['review', 'auto'] as const)) }),
-  // Sharing meetings without a review widens who reads them: the person's own press. Asking for review stays Tico's.
-  can: (ctx, { mine, team }) => !((mine === 'auto' || team === 'auto') && ctx.via === 'tico'),
   run: (_ctx, { mine, team }) => setMeetingSettings({ auto_share: mine === 'default' ? null : mine === 'auto', ...(team ? { review_default: team } : {}) }),
   did: ({ mine }) => (mine === 'auto' ? 'Set meetings to share at once' : mine === 'review' ? 'Set meetings to wait for review' : 'Set meetings to the company default'),
 });

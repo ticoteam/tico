@@ -75,7 +75,6 @@ describe("kept from Tico, and the person's own press still works", () => {
     queryClient.setQueryData(['tools', 'api', 'keyed'], tool(1));
     queryClient.setQueryData(['tools', 'api', 'keyless'], tool(0));
     queryClient.setQueryData(['tools', 'website', 'w1'], { accounts: [{ id: 'a1' }], tool: { sites: ['app.example.test'], central_only: true } });
-    queryClient.setQueryData(['team', 'agents'], [{ slug: 'qa', users: [{ id: 'p1' }, { id: 'p2' }] }]);
   });
   const spied = (id: string) => {
     const a = registry.get(id);
@@ -103,13 +102,11 @@ describe("kept from Tico, and the person's own press still works", () => {
     ['people.invite', { email: 'new@example.test', role: 'admin' }],
     ['people.setRole', { person: 'p1', role: 'admin' }],
     ['settings.setRole', { person: 'p1', role: 'admin' }],
-    ['agents.setWorksFor', { slug: 'qa', people: ['p1', 'p3'] }],
     ['threads.whoCanRead', { thread: 't1', audience: 'company' }],
     ['threads.openEarlier', { thread: 't1' }],
     ['tools.setAccess', { tool: 'keyed', subject: 'bot:new', level: 'read' }],
     ['tools.setAccess', { tool: 'keyed', subject: 'bot:ro', level: 'read_write' }],
     ['tools.setAccess', { tool: 'unread', subject: 'bot:qa', level: 'read' }],
-    ['calls.meetingSettings', { mine: 'auto' }],
     ['settings.reportsDirect', { on: true }],
     // where a stored credential goes, and credentials ended
     ['tools.editApi', { tool: 'keyed', base_url: 'https://elsewhere.example.test' }],
@@ -141,7 +138,6 @@ describe("kept from Tico, and the person's own press still works", () => {
     ['people.invite', { email: 'new@example.test' }],
     ['people.setRole', { person: 'p1', role: 'member' }],
     ['settings.setRole', { person: 'p1', role: 'member' }],
-    ['agents.setWorksFor', { slug: 'qa', people: ['p1'] }],
     ['threads.whoCanRead', { thread: 't1', audience: 'members' }],
     ['threads.keepMessages', { thread: 't1', days: null }],
     ['tools.setAccess', { tool: 'keyed', subject: 'bot:qa', level: 'read' }],
@@ -153,7 +149,6 @@ describe("kept from Tico, and the person's own press still works", () => {
     ['tools.editWebsite', { tool: 'w1', sites: [], central_only: true }],
     ['settings.editSubscription', { subscription: 's1', name: 'Plan' }],
     ['settings.reportsDirect', { on: false }],
-    ['calls.meetingSettings', { mine: 'review', team: 'review' }],
     ['budget.openRow', { budget: 'b1' }],
     ['finance.attribute', { line: 'l1', splits: [] }],
   ];
