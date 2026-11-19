@@ -18,6 +18,8 @@ from .store import Problem, digest, encode
 class ReviewerApp(GitHubApp):
     """Separate caches and signer; repository authority still comes from the primary App."""
 
+    KEEPS_TOKENS = False  # its key is a file, not the sealed secrets: its tokens stay in memory
+
     def __init__(self, settings, store, primary):
         super().__init__(settings, store)
         self.primary = primary
@@ -55,7 +57,7 @@ class ReviewerApp(GitHubApp):
             "account_type": account_kind(primary),
         }
 
-    def private_key(self, c, row):
+    def private_key(self, c, row, reseal=True):
         try:
             return Path(self.settings.github_reviewer_private_key_file).read_text()
         except (OSError, UnicodeError):

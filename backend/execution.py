@@ -3529,9 +3529,10 @@ class Execution:
         self.refuse_in_rehearsal()
         if who.role != "runner":
             raise Problem("identity", "A registered runner is required", 403)
-        return c.execute(
-            "SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (who.runner_id,)
-        ).fetchone()
+        from .read_cache import one
+
+        # Once a snapshot: validate_identity read the same row under the same lock (a write in between reads it again).
+        return one(c, H.RUNNER_SQL, (who.runner_id,))
 
     @staticmethod
     def waking(row, now):

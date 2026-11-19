@@ -120,7 +120,7 @@ work on the defaults at once. Save the answers, dated, under "Setup answers" in 
      a new one.
    An annoyance needs no gesture. A real apology and a fast fix is the gesture.
 
-7. **Send it** with `tico email lint`, then `tico email reply <mailbox> --thread <thread-id> --body-file <file>`.
+7. **Send it** with `tico email lint`, then `tico email reply <mailbox> --thread <thread-id> --task <id> --body-file <file>`.
    Tico decides the send from the team's sending policy: `pending` goes after the undo window, `waiting_approval`
    means the right person has been asked, `blocked` means fix the cause and never route around it.
 

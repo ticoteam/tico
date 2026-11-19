@@ -1715,11 +1715,17 @@ def install(app, store, auth, mutate):
             row = preview_row(c, request, sid)
             snap = snapshot(row["raw"], row["mailbox"]) if row["raw"] else None
             shown = shown_to(c, who, row) if snap else None
+            # Who each address is to, as its frozen headers say (the stored `recipients` is all of them in one list);
+            # empty once the frozen copy is gone, as `body` is.
+            groups = (snap or {}).get("recipient_headers") or {}
             return {
                 "send": public(row),
                 "body": (snap or {}).get("body", ""),
                 "bodies": (snap or {}).get("visible_bodies", []),
                 "preview_complete": bool(snap),
+                "to": groups.get("to", []),
+                "cc": groups.get("cc", []),
+                "bcc": groups.get("bcc", []),
                 # What the OK button sends back: POST /api/v2/tasks/{task}/asks/{approval_id}/ok {"shown_hash"}.
                 "shown_hash": shown,
             }

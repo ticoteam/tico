@@ -1055,10 +1055,10 @@ def register(
             auth.task(c, who, task_id)
             if task_asks.task_of(c, requirement_id) != task_id or not task_asks.grant(c, requirement_id):
                 raise Problem("not_found", "No such OK on this task", 404)
-            task_asks.give_ok(
+            answer_id = task_asks.give_ok(
                 c, who.actor, requirement_id, body.shown_hash, own_click=task_asks.own_click(who), ctx=ctx
             )
-            return answer(c, who, task_id, requirement_id=requirement_id)
+            return answer(c, who, task_id, requirement_id=requirement_id, answer_id=answer_id)
 
         out = mutate(request, body, write, durable=True)
         for after in ctx.after:

@@ -146,7 +146,7 @@ more than they paid in the last 12 months.
 
 10. **Send it.** Write the text to a file, then:
     `tico email lint <mailbox> --body-file out/reply.txt --subject "<subject>"` and fix what it flags;
-    `tico email reply <mailbox> --thread <thread-id> --body-file out/reply.txt`.
+    `tico email reply <mailbox> --thread <thread-id> --task <the customer's task id> --body-file out/reply.txt`.
     Tico decides the send from the team's sending policy (`tico email policy --bot <your slug>` shows yours) and
     answers one of three ways. `pending`: it goes after a
     short undo window. `waiting_approval`: Tico has asked the right person; move to the next customer and note what

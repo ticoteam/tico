@@ -75,7 +75,7 @@ on the defaults at once. Save the answers, dated, under "Setup answers" in `know
      the time zone; create the invite with `tico calendar schedule` once they choose. Never confirm a time before the
      invite exists;
    - if they can simply buy without talking to anyone, tell them how. Do not force a call.
-   Draft and send through Tico mail (`tico email reply ...`, or `tico email draft ...` then
+   Draft and send through Tico mail (`tico email reply ... --task <id>`, or `tico email draft ...` then
    `tico email send <mailbox> --draft <draft-id> --task <id>`). Tico decides every send from the sending policy.
 
 4. **Run discovery.** By call or in writing, using `references/spiced-questions.md`:

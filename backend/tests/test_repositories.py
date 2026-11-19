@@ -104,7 +104,7 @@ def test_read_grant_reads_pull_requests_comments_and_deployments_but_never_write
     }
     # An installation that has not accepted Deployments yet still reads pull requests and comments.
     gh.permissions.pop('deployments')
-    api.app_state.github_app.cache.clear()
+    api.app_state.github_app.forget_tokens()
     api.app_state.github_app.live.clear()
     assert turn_token(api).status_code == 200
     read = [r[2] for r in gh.of('/access_tokens') if r[2].get('repositories') == ['docs']][-1]
@@ -427,14 +427,14 @@ def test_run_workflows_gets_its_own_actions_token_only_once_the_installation_acc
     assert 'github_workflows' not in {x['id'] for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
     # Actions dropped back to read inside the live cache: the refused mint falls back and says why.
     gh.permissions = {'actions': 'read', 'checks': 'read', 'statuses': 'read'}
-    api.app_state.github_app.cache.clear()
+    api.app_state.github_app.forget_tokens()
     token = turn_token(api).json()
     assert token['workflows_withheld']['repositories'] == ['Acme/product']
     assert all(t.get('actions') is None for t in token['tokens'])
     assert 'github_workflows' in {x['id'] for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
     # Set right again, the setting warning clears with the live read, even if the mint then fails for another reason.
     gh.permissions = {'actions': 'write', 'checks': 'read', 'statuses': 'read'}
-    api.app_state.github_app.cache.clear()
+    api.app_state.github_app.forget_tokens()
     api.app_state.github_app.live.clear()
     gh.refuse = (500, 'GitHub is down')
     assert turn_token(api).status_code >= 400
@@ -442,7 +442,7 @@ def test_run_workflows_gets_its_own_actions_token_only_once_the_installation_acc
     assert 'github_workflows' not in {x['id'] for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
     # An installation without Checks: the refusal is the reads', not Actions'; the flagged repository still gets it.
     gh.permissions = {'actions': 'write', 'statuses': 'read'}
-    api.app_state.github_app.cache.clear()
+    api.app_state.github_app.forget_tokens()
     api.app_state.github_app.live.clear()
     one = api.post(
         '/api/v2/github/token',
@@ -498,7 +498,7 @@ def _a_workflow_mint_refused_twice_falls_back_to_the_ordinary_write_token_and_ke
     assert gh.calls[asked:] == []
     # Once it lapses, GitHub is asked again; still refused, so the reply and Health stay the same.
     api.app_state.github_app.live['workflows-refused'] = 0
-    api.app_state.github_app.cache.clear()
+    api.app_state.github_app.forget_tokens()
     assert turn_token(api).json()['workflows_withheld']['repositories'] == ['Acme/product']
     assert any(
         r[1].endswith('/access_tokens') and r[2]['permissions'].get('actions') == 'write' for r in gh.calls[asked:]
@@ -506,7 +506,7 @@ def _a_workflow_mint_refused_twice_falls_back_to_the_ordinary_write_token_and_ke
     # Check permissions forgets it, and the accepted mint clears Health.
     gh.refuse_actions_write = False
     assert api.post('/api/v2/github/app/check-permissions', headers=auth()).status_code == 200
-    api.app_state.github_app.cache.clear()
+    api.app_state.github_app.forget_tokens()
     token = turn_token(api).json()
     assert 'workflows_withheld' not in token and token['tokens'][-1]['actions'] == 'write'
     assert 'github_workflows' not in {x['id'] for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
@@ -535,7 +535,7 @@ def _forget_github_state(api, gh):
     gh.refuse = None
     gh.on_token = None
     service.live.clear()
-    service.cache.clear()
+    service.forget_tokens()
 
 
 def flagged_grants(api, gh):
@@ -588,7 +588,7 @@ def test_no_turn_token_ever_writes_checks_statuses_or_settings(api, gh):
     }
     service = api.app_state.github_app
     service.live.clear()
-    service.cache.clear()
+    service.forget_tokens()
     asked = len(gh.of('/access_tokens'))
     for purpose in ('turn', 'git'):
         assert turn_token(api, purpose=purpose).status_code == 200
@@ -656,7 +656,7 @@ def test_edit_workflows_gets_workflows_write_only_on_a_flagged_grant_the_install
     gh.permissions = {'actions': 'write', 'workflows': 'write', 'checks': 'read', 'statuses': 'read'}
     service = api.app_state.github_app
     service.live.clear()
-    service.cache.clear()
+    service.forget_tokens()
     asked = len(gh.of('/access_tokens'))
     token = turn_token(api).json()
     assert 'workflows_withheld' not in token and 'workflow_edits_withheld' not in token
@@ -735,7 +735,7 @@ def test_all_ticked_repos_lets_one_repository_run_workflows(api, gh):
     # Health names it while the installation lacks Actions: write.
     gh.permissions = {'actions': 'read', 'checks': 'read', 'statuses': 'read'}
     api.app_state.github_app.live.clear()
-    api.app_state.github_app.cache.clear()
+    api.app_state.github_app.forget_tokens()
     assert turn_token(api).json()['workflows_withheld']['repositories'] == ['Acme/product']
     checks = {x['id']: x for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
     assert 'cpo: Acme/product' in checks['github_workflows']['summary']
@@ -805,7 +805,7 @@ def _a_refused_workflows_write_token_falls_back_and_keeps_the_grants_actions(api
     # Check permissions forgets it, and the accepted mint clears Health.
     gh.refuse_workflows_write = False
     assert api.post('/api/v2/github/app/check-permissions', headers=auth()).status_code == 200
-    api.app_state.github_app.cache.clear()
+    api.app_state.github_app.forget_tokens()
     token = turn_token(api).json()
     assert 'workflow_edits_withheld' not in token and write_tokens(token)['Acme/product'] == ('actions', 'workflows')
     assert 'github_workflow_edits' not in {x['id'] for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
@@ -813,7 +813,7 @@ def _a_refused_workflows_write_token_falls_back_and_keeps_the_grants_actions(api
     # write leaves the grant its Workflows: write.
     # The installation lacks Deployments, which the reads ask for until a refusal narrows them.
     gh.refuse_actions_write = True
-    api.app_state.github_app.cache.clear()
+    api.app_state.github_app.forget_tokens()
     api.app_state.github_app.live.pop('turn-reads', None)
     one = api.post(
         '/api/v2/github/token',

@@ -311,8 +311,7 @@ def install(app, store, auth, mutate):
         the `as_of` before. Empty `lines` when there is nothing to say (backend/finance/brief.py)."""
         actor = as_viewer(request, view_as)
         try:
-            with store.transaction() as c:
-                return finance_brief_mod.brief(c, actor)
+            return finance_brief_mod.on_demand(store, actor)
         except finance.FinanceError as e:
             raise problem(e) from None
 

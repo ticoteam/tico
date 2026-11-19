@@ -847,11 +847,12 @@ def give_ok(
     *,
     own_click: bool,
     ctx: Context | None = None,
-) -> None:
+) -> str | None:
     """The only way a bound OK is given. Passes when `person` is the one it waits on now, clicked it themselves in
     their own session, and was shown exactly the content asked about (`shown_hash` is the hash of the preview they
     were shown). Then it answers the requirement `ok` and marks the grant, and the subject's own step runs (ON_OK) in
-    the same transaction. Otherwise H.Refused, with nothing written."""
+    the same transaction. Returns the answer's id, which takes it back (POST /api/v2/answers/{id}/undo); an OK already
+    given returns its own. Otherwise H.Refused, with nothing written."""
     from . import task_requirements as R
 
     H = _h()
@@ -869,7 +870,7 @@ def give_ok(
     if state == USED:
         _refuse(conn, person, "consumed", "This OK was already used", task_id)
     if state == OK:
-        return
+        return row.get("answer_id")
     if row.get("revoked_at"):
         _refuse(conn, person, "task_requirement", "This was sent back or taken back: it needs a new ask", task_id)
     if state == WITHDRAWN or not requirement or not visit or visit.get("left_at"):
@@ -901,6 +902,7 @@ def give_ok(
     H.event(conn, person, "ok.given", requirement_id, {"subject": row["subject"], "task": task_id})
     if step:
         step(conn, grant(conn, requirement_id), ctx)
+    return answered.get("answer_id")
 
 
 # ----------------------------------------------------------------------------- the act

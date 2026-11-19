@@ -364,16 +364,31 @@ def drop(c: Any, sid: str) -> None:
     unpark(c, sid)
 
 
-def _refreshes(c: Any, vault: Any, runner_id: str) -> list[Row]:
-    """The refreshes this computer is to make now, each with the plan's login: a lease it holds, or one it takes."""
-    MS = _MS()
+class _Write(Exception):
+    """A poll read on a snapshot (`write=False`) came to something it would write: it is asked again whole under the
+    write lock, which decides it as it always has. `key`: only the vault's key is wanted (`_value`)."""
 
+    def __init__(self, key: bool = False) -> None:
+        super().__init__()
+        self.key = key
+
+
+def _value(c: Any, vault: Any, sub: Any, write: bool) -> str | None:
+    """The plan's value. A read-only poll opens it only with the vault's key already in memory: the key's first use
+    may save it (credentials.CredentialCipher.key), so the route loads it first (`prepare`) and reads again."""
+    if not write and getattr(vault.cipher, "cached", None) is None:
+        raise _Write(key=True)
+    return _MS().value_of(c, vault.cipher, sub)
+
+
+def _refreshes(c: Any, vault: Any, runner_id: str, write: bool = True) -> list[Row]:
+    """The refreshes this computer is to make now, each with the plan's login: a lease it holds, or one it takes."""
     now = H.now()
     due = H.shift(now, seconds=REFRESH_BEFORE.total_seconds())
     out: list[Row] = []
     for sub in H._rows(
         c.execute(
-            f"SELECT * FROM {MS.SUBS} WHERE kind=? AND status<>'needs_reconnect' "
+            f"SELECT * FROM {_MS().SUBS} WHERE kind=? AND status<>'needs_reconnect' "
             "AND (access_expires_at IS NULL OR access_expires_at<=?)",
             (KIND, due),
         )
@@ -387,6 +402,8 @@ def _refreshes(c: Any, vault: Any, runner_id: str) -> list[Row]:
                     continue
             elif mine:
                 # Uncertain, and back: it may hold the rotated login, so it goes on with the same lease.
+                if not write:
+                    raise _Write
                 _put_lease(c, sub["id"], lease_until=H.shift(now, seconds=LEASE_SECONDS))
             elif (sub["access_expires_at"] or "") > now:
                 continue  # uncertain: no other computer refreshes while the old token may still be the one in use
@@ -401,6 +418,8 @@ def _refreshes(c: Any, vault: Any, runner_id: str) -> list[Row]:
             others = [x for x in computers if x[0]["id"] != quiet and can_sign_in(x[0])]
             if _chosen(others or computers, can_sign_in, lease.get("failures") or 0) != runner_id:
                 continue
+            if not write:
+                raise _Write
             lease = {"lease_id": H.new_id(), "lease_revision": sub["revision"]}
             c.execute(
                 "INSERT INTO claude_login_leases(id,subscription_id,runner_id,revision,issued_at) VALUES(?,?,?,?,?)",
@@ -418,7 +437,7 @@ def _refreshes(c: Any, vault: Any, runner_id: str) -> list[Row]:
             H.event(c, "runner:" + runner_id, "subscription.refresh_leased", sub["id"], {"revision": sub["revision"]})
         if lease["lease_revision"] != sub["revision"]:
             continue  # the plan moved on under it (a Reconnect): the lease ends with its result
-        value = MS.value_of(c, vault.cipher, sub)
+        value = _value(c, vault, sub, write)
         if value is None:
             continue
         out.append({"lease": lease["lease_id"], "subscription": sub["id"], "revision": sub["revision"], "value": value})
@@ -617,11 +636,50 @@ def _request(runner_id: str, now: str) -> Row:
     }
 
 
-def _wanted(c: Any, sid: str, schedule: Row) -> bool:
-    """Whether a plan's usage is read on its schedule: never read yet, in use (a turn runs on it, or a computer signs in
-    with it now), or next in line in a person's set. Others wait for ↻ or their turn to come up."""
-    MS = _MS()
+class _Line:
+    """The plans a computer signs in with now or next (`_wanted`), read once per poll and only as far as a plan asks:
+    first the plans in use (each given a computer on its own, and the one in use of each person's set given one), then
+    the first two available of each person's set in pick order (model_subscriptions._ordered), with one reading of the
+    plans' usage (`_listing`) for every set. Neither changes while a poll runs: its writes are leases and asked reads,
+    which no pick reads."""
 
+    def __init__(self, c: Any) -> None:
+        self.c = c
+        self.current: set[str] | None = None
+        self.following: set[str] | None = None
+        self._given: dict[tuple[str, str], Row] | None = None
+
+    def given(self) -> dict[tuple[str, str], Row]:
+        given = self._given
+        if given is None:
+            given = self._given = _MS()._given(self.c) or {}
+        return given
+
+    def __contains__(self, sid: str) -> bool:
+        if self.current is None:
+            self.current = {entry["id"] for entry in self.given().values() if entry.get("id")}
+        if sid in self.current:
+            return True
+        if self.following is None:
+            MS = _MS()
+            self.following = set()
+            ctx: Any = None
+            picked: set[tuple[str, str]] = set()  # many computers given one person's set pick from it alike
+            for (_, runtime), entry in self.given().items():
+                if not entry.get("person") or (entry["person"], runtime) in picked:
+                    continue
+                picked.add((entry["person"], runtime))
+                members: list[Row] = entry.get("members") or []
+                ready = [m for m in members if MS.available(self.c, m, runtime)]
+                if len(ready) > 1 and ctx is None:
+                    ctx = MS._listing(self.c)
+                self.following.update(m["id"] for m in MS._ordered(self.c, ready, runtime, ctx)[:2])
+        return sid in self.following
+
+
+def _wanted(c: Any, sid: str, schedule: Row, line: _Line) -> bool:
+    """Whether a plan's usage is read on its schedule: never read yet, in use (a turn runs on it, or a computer signs in
+    with it now), or next in line in a person's set (`line`, the poll's). Others wait for ↻ or their turn to come up."""
     if not schedule.get("read_at"):
         return True
     if c.execute(
@@ -630,32 +688,19 @@ def _wanted(c: Any, sid: str, schedule: Row) -> bool:
         (sid,),
     ).fetchone():
         return True
-    given: dict[tuple[str, str], Row] = MS._given(c) or {}
-    for (_, runtime), entry in given.items():
-        if not entry.get("person"):
-            if entry.get("id") == sid:
-                return True
-            continue
-        if entry.get("id") == sid:
-            return True
-        members: list[Row] = entry.get("members") or []
-        ready = [m for m in members if MS.available(c, m, runtime)]
-        if sid in [m["id"] for m in MS._ordered(c, ready, runtime)[:2]]:
-            return True
-    return False
+    return sid in line
 
 
-def _usage_jobs(c: Any, vault: Any, runner_id: str) -> list[Row]:
+def _usage_jobs(c: Any, vault: Any, runner_id: str, write: bool = True) -> list[Row]:
     """The usage reads this computer is to make now, each with the plan's access token for this read only: one asked of
     it, or one due on the plan's schedule whose turn is this computer's."""
-    MS = _MS()
-
     now = H.now()
     fresh = H.shift(now, seconds=120)
     out: list[Row] = []
+    line = _Line(c)
     for sub in H._rows(
         c.execute(
-            f"SELECT * FROM {MS.SUBS} WHERE kind=? AND status<>'needs_reconnect' AND access_expires_at>?",
+            f"SELECT * FROM {_MS().SUBS} WHERE kind=? AND status<>'needs_reconnect' AND access_expires_at>?",
             (KIND, fresh),
         )
     ):
@@ -667,16 +712,18 @@ def _usage_jobs(c: Any, vault: Any, runner_id: str) -> list[Row]:
         live = request.get("state") == "requested" and request.get("expires_at", "") > now
         if not live:
             schedule: Row = value.get("schedule") or {}
-            if (schedule.get("next_at") or "") > now or not _wanted(c, sub["id"], schedule):
+            if (schedule.get("next_at") or "") > now or not _wanted(c, sub["id"], schedule, line):
                 continue
             computers = _computers(c, sub["id"])
             if _chosen(computers, lambda r: takes_turns(r) and _online(r), schedule.get("failures") or 0) != runner_id:
                 continue
+            if not write:
+                raise _Write
             request = value["request"] = _request(runner_id, now)
             _save_usage_meta(c, sub["id"], value)
         if request.get("kind") != "oauth_usage" or request.get("runner_id") != runner_id:
             continue
-        secret = MS.value_of(c, vault.cipher, sub)
+        secret = _value(c, vault, sub, write)
         if secret is None:
             continue
         out.append(
@@ -820,31 +867,44 @@ class UsageResult(M.Contract):
     retry_after: int | None = Field(default=None, ge=0, le=10 * RETRY_AFTER_CAP)
 
 
-def poll(c: Any, vault: Any, runner_id: str, body: "Poll") -> Row:
-    """A computer's poll: the access tokens its running turns need, the refreshes and usage reads it is to make."""
-    MS = _MS()
+# The records of this computer's running turns on a plan that its poll moves up to the revision they hold (`poll`).
+# Capped at the plan's own revision, as the move is: a computer ahead of its hub (a restored database) is not behind.
+_BEHIND = (
+    "WHERE subscription_id=? AND revision<min(?,(SELECT revision FROM model_subscriptions WHERE id=?)) AND attempt_id IN "
+    "(SELECT id FROM attempts WHERE runner_id=? AND state IN ('leased','running'))"
+)
 
+
+def poll(c: Any, vault: Any, runner_id: str, body: "Poll", write: bool = True) -> Row:
+    """A computer's poll: the access tokens its running turns need, the refreshes and usage reads it is to make. With
+    `write` False, on a read snapshot: the same answer when it writes nothing, else `_Write` before any change."""
     runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
     if not takes_turns(runner):
         return {"tokens": [], "refreshes": [], "usage": []}
     # What the computer's turns hold now: their record moves with it, so a later refusal is judged against the token
     # they really had (`gap`).
     for item in body.live[:MAX_LIVE]:
+        if not write:
+            if c.execute(
+                f"SELECT 1 FROM attempt_subscriptions {_BEHIND} LIMIT 1",
+                (item.subscription, item.revision, item.subscription, runner_id),
+            ).fetchone():
+                raise _Write
+            continue
         c.execute(
             "UPDATE attempt_subscriptions SET revision=min(?,(SELECT revision FROM model_subscriptions WHERE id=?)) "
-            "WHERE subscription_id=? AND revision<? AND attempt_id IN "
-            "(SELECT id FROM attempts WHERE runner_id=? AND state IN ('leased','running'))",
-            (item.revision, item.subscription, item.subscription, item.revision, runner_id),
+            + _BEHIND,
+            (item.revision, item.subscription, item.subscription, item.revision, item.subscription, runner_id),
         )
     tokens: list[Row] = []
     for sub in _tokens(c, runner_id, body.live):
-        value = MS.value_of(c, vault.cipher, sub)
+        value = _value(c, vault, sub, write)
         if value is not None:
             tokens.append({"subscription": sub["id"], "revision": sub["revision"], "value": turn_file(value)})
     return {
         "tokens": tokens,
-        "refreshes": _refreshes(c, vault, runner_id) if can_sign_in(runner) else [],
-        "usage": _usage_jobs(c, vault, runner_id),
+        "refreshes": _refreshes(c, vault, runner_id, write) if can_sign_in(runner) else [],
+        "usage": _usage_jobs(c, vault, runner_id, write),
     }
 
 
@@ -861,9 +921,32 @@ def install(app: Any, store: Any) -> None:
     @app.post("/api/v2/runner-claude-logins")
     def runner_poll(request: Request, body: Poll) -> Row:
         who = request.state.identity
+        # Every computer polls every few minutes and most polls change nothing: answered from a read snapshot, off the
+        # write lock. One that comes to a write (a turn's revision to move, a lease to take or keep, a usage read to
+        # ask) is decided again whole under the write lock, as before, so no two computers take the same lease.
+        vault = app.state.vault
+        for first in (True, False):
+            with store.read_transaction() as c:
+                runner_only(c, who)
+                try:
+                    return poll(c, vault, who.runner_id, body, write=False)
+                except _Write as why:
+                    key = why.key
+            # The vault's key not in memory yet (a restart): loaded here, outside the write lock (KMS), so neither the
+            # read again nor the write path below loads it under the lock.
+            if not first or getattr(vault.cipher, "cached", True) is not None:
+                break
+            try:
+                vault.cipher.prepare(store)
+            except Exception:
+                if key:
+                    raise  # the poll hands a plan's value out: refused as the write path would refuse it, unlocked
+                break  # the write path loads it, and refuses as it always has
+            if not key:
+                break  # a write is due anyway: under the lock, with the key now in memory
         with store.transaction() as c:
             runner_only(c, who)
-            return poll(c, app.state.vault, who.runner_id, body)
+            return poll(c, vault, who.runner_id, body)
 
     @app.post("/api/v2/runner-claude-logins/{sid}/refreshed")
     def runner_refreshed(request: Request, sid: str, body: RefreshResult) -> Row:

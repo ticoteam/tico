@@ -3314,79 +3314,79 @@ def view(c, who, settings, auth, github, config, filing=False):
     if full and (denies := _harness_denies_check(c, settings)):
         checks.append(denies)
     if full:
-        from .worktrees import current_error, finished_and_retired, supported, statuses
+        from .worktrees import current_error, finished_and_retired, statuses
 
-        if supported(c):
-            usage, failing = {}, []
-            for row in statuses(
-                c,
-                c.execute(
-                    "SELECT t.owner_id,t.status AS task_status,l.* FROM task_links l JOIN tasks t ON t.id=l.task_id "
-                    "WHERE l.kind='worktree' AND l.state<>'removed'"
-                ),
-            ):
-                detail = json.loads(row['detail'] or '{}')
-                bot = H.actor_id(row['owner_id'])
-                usage[bot] = usage.get(bot, 0) + (0 if row['state'] == 'retired' else detail.get('size_mb', 0))
-                if not finished_and_retired(row) and (error := current_error(row['state'], detail)):
-                    failing.append((bot, error))
-            names = _bot_names(c, [bot for bot, _ in failing])  # one read for the bots named, not one a worktree
-            errors = [names[bot] + ': ' + error for bot, error in failing]
-            if usage:
-                checks.append(
-                    _check(
-                        'worktrees',
-                        'Task worktrees',
-                        'warn' if errors else 'ok',
-                        '; '.join(errors[:3])
-                        if errors
-                        else '; '.join(f'{_bot_name(c, bot)}: {size:g} MB' for bot, size in sorted(usage.items())),
-                        [_fix('Open tasks', '#/tasks')],
-                    )
+        usage, failing = {}, []
+        for row in statuses(
+            c,
+            c.execute(
+                "SELECT t.owner_id,t.status AS task_status,l.* FROM task_links l JOIN tasks t ON t.id=l.task_id "
+                "WHERE l.kind='worktree' AND l.state<>'removed'"
+            ),
+        ):
+            detail = json.loads(row['detail'] or '{}')
+            bot = H.actor_id(row['owner_id'])
+            usage[bot] = usage.get(bot, 0) + (0 if row['state'] == 'retired' else detail.get('size_mb', 0))
+            if not finished_and_retired(row) and (error := current_error(row['state'], detail)):
+                failing.append((bot, error))
+        names = _bot_names(c, [bot for bot, _ in failing])  # one read for the bots named, not one a worktree
+        errors = [names[bot] + ': ' + error for bot, error in failing]
+        if usage:
+            checks.append(
+                _check(
+                    'worktrees',
+                    'Task worktrees',
+                    'warn' if errors else 'ok',
+                    '; '.join(errors[:3])
+                    if errors
+                    else '; '.join(f'{_bot_name(c, bot)}: {size:g} MB' for bot, size in sorted(usage.items())),
+                    [_fix('Open tasks', '#/tasks')],
                 )
-            # A task waiting for room for a worktree is waiting, not failing (backend/worktree_waits.py). Named by bot
-            # and repository only: a private task's title is not everyone's.
-            from .worktree_waits import waiting as worktree_waiting
+            )
+        # A task waiting for room for a worktree is waiting, not failing (backend/worktree_waits.py). Named by bot
+        # and repository only: a private task's title is not everyone's.
+        from .worktree_waits import waiting as worktree_waiting
 
-            if waits := worktree_waiting(c):
+        if waits := worktree_waiting(c):
 
-                def age(since):
-                    minutes = int(max(0, (datetime.now(timezone.utc) - H.parse_ts(since)).total_seconds()) // 60)
-                    return f'{minutes} min' if minutes < 120 else f'{minutes // 60} h'
+            def age(since):
+                now = datetime.now(timezone.utc)
+                minutes = int(max(0, (now - (H.parse_ts(since) or now)).total_seconds()) // 60)
+                return f'{minutes} min' if minutes < 120 else f'{minutes // 60} h'
 
-                checks.append(
-                    _check(
-                        'worktree_waits',
-                        'Waiting for a worktree',
-                        'info',
-                        '; '.join(
-                            f"{H.actor_name(c, w['owner'])}: {w['repo']}, {'setting up' if w['state'] == 'reserved' else 'no room'} "
-                            f"for {age(w['created_at'])} ({w['reason']})"
-                            for w in waits[:3]
-                        )
-                        + ('.' if len(waits) <= 3 else f'; and {len(waits) - 3} more.'),
-                        [_fix('Open tasks', '#/tasks')],
+            checks.append(
+                _check(
+                    'worktree_waits',
+                    'Waiting for a worktree',
+                    'info',
+                    '; '.join(
+                        f"{H.actor_name(c, w['owner'])}: {w['repo']}, {'setting up' if w['state'] == 'reserved' else 'no room'} "
+                        f"for {age(w['created_at'])} ({w['reason']})"
+                        for w in waits[:3]
                     )
+                    + ('.' if len(waits) <= 3 else f'; and {len(waits) - 3} more.'),
+                    [_fix('Open tasks', '#/tasks')],
                 )
-            # What freed a place lately, and why (backend/worktrees.py released_event): finished work releasing its
-            # tree is the normal way room comes back, so it is said, not warned about.
-            since = H.shift(H.now(), hours=-24)
-            reasons = {}
-            for (reason,) in c.execute(
-                "SELECT json_extract(detail,'$.reason') FROM events WHERE action='worktree.released' AND created_at>=?",
-                (since,),
-            ):
-                reasons[reason or 'cleanup'] = reasons.get(reason or 'cleanup', 0) + 1
-            if reasons:
-                checks.append(
-                    _check(
-                        'worktrees_released',
-                        'Worktrees released (24 h)',
-                        'info',
-                        '; '.join(f'worktree released: {reason} ({n})' for reason, n in sorted(reasons.items())) + '.',
-                        [_fix('Open tasks', '#/tasks')],
-                    )
+            )
+        # What freed a place lately, and why (backend/worktrees.py released_event): finished work releasing its
+        # tree is the normal way room comes back, so it is said, not warned about.
+        since = H.shift(H.now(), hours=-24)
+        reasons = {}
+        for (reason,) in c.execute(
+            "SELECT json_extract(detail,'$.reason') FROM events WHERE action='worktree.released' AND created_at>=?",
+            (since,),
+        ):
+            reasons[reason or 'cleanup'] = reasons.get(reason or 'cleanup', 0) + 1
+        if reasons:
+            checks.append(
+                _check(
+                    'worktrees_released',
+                    'Worktrees released (24 h)',
+                    'info',
+                    '; '.join(f'worktree released: {reason} ({n})' for reason, n in sorted(reasons.items())) + '.',
+                    [_fix('Open tasks', '#/tasks')],
                 )
+            )
     if full and (missing_tools := _missing_tool_credentials(c, online_ids)):
         checks.append(
             _check(
