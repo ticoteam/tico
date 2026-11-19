@@ -33,7 +33,12 @@ REVIEWS = int(os.environ.get("REVIEWS", 83))
 READS = 11  # second reviews one Needs-you build reads on TIDY
 RUNS = int(os.environ.get("RUNS", 21))
 NEW = R._review_messages_sql(MESSAGE_TASK_SQL)
-OLD = NEW.replace("+m.kind", "m.kind")
+# The statement as it was before (v0.6, Nov 19), kept apart from NEW so a change to both still shows.
+OLD = (
+    "SELECT m.body FROM messages m LEFT JOIN conversations cv ON cv.id = m.conversation_id "
+    "WHERE m.conversation_id=? AND m.kind='say' AND m.deleted_at IS NULL AND m.superseded_at IS NULL "
+    f"AND {MESSAGE_TASK_SQL}=? ORDER BY m.created_at, m.id"
+)
 
 
 def seed(c):
@@ -103,11 +108,15 @@ def main():
                 for step in plan:
                     print("    ", step)
                 print(f"{name}: {READS} reads, {timed(c, sql, reviews):.3f} ms median of {RUNS}")
+            expected = {n: [(f"Reviewed PR #{n} at {n:07x}{k}",) for k in range(3)] for n in range(REVIEWS)}
             same = all(
-                c.execute(OLD, (f"cv{n}", f"t{n}")).fetchall() == c.execute(NEW, (f"cv{n}", f"t{n}")).fetchall()
+                c.execute(sql, (f"cv{n}", f"t{n}")).fetchall() == expected[n]
                 for n in range(REVIEWS)
+                for sql in (OLD, NEW)
             )
-            print(f"\nsame rows for every review, old and new: {same}")
+            print(f"\nold and new read each review's three messages, in order: {same}")
+            if not same:
+                sys.exit(1)
     finally:
         shutil.rmtree(folder, ignore_errors=True)
 
