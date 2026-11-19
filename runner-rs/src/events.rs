@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use serde_json::Value;
-use tokio::sync::Notify;
+use tokio::sync::{broadcast, Notify};
 
 use crate::client::{bearer, http_client, quote_plus, Client, CLIENT_VERSION};
 use crate::util::{diagnostic, log, mark};
@@ -33,6 +33,13 @@ pub const STABLE_S: u64 = 30;
 /// for a notice that went missing. Each wait is jittered by TURN_RECOVERY_JITTER so turns do not line up.
 pub const TURN_RECOVERY_S: f64 = 15.0;
 pub const TURN_RECOVERY_JITTER: f64 = 0.2;
+/// How often a resident voice session reads its inputs when nothing pushes them: what it always did.
+const VOICE_POLL: Duration = Duration::from_millis(400);
+/// The backstop read while the server pushes `voice_inputs` hints, for a hint that went missing.
+const VOICE_BACKUP: Duration = Duration::from_secs(3);
+/// A stream quiet this long may be dead without having failed yet: voice keeps its own poll until it is heard again.
+/// The server sends a keepalive every 15 s by default (20 s is a common setting).
+const VOICE_QUIET: Duration = Duration::from_secs(25);
 /// Every channel the runner reads on its own clock. A channel's bit in `Events::pending` is its index here.
 pub const CHANNELS: [&str; 10] = [
     "claim",
@@ -84,8 +91,10 @@ pub fn channels(kind: &str) -> &'static [&'static str] {
         "credential_imports" => &["imports"],
         // A plan's usage read, or a full Claude login's new token or refresh (claude_login.rs).
         "subscription_refresh" => &["refresh", "claude_logins"],
-        "screen_open" => &[], // crate::screen polls its sessions at once
-        "pushed" => &[],      // crate::fetch_fresh fetches the bots' checkouts at once
+        // Each wakes its own input reader: crate::screen polls its sessions at once, a voice session reads its inputs.
+        "screen_open" | "voice_inputs" => &[],
+        // crate::fetch_fresh fetches the bots' checkouts at once.
+        "pushed" => &[],
         _ => ALL,
     }
 }
@@ -102,6 +111,53 @@ enum Failure {
     Broken(String),
 }
 
+#[derive(Clone)]
+enum VoiceWake {
+    Input { attempt_id: String, call_id: String },
+    CatchUp,
+}
+
+pub(crate) struct VoiceInputs {
+    events: Arc<Events>,
+    wakes: broadcast::Receiver<VoiceWake>,
+    /// When the session last read its inputs; None reads at once.
+    read_at: Option<tokio::time::Instant>,
+}
+
+impl VoiceInputs {
+    /// Until the session's next read of its inputs: a hint for its attempt, a catch-up, or its poll. While the server
+    /// pushes hints the poll is only a backstop (VOICE_BACKUP); otherwise it is the 400 ms poll it always was. Losing
+    /// push (the stream drops, the server stops taking voice_inputs_v1) ends a backstop wait at once.
+    pub async fn wait(&mut self, attempt: &str, call: &str) {
+        if let Some(at) = self.read_at {
+            let every = if self.events.voice_pushed() {
+                VOICE_BACKUP
+            } else {
+                VOICE_POLL
+            };
+            let wakes = &mut self.wakes;
+            tokio::select! {
+                _ = tokio::time::sleep_until(at + every) => {}
+                _ = async {
+                    loop {
+                        match wakes.recv().await {
+                            Ok(VoiceWake::Input { attempt_id, call_id }) if attempt_id == attempt && call_id == call => break,
+                            Ok(VoiceWake::CatchUp) | Err(broadcast::error::RecvError::Lagged(_)) => break,
+                            Ok(VoiceWake::Input { .. }) => {}
+                            Err(broadcast::error::RecvError::Closed) => std::future::pending().await,
+                        }
+                    }
+                } => {}
+            }
+        }
+        self.read_at = Some(tokio::time::Instant::now());
+    }
+
+    pub fn refresh(&mut self) {
+        self.read_at = None;
+    }
+}
+
 pub struct Events {
     /// The channels the server asked for since each was last taken, one bit per channel (`index`).
     pending: AtomicU16,
@@ -115,6 +171,11 @@ pub struct Events {
     stop: AtomicBool,
     /// Notices for running turns: (for every bot, per bot). `heard` adds the two, so a turn sees either move.
     notices: Mutex<(u64, HashMap<String, u64>)>,
+    voice: broadcast::Sender<VoiceWake>,
+    /// Whether the server took voice_inputs_v1 on the last heartbeat, so it pushes voice hints to this computer.
+    voice_push: AtomicBool,
+    /// When the stream last said anything, a keepalive included.
+    heard_at: Mutex<Option<tokio::time::Instant>>,
     /// TURN_RECOVERY_S in milliseconds; tests shorten it.
     recovery_ms: AtomicU64,
 }
@@ -130,8 +191,54 @@ impl Events {
             wake: Notify::new(),
             stop: AtomicBool::new(false),
             notices: Mutex::new((0, HashMap::new())),
+            voice: broadcast::channel(32).0,
+            voice_push: AtomicBool::new(false),
+            heard_at: Mutex::new(None),
             recovery_ms: AtomicU64::new((TURN_RECOVERY_S * 1000.0) as u64),
         })
+    }
+
+    pub(crate) fn voice_inputs(self: &Arc<Self>) -> VoiceInputs {
+        VoiceInputs {
+            events: self.clone(),
+            wakes: self.voice.subscribe(),
+            read_at: None,
+        }
+    }
+
+    /// What the server's heartbeat answer says: whether it took voice_inputs_v1 (runner.rs post_heartbeat).
+    pub fn voice_push(&self, taken: bool) {
+        if self.voice_push.swap(taken, Ordering::SeqCst) && !taken {
+            self.voice_unpushed();
+        }
+    }
+
+    /// Whether voice hints reach this computer now: the server takes them and the stream is up and not gone quiet.
+    fn voice_pushed(&self) -> bool {
+        self.voice_push.load(Ordering::SeqCst)
+            && self.live()
+            && self
+                .heard_at
+                .lock()
+                .unwrap()
+                .is_some_and(|at| at.elapsed() < VOICE_QUIET)
+    }
+
+    /// Push just stopped: a voice session waiting on its backstop reads now, then polls as before.
+    fn voice_unpushed(&self) {
+        let _ = self.voice.send(VoiceWake::CatchUp);
+    }
+
+    fn stream_heard(&self) {
+        *self.heard_at.lock().unwrap() = Some(tokio::time::Instant::now());
+    }
+
+    /// The stream is no longer up (dropped, or the server has none).
+    fn fall_back(&self, to: Stream) {
+        let was = std::mem::replace(&mut *self.state.lock().unwrap(), to);
+        if was == Stream::Up {
+            self.voice_unpushed();
+        }
     }
 
     /// How many notices a running turn of `bot` has had: one that differs from the count at its last ask means ask
@@ -206,7 +313,7 @@ impl Events {
                     if self.state() != Stream::Legacy {
                         log("Tico runner: this server has no event stream; polling as before");
                     }
-                    *self.state.lock().unwrap() = Stream::Legacy;
+                    self.fall_back(Stream::Legacy);
                     legacy_until = Instant::now() + Duration::from_secs_f64(LEGACY_RETRY_S);
                     continue;
                 }
@@ -232,7 +339,7 @@ impl Events {
                 delay = 1.0;
                 continue; // the server's own lifetime ran out: reconnect at once
             }
-            *self.state.lock().unwrap() = Stream::Down;
+            self.fall_back(Stream::Down);
             tokio::time::sleep(Duration::from_secs_f64(delay)).await;
             delay = (delay * 2.0).min(RECONNECT_MAX_S);
         }
@@ -302,7 +409,7 @@ impl Events {
                     ident = None;
                     data = Value::Null;
                 } else if line.starts_with(':') {
-                    // keepalive
+                    self.stream_heard(); // keepalive
                 } else {
                     let (field, value) = line.split_once(':').unwrap_or((line.as_str(), ""));
                     let value = value.strip_prefix(' ').unwrap_or(value);
@@ -329,6 +436,7 @@ impl Events {
         data: &Value,
         recovering: bool,
     ) {
+        self.stream_heard();
         match event {
             "ready" => {
                 let frame: ReadyFrame = decode(data.clone()).unwrap_or_default();
@@ -350,8 +458,14 @@ impl Events {
                     self.ask(ALL);
                     self.notice(&[]);
                 }
+                if changed {
+                    // Another release may not push voice hints: voice polls until its heartbeat (asked above) says.
+                    self.voice_push(false);
+                }
                 *self.release.lock().unwrap() = Some(release);
                 *self.state.lock().unwrap() = Stream::Up;
+                // Even a clean reconnect can have missed a hint between streams.
+                let _ = self.voice.send(VoiceWake::CatchUp);
                 if let Some(since) = self.down_since.lock().unwrap().take() {
                     diagnostic(&format!(
                         "Tico runner: event stream back after {} s; polling stops",
@@ -372,19 +486,29 @@ impl Events {
                 if kind == "pushed" {
                     crate::fetch_fresh::heard(&frame.bots);
                 }
-                let asked = channels(kind);
-                if kind == "work" {
-                    // A follow-up queued or a chat goal changed for these bots (backend/events.py): their running
-                    // turns ask for inputs and goal at once.
-                    self.notice(&frame.bots);
-                } else if asked == ALL {
-                    self.notice(&[]);
+                if kind == "voice_inputs" {
+                    if let (Some(attempt_id), Some(call_id)) = (frame.attempt_id, frame.call_id) {
+                        let _ = self.voice.send(VoiceWake::Input {
+                            attempt_id,
+                            call_id,
+                        });
+                    }
+                } else {
+                    let asked = channels(kind);
+                    if kind == "work" {
+                        // A follow-up queued or a chat goal changed for these bots (backend/events.py): their running
+                        // turns ask for inputs and goal at once.
+                        self.notice(&frame.bots);
+                    } else if asked == ALL {
+                        self.notice(&[]);
+                    }
+                    self.ask(asked);
                 }
-                self.ask(asked);
             }
             "reset" => {
                 self.ask(ALL);
                 self.notice(&[]);
+                let _ = self.voice.send(VoiceWake::CatchUp);
             }
             "screen_open" => crate::screen::heard(),
             _ => {}
@@ -507,7 +631,13 @@ mod tests {
             false,
         );
         assert!(e.heard("acme") > acme && e.heard("cpo") == cpo);
-        for kind in ["logins", "config", "credentials", "screen_open"] {
+        for kind in [
+            "logins",
+            "config",
+            "credentials",
+            "screen_open",
+            "voice_inputs",
+        ] {
             let before = (e.heard("acme"), e.heard("cpo"));
             e.dispatch(
                 "runner",
@@ -542,6 +672,133 @@ mod tests {
             false,
         );
         assert_eq!(fresh.heard("acme"), 0);
+    }
+
+    /// A runner whose stream is up and whose server took voice_inputs_v1.
+    fn pushing() -> Arc<Events> {
+        let e = Events::new();
+        e.dispatch("ready", None, &serde_json::json!({"seq": 1}), false);
+        e.voice_push(true);
+        e
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn voice_inputs_wake_only_the_named_attempt_and_call() {
+        let e = pushing();
+        let mut inputs = e.voice_inputs();
+        inputs.wait("attempt", "call").await;
+
+        let prompt = Duration::from_millis(10);
+        for (attempt_id, call_id) in [("other-attempt", "call"), ("attempt", "other-call")] {
+            e.dispatch(
+                "runner",
+                None,
+                &serde_json::json!({
+                    "kind": "voice_inputs", "attempt_id": attempt_id, "call_id": call_id
+                }),
+                false,
+            );
+            assert!(tokio::time::timeout(prompt, inputs.wait("attempt", "call"))
+                .await
+                .is_err());
+        }
+        e.dispatch(
+            "runner",
+            Some("17".into()),
+            &serde_json::json!({
+                "kind": "voice_inputs", "attempt_id": "attempt", "call_id": "call"
+            }),
+            false,
+        );
+        tokio::time::timeout(prompt, inputs.wait("attempt", "call"))
+            .await
+            .expect("the notice did not wake the voice loop");
+        assert_eq!(e.last_id.lock().unwrap().as_deref(), Some("17"));
+        assert!(!e.take("claim"));
+    }
+
+    /// How long the next read of the voice inputs waits, given nothing else wakes it.
+    async fn next_read(inputs: &mut VoiceInputs) -> Duration {
+        let before = tokio::time::Instant::now();
+        inputs.wait("attempt", "call").await;
+        before.elapsed()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn voice_inputs_back_off_only_while_hints_are_pushed() {
+        // Never pushed (an older server, or one refusing voice_inputs_v1): the 400 ms poll, as before.
+        let e = Events::new();
+        e.dispatch("ready", None, &serde_json::json!({"seq": 1}), false);
+        let mut inputs = e.voice_inputs();
+        assert_eq!(next_read(&mut inputs).await, Duration::ZERO);
+        assert_eq!(next_read(&mut inputs).await, VOICE_POLL);
+
+        // Pushed: a 3 s backstop, kept by keepalives.
+        e.voice_push(true);
+        assert_eq!(next_read(&mut inputs).await, VOICE_BACKUP);
+        tokio::time::advance(VOICE_QUIET - VOICE_BACKUP).await;
+        e.stream_heard();
+        assert_eq!(next_read(&mut inputs).await, Duration::ZERO); // overdue: reads at once
+        assert_eq!(next_read(&mut inputs).await, VOICE_BACKUP);
+
+        // A stream gone quiet may be dead: 400 ms until it is heard again.
+        tokio::time::advance(VOICE_QUIET).await;
+        assert_eq!(next_read(&mut inputs).await, Duration::ZERO);
+        assert_eq!(next_read(&mut inputs).await, VOICE_POLL);
+        e.dispatch(
+            "runner",
+            None,
+            &serde_json::json!({"kind": "logins"}),
+            false,
+        );
+        assert_eq!(next_read(&mut inputs).await, VOICE_BACKUP);
+
+        // The server stops taking voice_inputs_v1 during a backstop wait: read at once, then poll.
+        let waiting = tokio::spawn({
+            let e = e.clone();
+            async move {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                e.voice_push(false);
+            }
+        });
+        assert_eq!(next_read(&mut inputs).await, Duration::from_millis(100));
+        waiting.await.unwrap();
+        assert_eq!(next_read(&mut inputs).await, VOICE_POLL);
+
+        // A new server release polls until its heartbeat says it takes the hints.
+        e.voice_push(true);
+        e.dispatch(
+            "ready",
+            None,
+            &serde_json::json!({"seq": 2, "release": "next"}),
+            false,
+        );
+        assert!(!e.voice_pushed());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn voice_inputs_poll_after_a_drop_and_fetch_on_reconnect() {
+        let e = pushing();
+        let mut inputs = e.voice_inputs();
+        inputs.wait("attempt", "call").await;
+
+        // The stream drops during a backstop wait: read at once, then the 400 ms poll.
+        let dropping = tokio::spawn({
+            let e = e.clone();
+            async move {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                e.fall_back(Stream::Down);
+            }
+        });
+        assert_eq!(next_read(&mut inputs).await, Duration::from_millis(100));
+        dropping.await.unwrap();
+        assert_eq!(next_read(&mut inputs).await, VOICE_POLL);
+
+        e.dispatch("ready", None, &serde_json::json!({"seq": 1}), true);
+        tokio::time::timeout(Duration::from_millis(10), inputs.wait("attempt", "call"))
+            .await
+            .expect("reconnecting did not wake the voice loop");
+        assert_eq!(next_read(&mut inputs).await, VOICE_BACKUP);
     }
 
     #[test]

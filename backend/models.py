@@ -1669,6 +1669,7 @@ class Heartbeat(Contract):
             "threads_v1",
             "voice_sessions_v1",
             "voice_session_resume_v1",
+            "voice_inputs_v1",
             "memory_tidy_packets_v1",
             "harness_allocation_v1",
             "make_page",

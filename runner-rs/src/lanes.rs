@@ -21,6 +21,8 @@ pub const PLAN_SWITCH_RESUME: &str = "plan_switch_resume_v1";
 
 const VOICE_SESSIONS: &str = "voice_sessions_v1";
 const VOICE_SESSION_RESUME: &str = "voice_session_resume_v1";
+/// The server pushes `voice_inputs` hints to a resident voice session (events.rs VoiceInputs); without them it polls.
+pub const VOICE_INPUTS: &str = "voice_inputs_v1";
 pub const CAPABILITIES: &[&str] = &[
     "task_lanes_v2",
     "session_roots_v1",
@@ -55,6 +57,7 @@ pub const CAPABILITIES: &[&str] = &[
     // A push to a bot's repository is heard at once, so its chat turns never start on an older fetch (fetch_fresh.rs).
     crate::fetch_fresh::PUSH_HINTS,
     VOICE_SESSION_RESUME,
+    VOICE_INPUTS,
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
@@ -205,6 +208,7 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
             }
         }
         for name in [
+            VOICE_INPUTS,
             VOICE_SESSION_RESUME,
             crate::fetch_fresh::PUSH_HINTS,
             VOICE_SESSIONS,
@@ -429,6 +433,7 @@ mod tests {
             .copied()
             .filter(|c| {
                 ![
+                    VOICE_INPUTS,
                     crate::fetch_fresh::PUSH_HINTS,
                     VOICE_SESSION_RESUME,
                     VOICE_SESSIONS,
@@ -464,11 +469,19 @@ mod tests {
         // A bare capabilities refusal from an older hub drops the newest offer first.
         assert_eq!(
             refused_field("body.capabilities: bad", &all).as_deref(),
-            Some(VOICE_SESSION_RESUME)
+            Some(VOICE_INPUTS)
         );
         let older: Vec<&str> = CAPABILITIES
             .iter()
             .copied()
+            .filter(|c| *c != VOICE_INPUTS)
+            .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(VOICE_SESSION_RESUME)
+        );
+        let older: Vec<&str> = older
+            .into_iter()
             .filter(|c| *c != VOICE_SESSION_RESUME)
             .collect();
         assert_eq!(
@@ -476,8 +489,7 @@ mod tests {
             Some(crate::fetch_fresh::PUSH_HINTS)
         );
         let older: Vec<&str> = older
-            .iter()
-            .copied()
+            .into_iter()
             .filter(|c| *c != crate::fetch_fresh::PUSH_HINTS)
             .collect();
         assert_eq!(

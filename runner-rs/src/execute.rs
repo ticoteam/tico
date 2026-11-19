@@ -1670,10 +1670,12 @@ impl Runner {
         &self,
         d: &Drive<'_>,
         claude: &ClaudeHost,
+        call_id: &str,
         primer: &str,
         mut notes_stamp: String,
         meter: &mut Meter,
     ) -> Result<(), Fail> {
+        let mut inputs = self.events.voice_inputs();
         let state = self.voice_inputs(d.aid, "busy").await?;
         if state.is_null() || state["closed"] == true {
             return Ok(());
@@ -1681,8 +1683,6 @@ impl Runner {
         unstopped(d.flags)?;
         let mut resident = claude.start_voice(d.thread, d.effort, d.aid)?;
         resident.send(primer).await?;
-        let mut poll = tokio::time::interval(Duration::from_millis(400));
-        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut warming = true;
         let mut active: Option<String> = None;
         let mut last = String::new();
@@ -1730,6 +1730,10 @@ impl Runner {
                         if frame["is_error"] == true && !canceled {
                             return Err(Fail::runtime(text_of(&frame["result"])));
                         }
+                        // The busy read leaves pending utterances for the first ready read.
+                        if warming || canceled {
+                            inputs.refresh();
+                        }
                         warming = false;
                         let Some(turn) = active.take() else { continue };
                         if !canceled {
@@ -1770,7 +1774,7 @@ impl Runner {
                     active = None;
                     restart = Some(Duration::ZERO);
                 }
-                _ = poll.tick(), if interrupt_at.is_none() => {
+                _ = inputs.wait(d.aid, call_id), if interrupt_at.is_none() => {
                     if d.flags.lost.load(Ordering::SeqCst) || d.flags.stopped.load(Ordering::SeqCst) {
                         meter.add(&resident.take_usage().1);
                         return Err(Fail::runtime("Voice session lease ended"));
@@ -2891,17 +2895,19 @@ impl Runner {
             if voice_call {
                 let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, fresh: None };
                 let primer = text_of(&attempt["message"]["body"]);
-                let stamp = text_of(&attempt["message"]["refs"]["live_meeting"]["notes_stamp"]);
+                let meeting = &attempt["message"]["refs"]["live_meeting"];
+                let call_id = meeting["voice_call"].as_str().unwrap_or_default();
+                let stamp = text_of(&meeting["notes_stamp"]);
                 let segment = segments.last_mut().expect("the primary segment was added");
                 self.during_drain(&aid, async {
                     tokio::time::timeout_at(d.limit.into(), async {
                         match (&*h, voice_scope.as_deref()) {
                             (Host::Claude(claude), _) => {
-                                self.claude_voice_session(&d, claude, &primer, stamp, &mut segment.meter).await?;
+                                self.claude_voice_session(&d, claude, call_id, &primer, stamp, &mut segment.meter).await?;
                                 drove.outcome = "completed".into();
                             }
                             (Host::Codex(codex), Some(scope)) => {
-                                let start = voice::Start { primer: &primer, notes_stamp: stamp, scope, resumed, replacing: previous.is_some() };
+                                let start = voice::Start { primer: &primer, call: call_id, notes_stamp: stamp, scope, resumed, replacing: previous.is_some() };
                                 match self.codex_voice_session(&d, codex, rx, start, segment).await? {
                                     voice::End::Closed => {
                                         drop_session(&self.state, &bot, scope, &session_runtime, &th).await?;

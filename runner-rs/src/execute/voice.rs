@@ -12,6 +12,7 @@ const TURN_START_ACK: Duration = Duration::from_secs(10);
 
 pub(super) struct Start<'a> {
     pub primer: &'a str,
+    pub call: &'a str,
     pub notes_stamp: String,
     pub scope: &'a str,
     pub resumed: bool,
@@ -98,6 +99,8 @@ impl Runner {
         } else {
             "busy"
         };
+        // The same wake as the Claude session: runner-stream hints, a 3 s backup while they arrive, else 400 ms.
+        let mut inputs = self.events.voice_inputs();
         let state = self.voice_inputs(d.aid, phase).await?;
         if state.is_null() || state["closed"] == true {
             return Ok(End::Closed);
@@ -131,8 +134,6 @@ impl Runner {
             starting = Some(Box::pin(begin(primer)));
             Some(Turn::new(None))
         };
-        let mut poll = time::interval(Duration::from_millis(400));
-        poll.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
         let mut last = String::new();
         let mut interrupt_at = None;
         let mut closing = false;
@@ -191,6 +192,10 @@ impl Runner {
                             return Ok(End::Closed);
                         }
                         let turn = active.take().expect("the event belongs to the active turn");
+                        // The busy read leaves pending utterances for the first ready read.
+                        if canceled || turn.question.is_none() {
+                            inputs.refresh();
+                        }
                         if canceled {
                             continue;
                         }
@@ -231,7 +236,7 @@ impl Runner {
                         None => std::future::pending().await,
                     }
                 } => return Ok(if closing { End::Closed } else { End::Restart }),
-                _ = poll.tick(), if input_poll.is_none() && interrupt_at.is_none() => {
+                _ = inputs.wait(d.aid, start.call), if input_poll.is_none() && interrupt_at.is_none() => {
                     if d.flags.lost.load(Ordering::SeqCst) {
                         return Err(Fail::runtime("Voice session lease ended"));
                     }

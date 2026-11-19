@@ -39,6 +39,7 @@ webpki-roots = "1"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 
 [dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
 
 [profile.release]
 # Thin LTO keeps most of fat LTO's inlining but runs in parallel: a clean build takes about two minutes on four

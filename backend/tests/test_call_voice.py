@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from backend import call_media, call_sessions, call_voice, calls, live_meetings, providers, threads
+from backend import call_media, call_sessions, call_voice, calls, events, live_meetings, providers, threads
 from backend import bot_settings as BS
 from backend.run_diagnostics import RESTART_TEXT
 from backend.store import H
@@ -39,6 +39,7 @@ from backend.tests.helpers.calls import (
 from backend.tests.helpers.live_meetings import live  # noqa: F401
 from backend.tests.helpers.new_bot_flows import create_bot
 from backend.tests.helpers.credentials import setup as credential_setup
+from backend.tests.helpers.company import company_store
 from backend.tests.helpers.model_subscriptions import add, codex_file, company, give, machine, on
 from backend.tests.helpers.models_preset import connected, on_tico
 
@@ -694,12 +695,83 @@ def test_resident_primer_and_inputs_read_each_bots_current_notes(meet):
     assert post(meet, path, {}, token)["call_voice"]["turn"]["notes"] == brief
 
 
+def test_voice_inputs_wake_only_the_runner_holding_the_attempt(meet, tmp_path, api_database):
+    credential_setup(meet)
+    company(meet)
+    default = get(meet, "providers")["default"]
+    on(meet, "ops", default["runtime"], default["model"])
+    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1", "voice_inputs_v1"))
+    give(meet, worker, "claude", add(meet)["id"])
+    other = runner(meet, label="Other computer")
+    ready(meet, other, [], capabilities=("voice_inputs_v1",))
+    call = start_call(meet, _dm(meet), bots=["ops"])
+    attempt = _claim(meet, worker, "ops")
+    store, rid = meet.app.state.store, worker["runner_id"]
+
+    def newest(database):
+        with database.read() as c:
+            return events.latest(c)
+
+    def sent(database, runner_id, after):
+        with database.read() as c:
+            frames, _, reset, _ = events.runner_read(c, runner_id, "runner:" + runner_id, after)
+        assert not reset
+        return [data for _, data in frames if data["kind"] == "voice_inputs"]
+
+    second = tmp_path / "second-company"
+    second.mkdir()
+    second_store = company_store(second, api_database)
+    try:
+        with second_store.transaction() as c:
+            c.execute(
+                "INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES(?,?,?,?,?)",
+                (rid, "Other company's computer", "ana", "synthetic-runner", H.now()),
+            )
+        start, second_start = newest(store), newest(second_store)
+        _speak(meet, call["id"], 0)
+        [hint] = sent(store, rid, start)
+        assert hint == {
+            "seq": hint["seq"],
+            "kind": "voice_inputs",
+            "bots": [],
+            "attempt_id": attempt["id"],
+            "call_id": call["id"],
+        }
+        assert events.runner_bell(store).latest >= hint["seq"]
+        assert sent(store, other["runner_id"], start) == sent(second_store, rid, second_start) == []
+
+        start = newest(store)
+        # Notes reach the resident with the next utterance: a note on its own wakes nothing.
+        with store.transaction() as c:
+            c.execute(
+                "INSERT INTO changes(topic,kind,subject_id,bot,created_at) VALUES('threads','call.notes',?,?,?)",
+                (call["id"], "ops", H.now()),
+            )
+        assert sent(store, rid, start) == []
+
+        # A hint written while this computer held the attempt is not sent once the bot has moved away.
+        with store.transaction() as c:
+            events.queue_voice_inputs(c, store, call["id"], "ops")
+        assert len(sent(store, rid, start)) == 1
+        with store.transaction() as c:
+            c.execute(
+                "UPDATE assignments SET runner_id=?,generation=generation+1 WHERE bot='ops'", (other["runner_id"],)
+            )
+        with store.read() as c:
+            frames, cursor, reset, more = events.runner_read(c, rid, "runner:" + rid, start)
+        assert (reset, more) == (False, False)
+        assert [data for _, data in frames if data["kind"] == "voice_inputs"] == []
+        assert cursor == newest(store)  # past the skipped hint
+    finally:
+        second_store.close()
+
+
 def test_a_warm_reply_that_stalls_mid_sentence_is_cut_off_at_its_deadline(meet, caplog):
     credential_setup(meet)
     company(meet)
     default = get(meet, "providers")["default"]
     on(meet, "ops", default["runtime"], default["model"])
-    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1"))
+    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1", "voice_inputs_v1"))
     give(meet, worker, "claude", add(meet)["id"])
     voice, now = meet.app.state.calls.voice, [1000.0]
     voice.clock = lambda: now[0]
@@ -715,8 +787,15 @@ def test_a_warm_reply_that_stalls_mid_sentence_is_cut_off_at_its_deadline(meet, 
         {"events": [{"seq": 1, "kind": "delta", "payload": {"voice_turn": turn["id"], "text": "I think"}}]},
         token,
     )
+    store, rid = meet.app.state.store, worker["runner_id"]
+    with store.read() as c:
+        start = events.latest(c)
     now[0] += call_voice.ANSWER_SECONDS + 1
     voice.tick()
+    # The resident is woken to drop the expired answer at once.
+    with store.read() as c:
+        frames = events.runner_read(c, rid, "runner:" + rid, start)[0]
+    assert [data["attempt_id"] for _, data in frames if data["kind"] == "voice_inputs"] == [attempt["id"]]
     assert voice.settle(5), "the expired speech stream is still holding a player"
     [expired] = _turns(meet, call["meeting_id"])
     assert (expired["status"], expired["skip_reason"]) == ("skipped", "voice_deadline")
