@@ -110,6 +110,28 @@ describe('Finance @s398 @s403 @s399', () => {
     expect(screen.getByRole('button', { name: 'Add source' })).toBeTruthy();
   });
 
+  it('shows the permitted overview when viewing as a teammate without sources access', async () => {
+    const scoped = {
+      ...OWNER,
+      can_view_as: true,
+      teammates: [...OWNER.teammates, { teammate: 'human:lee', default: 'own_expenses', rights: [] }],
+    };
+    const sourceReads = vi.fn();
+    serve((url) => {
+      if (url.endsWith('/finance/access')) return ok(scoped);
+      if (url.includes('/finance/sources')) {
+        sourceReads();
+        return { status: 403, body: {} };
+      }
+      if (url.includes('/finance/pnl')) return ok({ ...PNL([COL('2026-11-01', 'current')], []), net: [12300] });
+      return { status: 404, body: {} };
+    });
+    show('finance', '/company/finance?as=human:lee');
+    expect(await screen.findByText('$123')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Add source' })).toBeNull();
+    expect(sourceReads).not.toHaveBeenCalled();
+  });
+
   it('a P&L that does not load says so and offers Try again', async () => {
     serve(() => ({ status: 500, body: { error: { code: 'internal' } } }));
     show('finance', '/company/finance?tab=pnl');

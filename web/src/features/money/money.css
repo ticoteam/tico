@@ -169,7 +169,9 @@
 .money .gr-health{display:grid;gap:var(--s-1);padding:var(--s-3) var(--page-x);font-size:var(--t-sm);color:var(--muted)}
 .money .gr-health p{margin:0}
 .money .gr-health .gr-match{display:inline-flex;align-items:center;gap:var(--s-1h)}
-/* a tile's lines end in "…" in their own tile, clear of the sparkline */
+/* The sparkline yields to the figure in a narrow tile. */
+.money .gr-tiles .widget-main{flex-shrink:0;max-width:100%}
+.money .gr-tiles .spark{flex-shrink:1;min-width:0}
 /* Retention: the month column shares the room with the day columns (fixed day widths left it 0 wide on a phone); a
    cohort not old enough yet says so on two lines inside its cell */
 .money .gr-ret col.t-col{width:auto}

@@ -122,6 +122,21 @@ describe('Growth panels @s480', () => {
     expect(await within(panel).findByText('No months yet')).toBeTruthy();
   });
 
+  it('shows the channel-wide acquisition cost alongside channel-wide history when opened from a segment', async () => {
+    serve({
+      '/growth/read?scope=segment:retail': ok({
+        ...READ,
+        scope: 'segment:retail',
+        channels: [{ ...READ.channels[0]!, cac: 100 }],
+      }),
+      '/growth/read?scope=channel:search': ok(CHANNEL),
+    });
+    show('/company/growth?segment=retail&month=2026-10');
+    fireEvent.click(await screen.findByRole('link', { name: 'Search ads' }));
+    const panel = await screen.findByRole('complementary', { name: 'Search ads' });
+    expect(await within(panel).findByText('$50', { selector: '.pfig b' })).toBeTruthy();
+  });
+
   it('a channel that fails offers Try again', async () => {
     serve({ '/growth/read?scope=channel:search': broken });
     show('/company/growth?panel=channel:search');
