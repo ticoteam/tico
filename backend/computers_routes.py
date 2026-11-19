@@ -41,11 +41,12 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
         # Keep the expensive, repeated provenance walks off the write lock. As for claim, a concurrent
         # commit invalidates this selection and the write falls back to current state under its lock.
         with store.read() as snapshot:
-            validate_identity(snapshot, request.state.identity)
-            execution.runner(snapshot, request.state.identity)
             version = snapshot.execute("PRAGMA data_version").fetchone()[0]
             snapshot.execute("BEGIN")
             try:
+                # Inside the read transaction, so the two share one read of the computer's row (read_cache).
+                validate_identity(snapshot, request.state.identity)
+                execution.runner(snapshot, request.state.identity)
                 selected = live_turn_cache(snapshot, request.state.identity.runner_id)
             finally:
                 snapshot.rollback()

@@ -41,7 +41,20 @@ SCHEMAS.update(
             {"send": ref("EmailSend"), "draft": obj({"id": "s", "kept": "b", "detail": "s"})},
             required=("send",),
         ),
-        "EmailSendDetail": obj({"send": ref("EmailSend"), "body": "s", "bodies": items("o"), "preview_complete": "b"}),
+        "EmailSendDetail": obj(
+            {
+                "send": ref("EmailSend"),
+                "body": "s",
+                "bodies": items("o"),
+                "preview_complete": "b",
+                # The frozen copy's To, Cc and Bcc apart (send.recipients is all of them); empty once it is gone.
+                "to": items("s"),
+                "cc": items("s"),
+                "bcc": items("s"),
+                # What the OK sends back (POST /api/v2/tasks/{tid}/asks/{rid}/ok); null when the send has no OK to give.
+                "shown_hash": "n",
+            }
+        ),
         "EmailSendList": obj({"sends": items(ref("EmailSend")), "next_cursor": "n"}),
         "EmailSuppressionList": obj({"recipients": items("o"), "next_cursor": "n"}),
     }

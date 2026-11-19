@@ -29,6 +29,19 @@ pub const READ_TIMEOUT_S: u64 = 90;
 pub const HEARTBEAT_LIVE_S: f64 = 60.0;
 /// A stream that stayed up this long before it dropped had a fresh drop: its reconnect backoff starts over.
 pub const STABLE_S: u64 = 30;
+/// For this long after a stream that was up drops, while the server cannot be reached at all (a restart: the
+/// connection is refused, or the proxy in front answers 502/503/504), the stream is tried again at least every
+/// QUICK_RETRY_S instead of on the doubling backoff. The stream is then back within a couple of seconds of the server,
+/// instead of up to half a minute later, and the runner's own fallback polls (`live` false) stop as soon as it is.
+pub const QUICK_WINDOW_S: u64 = 90;
+pub const QUICK_RETRY_S: f64 = 2.0;
+/// A server's new release asks every computer to read everything again (`ready`). Each computer spreads that pass
+/// over this many seconds, so the dozen computers that reconnect to a just-started server do not all ask at once.
+pub const CATCH_UP_SPREAD_S: f64 = 10.0;
+/// A read taken just before a stream dropped may have failed against the stopping server, after its hint moved the
+/// stream's cursor on. A resumed stream does not replay that hint, so the channels taken since this long before the
+/// drop are read once more.
+pub const REASK_BEFORE_DROP_S: u64 = 60;
 /// How often a running turn asks for its inputs and goal with the stream up and no notice for its bot: the backstop
 /// for a notice that went missing. Each wait is jittered by TURN_RECOVERY_JITTER so turns do not line up.
 pub const TURN_RECOVERY_S: f64 = 15.0;
@@ -109,6 +122,8 @@ pub enum Stream {
 enum Failure {
     NotSupported,
     Broken(String),
+    /// No server answered: the connection failed, or the proxy in front of a server that is down said so.
+    Unreachable(String),
 }
 
 #[derive(Clone)]
@@ -163,6 +178,12 @@ pub struct Events {
     pending: AtomicU16,
     state: Mutex<Stream>,
     last_id: Mutex<Option<String>>,
+    /// The `after` the stream being opened asked to resume from; None when it asked for none.
+    resume: Mutex<Option<i64>>,
+    /// A release's catch-up pass (`ready`), due at this instant (CATCH_UP_SPREAD_S).
+    catch_up_at: Mutex<Option<Instant>>,
+    /// When each channel (by `bit`) was last taken: read again on a resumed stream (REASK_BEFORE_DROP_S).
+    taken: Mutex<HashMap<u16, Instant>>,
     /// When the stream was last said to be lost or unavailable, until it is said to be back.
     down_since: Mutex<Option<Instant>>,
     pub release: Mutex<Option<Value>>,
@@ -186,6 +207,9 @@ impl Events {
             pending: AtomicU16::new(0),
             state: Mutex::new(Stream::Down),
             last_id: Mutex::new(None),
+            resume: Mutex::new(None),
+            catch_up_at: Mutex::new(None),
+            taken: Mutex::new(HashMap::new()),
             down_since: Mutex::new(None),
             release: Mutex::new(None),
             wake: Notify::new(),
@@ -244,6 +268,7 @@ impl Events {
     /// How many notices a running turn of `bot` has had: one that differs from the count at its last ask means ask
     /// again now. Take it before the request, so a notice that lands during the request is not lost.
     pub fn heard(&self, bot: &str) -> u64 {
+        self.settle();
         let notices = self.notices.lock().unwrap();
         notices.0 + notices.1.get(bot).copied().unwrap_or(0)
     }
@@ -282,8 +307,68 @@ impl Events {
 
     /// True once for each time the server asked for `channel` since it was last taken.
     pub fn take(&self, channel: &str) -> bool {
+        self.settle();
         let bit = bit(channel);
-        self.pending.fetch_and(!bit, Ordering::SeqCst) & bit != 0
+        let taken = self.pending.fetch_and(!bit, Ordering::SeqCst) & bit != 0;
+        if taken {
+            self.taken.lock().unwrap().insert(bit, Instant::now());
+        }
+        taken
+    }
+
+    /// How long until a release's catch-up pass is due, if one waits: the run loop sleeps no longer than this.
+    pub fn catch_up_in(&self) -> Option<Duration> {
+        self.catch_up_at
+            .lock()
+            .unwrap()
+            .map(|at| at.saturating_duration_since(Instant::now()))
+    }
+
+    /// Everything asked for now, every running turn notified: a release's pass still waiting is not needed any more.
+    fn catch_up_now(&self) {
+        *self.catch_up_at.lock().unwrap() = None;
+        self.ask(ALL);
+        self.notice(&[]);
+    }
+
+    /// A resumed stream: the channels taken since REASK_BEFORE_DROP_S before it dropped are asked for once more.
+    fn reask_since(&self, dropped: Instant) {
+        let since = dropped
+            .checked_sub(Duration::from_secs(REASK_BEFORE_DROP_S))
+            .unwrap_or(dropped);
+        let bits = self
+            .taken
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, at)| **at >= since)
+            .fold(0, |set, (bit, _)| set | bit);
+        if bits != 0 {
+            self.pending.fetch_or(bits, Ordering::SeqCst);
+            self.wake.notify_one();
+        }
+    }
+
+    /// A release's catch-up pass whose moment came: everything is asked for, and every running turn hears it.
+    fn settle(&self) {
+        let due = {
+            let mut at = self.catch_up_at.lock().unwrap();
+            at.is_some_and(|t| Instant::now() >= t) && at.take().is_some()
+        };
+        if due {
+            self.catch_up_now();
+        }
+    }
+
+    /// Everything read again within CATCH_UP_SPREAD_S, at a moment of this computer's own.
+    fn catch_up_soon(&self) {
+        let spread = (uuid::Uuid::new_v4().as_u128() % 10_001) as f64 / 10_000.0;
+        let at = Instant::now() + Duration::from_secs_f64(CATCH_UP_SPREAD_S * spread);
+        let mut due = self.catch_up_at.lock().unwrap();
+        // One already waiting keeps its moment: a second release within the spread asks for the same pass.
+        if due.is_none() {
+            *due = Some(at);
+        }
     }
 
     pub fn ask(&self, channels: &[&'static str]) {
@@ -300,6 +385,8 @@ impl Events {
         let mut delay = 1.0f64;
         let mut legacy_until = Instant::now();
         let mut said_down = false;
+        // When a stream that was up last dropped (QUICK_WINDOW_S).
+        let mut dropped_at: Option<Instant> = None;
         while !self.stop.load(Ordering::SeqCst) {
             if self.state() == Stream::Legacy && Instant::now() < legacy_until {
                 tokio::time::sleep((legacy_until - Instant::now()).min(Duration::from_secs(60)))
@@ -307,8 +394,13 @@ impl Events {
                 continue;
             }
             let started = Instant::now();
-            let clean = match self.read_once(&client).await {
-                Ok(clean) => clean,
+            let (why, unreachable) = match self.read_once(&client).await {
+                Ok(true) => {
+                    delay = 1.0;
+                    dropped_at = None;
+                    continue; // the server's own lifetime ran out: reconnect at once
+                }
+                Ok(false) => (None, false),
                 Err(Failure::NotSupported) => {
                     if self.state() != Stream::Legacy {
                         log("Tico runner: this server has no event stream; polling as before");
@@ -317,30 +409,29 @@ impl Events {
                     legacy_until = Instant::now() + Duration::from_secs_f64(LEGACY_RETRY_S);
                     continue;
                 }
-                Err(Failure::Broken(why)) => {
-                    if self.state() == Stream::Up {
-                        delay = backoff_after_drop(delay, started.elapsed());
-                        log(&format!(
-                            "Tico runner: event stream lost ({why}); polling until it is back"
-                        ));
-                        *self.down_since.lock().unwrap() = Some(Instant::now());
-                    } else if !said_down {
-                        said_down = true;
-                        *self.down_since.lock().unwrap() = Some(Instant::now());
-                        log(&format!(
-                            "Tico runner: event stream unavailable ({}); polling",
-                            why.chars().take(120).collect::<String>()
-                        ));
-                    }
-                    false
-                }
+                Err(Failure::Broken(why)) => (Some(why), false),
+                Err(Failure::Unreachable(why)) => (Some(why), true),
             };
-            if clean {
-                delay = 1.0;
-                continue; // the server's own lifetime ran out: reconnect at once
+            if let Some(why) = why {
+                if self.state() == Stream::Up {
+                    dropped_at = Some(Instant::now());
+                    delay = backoff_after_drop(delay, started.elapsed());
+                    log(&format!(
+                        "Tico runner: event stream lost ({why}); polling until it is back"
+                    ));
+                    *self.down_since.lock().unwrap() = Some(Instant::now());
+                } else if !said_down {
+                    said_down = true;
+                    *self.down_since.lock().unwrap() = Some(Instant::now());
+                    log(&format!(
+                        "Tico runner: event stream unavailable ({}); polling",
+                        why.chars().take(120).collect::<String>()
+                    ));
+                }
             }
             self.fall_back(Stream::Down);
-            tokio::time::sleep(Duration::from_secs_f64(delay)).await;
+            let wait = retry_after(delay, unreachable, dropped_at.map(|at| at.elapsed()));
+            tokio::time::sleep(Duration::from_secs_f64(wait)).await;
             delay = (delay * 2.0).min(RECONNECT_MAX_S);
         }
     }
@@ -353,6 +444,7 @@ impl Events {
             .as_ref()
             .map(|a| format!("?after={}", quote_plus(a)))
             .unwrap_or_default();
+        *self.resume.lock().unwrap() = after.as_deref().and_then(|a| a.parse().ok());
         let token = bearer(&client.token).map_err(|e| Failure::Broken(e.to_string()))?;
         let http = http_client(Some(Duration::from_secs(READ_TIMEOUT_S)));
         let mut req = http
@@ -366,10 +458,14 @@ impl Events {
         let response = req
             .send()
             .await
-            .map_err(|e| Failure::Broken(format!("URLError: {e}")))?;
+            .map_err(|e| Failure::Unreachable(format!("URLError: {e}")))?;
         let status = response.status().as_u16();
         if status == 404 || status == 405 {
             return Err(Failure::NotSupported);
+        }
+        if [502, 503, 504].contains(&status) {
+            // The proxy in front of a server that is not answering (a restart).
+            return Err(Failure::Unreachable(format!("HTTPError: HTTP {status}")));
         }
         if !(200..300).contains(&status) {
             return Err(Failure::Broken(format!("HTTPError: HTTP {status}")));
@@ -453,10 +549,25 @@ impl Events {
                     .unwrap()
                     .as_ref()
                     .is_some_and(|r| *r != release);
-                // Back after an outage or on a new server release: one full pass catches up on anything unsaid.
-                if recovering || changed {
-                    self.ask(ALL);
-                    self.notice(&[]);
+                // Back after an outage: one full pass catches up on anything unsaid. Not when the server took the
+                // resume (it echoes our `after`): it sends every change since then on this stream, and a `reset` when
+                // it no longer has them. A new server release: one full pass too, within CATCH_UP_SPREAD_S.
+                // A server whose newest change is behind our `after` (a restored database) has not got them: no resume.
+                let resumed = self.resume.lock().unwrap().is_some_and(|after| {
+                    frame.after == Some(after) && frame.seq.is_some_and(|seq| seq >= after)
+                });
+                if recovering && !resumed {
+                    self.catch_up_now();
+                } else {
+                    if recovering {
+                        // A read taken just before the drop may have failed; its hint is not sent again.
+                        if let Some(dropped) = *self.down_since.lock().unwrap() {
+                            self.reask_since(dropped);
+                        }
+                    }
+                    if changed {
+                        self.catch_up_soon();
+                    }
                 }
                 if changed {
                     // Another release may not push voice hints: voice polls until its heartbeat (asked above) says.
@@ -506,8 +617,7 @@ impl Events {
                 }
             }
             "reset" => {
-                self.ask(ALL);
-                self.notice(&[]);
+                self.catch_up_now();
                 let _ = self.voice.send(VoiceWake::CatchUp);
             }
             "screen_open" => crate::screen::heard(),
@@ -526,6 +636,17 @@ impl Events {
 fn backoff_after_drop(delay: f64, lasted: Duration) -> f64 {
     if lasted >= Duration::from_secs(STABLE_S) {
         1.0
+    } else {
+        delay
+    }
+}
+
+/// How long to wait before the next try. While a server that dropped a live stream within QUICK_WINDOW_S cannot be
+/// reached at all, no longer than QUICK_RETRY_S: it is most likely restarting, and every second the stream stays down
+/// is a second of fallback polling against it once it is back. Anything else waits out the doubling backoff.
+fn retry_after(delay: f64, unreachable: bool, since_drop: Option<Duration>) -> f64 {
+    if unreachable && since_drop.is_some_and(|d| d < Duration::from_secs(QUICK_WINDOW_S)) {
+        delay.min(QUICK_RETRY_S)
     } else {
         delay
     }
@@ -831,6 +952,108 @@ mod tests {
         assert!(low < 12.5 && high > 17.5, "{low}..{high}");
         let seconds: std::collections::HashSet<u64> = waits.iter().map(|w| *w as u64).collect();
         assert!(seconds.len() >= 6, "{seconds:?}");
+    }
+
+    #[test]
+    fn a_restarting_server_is_tried_every_few_seconds_for_a_while_then_on_the_backoff() {
+        let soon = Some(Duration::from_secs(5));
+        assert_eq!(retry_after(16.0, true, soon), QUICK_RETRY_S);
+        assert_eq!(retry_after(1.0, true, soon), 1.0);
+        // An answer from the server itself, a stream that never was up, or a long outage: the backoff stands.
+        assert_eq!(retry_after(16.0, false, soon), 16.0);
+        assert_eq!(retry_after(16.0, true, None), 16.0);
+        let late = Some(Duration::from_secs(QUICK_WINDOW_S));
+        assert_eq!(retry_after(16.0, true, late), 16.0);
+    }
+
+    #[test]
+    fn a_resumed_stream_reads_nothing_again_and_a_new_release_reads_everything_within_the_spread() {
+        let e = Events::new();
+        e.dispatch(
+            "ready",
+            None,
+            &serde_json::json!({"seq": 5, "after": 5, "release": "v1"}),
+            true,
+        );
+        // A fresh start (no resume) reads everything at once, as before.
+        assert!(e.take("logins") && e.take("sync"));
+        e.pending.store(0, Ordering::SeqCst);
+        let before = e.heard("acme");
+        // The stream drops and comes back on the same release; the server took the resume: it sends what changed.
+        *e.resume.lock().unwrap() = Some(5);
+        e.dispatch(
+            "ready",
+            None,
+            &serde_json::json!({"seq": 9, "after": 5, "release": "v1"}),
+            true,
+        );
+        assert!(ALL.iter().all(|c| !e.take(c)) && e.heard("acme") == before);
+        // A server that did not take it (it answers another `after`): everything, as before.
+        e.dispatch(
+            "ready",
+            None,
+            &serde_json::json!({"seq": 9, "after": 9, "release": "v1"}),
+            true,
+        );
+        assert!(e.take("logins") && e.heard("acme") > before);
+        // A new release, resumed: nothing yet, then everything once its moment within the spread comes.
+        let before = e.heard("acme");
+        e.dispatch(
+            "ready",
+            None,
+            &serde_json::json!({"seq": 12, "after": 5, "release": "v2"}),
+            true,
+        );
+        let at = e.catch_up_at.lock().unwrap().expect("a catch-up is due");
+        assert!(at <= Instant::now() + Duration::from_secs_f64(CATCH_UP_SPREAD_S));
+        *e.catch_up_at.lock().unwrap() = Some(Instant::now());
+        assert!(e.take("harness") && e.take("imports") && !e.take("keys"));
+        assert!(e.heard("acme") > before && e.catch_up_at.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_resumed_stream_reads_again_what_it_took_just_before_the_drop_and_a_reset_drops_the_spread_pass(
+    ) {
+        let e = Events::new();
+        e.dispatch(
+            "ready",
+            None,
+            &serde_json::json!({"seq": 5, "after": 5, "release": "v1"}),
+            true,
+        );
+        e.pending.store(0, Ordering::SeqCst);
+        // A refresh hint taken (its read then failed against the stopping server), and the stream drops.
+        e.ask(&["refresh"]);
+        assert!(e.take("refresh"));
+        *e.down_since.lock().unwrap() = Some(Instant::now());
+        *e.resume.lock().unwrap() = Some(5);
+        e.dispatch(
+            "ready",
+            None,
+            &serde_json::json!({"seq": 9, "after": 5, "release": "v1"}),
+            true,
+        );
+        assert!(e.take("refresh") && !e.take("logins") && !e.take("claim"));
+        // A server behind our `after` (a restored database) did not take the resume: everything.
+        *e.down_since.lock().unwrap() = Some(Instant::now());
+        e.dispatch(
+            "ready",
+            None,
+            &serde_json::json!({"seq": 3, "after": 5, "release": "v1"}),
+            true,
+        );
+        assert!(e.take("logins") && e.take("sync"));
+        e.pending.store(0, Ordering::SeqCst);
+        // A new release schedules its pass; a `reset` then reads everything at once and the pass is not needed.
+        e.dispatch(
+            "ready",
+            None,
+            &serde_json::json!({"seq": 12, "after": 5, "release": "v2"}),
+            false,
+        );
+        assert!(e.catch_up_in().is_some());
+        e.dispatch("reset", None, &serde_json::json!({}), false);
+        assert!(e.catch_up_in().is_none() && e.take("logins"));
     }
 
     #[test]
