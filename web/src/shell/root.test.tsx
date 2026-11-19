@@ -46,12 +46,14 @@ vi.mock('@/features/start/exports', () => ({
   StartScreen: ({ screen }: { screen: string }) => <p>start: {screen}</p>,
   useStartGate: () => ({ screen: gate.screen, error: null, retry: () => {}, busy: false, firstRun: false }),
 }));
+const call = vi.hoisted(() => ({ phase: 'idle' }));
 vi.mock('@/features/calls/exports', () => ({
   CallBar: () => <div>call bar</div>,
   CallSide: () => null,
   RingCard: () => null,
   TOGGLE_MUTE: 'calls.toggleMute',
-  useCall: () => ({ muted: false }),
+  useCall: () => ({ muted: false, phase: call.phase }),
+  isCallActive: (c: { phase: string }) => c.phase === 'live',
 }));
 vi.mock('@/features/tasks/exports', () => ({ flowQuery: q('flow', { count: 4, items: [] }), pipelinesQuery: q('pipelines', []), roadmapPipeline: () => null }));
 vi.mock('@/features/team/exports', () => ({ TeammateChat: () => null, teamSlug: (t: string) => t, whoHref: () => '/' }));
@@ -93,6 +95,7 @@ function fakeDesktop() {
     callWindow: { open: vi.fn(async () => {}), close: vi.fn(), setOnTop: vi.fn(), onState: vi.fn(() => () => {}) },
     app: { updateState: vi.fn(), restartToUpdate: vi.fn(), checkForUpdates: vi.fn(), showLog: vi.fn(), logTail: vi.fn(), openAtLogin: vi.fn() },
     setFilesOrigin: vi.fn(),
+    reportCall: vi.fn(),
   } satisfies TicoDesktop;
   (window as { tico?: TicoDesktop }).tico = t;
   return t;
@@ -155,6 +158,17 @@ describe('the desktop app', () => {
     await waitFor(() => expect(t.companies.reportSelf).toHaveBeenCalledWith({ name: 'Fernhill', email: 'maya@example.com', signedOut: true }));
     expect(t.setBadge).toHaveBeenCalledWith(0);
     expect(t.setBadge).not.toHaveBeenCalledWith(4);
+  });
+
+  it('hears that a call is live, so an update waits for it', async () => {
+    const t = fakeDesktop();
+    call.phase = 'live';
+    try {
+      show('/');
+      await waitFor(() => expect(t.reportCall).toHaveBeenCalledWith(true));
+    } finally {
+      call.phase = 'idle';
+    }
   });
 
   it('in a browser, nothing is reported and nothing breaks', async () => {
