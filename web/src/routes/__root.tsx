@@ -2,9 +2,10 @@ import { useInfiniteQuery, useQuery, type QueryClient } from '@tanstack/react-qu
 import { Outlet, createRootRouteWithContext, useLocation, useRouter } from '@tanstack/react-router';
 import { Suspense, lazy, useEffect, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
+import { reportCallToDesktop } from '@/desktop';
 import { ticoRoomQuery } from '@/conversation';
 import { configQuery, directoryQuery, meQuery, recordVisit, useHeldCount, type Actor, type Directory } from '@/data';
-import { CallBar, CallSide, RingCard, TOGGLE_MUTE, useCall } from '@/features/calls/exports';
+import { CallBar, CallSide, RingCard, TOGGLE_MUTE, isCallActive, useCall } from '@/features/calls/exports';
 import { FileViewerHost } from '@/features/library/exports';
 import { AssetRecovery, PlanLock } from '@/features/notices/exports';
 import { FirstRun, StartScreen, useStartGate } from '@/features/start/exports';
@@ -106,6 +107,10 @@ function CallWindow() {
    Nothing is read or sent in a browser. */
 function useDesktopReports(signedOut: boolean) {
   const on = !!desktop();
+  const callLive = isCallActive(useCall());
+  useEffect(() => {
+    if (on) reportCallToDesktop(callLive);
+  }, [on, callLive]);
   const me = useQuery({ ...meQuery, enabled: on });
   const config = useQuery({ ...configQuery, enabled: on });
   const flow = useQuery({ ...flowQuery, enabled: on && me.isSuccess });
