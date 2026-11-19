@@ -2,7 +2,7 @@ import { useLocation } from '@tanstack/react-router';
 import type { Arrangement } from './layout';
 
 /* Which arrangement the address asks for (architecture.md 3, layout.md 6 "Which memory"):
-   a call is `call`; an open task is `task`; an agent's or a person's own page is `agent`;
+   a call is `call`; an open task is `task` (`/tasks/<pipeline>/edit` is the pipeline editor, a page); an agent's or a person's own page is `agent`;
    a page with a second chat (?chat=) is `chat`; anything else is `page`.
    `/team/<who>` is also a team's page, which the path alone cannot tell apart: `isActor` says whether `<who>` is a
    teammate (the root asks the directory). Without it, every `/team/<who>` is a teammate's. */
@@ -10,7 +10,7 @@ export function arrangementFor(pathname: string, search: Record<string, unknown>
   const parts = pathname.replace(/^\/next(?=\/|$)/, '').split('/').filter(Boolean);
   const [root, a, b] = parts;
   if (root === 'call' && a) return 'call';
-  if ((root === 'tasks' && a && b) || ((root === 'flow' || root === 'task') && a)) return 'task';
+  if ((root === 'tasks' && a && b && b !== 'edit') || ((root === 'flow' || root === 'task') && a)) return 'task';
   if (root === 'team' && a && (isActor?.(decodeURIComponent(a)) ?? true)) return 'agent';
   if (typeof search.chat === 'string' && search.chat) return 'chat';
   return 'page';

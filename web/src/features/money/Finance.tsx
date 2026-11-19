@@ -31,11 +31,12 @@ import { FINANCE_TAB_IDS, type FinanceSearch, type FinanceTab } from './search';
     the first page they have, as the old app's redirect did (finance.ts finShow). */
 export function FinancePage({ search }: { search: FinanceSearch }) {
   const [failure, dismiss] = useBooksReturn(search);
-  const { shown, pending } = useCaps();
+  const { shown, pending, caps } = useCaps();
   // The plain address waits for the access list, so a teammate who has only My budget lands there, not on the overview.
   if (!search.tab && pending) return <Waiting />;
   const tab: FinanceTab = search.tab ?? (shown('overview') ? 'overview' : (FINANCE_TAB_IDS.find(shown) ?? 'overview'));
-  if (!shown(tab)) return <Closed />;
+  // My budget is a tab only for a teammate who sees nothing else, but whoever reads every budget (the owner) may open it
+  if (!shown(tab) && !(tab === 'mine' && caps?.budgets)) return <Closed />;
   if (tab === 'overview') return <Overview />;
   if (tab === 'pnl') return <PnlPage search={search} />;
   if (tab === 'budgets') return <BudgetsPage search={search} />;

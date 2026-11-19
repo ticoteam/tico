@@ -60,4 +60,11 @@ describe('Dialog', () => {
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(opener));
   });
+
+  it('starts with its title and ends with its buttons, the two the CSS holds in place while a tall dialog scrolls', async () => {
+    render(<Dialog open onOpenChange={() => {}} title="Add webhook" actions={<Button variant="primary">Add</Button>}><p>fields</p></Dialog>);
+    const dialog = await screen.findByRole('dialog', { name: 'Add webhook' });
+    expect(dialog.firstElementChild?.tagName).toBe('H2');
+    expect(dialog.lastElementChild?.className).toBe('modal-row');
+  });
 });

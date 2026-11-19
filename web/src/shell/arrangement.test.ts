@@ -7,6 +7,7 @@ describe('arrangementFor', () => {
     expect(arrangementFor('/tasks/p1')).toBe('page');
     expect(arrangementFor('/tasks/p1/12')).toBe('task');
     expect(arrangementFor('/tasks/p1/12/details')).toBe('task');
+    expect(arrangementFor('/tasks/p1/edit')).toBe('page');
     expect(arrangementFor('/flow/12')).toBe('task');
     expect(arrangementFor('/task/12')).toBe('task');
     expect(arrangementFor('/call/r1')).toBe('call');

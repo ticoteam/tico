@@ -49,7 +49,7 @@ function refetchSoon(key: QueryKey): void {
   const go = () => {
     trailing.delete(id);
     refetchedAt.set(id, Date.now());
-    void queryClient.invalidateQueries({ queryKey: key, refetchType: 'active' });
+    void queryClient.invalidateQueries({ queryKey: key, refetchType: 'active' }, { cancelRefetch: false });
   };
   if (wait <= 0) return go();
   // Stale now, so a page opened meanwhile reads it; what is on screen reads once the gap has passed.
@@ -199,7 +199,7 @@ export function patchTaskList<T extends TaskRow>(
 
 function patchTasks(batch: TaskEvent[]): void {
   if (batch.some((e) => e.bulk)) {
-    void queryClient.invalidateQueries({ queryKey: ['tasks'] });
+    void queryClient.invalidateQueries({ queryKey: ['tasks'] }, { cancelRefetch: false });
     batch = batch.filter((e) => !e.bulk);
   }
   if (!batch.length) return;
@@ -227,9 +227,10 @@ function patchTasks(batch: TaskEvent[]): void {
     if (held && !older(task, held) && !same({ ...held, ...task }, held)) queryClient.setQueryData(detail, { ...held, ...task });
     // A file or a linked page changed: whatever the task view reads under its detail key (not the detail itself).
     if (e.kinds?.includes('files'))
-      void queryClient.invalidateQueries({
-        predicate: (q) => q.queryKey.length > 3 && same(q.queryKey.slice(0, 3), detail),
-      });
+      void queryClient.invalidateQueries(
+        { predicate: (q) => q.queryKey.length > 3 && same(q.queryKey.slice(0, 3), detail) },
+        { cancelRefetch: false },
+      );
   }
 }
 

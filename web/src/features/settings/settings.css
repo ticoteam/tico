@@ -180,10 +180,11 @@ div.row{cursor:default}
 .pk-sec+.list-tools,.pk-sec+.fl{border-top:1px solid var(--line)}
 /* the table measures its own width (the page's includes the section list): narrow, the model for tasks and the owner give way */
 .fl{container:fleet / inline-size}
-/* The third column (Computer, Team or Next) takes its full 140 before the name grows, so "No computer" is not cut; only
-   when there is no room left does it give way, to 72, rather than push the row past the edge. */
+/* The third column (Computer, Team or Next) takes its full 140 before the name grows, and shares the squeeze with the
+   model (down to 112), so "No computer" is not cut at 1100; only when there is no room left does it give way, to 72,
+   rather than push the row past the edge. */
 @container fleet (max-width:840px){
-  .g-bots.g-fleet{--g:16px var(--av-sm) minmax(96px,1fr) 176px minmax(72px,140px) 34px}
+  .g-bots.g-fleet{--g:16px var(--av-sm) minmax(96px,1fr) minmax(112px,176px) minmax(72px,140px) 34px}
   .g-fleet .c-tasks,.g-fleet .c-own{display:none}
 }
 /* a row's ⋯: only on a phone, where the model, tasks and limit cells give way */

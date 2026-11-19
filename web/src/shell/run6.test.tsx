@@ -250,3 +250,4 @@ describe('the browser tab’s title', () => {
     expect(tabTitle('Tasks')).not.toContain('·');
   });
 });
+
