@@ -1,6 +1,6 @@
 import { queryOptions, type QueryClient, type QueryKey } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
-import type { NeedsYou, OkPreview, PageShown, PipelineSettingsList, Task, TaskDetail, TaskFileList, TaskResult } from '@/api/schema';
+import type { NeedsYou, OkPreview, PagePublished, PageShown, PipelineSettingsList, PublishPageBody, Task, TaskDetail, TaskFileList, TaskResult } from '@/api/schema';
 import { keys, queryClient, QUIET_STALE_MS, quietRoot, write } from '@/data';
 
 /* One open task: its detail (GET /api/v2/tasks/{tid}, kept current by the stream under keys.tasks.detail), the files
@@ -110,6 +110,14 @@ export const taskPageQuery = (task: string, file: string) =>
   queryOptions({
     queryKey: [...keys.tasks.detail(task), 'page', file] as const,
     queryFn: async ({ signal }) => (await api.get<PageShown>(`/api/v2/pages/${enc(file)}`, { signal })).page,
+  });
+
+/** One version of a page as its text (GET /api/v2/files/{fid}?v=<n>). A version never changes once written. */
+export const pageVersionQuery = (file: string, n: number) =>
+  queryOptions({
+    queryKey: ['page-versions', file, n] as const,
+    queryFn: async ({ signal }) => String(await api.get<unknown>(`/api/v2/files/${enc(file)}?v=${n}`, { signal })),
+    staleTime: Infinity,
   });
 
 export interface StageChoice {
@@ -301,6 +309,23 @@ export async function askSomeone(id: string, to: string, line: string) {
   const version = queryClient.getQueryData<TaskData>(keys.tasks.detail(id))?.version;
   const r = await api.post<TaskResult>(`${taskPath(id)}/asks`, { to, line, kind: 'ok', ...(version != null && { version }) });
   queryClient.setQueryData(keys.tasks.detail(id), settled(id)(queryClient.getQueryData(keys.tasks.detail(id)), r));
+  return r;
+}
+
+/** A page's file name from its title, as the old app made it. */
+const pageName = (title: string) =>
+  `${
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) || 'page'
+  }.html`;
+
+/** A new page on the task, from a title and its text (POST /api/v2/pages, as the task's related page). */
+export async function newTaskPage(id: string, title: string, text: string): Promise<PagePublished> {
+  const r = await api.post<PagePublished>('/api/v2/pages', { title, text, task: id, as: 'related', name: pageName(title) } satisfies PublishPageBody);
+  await reread(id);
   return r;
 }
 

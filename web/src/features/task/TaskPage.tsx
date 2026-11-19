@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from '@tanstack/react-router';
+import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { run } from '@/actions';
 import { ApiError } from '@/api/client';
@@ -11,11 +11,14 @@ import { useFollow } from '@/live/follow';
 import { Document, type PageState, type PageTab } from '@/pagekinds';
 import { Decision } from './Answer';
 import { AddMenu, Details, type Adding } from './Details';
-import { DocFrame, FileView } from './FileView';
-import { FlowSteps, MoreMenu, WhereLine } from './Head';
+import type { TaskSearch } from './exports';
+import { FileView } from './FileView';
+import { FlowCover } from './FlowCover';
+import { FlowSteps, FlowTop, MoreMenu, WhereLine } from './Head';
 import { defaultTab, DETAILS, reasonOf, tabAddress, tabsOf, type TaskTab } from './model';
 import { Face, FlowMark } from './parts';
 import { taskDetailQuery, taskRefQuery, type TaskData } from './queries';
+import { PageView, useVersions, VersionBar } from './Versions';
 import './task.css';
 
 export interface TaskPageProps {
@@ -92,8 +95,15 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
     void navigate({ to: a.to as never, search: a.search as never, replace: true });
   }, [known, opened, flow, t, navigate]);
   const [adding, setAdding] = useState<Adding | null>(null);
+  const search = useSearch({ strict: false }) as TaskSearch;
 
   const current = tabs.find((x) => x.slug === on);
+  const versions = useVersions(current?.doc, search.v, search.vs);
+  // The change stepped to, from Changes' two arrows; a new page, version or comparison starts before the first.
+  const [step, setStep] = useState({ key: '', at: -1 });
+  const key = `${on}:${versions?.shown ?? ''}:${versions?.on ? versions.before : ''}`;
+  const at = step.key === key ? step.at : -1;
+  const onAt = (n: number) => setStep({ key, at: n });
   const address = tabAddress(t, on, flow);
   const details = on === DETAILS;
   const rename = async (title: string) => {
@@ -108,30 +118,34 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
 
   const body =
     file && details ? (
-      <FileView t={t} file={file} flow={flow} />
+      <FileView t={t} file={file} flow={flow} full={search.full} />
     ) : details ? (
       <Details t={t} flow={flow} adding={adding} onAdding={setAdding} />
-    ) : current?.doc ? (
-      <DocFrame task={t.id} doc={current.doc} />
+    ) : versions ? (
+      <PageView task={t.id} vs={versions} at={at} />
     ) : null;
 
   return (
     <Document
-      className={details ? 'tv is-details' : 'tv'}
+      className={['tv', details && 'is-details', flow && 'is-flow'].filter(Boolean).join(' ')}
       title={t.title}
       path={address.to}
       crumb={flow ? [{ label: 'Flow', to: '/flow' }] : [{ label: t.pipeline?.name ?? 'Tasks', to: `/tasks/${encodeURIComponent(t.pipeline_id ?? '')}` }]}
       sub={<WhereLine t={t} />}
       onRename={(title) => void rename(title)}
       actions={flow ? <FlowSteps t={t} /> : undefined}
+      top={flow ? <FlowTop t={t} /> : undefined}
       more={<MoreMenu t={t} flow={flow} />}
       tabs={pageTabs}
-      tabsAfter={details && !file ? <AddMenu onAdding={setAdding} /> : undefined}
+      tabsAfter={
+        details && !file ? <AddMenu onAdding={setAdding} /> : versions ? <VersionBar task={t.id} vs={versions} at={at} onAt={onAt} /> : undefined
+      }
       framed
       body={
         <div className="tv-view">
           {body}
           <Decision t={t} flow={flow} dock />
+          {flow && <FlowCover />}
         </div>
       }
     />

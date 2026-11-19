@@ -1,8 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
+import { run } from '@/actions';
 import type { TaskDocument } from '@/api/schema';
 import { Ago } from '@/kit/Ago';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
+import { PictureViewer, type Picture } from '@/kit/PictureViewer';
 import { DETAILS, tabAddress } from './model';
 import { Face, Go } from './parts';
 import { taskFilesQuery, taskPageQuery, type TaskData } from './queries';
@@ -11,7 +13,7 @@ import { taskFilesQuery, taskPageQuery, type TaskData } from './queries';
    their own look in a frame (page-types: a file is a Document with its content in a frame). */
 
 /** The sandbox a page drawn by an agent runs in: its own scripts, never this app's cookies (ui/app/visual-pictures.ts). */
-const PAGE_SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox';
+export const PAGE_SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox';
 
 export function DocFrame({ task, doc }: { task: string; doc: TaskDocument }) {
   const page = useQuery(taskPageQuery(task, doc.file_id));
@@ -25,7 +27,7 @@ export function DocFrame({ task, doc }: { task: string; doc: TaskDocument }) {
 }
 
 /** A file open in the page sheet (more.js fileBar): back to Details, its name, which of the task's files it is. */
-export function FileView({ t, file, flow }: { t: TaskData; file: string; flow: boolean }) {
+export function FileView({ t, file, full, flow }: { t: TaskData; file: string; full?: string; flow: boolean }) {
   const files = useQuery(taskFilesQuery(t.id));
   const list = (files.data ?? []).filter((f) => !f.archived);
   const i = list.findIndex((f) => f.id === file);
@@ -34,6 +36,13 @@ export function FileView({ t, file, flow }: { t: TaskData; file: string; flow: b
   const at = (id: string) => (flow ? { tab: DETAILS, file: id } : { file: id });
   const back = flow ? { tab: DETAILS } : {};
   const v = f?.versions.find((x) => x.n === f.current_version) ?? f?.versions.at(-1);
+  // The task's pictures, each at its current version: the full size view walks them.
+  const pictures = list.flatMap((x) => {
+    const cur = x.versions.find((y) => y.n === x.current_version) ?? x.versions.at(-1);
+    return cur?.mime.startsWith('image/') && cur.url.startsWith('/api/') ? [{ id: x.id, src: cur.url, name: x.title || x.name } satisfies Picture & { id: string }] : [];
+  });
+  const fullAt = full ? pictures.findIndex((p) => p.id === full) : -1;
+  const showPicture = (id: string | null) => void run('task.showPicture', { task: t.id, file: id }, { via: 'click' });
   const step = (d: number, label: string, flip: boolean) => {
     const to = list[i + d];
     return to ? (
@@ -77,7 +86,9 @@ export function FileView({ t, file, flow }: { t: TaskData; file: string; flow: b
       ) : (
         <div className="frame fv">
           {v && f && (v.mime.startsWith('image/') ? (
-            <img src={v.url} alt={f.title || f.name} />
+            <button type="button" className="fv-pic" aria-label={`${f.title || f.name}, full size`} title="Full size" onClick={() => showPicture(f.id)}>
+              <img src={v.url} alt={f.title || f.name} />
+            </button>
           ) : v.mime.startsWith('video/') ? (
             <video src={v.url} poster={v.poster_url ?? undefined} controls />
           ) : (
@@ -85,6 +96,7 @@ export function FileView({ t, file, flow }: { t: TaskData; file: string; flow: b
           ))}
         </div>
       )}
+      <PictureViewer pictures={pictures} at={fullAt >= 0 ? fullAt : null} onAtChange={(i) => showPicture(i == null ? null : (pictures[i]?.id ?? null))} />
     </>
   );
 }

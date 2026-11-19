@@ -15,7 +15,7 @@ const to = (path: string) => path as LinkProps['to'];
  * the name (aaa-audit-a, Breadcrumb). Then the controls, "⋯" last, then a button for each sheet the frame tucked
  * behind the page.
  */
-export function PageHead({ title, path, crumb, lead, after, actions, more, onRename, sub, size }: PageHeadProps) {
+export function PageHead({ title, path, crumb, lead, after, actions, more, onRename, sub, size, top }: PageHeadProps) {
   const sheet = useSheet();
   const big = size === 'large' ? 't-figure' : undefined;
   const back = crumb?.at(-1);
@@ -30,7 +30,7 @@ export function PageHead({ title, path, crumb, lead, after, actions, more, onRen
       ))}
     </nav>
   );
-  return (
+  const head = (
     <header className="page-head pk-head">
       {back && (
         <Link className="ib back pk-back" to={to(back.to)} aria-label={`Back to ${back.label}`} title={`Back to ${back.label}`}>
@@ -83,5 +83,13 @@ export function PageHead({ title, path, crumb, lead, after, actions, more, onRen
         <IconButton key={t.id} icon="panel" label={t.label} quiet onClick={t.open} />
       ))}
     </header>
+  );
+  return top ? (
+    <>
+      {top}
+      {head}
+    </>
+  ) : (
+    head
   );
 }

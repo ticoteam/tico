@@ -1,0 +1,131 @@
+import { useQuery } from '@tanstack/react-query';
+import { useEffect, useMemo, useRef } from 'react';
+import { run } from '@/actions';
+import type { TaskDocument } from '@/api/schema';
+import { Empty } from '@/kit/Empty';
+import { Icon } from '@/kit/Icon';
+import { Menu, MenuItem } from '@/kit/Menu';
+import { fmtDate } from '@/lib';
+import { frameDoc, markChanges, parsePage } from './changes';
+import { DocFrame, PAGE_SANDBOX } from './FileView';
+import { pageVersionQuery } from './queries';
+
+/* A page's versions (more.js taskflow): "v2" names the one open and lists the rest; "11 changes" says how it differs
+   from the one before and, pressed, marks every difference in the page; the two arrows beside it step through them.
+   The address holds the version (`v`) and what it is compared with (`vs`), so Back and a shared link keep them. */
+
+export interface Versions {
+  doc: TaskDocument;
+  /** Newest first. */
+  list: TaskDocument['versions'];
+  shown: number;
+  newest: boolean;
+  /** The version its changes are counted against: the one before, or the one the address names. */
+  before: number | undefined;
+  /** The changes are marked in the page. */
+  on: boolean;
+  /** How many changes, once both versions are read. */
+  count: number | null;
+  /** The page as its frame draws it: marked when `on`, else the version shown when it is not the newest. */
+  html: string | null;
+  failed: boolean;
+}
+
+export function useVersions(doc: TaskDocument | undefined, v?: number, vs?: number): Versions | null {
+  const list = [...(doc?.versions ?? [])].sort((a, b) => b.n - a.n);
+  const shown = doc && v && list.some((x) => x.n === v) ? v : (doc?.version ?? 0);
+  const named = !!vs && vs !== shown && list.some((x) => x.n === vs);
+  const before = named ? vs : list.find((x) => x.n < shown)?.n;
+  const newest = shown === doc?.version;
+  const file = doc?.file_id ?? '';
+  const older = useQuery({ ...pageVersionQuery(file, before ?? 0), enabled: !!doc && !!before });
+  const newer = useQuery({ ...pageVersionQuery(file, shown), enabled: !!doc && (!!before || !newest) });
+  const md = doc?.kind === 'markdown';
+  const marked = useMemo(() => {
+    if (older.data == null || newer.data == null) return null;
+    const page = parsePage(newer.data, md);
+    const count = markChanges(parsePage(older.data, md), page);
+    return { count, html: frameDoc(page, true) };
+  }, [older.data, newer.data, md]);
+  const plain = useMemo(() => (newer.data == null || newest ? null : frameDoc(parsePage(newer.data, md))), [newer.data, newest, md]);
+  if (!doc) return null;
+  const on = named;
+  return {
+    doc,
+    list,
+    shown,
+    newest,
+    before,
+    on,
+    count: marked?.count ?? null,
+    html: on ? (marked?.html ?? null) : plain,
+    failed: older.isError || newer.isError,
+  };
+}
+
+const clock = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' });
+const when = (at: string) => `${fmtDate(at)}, ${clock.format(new Date(at))}`;
+
+/** At the tab row's end, for a page with more than one version: the version pick, Changes, and its two steps. */
+export function VersionBar({ task, vs, at, onAt }: { task: string; vs: Versions; at: number; onAt: (at: number) => void }) {
+  if (vs.list.length < 2) return null;
+  const n = vs.count ?? 0;
+  const step = (d: number, label: string, flip: boolean) => (
+    <button className="ib ib-sm" type="button" aria-label={label} title={label} disabled={!n} onClick={() => onAt(at < 0 ? (d > 0 ? 0 : n - 1) : (at + d + n) % n)}>
+      <Icon name="chevdown" className={flip ? 'flip' : undefined} />
+    </button>
+  );
+  return (
+    <>
+      <Menu
+        trigger={
+          <button className="tv-ver" type="button" aria-label={`Version ${vs.shown}`} data-target={`task-version:${task}`}>
+            v{vs.shown}
+            <Icon name="chevdown" />
+          </button>
+        }
+      >
+        {vs.list.map((x) => (
+          <MenuItem
+            key={x.n}
+            label={`v${x.n}`}
+            meta={[when(x.at), x.note].filter(Boolean).join(', ')}
+            on={x.n === vs.shown}
+            onSelect={() => void run('task.showVersion', { task, version: x.n === vs.doc.version ? null : x.n }, { via: 'click' })}
+          />
+        ))}
+      </Menu>
+      {vs.before && (
+        <button
+          className={vs.on ? 'tv-chg is-on' : 'tv-chg'}
+          type="button"
+          aria-pressed={vs.on}
+          title={`Changes since v${vs.before}`}
+          data-target={`task-changes:${task}`}
+          disabled={vs.count === 0}
+          onClick={() => void run('task.compare', { task, against: vs.on ? null : (vs.before ?? null) }, { via: 'click' })}
+        >
+          {vs.count == null ? 'Changes' : vs.count === 0 ? 'No changes' : `${vs.count} change${vs.count === 1 ? '' : 's'}`}
+        </button>
+      )}
+      {vs.on && step(-1, 'Previous change', true)}
+      {vs.on && step(1, 'Next change', false)}
+    </>
+  );
+}
+
+/** The open page: its newest version as it is framed, else the version picked, marked when Changes is on. */
+export function PageView({ task, vs, at }: { task: string; vs: Versions; at: number }) {
+  const frame = useRef<HTMLIFrameElement>(null);
+  useEffect(() => {
+    if (vs.on && at >= 0) frame.current?.contentWindow?.postMessage({ tico_change: at }, '*');
+  }, [vs.on, at]);
+  const name = vs.doc.title || vs.doc.name;
+  if (vs.newest && !vs.on) return <DocFrame task={task} doc={vs.doc} />;
+  if (vs.failed) return <Empty icon="alert" title={`${name} did not load`} />;
+  return (
+    <div className="frame is-inset">
+      {vs.html && <iframe ref={frame} srcDoc={vs.html} title={`${name}, v${vs.shown}`} sandbox={PAGE_SANDBOX} referrerPolicy="no-referrer" />}
+    </div>
+  );
+}

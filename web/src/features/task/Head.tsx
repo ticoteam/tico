@@ -15,7 +15,7 @@ import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { LatePill } from '@/kit/Pill';
 import { toast } from '@/kit/Toast';
 import { earlierStages, reasonOf, refusalOf, tabAddress, type Refusal } from './model';
-import { Face, Go, Mark } from './parts';
+import { Face, FlowMark, Go, Mark } from './parts';
 import { pipelineStagesQuery, waitingQuery, type TaskData } from './queries';
 
 /* The head's controls: the where line (pipeline › stage pick, owner pick, time in the stage, Late), Flow's previous
@@ -220,6 +220,24 @@ export function FlowSteps({ t }: { t: TaskData }) {
       {step(-1, 'Previous', true)}
       {step(1, 'Next', false)}
     </>
+  );
+}
+
+/** A phone's row over a task in Flow (more.js tv-top, 48 high): back to Flow, how many wait, previous and next. */
+export function FlowTop({ t }: { t: TaskData }) {
+  const { rows } = useFlowOrder(t);
+  return (
+    <div className="tv-top">
+      <Go to="/flow" className="ib" aria-label="Back to Flow" title="Back to Flow">
+        <Icon name="chevron" className="flip" />
+      </Go>
+      <span className="tv-n" title={`${rows.length} wait${rows.length === 1 ? 's' : ''} on you`}>
+        <FlowMark size={18} />
+        <b>{rows.length}</b>
+      </span>
+      <span className="grow" />
+      <FlowSteps t={t} />
+    </div>
   );
 }
 

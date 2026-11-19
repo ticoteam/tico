@@ -21,18 +21,28 @@ html[data-layout="cards"] .tv .pk-where{margin-top:var(--s-2)}
 html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(--lh-tight) - var(--ctl)) / 2)}
 
 /* the framed body: the open page or Details, then the answer on a phone */
-.tv-view{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
+.tv-view{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;position:relative}
+/* "Getting ready to flow", over a walk's first task for a moment (decide.css .dc-start) */
+.tv-start{position:absolute;inset:0;z-index:var(--z-pop);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s-3h);background:var(--bg);color:var(--muted);pointer-events:none;animation:tv-start .6s ease-in forwards}
+.tv-start p{margin:0}
+@keyframes tv-start{0%,55%{opacity:1}100%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.tv-start{display:none}}
 
 /* ---------- tab marks: approved, waits on you, not yet (parts-kit.js tab) ---------- */
 .doc-tab .dot{margin-right:calc(var(--s-0) * -1)}
 .tv .doc-tab:has(>.hollow){color:var(--muted)}
 
-/* ---------- Details' Add, at the tab row's end (more.css .tv-ver, .tv-add) ---------- */
+/* ---------- at the tab row's end: Details' Add, a page's versions and its changes (more.css .tv-ver, .tv-chg) ---------- */
 .tv-ver{height:var(--ctl-sm);border:0;background:none;border-radius:var(--r-ctl);display:inline-flex;align-items:center;gap:calc(var(--s-1) - 1px);flex:none;font-size:var(--t-sm);color:var(--muted);white-space:nowrap;
   padding:0 var(--s-1) 0 var(--s-2);transition:background var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
 .tv-ver .ico{width:14px;height:14px}
 .tv-ver:hover,.tv-ver[aria-expanded="true"]{background:var(--hover);color:var(--ink)}
 .tv-add{padding:0 var(--s-2h) 0 var(--s-1h);gap:var(--s-1);color:var(--ink-2)}
+.tv-chg{height:var(--ctl-sm);border:0;background:none;border-radius:var(--r-ctl);display:inline-flex;align-items:center;flex:none;padding:0 var(--s-2);font-size:var(--t-sm);color:var(--ink-2);white-space:nowrap;
+  transition:background var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
+.tv-chg:hover:not(:disabled){background:var(--hover);color:var(--ink)}
+.tv-chg:disabled{color:var(--muted)}
+.tv-chg.is-on{background:var(--well-2);color:var(--ink);font-weight:var(--w-strong);box-shadow:inset 0 0 0 1px var(--line-strong)}
 .tv-add .ico{width:15px;height:15px}
 
 /* ---------- Details: the sections scroll under the tab row ---------- */
@@ -96,6 +106,12 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .fv-n b{color:var(--ink);font-weight:var(--w-strong)}
 .frame.fv iframe,.frame.fv img,.frame.fv video{background:var(--desk)}
 .frame.fv img,.frame.fv video{flex:1;min-width:0;width:100%;height:100%;object-fit:contain}
+/* a picture opens full size (kit/PictureViewer) */
+.fv-pic{flex:1;min-width:0;min-height:0;display:flex;padding:0;border:0;background:none;cursor:zoom-in}
+
+/* New page: a title and the page's text */
+.tv-new{display:grid;gap:var(--s-4)}
+.tv-new .f{justify-items:stretch}
 
 /* ---------- the answer card, over the message box in the task's chat ---------- */
 .an-err{margin:var(--s-2) var(--s-1h) 0 0;font-size:var(--t-sm);line-height:var(--lh);color:var(--ink-2);text-wrap:pretty}
@@ -108,4 +124,7 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
   .dt .task .row-sub{grid-area:pills;display:flex;align-items:center;gap:var(--s-2)}
   .task.has-stage .row-stage{order:-1}
   .tv-add{display:none}
+  /* in Flow the row over the head holds back and the steps (parts.css .tv-top) */
+  .tv.is-flow .pk-head .pk-back,.tv.is-flow .pk-head .pk-acts{display:none}
+  .tv-n{display:inline-flex;align-items:center;gap:var(--s-2)}
 }

@@ -27,5 +27,17 @@ describe('Document', () => {
     expect(within(main).getByTitle('Report page')).toBeTruthy();
   });
 
+  it('draws a row over the head only when given one', async () => {
+    const plain = await showPage(<Document title="Report" path="/r" body={null} />);
+    const head = plain.querySelector('header.pk-head');
+    expect(head?.previousElementSibling).toBeNull();
+    const html = plain.innerHTML;
+    plain.ownerDocument.body.innerHTML = '';
+    const topped = await showPage(<Document title="Report" path="/r" body={null} top={<div className="row-over">Over</div>} />);
+    expect(topped.querySelector('header.pk-head')?.previousElementSibling?.textContent).toBe('Over');
+    topped.querySelector('.row-over')?.remove();
+    expect(topped.innerHTML).toBe(html);
+  });
+
   stateTests('Spec', (s) => <Document title="Spec" path="/tasks/t1/spec" body={null} {...s} />);
 });

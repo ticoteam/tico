@@ -235,3 +235,80 @@ describe('one open task', () => {
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 });
+
+describe('a page’s versions, a new page and a picture', () => {
+  const versions = [
+    { n: 1, by: 'bot:a1', at: '2026-11-01T10:00:00Z', note: 'Sent back' },
+    { n: 2, by: 'bot:a1', at: '2026-11-02T10:00:00Z', note: null },
+  ];
+  const withVersions = () =>
+    task({
+      documents: [
+        { file_id: 'f1', name: 'Spec', version: 2, approved_version: 2, versions },
+        { file_id: 'f2', name: 'QA report', version: 1 },
+      ] as never,
+    });
+  const html = (url: string): Reply | null => {
+    if (url.endsWith('/api/v2/files/f1?v=1')) return { status: 200, body: '<p>Sign in with your email.</p>' };
+    if (url.endsWith('/api/v2/files/f1?v=2')) return { status: 200, body: '<p>Sign in with your email or phone.</p>' };
+    return null;
+  };
+  const frame = (title: string) => screen.findByTitle(title) as Promise<HTMLIFrameElement>;
+
+  it('opens an older version and marks what changed since the one before', async () => {
+    serve((url) => (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1') ? { status: 200, body: detail(withVersions()) } : (html(url) ?? base(url))));
+    show(<TaskPage task="12" pipeline="p1" tab="spec" />, '/tasks/p1/12/spec');
+    fireEvent.click(await screen.findByRole('button', { name: 'Version 2' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /v1/ }));
+    expect((await frame('Spec, v1')).getAttribute('srcdoc')).toContain('Sign in with your email.');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Version 1' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /v2/ }));
+    const changes = await screen.findByRole('button', { name: '1 change' });
+    fireEvent.click(changes);
+    const marked = await frame('Spec, v2');
+    expect(marked.getAttribute('srcdoc')).toMatch(/<del[^>]*>email\.<\/del> <ins[^>]*>email or phone\.<\/ins>/);
+    expect(screen.getByRole('button', { name: '1 change' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Next change' })).toBeTruthy();
+  });
+
+  it('writes a new page from Add and opens it', async () => {
+    serve((url, method) => {
+      if (method === 'POST' && url.endsWith('/api/v2/pages'))
+        return { status: 200, body: { page: { id: 'pg9', file_id: 'f9', title: 'Release notes' }, unembedded: [] } };
+      return base(url);
+    });
+    show(<TaskPage task="12" pipeline="p1" tab="details" />, '/tasks/p1/12/details');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'New page' }));
+    const dialog = await screen.findByRole('dialog', { name: 'New page' });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Title' }), { target: { value: 'Release notes' } });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Text' }), { target: { value: '<p>What shipped</p>' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(sent.at(-1)).toEqual({
+        url: '/api/v2/pages',
+        body: { title: 'Release notes', text: '<p>What shipped</p>', task: 't1', as: 'related', name: 'release-notes.html' },
+      }),
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('opens a picture full size from its file', async () => {
+    const pic = {
+      id: 'f5',
+      name: 'shot.png',
+      title: 'Sign-in screen',
+      mime: 'image/png',
+      archived: false,
+      current_version: 1,
+      links: [],
+      writers: [],
+      versions: [{ n: 1, by: 'bot:a1', created_at: '2026-11-02T10:00:00Z', mime: 'image/png', url: '/api/v2/files/f5?v=1', answers: [], ask: null }],
+    };
+    serve((url) => (url.endsWith('/api/v2/tasks/t1/files') ? { status: 200, body: { files: [pic] } } : base(url)));
+    show(<TaskPage task="12" pipeline="p1" tab="details" file="f5" />, '/tasks/p1/12/details?file=f5');
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign-in screen, full size' }));
+    expect(await screen.findByRole('dialog', { name: 'Sign-in screen' })).toBeTruthy();
+  });
+});

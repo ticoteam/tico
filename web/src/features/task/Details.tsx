@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
 import { run } from '@/actions';
 import type { TaskRequirement } from '@/api/schema';
@@ -14,6 +15,7 @@ import { Section as Group } from '@/kit/SectionHead';
 import { PageBody, Section } from '@/pagekinds';
 import { ActorItems, OwnerMenu, tagsOf } from './Head';
 import { DETAILS, reasonOf, tabAddress } from './model';
+import { NewPage } from './NewPage';
 import { Face, Mark, NameOf, Go } from './parts';
 import { taskFilesQuery, taskLinksQuery, type TaskData } from './queries';
 
@@ -22,7 +24,7 @@ import { taskFilesQuery, taskLinksQuery, type TaskData } from './queries';
    Each fact edits in place and saves at once; Add (and a section's quiet +) opens a new line in its section. */
 
 /** What a new line is being written for: the Add menu's choices. */
-export type Adding = 'subtask' | 'depends_on' | 'blocks' | 'related' | 'ask' | 'link';
+export type Adding = 'subtask' | 'depends_on' | 'blocks' | 'related' | 'ask' | 'link' | 'page';
 
 const taskHref = (n: number | null | undefined, id: string) => `/task/${n ?? id}`;
 const day = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -223,6 +225,7 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
   const fileSearch = (id: string) => (flow ? { tab: DETAILS, file: id } : { file: id });
   const request = t.request?.text || t.body || '';
   const end = () => onAdding(null);
+  const navigate = useNavigate();
   // Links starts folded, with the record; a link being added opens it, and it stays open to show the new row.
   const [linksOpen, setLinksOpen] = useState(false);
   if (adding === 'link' && !linksOpen) setLinksOpen(true);
@@ -482,6 +485,9 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
           ))}
         </Section>
       )}
+      {adding === 'page' && (
+        <NewPage task={t.id} onClose={end} onSaved={(file) => void navigate({ to: details.to as never, search: fileSearch(file) as never })} />
+      )}
     </PageBody>
   );
 }
@@ -505,6 +511,7 @@ export function AddMenu({ onAdding }: { onAdding: (what: Adding) => void }) {
       <MenuItem label="Ask someone" onSelect={() => onAdding('ask')} />
       <MenuRule />
       <MenuItem label="Link" onSelect={() => onAdding('link')} />
+      <MenuItem label="New page" onSelect={() => onAdding('page')} />
     </Menu>
   );
 }

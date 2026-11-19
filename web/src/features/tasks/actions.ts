@@ -6,6 +6,8 @@ import {
   assignMany,
   createTask,
   listsOf,
+  makeSubtask,
+  mergeTask,
   moveMany,
   moveTask,
   pipelinesQuery,
@@ -111,6 +113,28 @@ export const move = defineAction({
   run: (_ctx, { task, to }) => said(() => moveTask(task, to), "Couldn't move the task"),
   did: (_input, out) => (out ? `Moved #${out.number ?? out.id}` : 'Moved the task'),
   target: ({ task }, out) => ({ kind: 'task', id: out?.number ?? task }),
+});
+
+/** One task under another as its subtask (a card let go over another's card, Make it a subtask). */
+export const subtask = defineAction({
+  id: 'tasks.makeSubtask',
+  title: 'Make a task a subtask of another',
+  kind: 'change',
+  input: s.object({ task, parent: task }),
+  run: (_ctx, { task, parent }) => said(() => makeSubtask(task, parent), "Couldn't make it a subtask"),
+  did: (_input, out) => (out ? `Made #${out.number ?? out.id} a subtask` : 'Made it a subtask'),
+  target: ({ parent }) => ({ kind: 'task', id: parent }),
+});
+
+/** Merge a task into another: `into` stays and gets its details, the task is closed as a duplicate. */
+export const merge = defineAction({
+  id: 'tasks.merge',
+  title: 'Merge a task into another',
+  kind: 'change',
+  input: s.object({ task, into: task, owner: clearable(actor) }),
+  run: (_ctx, { task, into, owner }) => said(() => mergeTask(task, into, owner), "Couldn't merge the tasks"),
+  did: (_input, out) => (out ? `Merged #${out.closed.number ?? out.closed.id} into #${out.task.number ?? out.task.id}` : 'Merged the tasks'),
+  target: ({ into }, out) => ({ kind: 'task', id: out?.task.number ?? into }),
 });
 
 export const create = defineAction({

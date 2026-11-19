@@ -1,3 +1,4 @@
+import type { AnyRouter } from '@tanstack/react-router';
 import { defineAction, s } from '@/actions';
 import {
   addSubtask,
@@ -7,6 +8,7 @@ import {
   linkTask,
   markDone,
   moveTask,
+  newTaskPage,
   relateTask,
   renameTask,
   setTaskDue,
@@ -201,4 +203,72 @@ export const sendBack = defineAction({
   run: (_ctx, i) => said(answerAsk(i.task, i.requirement, 'no', i.note.trim())),
   did: () => 'Sent back',
   target: (i) => ({ kind: 'task-answer', id: i.task }),
+});
+
+/* ---------------------------------------------------------------- what the open page shows */
+
+/** A task's page or Details is on screen: under its pipeline, or inside Flow. */
+const onTask = (path: string) => /^\/(tasks\/[^/]+\/[^/]+|flow\/[^/]+)/.test(path);
+const version = s.number({ int: true, min: 1 });
+
+/** The address keeps it, so Back and a shared link come back to the same version. */
+function show(router: AnyRouter, change: Record<string, unknown>) {
+  // The same page by its path: the address changes only in its search.
+  return router.navigate({
+    to: router.state.location.pathname,
+    search: (prev: Record<string, unknown>) => {
+      const next = { ...prev };
+      for (const [k, v] of Object.entries(change)) {
+        if (v == null) delete next[k];
+        else next[k] = v;
+      }
+      return next;
+    },
+  });
+}
+
+/** One version of the open page; null is its newest. Picking one ends a comparison. */
+export const showVersion = defineAction({
+  id: 'task.showVersion',
+  title: 'Show a version of a page',
+  kind: 'view',
+  input: s.object({ task, version: s.nullable(version) }),
+  can: ({ router }) => onTask(router.state.location.pathname),
+  run: ({ router }, i) => show(router, { v: i.version, vs: null }),
+  did: (i) => (i.version ? `Opened v${i.version}` : 'Opened the newest version'),
+  target: (i) => ({ kind: 'task-version', id: i.task }),
+});
+
+/** Marks in the open version what changed since `against`; null takes the marks off. */
+export const compare = defineAction({
+  id: 'task.compare',
+  title: 'Mark what changed in a page',
+  kind: 'view',
+  input: s.object({ task, against: s.nullable(version), version: s.optional(s.nullable(version)) }),
+  can: ({ router }) => onTask(router.state.location.pathname),
+  run: ({ router }, i) => show(router, { vs: i.against, ...(i.version !== undefined && { v: i.version }) }),
+  did: (i) => (i.against ? `Marked the changes since v${i.against}` : 'Took the marks off'),
+  target: (i) => ({ kind: 'task-changes', id: i.task }),
+});
+
+/** A picture among the task's files, full size over the page. */
+export const showPicture = defineAction({
+  id: 'task.showPicture',
+  title: 'Show a picture full size',
+  kind: 'view',
+  input: s.object({ task, file: s.nullable(s.string({ min: 1, max: 100 })) }),
+  can: ({ router }) => onTask(router.state.location.pathname),
+  run: ({ router }, i) => show(router, { full: i.file }),
+  did: (i) => (i.file ? 'Opened the picture' : 'Closed the picture'),
+  target: (i) => ({ kind: 'task-files', id: i.task }),
+});
+
+export const newPage = defineAction({
+  id: 'task.newPage',
+  title: 'Write a new page on a task',
+  kind: 'change',
+  input: s.object({ task, title: s.string({ min: 1, max: 200 }), text: s.string({ min: 1, max: 1_000_000 }) }),
+  run: (_ctx, i) => said(newTaskPage(i.task, i.title.trim(), i.text)),
+  did: (i) => `Wrote the page ${i.title.trim()}`,
+  target: (i) => ({ kind: 'task-files', id: i.task }),
 });

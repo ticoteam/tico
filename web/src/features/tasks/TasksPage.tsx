@@ -20,6 +20,7 @@ import { ArchivedSections, useShelves } from './Archived';
 import { BoardFit } from './BoardFit';
 import { Capped, CARD_H, COL_CAP, COL_SHOW, LIST_CAP, LIST_SHOW, moreText, RowMore, ROW_H } from './capped';
 import { useCardDrag } from './drag';
+import { DropDialog } from './DropDialog';
 import { DUE_NAMES, FilterMenu } from './FilterMenu';
 import { SelectBar, StageMenu } from './many';
 import { NewTask } from './NewTask';
@@ -392,7 +393,11 @@ function Card({ t, p, me, picked, onPick }: { t: TaskItem; p: Pipeline; me: stri
 
 function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle }: BodyProps) {
   const move = useAction('tasks.move');
-  const drag = useCardDrag((task, to) => void move.run({ task, to }));
+  const [dropped, setDropped] = useState<{ task: string; onto: string } | null>(null);
+  const drag = useCardDrag(
+    (task, to) => void move.run({ task, to }),
+    (task, onto) => setDropped({ task, onto }),
+  );
   const groups = byStage(p.stages, rows);
   const shape = p.stages.map((s) => `${s.id}:${groups.get(s.id)?.length ?? 0}:${folds.includes(s.id) ? 1 : 0}`).join(',');
   return (
@@ -440,6 +445,7 @@ function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle
         );
       })}
       <BoardFit shape={shape} />
+      {dropped && <DropDialog task={dropped.task} onto={dropped.onto} onClose={() => setDropped(null)} />}
     </>
   );
 }

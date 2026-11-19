@@ -52,6 +52,8 @@ export interface HeadProps {
   sub?: ReactNode;
   /** 'large': the title at figure size, for a page that stands as a column beside its chat (an agent's own page). */
   size?: 'large';
+  /** A row over the head, drawn only when given; the page's own CSS says where it shows (a task's phone row). */
+  top?: ReactNode;
 }
 
 /** Which body a page shows. The head (and tabs) stay in every state except no access. */
