@@ -5,6 +5,8 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -36,6 +38,31 @@ const STREAMED: [&str; 8] = [
 /// An event as the outbox keeps it: borrowed when no string in it holds a secret, scrubbed when one does.
 fn scrubbed<'a>(redactor: Option<&Arc<Redactor>>, v: &'a Value) -> Cow<'a, Value> {
     redactor.map_or(Cow::Borrowed(v), |r| r.scrub_json(v))
+}
+
+/// What one drive step heard from the hub beyond the upload.
+#[derive(Default)]
+struct Asked {
+    /// A person changed or cleared the chat goal: an explicit goal control.
+    controlled: bool,
+    /// A person's message was among the inputs.
+    person: bool,
+}
+
+/// A finished drive step: inputs the turn refused as it ended, and what the hub said.
+struct Step {
+    carried: BTreeMap<String, Value>,
+    asked: Result<Asked, Fail>,
+}
+
+type StepFuture<'a> = Pin<Box<dyn Future<Output = Step> + Send + 'a>>;
+
+/// The drive step in flight; never ready when there is none.
+async fn step_done(step: &mut Option<StepFuture<'_>>) -> Step {
+    match step {
+        Some(step) => step.as_mut().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// Goal continuations per (bot, session key) thread, for the runner's life (service.py goal_tries).
@@ -183,6 +210,12 @@ impl Runner {
         // count at the last ask, None before the first.
         let mut asked: Option<u64> = None;
         let mut recovery_at = Instant::now();
+        // The 1-second step (upload, then the goal and inputs asks) runs beside the harness output, so a slow hub never
+        // holds back the turn's text or its end. `step_asks`: it asks the hub more than the upload. A goal verdict is
+        // kept only when no goal row was written while it was out (`goal_rows`): one read against a row still going up
+        // is asked again.
+        let mut step: Option<StepFuture<'_>> = None;
+        let (mut step_asks, mut goal_rows, mut step_goal_rows) = (false, 0u64, 0u64);
 
         // Count a continuation; past the cap, interrupt the turn so its goal can be cleared.
         macro_rules! stuck {
@@ -197,6 +230,7 @@ impl Runner {
                     let note = format!("Goal paused after {n} tries without progress{}", if last.is_empty() { String::new() } else { format!(": {shown}") });
                     if goal_running {
                         self.state.append(aid, "goal", &json!({"goal_id": goal_id, "revision": revision, "status": "paused", "note": note}))?;
+                        goal_rows += 1;
                     }
                     goal.paused = Some(note);
                     goal_running = false;
@@ -205,6 +239,54 @@ impl Runner {
                     let _ = host.interrupt(thread, &turn).await;
                 }
             }};
+        }
+
+        // Apply a finished step, as the loop once did inline right after it.
+        macro_rules! settle {
+            ($done:expr) => {{
+                let done: Step = $done;
+                carried.extend(done.carried);
+                last_flush = Some(Instant::now());
+                match done.asked {
+                    Ok(heard) => {
+                        if heard.person {
+                            tries().take(&goal.tries_key);
+                        }
+                        if heard.controlled && goal_running && goal_rows == step_goal_rows {
+                            goal.controlled = true;
+                            let _ = host.interrupt(thread, &turn).await;
+                            // An explicit goal control settles this run so its queued successor can claim.
+                            goal_running = false;
+                            complete = true;
+                            outcome = "completed".into();
+                        } else if heard.controlled {
+                            asked = None;
+                        }
+                    }
+                    Err(e) => {
+                        recovery_at = Instant::now(); // an ask that failed is tried again at the next step
+                        if e.api.as_ref().is_some_and(|a| a.code == "stale_lease") {
+                            // Refused before the renewer heard: the same lost lease, read out the same way, from now: a
+                            // harness found gone further down this pass is waited on, not given up (Dev 242 R1 delta).
+                            d.flags.lost.store(true, Ordering::SeqCst);
+                            salvage.get_or_insert_with(|| Instant::now() + SALVAGE);
+                        } else if e.api.as_ref().is_none_or(|a| !a.retryable) {
+                            return Err(e);
+                        }
+                    }
+                }
+            }};
+        }
+        // Before the drive ends early: a step that only uploads is dropped (the attempt's final flush sends its rows
+        // again, and the hub skips what it has); one that asked is heard out, so an input it steered keeps its record.
+        macro_rules! end_step {
+            () => {
+                if let Some(s) = step.take() {
+                    if step_asks {
+                        carried.extend(s.await.carried);
+                    }
+                }
+            };
         }
 
         while !complete {
@@ -217,6 +299,7 @@ impl Runner {
                         .append(aid, "diagnostic", &json!({"end_reason": why}));
                 }
                 goal.failure = Some(reason.unwrap_or_else(|| "Stopped by a person".into()));
+                end_step!();
                 let _ = host.interrupt(thread, &turn).await;
                 return Ok(Drove {
                     outcome: "interrupted".into(),
@@ -233,6 +316,7 @@ impl Runner {
             }
             if let Some(line) = self.drain.due(aid, Instant::now()) {
                 let _ = self.state.append(aid, "status", &json!({"yielded": line}));
+                end_step!();
                 let _ = host.interrupt(thread, &turn).await;
                 return Ok(Drove {
                     outcome: "interrupted".into(),
@@ -267,6 +351,7 @@ impl Runner {
                     }
                     .into(),
                 );
+                end_step!();
                 let _ = host.interrupt(thread, &turn).await;
                 let why = if late {
                     format!("Timeout: {}", d.limit_name)
@@ -395,6 +480,7 @@ impl Runner {
                         row["goal_id"] = g["id"].clone();
                         row["revision"] = revision.clone();
                         self.state.append(aid, "goal", &row)?;
+                        goal_rows += 1;
                         goal_running = event["status"] == "active" && pausing.is_none();
                     }
                     let record_key = text_of(&record);
@@ -535,6 +621,15 @@ impl Runner {
                     }
                 }
             }
+            if complete {
+                // An upload in flight is left to the attempt's final flush; a step that asked is heard out first, so an
+                // input it carried goes into the next turn as it would have a step earlier.
+                if let Some(s) = step.take() {
+                    if step_asks {
+                        settle!(s.await);
+                    }
+                }
+            }
             if complete
                 && outcome == "completed"
                 && !carried.is_empty()
@@ -556,57 +651,55 @@ impl Runner {
             // A notice is acted on at the next 1-second step, never sooner: a burst of notices for one bot costs at
             // most one ask a second, as the old poll did.
             let heard = self.events.heard(d.bot);
-            if last_flush.is_none_or(|t| t.elapsed() >= Duration::from_secs(1)) {
+            if step.is_none() && last_flush.is_none_or(|t| t.elapsed() >= Duration::from_secs(1)) {
                 let noticed = asked != Some(heard);
                 let ask = noticed || !self.events.live() || Instant::now() >= recovery_at;
-                if ask {
-                    asked = Some(heard);
-                    recovery_at = Instant::now() + self.events.turn_recovery();
-                }
-                let step: Result<(), Fail> = async {
+                // Once the lease is lost the hub refuses this attempt's goal and inputs; its events and result it keeps.
+                let check_goal = goal_running && ask && salvage.is_none();
+                let steer = !complete && ask && host.supports_steer() && salvage.is_none();
+                // A turn that has ended is uploaded by the attempt's final flush; only a goal read is still asked.
+                if !complete || check_goal {
+                    if ask {
+                        asked = Some(heard);
+                        recovery_at = Instant::now() + self.events.turn_recovery();
+                    }
                     host.poll_goal(thread);
-                    self.flush(aid).await?;
-                    if salvage.is_some() {
-                        return Ok(()); // the hub refuses this attempt's goal and inputs now; its events and result it keeps
-                    }
-                    if goal_running && ask {
-                        let latest = self.client.get(&format!("attempts/{aid}/goal")).await?;
-                        let latest = &latest["goal"];
-                        if !latest.is_object()
-                            || latest["id"] != goal_id
-                            || latest["updated_at"] != revision
-                        {
-                            goal.controlled = true;
-                            let _ = host.interrupt(thread, &turn).await;
-                            // An explicit goal control settles this run so its queued successor can claim.
-                            goal_running = false;
-                            complete = true;
-                            outcome = "completed".into();
+                    let (steer_turn, goal_id, revision) =
+                        (turn.clone(), goal_id.clone(), revision.clone());
+                    (step_asks, step_goal_rows) = (check_goal || steer, goal_rows);
+                    step = Some(Box::pin(async move {
+                        let mut carried = BTreeMap::new();
+                        let asked: Result<Asked, Fail> = async {
+                            self.flush(aid).await?;
+                            let mut asked = Asked::default();
+                            if check_goal {
+                                let latest =
+                                    self.client.get(&format!("attempts/{aid}/goal")).await?;
+                                let latest = &latest["goal"];
+                                if !latest.is_object()
+                                    || latest["id"] != goal_id
+                                    || latest["updated_at"] != revision
+                                {
+                                    asked.controlled = true;
+                                    return Ok(asked);
+                                }
+                            }
+                            if steer {
+                                let messages = self
+                                    .receive_inputs(aid, host, thread, &steer_turn, &mut carried)
+                                    .await?;
+                                asked.person = messages.iter().any(from_person);
+                            }
+                            Ok(asked)
                         }
-                    }
-                    if !complete && ask && host.supports_steer() {
-                        let messages = self
-                            .receive_inputs(aid, host, thread, &turn, carried)
-                            .await?;
-                        if messages.iter().any(from_person) {
-                            tries().take(&goal.tries_key);
-                        }
-                    }
-                    Ok(())
-                }
-                .await;
-                if let Err(e) = step {
-                    recovery_at = Instant::now(); // an ask that failed is tried again at the next step
-                    if e.api.as_ref().is_some_and(|a| a.code == "stale_lease") {
-                        // Refused before the renewer heard: the same lost lease, read out the same way, from now: a
-                        // harness found gone further down this pass is waited on, not given up (Dev 242 R1 delta).
-                        d.flags.lost.store(true, Ordering::SeqCst);
-                        salvage.get_or_insert_with(|| Instant::now() + SALVAGE);
-                    } else if e.api.as_ref().is_none_or(|a| !a.retryable) {
-                        return Err(e);
+                        .await;
+                        Step { carried, asked }
+                    }));
+                    if complete {
+                        let s = step.take().unwrap();
+                        settle!(s.await);
                     }
                 }
-                last_flush = Some(Instant::now());
             }
             if !goal_running && pausing.is_none() && outcome == "completed" {
                 complete = true;
@@ -623,13 +716,22 @@ impl Runner {
                     continue;
                 }
                 if salvage.is_none() {
+                    end_step!();
                     return Err(Fail::runtime("Local runtime exited unexpectedly"));
                 }
             }
-            match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
-                Ok(Some(ev)) => queue.push(ev),
-                Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await, // no sender left; the window ends it
-                Err(_) => {}
+            // The step first, so a stream that never pauses still moves it on (and the upload lock it may hold).
+            tokio::select! {
+                biased;
+                done = step_done(&mut step) => {
+                    step = None;
+                    settle!(done);
+                }
+                got = tokio::time::timeout(Duration::from_millis(100), rx.recv()) => match got {
+                    Ok(Some(ev)) => queue.push(ev),
+                    Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await, // no sender left; the window ends it
+                    Err(_) => {}
+                },
             }
         }
         let mut text = answer(&earlier, &reply);
@@ -908,6 +1010,8 @@ mod tests {
         )
         .await
         .expect("the drive ends");
+        // The attempt's final flush, before its result: a turn that has ended leaves its last rows to it.
+        let _ = runner.flush("acme-late").await;
         (drove, carried, goal)
     }
 
