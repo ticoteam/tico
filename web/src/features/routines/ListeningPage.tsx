@@ -273,8 +273,8 @@ const KINDS: Record<string, string> = { search: 'Search', page: 'Page', github: 
 function Sources({ w }: { w: Routine }) {
   const read = useQuery(sourcesQuery(w.id));
   const remove = useConfirmRemove();
-  const byId = new Map((read.data ?? []).map((s) => [s.id, s]));
-  const list: (ListenSource & Partial<WatchSource>)[] = (w.trigger.sources ?? []).map((s) => ({ ...byId.get(s.id), ...s }));
+  const byKey = new Map((read.data ?? []).map((s) => [s.key ?? s.id, s]));
+  const list: (ListenSource & Partial<WatchSource>)[] = (w.trigger.sources ?? []).map((s) => ({ ...byKey.get(s.id), ...s }));
   const rules = w.trigger.rules ?? [];
   return (
     <>

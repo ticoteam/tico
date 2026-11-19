@@ -139,16 +139,24 @@ function RoutinesTab({ panel, q, state }: { panel?: string; q?: string; state?: 
                     label={name}
                     items={rs}
                     getKey={(r) => r.id}
-                    draw={(r) => <RoutineRow key={r.id} r={r} selected={r.id === open} when={triggerWords(r.trigger, { hook: hookName })} />}
+                    draw={(r) => (
+                      <RoutineRow
+                        key={r.id}
+                        r={r}
+                        href={routinesHref({ q, state, panel: `routine:${r.id}` })}
+                        selected={r.id === open}
+                        when={triggerWords(r.trigger, { hook: hookName })}
+                      />
+                    )}
                   />
                 </Section>
               ))
           ) : all.length ? (
-            <Empty title="No matches" />
+            state && <Empty title="No matches" />
           ) : (
             <Empty title="No routines yet">{add}</Empty>
           )}
-          {!state && <BuiltInSection selected={built} q={q} />}
+          {!state && <BuiltInSection selected={built} q={q} showEmpty={!none && !routines.length} />}
         </>
       }
       panel={open ? <RoutinePanel key={open} id={open} onClose={close} /> : built ? <BuiltinPanel which={built} onClose={close} /> : null}
@@ -156,13 +164,13 @@ function RoutinesTab({ panel, q, state }: { panel?: string; q?: string; state?: 
   );
 }
 
-function RoutineRow({ r, selected, when }: { r: Routine; selected: boolean; when: string }) {
+function RoutineRow({ r, href, selected, when }: { r: Routine; href: string; selected: boolean; when: string }) {
   const off = r.enabled === false || !!r.paused;
   const failed = r.last_run?.status === 'failed';
   const at = r.last_run?.started_at ?? r.last_run?.finished_at;
   const name = r.name || 'Routine';
   return (
-    <Row className={off ? 'auto is-off' : 'auto'} title={name} href={routinesHref({ panel: `routine:${r.id}` })} selected={selected} target={`routine:${r.id}`}>
+    <Row className={off ? 'auto is-off' : 'auto'} title={name} href={href} selected={selected} target={`routine:${r.id}`}>
       <span className="row-title">{name}</span>
       <span className="row-sub">{when}</span>
       <span className="row-state">
@@ -188,7 +196,7 @@ const lastJob = (jobs: SystemJob[] | undefined) =>
 
 /** Maintenance, Heartbeat and System jobs: Tico's own, each with its switch and timing in its panel. One the person
     may not read is left out. */
-function BuiltInSection({ selected, q }: { selected: Builtin | null; q?: string }) {
+function BuiltInSection({ selected, q, showEmpty }: { selected: Builtin | null; q?: string; showEmpty: boolean }) {
   const m = useQuery(maintenanceQuery);
   const h = useQuery(heartbeatQuery);
   const j = useQuery(systemJobsQuery);
@@ -198,7 +206,7 @@ function BuiltInSection({ selected, q }: { selected: Builtin | null; q?: string 
     { id: 'system', name: 'System jobs', when: j.data ? `${j.data.length} ${j.data.length === 1 ? 'job' : 'jobs'}` : '', at: lastJob(j.data), gone: j.isError },
   ];
   const shown = rows.filter((r) => !r.gone && has(r.name, q));
-  if (!shown.length) return null;
+  if (!shown.length) return showEmpty ? <Empty title="No matches" /> : null;
   return (
     <Section name="Built in" count={shown.length} target="section:built-in">
       {shown.map((b) => (
@@ -206,7 +214,7 @@ function BuiltInSection({ selected, q }: { selected: Builtin | null; q?: string 
           key={b.id}
           className={b.off ? 'auto is-off' : 'auto'}
           title={b.name}
-          href={routinesHref({ panel: `builtin:${b.id}` })}
+          href={routinesHref({ q, panel: `builtin:${b.id}` })}
           selected={selected === b.id}
           target={`routine:${b.id}`}
         >
