@@ -678,6 +678,8 @@ def test_one_person_dms_never_read_the_rooms_of_the_tasks_one_follows(api):
         room = c.execute(
             "SELECT id FROM conversations WHERE task_id=? AND parent_id IS NULL", (task["id"],)
         ).fetchone()[0]
+        # As a task's room written before threads stored an audience is (most of TIDY's 19k rooms, Nov 19).
+        c.execute("UPDATE conversations SET audience=NULL, kind='task' WHERE id=?", (room,))
         c.execute(
             "INSERT OR REPLACE INTO thread_followers(id,thread_id,actor,following,notify,reason,created_at,updated_at) "
             "VALUES(?,?,'human:ben',1,'live','manual',?,?)",
