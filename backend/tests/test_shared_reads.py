@@ -85,8 +85,14 @@ def test_a_streamed_answer_is_never_handed_to_another_request():
             await asyncio.sleep(0.01)
             return StreamingResponse(iter([b"x"]))
 
+        def own():  # each request has its own compute, as backend/names.py makes one per request
+            async def mine():
+                return await compute()
+
+            return mine
+
         key = shared_reads.key_of(_request(), "/api/v2/threads/rail")
-        await asyncio.gather(*(reads.answer(key, 0, compute) for _ in range(3)))
+        await asyncio.gather(*(reads.answer(key, 0, own()) for _ in range(3)))
         assert len(calls) == 3
 
     asyncio.run(run())
