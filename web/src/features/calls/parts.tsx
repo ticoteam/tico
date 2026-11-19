@@ -3,7 +3,7 @@ import { useLocation } from '@tanstack/react-router';
 import { useEffect, useState, useSyncExternalStore, type CSSProperties, type MouseEvent } from 'react';
 import type { CalendarOccurrence, Call } from '@/api/schema';
 import { refusal, run } from '@/actions';
-import { directoryQuery, meQuery, useActor } from '@/data';
+import { meQuery, useActor, useDirectory, type Directory } from '@/data';
 import { isCallWindow, useCallWindow } from '@/desktop';
 import { Avatar, Faces, type AvatarSize } from '@/kit/Avatar';
 import { Icon } from '@/kit/Icon';
@@ -42,10 +42,12 @@ export const useMe = (): string | undefined => useQuery(meQuery).data?.id;
 const bare = (actor: string) => actor.slice(actor.indexOf(':') + 1);
 const kindOf = (actor: string) => (actor.startsWith('bot:') ? 'agent' : 'person');
 
-/** A name for any actor id, from the directory. */
+const namesOf = (d: Directory) => Object.fromEntries(Object.entries(d.byId).map(([k, a]) => [k, a.name]));
+
+/** A name for any actor id, from the directory. Only the names are read, so a status line does not redraw it. */
 export function useNameOf(): (actor: string) => string {
-  const { data } = useQuery(directoryQuery);
-  return (actor) => data?.byId[actor]?.name ?? bare(actor);
+  const names = useDirectory(namesOf);
+  return (actor) => names?.[actor] ?? bare(actor);
 }
 
 /** On now: the call's level bars (the Dot's `.lvl`), standing still. */
@@ -76,10 +78,10 @@ export function Face({ actor, size, speaking, muted }: { actor: string; size: nu
 
 /** The faces of who is asked, from the directory; an outside guest is their email's initials. */
 export function Who({ refs, size = 22, max = 4 }: { refs: readonly string[]; size?: AvatarSize; max?: number }) {
-  const { data } = useQuery(directoryQuery);
+  const found = useDirectory((d) => refs.map((r) => d.byId[r]));
   if (!refs.length) return null;
-  const people = refs.map((r) => {
-    const a = data?.byId[r];
+  const people = refs.map((r, i) => {
+    const a = found?.[i];
     return { kind: a?.kind ?? kindOf(r), name: a?.name ?? (r.includes('@') ? r : bare(r)), hue: a?.hue };
   });
   return <Faces people={people} size={size} max={max} />;

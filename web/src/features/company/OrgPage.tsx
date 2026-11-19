@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { meQuery, useActor, useActors } from '@/data';
@@ -11,7 +11,7 @@ import { FoldButton } from '@/kit/SectionHead';
 import { Select } from '@/kit/Select';
 import { List, PageMore, Section, SidePanel, type PageTab } from '@/pagekinds';
 import { Dot } from '@/tico/dot';
-import { Face, Go, NameOf, PageOwner, PanelLink, readState, teamPath, useDo } from './parts';
+import { Face, Go, NameOf, PageOwner, PanelLink, teamPath, useDo } from './parts';
 import { accessQuery, factoriesQuery, groupsQuery, type Team } from './queries';
 
 /* Org (pages/3-company/company.js orgPage): who reports to whom, as a light chart. A teammate opens its sheet beside
@@ -31,7 +31,7 @@ const leadOf = (g: Team) => (g.lead ? g.lead.replace(/^person:/, 'human:') : nul
 const members = (g: Team) => [...g.people.map((p) => (p.includes(':') ? p : `human:${p}`)), ...g.bot_slugs.map((b) => `bot:${b}`)];
 
 export function OrgTab({ head, search }: { head: Head; search: { panel?: string } }) {
-  const q = useQuery(groupsQuery);
+  const all = useSuspenseQuery(groupsQuery).data;
   const me = useQuery(meQuery).data;
   const access = useQuery(accessQuery).data;
   const actors = useActors();
@@ -42,7 +42,6 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
   const maker = me?.role === 'owner' || access?.you === 'owner' || access?.you === 'admin';
   // The root is the company's owner (Access names them to the owner and Admins; a member sees themself there).
   const root = access?.owner ? `human:${access.owner}` : me?.id;
-  const all = q.data ?? [];
   const teams = all.filter((g) => !g.parent).sort((a, b) => a.order - b.order);
   const mate = search.panel?.startsWith('mate:') ? search.panel.slice(5) : null;
   return (
@@ -56,7 +55,7 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
           <PageOwner page="strategy" />
         </>
       }
-      state={readState(q, !teams.length)}
+      state={teams.length ? 'ready' : 'empty'}
       more={
         maker && (
           <PageMore target="org:more">
@@ -64,7 +63,6 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
           </PageMore>
         )
       }
-      onRetry={() => void q.refetch()}
       empty={{ title: 'No teams yet' }}
       sections={
         <>
@@ -96,7 +94,7 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
         search.panel === 'factory-new' && maker ? (
           <NewFactory onClose={() => void close.run({})} />
         ) : (
-          mate && q.data && <MateSheet who={mate} groups={q.data} onClose={() => void close.run({})} />
+          mate && <MateSheet who={mate} groups={all} onClose={() => void close.run({})} />
         )
       }
     />

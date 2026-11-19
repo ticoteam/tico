@@ -1,8 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { refusal, run } from '@/actions';
 import type { ApiTool, ToolIndexRow, WebsiteTool } from '@/api/schema';
-import { directoryQuery, meQuery } from '@/data';
+import { meQuery, useActors, useDirectory } from '@/data';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
@@ -16,15 +16,15 @@ import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
 import { GithubConnection } from '@/features/start/exports';
 import { BrowserDialog } from '@/features/team/exports';
-import { FilterRow, ListAndItem, PageMore, Section, type PageState } from '@/pagekinds';
+import { FilterRow, ListAndItem, PageMore, Section } from '@/pagekinds';
 import { AddAccountDialog, AddDialog, AddItems, AddMenu, ReplaceLoginDialog, type Adding } from './AddTool';
 import { CodeDialog, Confirm, EditApiDialog, ExpiryDialog, PasteDialog, RevealDialog, SettingDialog, SitesDialog } from './ToolDialogs';
-import { Face, Held, KindTile, More, OwnerButton, press, when } from './parts';
+import { Face, Held, idsAndNames, KindTile, More, OwnerButton, press, when } from './parts';
 import { apiToolQuery, teamsQuery, toolsQuery, vaultQuery, websiteToolQuery, type StoredKey } from './queries';
 import { AddressOne, CompanyAddress } from './ToolLetters';
 import { EmailView, hasWho, InboxView, KeyView, MailboxView, MessagesView, NumbersView, ServiceView, subjectOf, WebhookView, WhoMenu } from './ToolMore';
 import { MayFacts, useSending } from './ToolSettings';
-import { AddSomeone, bad, Code, Dim, KIND, stateOf, ToolPage, toolHref, UseRow, WhoRow } from './ToolShell';
+import { AddSomeone, bad, Code, Dim, KIND, ToolPage, toolHref, UseRow, WhoRow } from './ToolShell';
 import { useGithubReturn } from './githubReturn';
 import type { ToolsSearch } from './search';
 import './library.css';
@@ -57,17 +57,17 @@ const keyEntry = (k: StoredKey): Entry => ({ id: `key:${k.id}`, name: k.name, ki
 export const order = (a: Entry, b: Entry) => Number(!!b.problem) - Number(!!a.problem) || a.name.localeCompare(b.name);
 
 export function ToolsPage({ search }: { search: ToolsSearch }) {
-  const tools = useQuery(toolsQuery);
+  const { data: tools } = useSuspenseQuery(toolsQuery);
   const githubProblem = useGithubReturn(search);
   const [words, setWords] = useState(search.q ?? '');
   const w = words.trim().toLowerCase();
   // Keys no tool holds, for those who may see the vault (anyone else gets none, quietly).
   const loose = (useQuery(vaultQuery).data?.credentials ?? []).filter((k) => !k.tool_id);
   const teams = useQuery(teamsQuery).data ?? [];
-  const dir = useQuery(directoryQuery).data;
-  const same = (x: string) => dir?.byId[x]?.id ?? x;
+  const known = useDirectory(idsAndNames);
+  const same = (x: string) => known?.[x]?.id ?? x;
   const who = search.who;
-  const all = tools.data?.rows ?? [];
+  const all = tools.rows;
   const rows = narrow(all, search).filter(
     (r) =>
       (!w || [r.name, r.detail, r.vendor_name].some((x) => (x ?? '').toLowerCase().includes(w))) &&
@@ -91,17 +91,14 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
   // Who has access: the teams, then everyone a tool or a key is given to.
   const people = new Map<string, string>();
   for (const r of all) for (const p of (r.who as ToolIndexRow['who'] | undefined) ?? []) if (p.kind !== 'group') people.set(same(subjectOf(p)), p.name);
-  for (const k of loose) for (const g of k.grants) if (/^(human|bot):/.test(g.subject)) people.set(same(g.subject), dir?.byId[g.subject]?.name ?? g.subject);
+  for (const k of loose) for (const g of k.grants) if (/^(human|bot):/.test(g.subject)) people.set(same(g.subject), known?.[g.subject]?.name ?? g.subject);
   const whoList = [...people].map(([subject, name]) => ({ subject, name })).sort((a, b) => a.name.localeCompare(b.name));
-  const whoName = who && (who.startsWith('group:') ? teams.find((g) => `group:${g.id}` === who)?.name : (people.get(same(who)) ?? dir?.byId[who]?.name));
+  const whoName = who && (who.startsWith('group:') ? teams.find((g) => `group:${g.id}` === who)?.name : (people.get(same(who)) ?? known?.[who]?.name));
   const filters = [
     ...(search.needs ? [{ label: 'Needs you', onClear: () => filter({ kind: search.kind }) }] : []),
     ...(search.kind ? [{ label: KIND[search.kind] ?? search.kind, onClear: () => filter({ needs: !!search.needs }) }] : []),
     ...(who ? [{ label: whoName || 'Who has access', onClear: () => filterWho() }] : []),
   ];
-
-  let state: PageState = stateOf(tools);
-  if (state === 'ready' && !all.length && !loose.length) state = 'empty';
 
   const group = (name: string, list: Entry[]) =>
     list.length > 0 && (
@@ -161,8 +158,7 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
           </PageMore>
         }
         open={!!open}
-        state={state}
-        onRetry={() => void tools.refetch()}
+        state={!all.length && !loose.length ? 'empty' : 'ready'}
         empty={{ title: 'No tools yet', action: <AddMenu trigger={<Button variant="primary">Add tool</Button>} onPick={setAdding} /> }}
         search={
           <>
@@ -235,7 +231,7 @@ type ApiDialog = { is: 'edit' | 'paste' } | { is: 'setting'; setting: NonNullabl
 
 function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined }) {
   const q = useQuery(apiToolQuery(id));
-  const dir = useQuery(directoryQuery).data;
+  const actors = useActors();
   const [keyFor, setKeyFor] = useState<Key | 'new' | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [dialog, setDialog] = useState<ApiDialog | null>(null);
@@ -367,7 +363,7 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
       whoActions={
         manage && (
           <AddSomeone
-            choices={(dir?.actors ?? []).filter((a) => !t?.access.some((x) => x.subject === a.id))}
+            choices={actors.filter((a) => !t?.access.some((x) => x.subject === a.id))}
             onPick={(subject) => void press('tools.setAccess', { tool: id, subject, level: 'read' }, 'Not added')}
           />
         )
@@ -452,7 +448,7 @@ type SiteDialog = { is: 'sites' | 'delete' | 'add' } | { is: 'password' | 'code'
 
 function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined }) {
   const q = useQuery(websiteToolQuery(id));
-  const dir = useQuery(directoryQuery).data;
+  const actors = useActors();
   const teams = useQuery(teamsQuery).data ?? [];
   const [dialog, setDialog] = useState<SiteDialog | null>(null);
   const t = q.data;
@@ -468,7 +464,7 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
     return [
       ...(a.all_bots ? [] : [{ id: 'bots', name: 'All agents' }]),
       ...teams.filter((g) => !has.has(`group:${g.id}`)).map((g) => ({ id: `group:${g.id}`, name: g.name })),
-      ...(dir?.actors ?? []).filter((x) => !has.has(x.id)),
+      ...actors.filter((x) => !has.has(x.id)),
     ].map((c) => <MenuItem key={c.id} label={c.name} onSelect={() => give(a, c.id)} />);
   };
   const open = accounts.filter(editable);

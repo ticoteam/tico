@@ -11,6 +11,7 @@ import { bind } from '@/actions/bind';
 import { directoryQuery, queryClient, type Actor } from '@/data';
 import { instructionsChange } from './model';
 import { agentsQuery, groupsQuery, peopleQuery, type AgentRow, type Group } from './queries';
+import { loadWho } from './routing';
 import { TeamWho } from './TeamWho';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -117,11 +118,10 @@ describe("A person's Slack", () => {
     expect(screen.queryByRole('region', { name: /Slack/ })).toBeNull();
   });
 
-  it('shows no access one step in, without Try again @s626', async () => {
+  // The router's fault page draws a 403 as no access, without Try again.
+  it('hands a refused read one step in to the router as a 403 @s626', async () => {
     serve(slackOf(null, 403));
-    show(<TeamWho who="p1" tab="slack" />, '/team/p1?tab=slack');
-    expect(await screen.findByText('Only they and the owner can read their Slack.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    await expect(loadWho(queryClient, 'p1', 'slack')).rejects.toMatchObject({ status: 403 });
   });
 
   it('says not connected when they have no Slack and no threads @s626', async () => {

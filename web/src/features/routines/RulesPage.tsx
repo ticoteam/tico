@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
@@ -49,7 +49,7 @@ export const rulesTabs: readonly PageTab[] = [
 const close = () => void press('rules.closePanel', {});
 
 type State = 'loading' | 'fault' | 'empty' | 'ready';
-const stateOf = (q: { isPending: boolean; isError: boolean }, rows: number): State => (q.isPending ? 'loading' : q.isError ? 'fault' : rows ? 'ready' : 'empty');
+const stateOf = (rows: number): State => (rows ? 'ready' : 'empty');
 
 /** The day n days from now, YYYY-MM-DD. */
 const dayIn = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
@@ -91,8 +91,9 @@ export function RulesPage({ search }: { search: RulesSearch }) {
   return <Tab search={search} confirm={remove.confirm} asked={remove.node} />;
 }
 
-/** The page around one tab's rows: the head, its states and the open rule. */
-function Page({ search, asked, state, retry, empty, dialogs, children }: Omit<TabProps, 'confirm'> & { state: State; retry: () => void; empty: string; dialogs?: ReactNode; children: ReactNode }) {
+/** The page around one tab's rows: the head, its states and the open rule. A tab's own read comes with the address
+    (the route's loader), so most tabs are only empty or ready; Suggested reads two lists and draws their states. */
+function Page({ search, asked, state, retry, empty, dialogs, children }: Omit<TabProps, 'confirm'> & { state: State; retry?: () => void; empty: string; dialogs?: ReactNode; children: ReactNode }) {
   const t: RuleTab = search.tab ?? '';
   const [reading, setReading] = useState(false);
   const kind = t === 'stages' ? 'stage' : t === 'outside' ? 'outside' : 'org';
@@ -138,21 +139,20 @@ function useTeamName() {
 }
 
 function CompanyTab({ search, confirm, asked }: TabProps) {
-  const org = useQuery(orgRulesQuery('active'));
   return (
-    <Page search={search} asked={asked} state={org.isPending ? 'loading' : org.isError ? 'fault' : 'ready'} retry={() => void org.refetch()} empty="No rules yet">
+    <Page search={search} asked={asked} state="ready" empty="No rules yet">
       <CompanyRules who={search.who ?? '*'} panel={search.panel} confirm={confirm} q={search.q} />
     </Page>
   );
 }
 
 function StagesTab({ search, confirm, asked }: TabProps) {
-  const stage = useQuery(stageRulesQuery('active'));
+  const stage = useSuspenseQuery(stageRulesQuery('active')).data;
   const team = useTeamName();
-  const items = (stage.data?.items ?? []).filter((r) => hasWords([r.name, r.pipeline_name, ...stageParts(r, team), r.jev, r.reason].join(' '), search.q));
+  const items = stage.items.filter((r) => hasWords([r.name, r.pipeline_name, ...stageParts(r, team), r.jev, r.reason].join(' '), search.q));
   const every = 'Every pipeline';
   return (
-    <Page search={search} asked={asked} state={stateOf(stage, items.length)} retry={() => void stage.refetch()} empty="No stage rules yet">
+    <Page search={search} asked={asked} state={stateOf(items.length)} empty="No stage rules yet">
       {grouped(items, (r) => (r.scope === 'company' ? every : (r.pipeline_name ?? 'A pipeline')), every).map(([g, rs]) => (
         <Section key={g} name={g} count={rs.length} target={`section:${g}`}>
           <Rows
@@ -168,10 +168,10 @@ function StagesTab({ search, confirm, asked }: TabProps) {
 }
 
 function BuiltInTab({ search, asked }: TabProps) {
-  const groups = useQuery(ruleGroupsQuery);
-  const list = (groups.data?.built_in ?? []).filter((b) => hasWords(`${b.name} ${b.what ?? ''}`, search.q));
+  const groups = useSuspenseQuery(ruleGroupsQuery).data;
+  const list = (groups.built_in ?? []).filter((b) => hasWords(`${b.name} ${b.what ?? ''}`, search.q));
   return (
-    <Page search={search} asked={asked} state={stateOf(groups, list.length)} retry={() => void groups.refetch()} empty="No built-in rules">
+    <Page search={search} asked={asked} state={stateOf(list.length)} empty="No built-in rules">
       <Section name="Always on" count={list.length} target="section:built-in">
         {list.map((b) => (
           <RuleRow key={b.name} how="fixed" parts={b.what ? [agentWords(b.name), agentWords(b.what)] : [agentWords(b.name)]} fixed target={`builtin:${b.name}`} />
@@ -182,13 +182,13 @@ function BuiltInTab({ search, asked }: TabProps) {
 }
 
 function OutsideTab({ search, confirm, asked }: TabProps) {
-  const org = useQuery(orgRulesQuery('active'));
+  const org = useSuspenseQuery(orgRulesQuery('active')).data;
   const due = useQuery(dueQuery).data;
   const holds = useQuery(holdsQuery).data;
-  const list = (org.data ?? []).filter((r) => r.kind === 'external' && hasWords(`${r.text} ${r.description ?? ''} ${r.source?.name ?? ''}`, search.q));
+  const list = org.filter((r) => r.kind === 'external' && hasWords(`${r.text} ${r.description ?? ''} ${r.source?.name ?? ''}`, search.q));
   const dueOf = (id: string) => due?.find((d) => d.rule.id === id);
   return (
-    <Page search={search} asked={asked} state={stateOf(org, list.length)} retry={() => void org.refetch()} empty="No outside rules yet">
+    <Page search={search} asked={asked} state={stateOf(list.length)} empty="No outside rules yet">
       {grouped(list, (r) => r.source?.name ?? 'Other').map(([g, rs]) => (
         <Section key={g} name={g} count={rs.length}>
           {rs.map((r) => (
@@ -212,12 +212,12 @@ function OutsideTab({ search, confirm, asked }: TabProps) {
 }
 
 function DueTab({ search, asked }: TabProps) {
-  const due = useQuery(dueQuery);
-  const list = (due.data ?? []).filter((d) => hasWords(d.rule.text, search.q));
+  const due = useSuspenseQuery(dueQuery).data;
+  const list = due.filter((d) => hasWords(d.rule.text, search.q));
   const soon = dayIn(30);
   const when = (d: DueDate) => (d.status === 'overdue' ? 'Late' : d.due_on <= soon ? 'Next 30 days' : 'Later');
   return (
-    <Page search={search} asked={asked} state={stateOf(due, list.length)} retry={() => void due.refetch()} empty="No due dates">
+    <Page search={search} asked={asked} state={stateOf(list.length)} empty="No due dates">
       {grouped([...list].sort((a, b) => a.due_on.localeCompare(b.due_on)), when, 'Late').map(([g, ds]) => (
         <Section key={g} name={g} count={ds.length}>
           {ds.map((d) => (
@@ -251,7 +251,7 @@ function DueRow({ d, selected }: { d: DueDate; selected: boolean }) {
 /** Wakes, and routines on tasks: both are routines, read from the rule groups; each row opens on Routines. */
 function AutoTab({ search, asked }: TabProps) {
   const wake = search.tab === 'wakes';
-  const groups = useQuery(ruleGroupsQuery);
+  const groups = useSuspenseQuery(ruleGroupsQuery).data;
   const routines = useQuery(routinesQuery).data;
   const teams = useQuery(teamsQuery).data ?? [];
   const pipes = useQuery(pipelinesQuery).data ?? [];
@@ -260,10 +260,10 @@ function AutoTab({ search, asked }: TabProps) {
     const r = byId.get(w.id);
     return `${w.name} ${r ? triggerWords(r.trigger) : ''}`;
   };
-  const list = ((wake ? groups.data?.wakes : groups.data?.automations) ?? []).filter((w) => hasWords(words(w), search.q));
+  const list = ((wake ? groups.wakes : groups.automations) ?? []).filter((w) => hasWords(words(w), search.q));
   const sectionOf = (r: Routine | undefined) => (wake ? wakeSection(r, teams, pipes) : pipelineSection(r, pipes));
   return (
-    <Page search={search} asked={asked} state={stateOf(groups, list.length)} retry={() => void groups.refetch()} empty={wake ? 'No wakes yet' : 'No routines on tasks yet'}>
+    <Page search={search} asked={asked} state={stateOf(list.length)} empty={wake ? 'No wakes yet' : 'No routines on tasks yet'}>
       {grouped(list, (w) => sectionOf(byId.get(w.id))).map(([g, ws]) => (
         <Section key={g} name={g} count={ws.length}>
           {ws.map((w) => (
@@ -286,13 +286,13 @@ function SuggestedTab({ search, asked }: TabProps) {
   const orgs = (orgSugg.data ?? []).filter((r) => hasWords(`${r.text} ${r.description ?? ''}`, search.q));
   const stages = (stageSugg.data?.items ?? []).filter((r) => hasWords([r.name, ...stageParts(r, team)].join(' '), search.q));
   const n = orgs.length + stages.length;
-  const both = { isPending: orgSugg.isPending && stageSugg.isPending, isError: orgSugg.isError && stageSugg.isError };
+  const state: State = orgSugg.isPending && stageSugg.isPending ? 'loading' : orgSugg.isError && stageSugg.isError ? 'fault' : stateOf(n);
   const cols = { who: true, at: true };
   return (
     <Page
       search={search}
       asked={asked}
-      state={stateOf(both, n)}
+      state={state}
       retry={() => void Promise.all([orgSugg.refetch(), stageSugg.refetch()])}
       empty="No suggestions"
       dialogs={whoFor && <AcceptWho rule={whoFor} onClose={() => setWhoFor(null)} />}

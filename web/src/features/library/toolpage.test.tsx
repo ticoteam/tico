@@ -1238,12 +1238,9 @@ describe('the list and the open tool’s states', () => {
     expect(await screen.findByRole('menuitem', { name: 'API' })).toBeTruthy();
   });
 
-  it('says a tool list or a tool not shared with you is no access, with nothing to try again', async () => {
-    serve((url) => (url.startsWith('/api/v2/tool-index') || url === '/api/v2/api-tools/t9' ? refused(403, 'forbidden') : undefined));
-    queryClient.removeQueries({ queryKey: toolsQuery.queryKey });
-    open('');
-    expect(await screen.findByText("You don't have access to this page")).toBeTruthy();
-    cleanup();
+  // A Tools list not shared with you is the router's no-access page (PageFault).
+  it('says a tool not shared with you is no access, with nothing to try again', async () => {
+    serve((url) => (url === '/api/v2/api-tools/t9' ? refused(403, 'forbidden') : undefined));
     tools([indexRow({ id: 'api:t9', name: 'Hidden API' })]);
     open('api:t9');
     const tool = await page('Hidden API');

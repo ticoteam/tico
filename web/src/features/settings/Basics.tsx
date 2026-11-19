@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { refusal, run } from '@/actions';
-import { configQuery, directoryQuery, meQuery, useActor } from '@/data';
+import { configQuery, meQuery, useActor } from '@/data';
 import { tellDesktopSigningOut } from '@/desktop';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
@@ -24,7 +24,7 @@ import { TicoSection } from './Desktop';
 import { NoticeSwitch } from './Notices';
 import { Joining, LeftPeople } from './People';
 import { ScreeningMore, SupportAccess } from './SecurityMore';
-import { Foot, Line, SwitchLine, Verb, act } from './parts';
+import { Foot, Line, SwitchLine, Verb, act, useAgentFaces, useFaces } from './parts';
 import {
   accessQuery,
   supportAccessQuery,
@@ -53,10 +53,10 @@ export function General() {
   const config = useQuery(configQuery);
   const access = useQuery(accessQuery);
   const owners = useQuery(pageOwnersQuery);
-  const dir = useQuery(directoryQuery);
+  const agents = useAgentFaces();
+  const faces = useFaces();
   const c = config.data;
-  const agents = (dir.data?.actors ?? []).filter((a) => a.kind === 'agent');
-  const named = (actor?: string | null) => (actor ? (dir.data?.byId[actor]?.name ?? '') : '');
+  const named = (actor?: string | null) => (actor ? (faces[actor]?.name ?? '') : '');
   const pages = Object.entries(owners.data ?? {});
   return (
     <>

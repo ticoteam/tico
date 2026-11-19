@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { refusal, run } from '@/actions';
-import { useActor } from '@/data';
+import { useActor, type Directory } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { SettledSearch } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
@@ -10,6 +10,10 @@ import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
 import { toast } from '@/kit/Toast';
 import { pageOwnersQuery } from './queries';
 import { chatAddress } from '@/lib';
+
+/** Each id form the directory answers (`bot:<slug>`, a bare id...) to its actor's id and name only, for `useDirectory`:
+    an agent's status line does not draw the page again. */
+export const idsAndNames = (d: Directory) => Object.fromEntries(Object.entries(d.byId).map(([k, a]) => [k, { id: a.id, name: a.name }]));
 
 /** A teammate's face from the directory. `bot:<slug>`, `human:<id>`, a bare slug or id all resolve. */
 export function Face({ actor, name, size = 22 }: { actor: string | null | undefined; name?: string | null; size?: 22 | 28 }) {
@@ -63,9 +67,6 @@ export function ChatWith({ actor }: { actor: string | null }) {
 export function Find({ label, value, onFind }: { label: string; value: string | undefined; onFind: (q: string | undefined) => void }) {
   return <SettledSearch label={label} value={value ?? ''} onSettle={(q) => onFind(q || undefined)} placeholder="Search" button="Search" />;
 }
-
-/** A page's state for a read that failed: one the server refused (403) is not shared, with nothing to try again. */
-export const refused = (e: unknown): 'no-access' | 'fault' => ((e as { status?: number } | null)?.status === 403 ? 'no-access' : 'fault');
 
 /** Run an action from a control and say why when it is refused (`run` itself shows nothing). */
 export async function press(id: string, input: unknown, failed = 'That did not work'): Promise<boolean> {

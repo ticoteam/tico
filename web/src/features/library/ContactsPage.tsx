@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseInfiniteQuery } from '@tanstack/react-query';
 import { useState, type FocusEvent, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Empty } from '@/kit/Empty';
@@ -12,7 +12,7 @@ import { Row } from '@/kit/Row';
 import { VirtualList } from '@/kit/VirtualList';
 import { FilterRow, List, RecordPanel, Section, type PageState, type PageTab } from '@/pagekinds';
 import { ContactRules, PlaceFacts, PlaceSections, useUs } from './ContactPlace';
-import { Face, Find, OwnerButton, press, refused, Who } from './parts';
+import { Face, Find, OwnerButton, press, Who } from './parts';
 import {
   attributesQuery,
   cardQuery,
@@ -86,16 +86,13 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
   const type = search.type ?? 'person';
   const types = useQuery(typesQuery);
   const counts = useQuery(countsQuery);
-  const list = useInfiniteQuery(contactsQuery(type, search.q ?? '', search.link ?? ''));
-  const rows = list.data?.pages.flatMap((p) => p.rows) ?? [];
+  const list = useSuspenseInfiniteQuery(contactsQuery(type, search.q ?? '', search.link ?? ''));
+  const rows = list.data.pages.flatMap((p) => p.rows);
   const kinds = types.data ?? [];
   const kind = kinds.find((k) => k.key === type);
   const countOf = (key: string) => counts.data?.find((c) => c.type === key)?.count;
 
-  let state: PageState = 'ready';
-  if (list.isError) state = refused(list.error);
-  else if (!list.data) state = 'loading';
-  else if (!rows.length && !search.q && !search.link) state = 'empty';
+  const state: PageState = !rows.length && !search.q && !search.link ? 'empty' : 'ready';
   // An empty tab beside full ones names its own kind; with none at all, the page says so.
   const none = !(counts.data ?? []).some((c) => c.count > 0);
   const emptyTitle = none || !kind ? 'No contacts yet' : `No ${kind.plural_name.toLowerCase()} yet`;
@@ -134,7 +131,6 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
       filter={search.link && <FilterRow filters={[{ label: relation(search.link), onClear: () => listed({ type: search.type, q: search.q }) }]} />}
       state={state}
       empty={{ title: emptyTitle }}
-      onRetry={() => void list.refetch()}
       sections={
         rows.length ? (
           <VirtualList

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useSearch } from '@tanstack/react-router';
-import { directoryQuery, useActor } from '@/data';
+import { useActor, useDirectory } from '@/data';
 import { chatAddress, fmtDate, fmtMoney } from '@/lib';
 import { Button } from '@/kit/Button';
 import { Lines } from '@/kit/Chart';
@@ -18,9 +18,8 @@ import { growthChannelQuery, growthManager, pageOwnersQuery, type GrowthChannel,
 const usd = (v: number | null | undefined, cents = false) => (v == null ? '' : fmtMoney(v, { cents }));
 /** The Growth Manager's face in the head: it opens its chat beside the page. Nothing when the company has none. */
 export function ManagerFace() {
-  const owners = useQuery(pageOwnersQuery);
-  const dir = useQuery(directoryQuery);
-  const bot = growthManager(owners.data, dir.data);
+  const owners = useQuery(pageOwnersQuery).data;
+  const bot = useDirectory((dir) => growthManager(owners, dir)) ?? null;
   const who = useActor(bot);
   const press = usePress();
   const chat = (useSearch({ strict: false }) as { chat?: string }).chat;

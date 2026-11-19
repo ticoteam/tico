@@ -15,15 +15,22 @@ import {
 } from './queries';
 import type { SectionId } from './sections';
 
-/** For the route's loader: the section's read before the first paint. Never throws: a 403 or a fault is the page's to say.
-    A section read before draws from the cache at once; one gone stale (the quiet reads) is read again behind it. */
+/** The server said this read is for owners and admins. */
+export const isForbidden = (e: unknown) => (e as { status?: number } | null)?.status === 403;
+
+/** For the route's loader: the person and the section's read before the first paint. A fault is the router's to show;
+    a 403 is not thrown, since the section says it beside the section list. A section read before draws from the cache
+    at once; one gone stale (the quiet reads) is read again behind it. */
 export const loadSection = (qc: QueryClient, section: SectionId) =>
-  qc
-    .ensureQueryData({ ...(mainQuery(section) as FetchQueryOptions<unknown, Error, unknown, readonly unknown[]>), revalidateIfStale: true })
-    .then(
-      () => undefined,
-      () => undefined,
-    );
+  Promise.all([
+    qc.ensureQueryData(meQuery),
+    qc.ensureQueryData({ ...(mainQuery(section) as FetchQueryOptions<unknown, Error, unknown, readonly unknown[]>), revalidateIfStale: true }),
+  ]).then(
+    () => undefined,
+    (e: unknown) => {
+      if (!isForbidden(e)) throw e;
+    },
+  );
 
 /** The one read a section cannot draw without: the route loads it first, and its state is the page's state. */
 export function mainQuery(section: SectionId) {

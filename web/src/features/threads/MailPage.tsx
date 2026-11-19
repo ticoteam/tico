@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQueries, useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueries, useQuery, useSuspenseInfiniteQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { ApiError } from '@/api/client';
 import { clock, Composer, dayKey, dayLabel, MessageBones, stamp } from '@/conversation';
@@ -39,9 +39,9 @@ export interface MailPageProps {
 /** Mail: the company's mailboxes, a row per conversation, the open one in full with a reply box. */
 export function MailPage({ box, open, view, q: words }: MailPageProps) {
   const tabs = useThreadTabs('/threads');
-  const boxes = useQuery(mailboxesQuery);
-  const current = box ?? boxes.data?.[0]?.address ?? '';
-  const mailbox = boxes.data?.find((b) => b.address === current);
+  const boxes = useSuspenseQuery(mailboxesQuery).data;
+  const current = box ?? boxes[0]?.address ?? '';
+  const mailbox = boxes.find((b) => b.address === current);
   const agent = !!mailbox?.agent_instructions;
   const reading = view === 'instructions' && agent;
   const narrowed = !!words;
@@ -52,21 +52,19 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
   // An opened mail keeps the words it was found by.
   const keep: Record<string, string> = words ? { q: words } : {};
   // With more than one mailbox an empty one stays a list: the filter in the head leads to the others.
-  const pick = (boxes.data?.length ?? 0) > 1;
-  const none = boxes.data?.length === 0;
+  const pick = boxes.length > 1;
+  const none = boxes.length === 0;
   const unconnected = cut || (list.error instanceof ApiError && list.error.code === 'not_connected');
   const state =
-    boxes.isPending || (!!current && list.isPending && !unconnected)
-      ? 'loading'
-      : boxes.isError
-        ? 'fault'
-        : none || unconnected
-          ? 'empty'
-          : list.isError
-            ? 'fault'
-            : rows.length === 0 && !open && !agent && !pick && !narrowed
-              ? 'empty'
-              : 'ready';
+    none || unconnected
+      ? 'empty'
+      : current && list.isPending
+        ? 'loading'
+        : list.isError
+          ? 'fault'
+          : rows.length === 0 && !open && !agent && !pick && !narrowed
+            ? 'empty'
+            : 'ready';
   const more = () => {
     if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
   };
@@ -79,7 +77,7 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
         <>
           {pick && (
             <Menu trigger={<IconButton icon="filter" label="Mailbox" />}>
-              {boxes.data?.map((b) => (
+              {boxes.map((b) => (
                 <MenuItem key={b.address} label={b.name || b.address} on={b.address === current} onSelect={() => void press('mail.pickBox', { box: b.address })} />
               ))}
             </Menu>
@@ -131,7 +129,7 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
             }
           : { title: 'No mail' }
       }
-      onRetry={() => void (boxes.isError ? boxes.refetch() : list.refetch())}
+      onRetry={() => void list.refetch()}
       {...(reading
         ? {
             itemHead: <ItemHead title="Instructions" target="page:/threads/mail?view=instructions" back={BACK} />,
@@ -309,11 +307,10 @@ export interface MessagingPageProps {
     the server receives texts and sends none. */
 export function MessagingPage({ open }: MessagingPageProps) {
   const tabs = useThreadTabs('/threads');
-  const list = useInfiniteQuery(textListQuery);
+  const list = useSuspenseInfiniteQuery(textListQuery);
   const [words, setWords] = useState('');
-  const contacts = contactsOf(list.data?.pages.flatMap((p) => p.messages) ?? []);
+  const contacts = contactsOf(list.data.pages.flatMap((p) => p.messages));
   const shown = words.trim() ? contacts.filter((c) => (c.from ?? '').toLowerCase().includes(words.trim().toLowerCase())) : contacts;
-  const state = list.isPending ? 'loading' : list.isError ? 'fault' : contacts.length === 0 && !open ? 'empty' : 'ready';
   const more = () => {
     if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
   };
@@ -341,9 +338,8 @@ export function MessagingPage({ open }: MessagingPageProps) {
         )
       }
       open={!!open}
-      state={state}
+      state={contacts.length === 0 && !open ? 'empty' : 'ready'}
       empty={{ title: 'No texts yet' }}
-      onRetry={() => void list.refetch()}
       {...(open
         ? {
             itemHead: (

@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useState, type MouseEvent } from 'react';
 import { Conversation } from '@/conversation';
-import { directoryQuery } from '@/data';
+import { useDirectory, type Directory } from '@/data';
 import { followFromSmallWindow, smallWindowLink } from '@/desktop';
 import { Avatar } from '@/kit/Avatar';
 import { Count } from '@/kit/Count';
@@ -88,22 +88,24 @@ function Person({ actor, inCall, out }: { actor: string; inCall: boolean; out?: 
   );
 }
 
+/** A speaker's actor id: an actor id as is, an agent's or person's id with no prefix, or null for a name the meeting
+    tool gave. */
+const speakerId = (d: Directory, sp: string) => (sp.includes(':') ? sp : d.byId[`bot:${sp}`] ? `bot:${sp}` : d.byId[`human:${sp}`] ? `human:${sp}` : null);
+
 /** What has been said: read once, then each line as the live meeting's stream sends it (no timer). */
 export function Transcript({ meeting, room, live }: { meeting: string; room: string; live: boolean }) {
   const t = useQuery(transcriptQuery(meeting));
   const after = t.data?.event_id;
   const loaded = t.isSuccess;
   useEffect(() => (live && loaded ? followTranscript(meeting, after ?? 0, room) : undefined), [live, loaded, meeting, room, after]);
-  const dir = useQuery(directoryQuery).data;
   const nameOf = useNameOf();
-  // A speaker is an actor id, or an agent's id or slug with no prefix, or a name the meeting tool gave.
-  const actorOf = (sp: string) => (sp.includes(':') ? sp : dir?.byId[`bot:${sp}`] ? `bot:${sp}` : dir?.byId[`human:${sp}`] ? `human:${sp}` : null);
   const chunks = t.data?.chunks ?? [];
+  const ids = useDirectory((d) => chunks.map((c) => (c.speaker ? speakerId(d, c.speaker) : null)));
   if (!chunks.length) return t.isPending ? null : <Empty title="Nothing said yet" />;
   return (
     <div className="chat-body cw-ts">
-      {chunks.map((c) => {
-        const actor = c.speaker ? actorOf(c.speaker) : null;
+      {chunks.map((c, i) => {
+        const actor = ids?.[i] ?? (c.speaker?.includes(':') ? c.speaker : null);
         const name = actor ? nameOf(actor) : c.speaker || 'Someone';
         return (
           <div key={`${c.seq}:${c.revision ?? 0}`} className="msg ts">

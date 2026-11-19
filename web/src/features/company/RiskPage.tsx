@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useRef, useState, type ReactNode } from 'react';
 import { Button } from '@/kit/Button';
@@ -17,7 +17,7 @@ import { fmtAge, fmtDate, fmtMoney } from '@/lib';
 import { FiguresStrip, List, PageMore, Record, RecordPanel, Section, SidePanel } from '@/pagekinds';
 import type { Risk, RiskDetail } from '@/api/schema';
 import { Markdown } from '@/kit/Markdown';
-import { Face, Go, NameOf, PageOwner, PanelLink, readState, useDo } from './parts';
+import { Face, Go, NameOf, PageOwner, PanelLink, useDo } from './parts';
 import { fileSearchQuery, partySearchQuery, productsQuery, matterDatesQuery, matterFilesQuery, mattersQuery, riskQuery, risksQuery, waitingTasksQuery, type MatterRow, type RiskDate } from './queries';
 import './company.css';
 
@@ -106,10 +106,9 @@ function onePanel(panel: string | undefined, d: RiskDetail) {
 // ---------------------------------------------------------------- the list
 
 function Risks({ search }: { search: RiskSearch }) {
-  const q = useQuery(risksQuery);
+  const { risks } = useSuspenseQuery(risksQuery).data;
   const matters = useQuery(mattersQuery('open'));
   const open = useDo('company.openPanel');
-  const risks = q.data?.risks ?? [];
   const rows = matters.data?.matters ?? [];
   const add = (
     <Button variant={search.panel ? 'plain' : 'primary'} icon="plus" onClick={() => void open.run({ panel: 'new' })}>
@@ -125,8 +124,7 @@ function Risks({ search }: { search: RiskSearch }) {
           {add}
         </>
       }
-      state={readState(q, !risks.length)}
-      onRetry={() => void q.refetch()}
+      state={risks.length ? 'ready' : 'empty'}
       empty={{ title: 'No risks yet', action: add }}
       sections={LEVELS.map(([level, name]) => {
         const list = risks.filter((r) => r.level === level);
@@ -212,9 +210,8 @@ function openClaimed(rows: MatterRow[]): string {
 }
 
 function Disputes({ search }: { search: RiskSearch }) {
-  const q = useQuery(mattersQuery('disputes'));
+  const rows = useSuspenseQuery(mattersQuery('disputes')).data.matters;
   const waiting = useWaiting();
-  const rows = q.data?.matters ?? [];
   const groups: [string, MatterRow[]][] = [
     ['Open', rows.filter((m) => m.task.status === 'open')],
     ['Closed', rows.filter((m) => m.task.status !== 'open')],
@@ -223,8 +220,7 @@ function Disputes({ search }: { search: RiskSearch }) {
     <List
       {...useHead('disputes')}
       actions={<PageOwner page="risk" />}
-      state={readState(q, !rows.length)}
-      onRetry={() => void q.refetch()}
+      state={rows.length ? 'ready' : 'empty'}
       empty={{ title: 'No disputes' }}
       sections={groups
         .filter(([, list]) => list.length)
@@ -567,47 +563,40 @@ function MatterFiles({ task }: { task: string }) {
 
 /** One risk as its own page: figures, its matters, its dates, the rules and sources it rests on. */
 function OneRisk({ id, panel }: { id: string; panel?: string }) {
-  const q = useQuery(riskQuery(id));
+  const d = useSuspenseQuery(riskQuery(id)).data;
   const open = useDo('company.openPanel');
-  const d = q.data;
   return (
     <Record
-      title={d?.risk.label ?? 'Risk'}
+      title={d.risk.label}
       path={BASE}
       crumb={[{ label: 'Risk', to: BASE }]}
       className="co"
       actions={
-        d && (
-          <Button variant={panel ? 'plain' : 'primary'} icon="plus" data-phone onClick={() => void open.run({ panel: 'matter-new' })}>
-            Add matter
-          </Button>
-        )
+        <Button variant={panel ? 'plain' : 'primary'} icon="plus" data-phone onClick={() => void open.run({ panel: 'matter-new' })}>
+          Add matter
+        </Button>
       }
       more={
-        d?.editable && (
+        d.editable && (
           <PageMore target="risk:more">
             <MenuItem label="Edit" onSelect={() => void open.run({ panel: 'edit' })} />
           </PageMore>
         )
       }
-      state={readState(q)}
-      onRetry={() => void q.refetch()}
-      facts={d && <RiskFacts d={d} />}
+      facts={<RiskFacts d={d} />}
       figures={
-        d && (
-          <FiguresStrip
-            label="Risk figures"
-            figures={[
-              { label: 'Claimed', value: claimed(d.risk) || '$0' },
-              { label: 'Next date', value: d.risk.next_date ? fmtDate(d.risk.next_date) : 'None' },
-              { label: 'Open', value: d.risk.open },
-              { label: 'Closed', value: d.risk.closed },
-            ]}
-          />
-        )
+        <FiguresStrip
+          label="Risk figures"
+          figures={[
+            { label: 'Claimed', value: claimed(d.risk) || '$0' },
+            { label: 'Next date', value: d.risk.next_date ? fmtDate(d.risk.next_date) : 'None' },
+            { label: 'Open', value: d.risk.open },
+            { label: 'Closed', value: d.risk.closed },
+          ]}
+        />
       }
-      sections={d && <RiskSections d={d} open={panel} />}
-      panel={d && onePanel(panel, d)}
+      sections={<RiskSections d={d} open={panel} />}
+      panel={onePanel(panel, d)}
     />
   );
 }

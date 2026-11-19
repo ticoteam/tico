@@ -1,8 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useAction } from '@/actions';
-import { directoryQuery, meQuery, useActor } from '@/data';
+import { meQuery, useActor, useDirectory } from '@/data';
 import { Button } from '@/kit/Button';
 import { Sparkline } from '@/kit/Chart';
 import { FlowMark } from '@/kit/FlowMark';
@@ -11,7 +11,7 @@ import { FoldButton } from '@/kit/SectionHead';
 import { LatePill } from '@/kit/Pill';
 import { chatAddress, fmtAge } from '@/lib';
 import { Dashboard, FiguresStrip, PageMore, SidePanel, type Figure } from '@/pagekinds';
-import { Face, Go, NameOf, PanelLink, readState, usd } from './parts';
+import { Face, Go, NameOf, PanelLink, usd } from './parts';
 import { floorQuery, revenueQuery, spendQuery, stageTasksQuery, type Pipeline, type Stage } from './queries';
 import './company.css';
 
@@ -27,13 +27,13 @@ const CAP = 7;
 type Factory = { id: string | null; manager_id: string | null; name: string; pipelines: Pipeline[] };
 
 export function CompanyPage({ search }: { search: CompanySearch }) {
-  const floor = useQuery(floorQuery);
+  const { data: floor } = useSuspenseQuery(floorQuery);
   const navigate = useNavigate();
   const open = parseStage(search.panel);
   const close = () => void navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, panel: undefined }) as never });
   // Set up: the owner's first-run steps (setup.open), for a new company and again from the ⋯.
   const setup = useAction('setup.open', {});
-  const halls = (floor.data?.factories ?? []) as Factory[];
+  const halls = floor.factories as Factory[];
   const pipeline = open && halls.flatMap((h) => h.pipelines).find((p) => p.id === open.pipeline);
   const stage = pipeline && pipeline.stages.find((s) => s.id === open.stage);
   return (
@@ -48,8 +48,7 @@ export function CompanyPage({ search }: { search: CompanySearch }) {
           </PageMore>
         )
       }
-      state={readState(floor, !halls.length)}
-      onRetry={() => void floor.refetch()}
+      state={halls.length ? 'ready' : 'empty'}
       empty={{
         title: 'Nothing is running yet',
         action: setup.can && (
@@ -112,8 +111,7 @@ function ManagerChat({ who }: { who: string }) {
 /** One team: its name (folds the hall), its crew's faces, then its pipelines. */
 function Hall({ hall, open }: { hall: Factory; open: { pipeline: string; stage: string } | null }) {
   const [shown, setShown] = useState(true);
-  const dir = useQuery(directoryQuery);
-  const crew = (dir.data?.actors ?? []).filter((a) => a.team === hall.name && a.id !== hall.manager_id);
+  const crew = useDirectory((d) => d.actors.filter((a) => a.team === hall.name && a.id !== hall.manager_id)) ?? [];
   return (
     <section className={shown ? 'hall' : 'hall is-folded'} aria-label={hall.name}>
       <header className="hall-head">

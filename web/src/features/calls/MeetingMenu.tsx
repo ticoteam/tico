@@ -1,9 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { GranolaDevice, GranolaStatus, MeetingImporter, MeetingImporterComputer, MeetingSource } from '@/api/schema';
 import { run } from '@/actions';
-import { directoryQuery, meQuery, useActors } from '@/data';
+import { meQuery, useActors } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { DatePick } from '@/kit/DatePick';
@@ -16,7 +16,7 @@ import { toast } from '@/kit/Toast';
 import { PageMore } from '@/pagekinds';
 import { TRANSCRIPT_SOURCES, type TranscriptSource } from './model';
 import { PeoplePick } from './PeoplePick';
-import { press } from './parts';
+import { press, useNameOf } from './parts';
 import { granolaQuery, importersQuery, meetingSettingsQuery, pollGranola, sourcesQuery } from './queries';
 
 type Open = 'log' | 'sources' | 'granola' | 'settings' | null;
@@ -31,8 +31,7 @@ export function MeetingMenu({ children }: { children?: ReactNode }) {
   // What needs a look (meetings-sources.ts meetSourcesTrouble): a source that errors or lags, or Granola signed out or failing.
   const trouble =
     sources.some((x) => x.status === 'error' || x.status === 'delayed') || !!(granola && (granola.needs_signin || (granola.connected && granola.last_error)));
-  // Stable: Connect Granola's sign-in runs once per open, and it closes with this.
-  const close = useCallback(() => setOpen(null), []);
+  const close = () => setOpen(null);
   return (
     <>
       <span className={trouble ? 'call-more is-trouble' : 'call-more'} title={trouble ? 'Meeting sources need a look' : undefined}>
@@ -74,7 +73,7 @@ export function MeetingMenu({ children }: { children?: ReactNode }) {
 /* ---------------------------------------------------------------- Log a meeting */
 
 function LogForm({ done }: { done: () => void }) {
-  const { data: dir } = useQuery(directoryQuery);
+  const nameOf = useNameOf();
   const [title, setTitle] = useState('');
   const [when, setWhen] = useState(() => new Date());
   const [who, setWho] = useState<string[]>([]);
@@ -107,7 +106,7 @@ function LogForm({ done }: { done: () => void }) {
     if (!ready) return;
     setBusy(true);
     // Someone typed in from outside is kept as typed (a name or an email).
-    const names = who.map((id) => dir?.byId[id]?.name ?? (/^(human|bot):/.test(id) ? id.slice(id.indexOf(':') + 1) : id));
+    const names = who.map(nameOf);
     const ok = await press('calls.logMeeting', {
       title: title.trim() || undefined,
       start: when.toISOString(),

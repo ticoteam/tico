@@ -6,8 +6,7 @@ import { pipelinesQuery } from '@/features/tasks/routing';
 export const Route = createFileRoute('/tasks/$pipeline/edit')({
   validateSearch: (raw: Record<string, unknown>): { new?: true } =>
     raw.new === true || raw.new === 'true' || raw.new === 1 || raw.new === '1' ? { new: true } : {},
-  // A failed read is the page's own fault state (Try again), not the router's error screen.
-  loader: ({ context }) => context.queryClient.ensureQueryData(pipelinesQuery).catch(() => undefined),
+  loader: ({ context }) => context.queryClient.ensureQueryData(pipelinesQuery),
   component: Page,
 });
 

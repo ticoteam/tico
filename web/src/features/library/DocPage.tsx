@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { refusal, run } from '@/actions';
 import { meQuery } from '@/data';
@@ -7,9 +7,9 @@ import { Button } from '@/kit/Button';
 import { Icon } from '@/kit/Icon';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { toast } from '@/kit/Toast';
-import { Document, PageMore, type PageState } from '@/pagekinds';
+import { Document, PageMore } from '@/pagekinds';
 import { headings, Markdown } from '@/kit/Markdown';
-import { Face, OwnerButton, press, refused, when } from './parts';
+import { Face, OwnerButton, press, when } from './parts';
 import { docQuery, docVersionQuery, docVersionsQuery, externalDocAtQuery, externalDocQuery, type Doc } from './queries';
 import type { DocSearch } from './search';
 import './library.css';
@@ -26,8 +26,6 @@ export function DocPage({ doc, search }: { doc: string; search: DocSearch }) {
   return <OneDoc id={doc} search={search} />;
 }
 
-const stateOf = (q: { isError: boolean; error: unknown; data: unknown }): PageState => (q.isError ? refused(q.error) : q.data ? 'ready' : 'loading');
-
 /** Save a change against the version it started from, so a doc changed meanwhile is refused. */
 async function keep(from: Doc, change: { title?: string; body?: string }): Promise<boolean> {
   const r = await run('docs.save', { doc: from.id, version: from.version, ...change }, { via: 'click' });
@@ -37,19 +35,18 @@ async function keep(from: Doc, change: { title?: string; body?: string }): Promi
 }
 
 function OneDoc({ id, search }: { id: string; search: DocSearch }) {
-  const d = useQuery(docQuery(id));
+  const { data: doc } = useSuspenseQuery(docQuery(id));
   const versions = useQuery(docVersionsQuery(id));
   const old = useQuery(docVersionQuery(id, search.v ?? 0));
-  const doc = d.data;
-  const past = search.v && doc && search.v !== doc.version ? old.data : undefined;
-  const body = past?.body ?? doc?.body ?? '';
+  const past = search.v && search.v !== doc.version ? old.data : undefined;
+  const body = past?.body ?? doc.body;
   const outline = headings(body);
   // A locked doc changes only by an owner (docs-page.ts canChange; the server lets agent administrators too).
   const owner = useQuery(meQuery).data?.role === 'owner';
-  const canChange = !!doc && (owner || !doc.locked);
+  const canChange = owner || !doc.locked;
   const typable = canChange && !past;
 
-  const versionPick = doc && (versions.data?.length ?? 0) > 1 && (
+  const versionPick = (versions.data?.length ?? 0) > 1 && (
     <Menu
       align="start"
       trigger={
@@ -73,15 +70,14 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
 
   return (
     <Document
-      title={past?.title ?? doc?.title ?? 'Doc'}
+      title={past?.title ?? doc.title}
       path={`/library/${id}`}
       crumb={CRUMB}
       className="lib"
       after={versionPick}
-      onRename={typable && doc ? (title) => void keep(doc, { title }) : undefined}
+      onRename={typable ? (title) => void keep(doc, { title }) : undefined}
       actions={<OwnerButton page="docs" />}
       more={
-        doc &&
         !past &&
         !doc.archived && (
           <PageMore>
@@ -95,21 +91,16 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
           </PageMore>
         )
       }
-      state={stateOf(d)}
-      onRetry={() => void d.refetch()}
-      noAccess={{ text: 'This doc is not shared with you.' }}
       side={outline.length > 1 ? <Outline items={outline} /> : undefined}
       body={
-        doc && (
-          <>
-            <p className="read-by">
-              <Face actor={past ? past.actor : doc.updated_by_id} name={past ? past.actor_name : doc.updated_by_name} />
-              <b>{past ? past.actor_name : doc.updated_by_name}</b>
-              <span>{when(past ? past.created_at : doc.updated_at)}</span>
-            </p>
-            {typable ? <TypeHere doc={doc} /> : search.v && !past && old.isLoading ? null : <Markdown text={body} />}
-          </>
-        )
+        <>
+          <p className="read-by">
+            <Face actor={past ? past.actor : doc.updated_by_id} name={past ? past.actor_name : doc.updated_by_name} />
+            <b>{past ? past.actor_name : doc.updated_by_name}</b>
+            <span>{when(past ? past.created_at : doc.updated_at)}</span>
+          </p>
+          {typable ? <TypeHere doc={doc} /> : search.v && !past && old.isLoading ? null : <Markdown text={body} />}
+        </>
       }
       foot={
         past && (
@@ -203,36 +194,31 @@ export function wholeLinks(text: string, base: string): string {
 /** A doc read from an outside source: shown as it was read (at `revision`, the commit a link saw, when one is given),
     never edited here. Its relative links lead to where it lives. */
 function OutsideDoc({ id, revision }: { id: string; revision: string | undefined }) {
-  const d = useQuery(revision ? externalDocAtQuery(id, revision) : externalDocQuery(id));
-  const doc = d.data;
+  const { data: doc } = useSuspenseQuery(revision ? externalDocAtQuery(id, revision) : externalDocQuery(id));
   return (
     <Document
-      title={doc?.title ?? 'Outside doc'}
+      title={doc.title}
       path={`/library/ext:${id}`}
       crumb={CRUMB}
       className="lib"
       actions={
-        doc?.citation_url && (
+        doc.citation_url && (
           <a className="ib" href={doc.citation_url} target="_blank" rel="noreferrer" aria-label="Open where it lives" title="Open where it lives">
             <Icon name="popout" />
           </a>
         )
       }
-      state={stateOf(d)}
-      onRetry={() => void d.refetch()}
       body={
-        doc && (
-          <>
-            <p className="read-by">
-              <b>{doc.source_title}</b>
-              <span>{doc.path}</span>
-              {doc.commit && <span title={doc.commit}>{doc.commit.slice(0, 7)}</span>}
-              {doc.last_checked_at && <Ago at={doc.last_checked_at} />}
-            </p>
-            {doc.reference_notice && <p className="read-note t-small">{doc.reference_notice}</p>}
-            <Markdown text={doc.citation_url ? wholeLinks(doc.content, doc.citation_url) : doc.content} />
-          </>
-        )
+        <>
+          <p className="read-by">
+            <b>{doc.source_title}</b>
+            <span>{doc.path}</span>
+            {doc.commit && <span title={doc.commit}>{doc.commit.slice(0, 7)}</span>}
+            {doc.last_checked_at && <Ago at={doc.last_checked_at} />}
+          </p>
+          {doc.reference_notice && <p className="read-note t-small">{doc.reference_notice}</p>}
+          <Markdown text={doc.citation_url ? wholeLinks(doc.content, doc.citation_url) : doc.content} />
+        </>
       }
     />
   );

@@ -4,6 +4,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
+// eslint-disable-next-line no-restricted-imports -- the router's error component, as the app wires it
+import { PageFault } from '@/shell/PageFault';
 import type { CompanyFloor, MatterRow, ProductList, RiskDetail, RiskList } from '@/api/schema';
 import { CompanyPage } from './CompanyPage';
 import { ProductsPage } from './ProductsPage';
@@ -69,7 +71,7 @@ function show(page: (search: Record<string, unknown>) => ReactNode, at: string) 
   }
   const root = createRootRoute({ component: Outlet });
   const route = createRoute({ getParentRoute: () => root, path: at.split('?')[0] ?? '/', component: Routed });
-  const router = createRouter({ routeTree: root.addChildren([route]), history: createMemoryHistory({ initialEntries: [at] }) });
+  const router = createRouter({ routeTree: root.addChildren([route]), history: createMemoryHistory({ initialEntries: [at] }), defaultErrorComponent: PageFault });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />

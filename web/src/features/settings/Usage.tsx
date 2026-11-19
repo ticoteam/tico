@@ -3,7 +3,6 @@ import { Link } from '@tanstack/react-router';
 import { useLayoutEffect, useRef, useState } from 'react';
 import { run } from '@/actions';
 import type { UsageFigures } from '@/api/schema';
-import { directoryQuery } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { BarChart, Sparkline } from '@/kit/Chart';
 import { Empty } from '@/kit/Empty';
@@ -13,7 +12,7 @@ import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { Dashboard, FiguresStrip, Section } from '@/pagekinds';
 import { agentsQuery } from '@/features/team/routing';
-import { Meter, NO_ACCESS, PageOwner, Verb, isForbidden, usd } from './parts';
+import { Meter, NO_ACCESS, PageOwner, Verb, isForbidden, useFaces, usd } from './parts';
 import {
   agentUsageWhereQuery,
   limitsQuery,
@@ -164,7 +163,7 @@ function AgentOpen({ where, bot }: { where: UsageWhere; bot: string }) {
 
 function ByAgent({ search, where }: { search: UsageSearch; where: UsageWhere }) {
   const by = useQuery(usageWhereQuery(where, 'bot'));
-  const dir = useQuery(directoryQuery);
+  const faces = useFaces();
   const agents = useQuery(agentsQuery);
   const modelOf = (slug: string) => (Array.isArray(agents.data) ? agents.data.find((a) => a.slug === slug)?.resolved_model_label : '') ?? '';
   const rows = [...(by.data?.rows ?? [])].sort((a, b) => spent(b) - spent(a));
@@ -184,7 +183,7 @@ function ByAgent({ search, where }: { search: UsageSearch; where: UsageWhere }) 
       </div>
       {rows.map((r) => {
         const slug = r.bot ?? '';
-        const who = dir.data?.byId[slug] ?? dir.data?.byId[`bot:${slug}`];
+        const who = faces[slug] ?? faces[`bot:${slug}`];
         const name = who?.name ?? r.name ?? slug;
         const isOpen = search.open === slug;
         const row = (

@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { configQuery, useActor, useActors } from '@/data';
@@ -14,7 +14,7 @@ import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import { fmtAge, fmtDate } from '@/lib';
 import { List, RecordPanel, Section, SidePanel, type PageTab } from '@/pagekinds';
-import { amount, Face, Go, NameOf, PageOwner, PanelLink, readState, Trend, useDo } from './parts';
+import { amount, Face, Go, NameOf, PageOwner, PanelLink, Trend, useDo } from './parts';
 import {
   goalNeedsQuery,
   goalQuery,
@@ -45,11 +45,11 @@ const flag = (status: string | null | undefined) => (status ? FLAGS[status] : un
 const KPIS_SHOWN = 3;
 
 export function GoalsPage({ head, search }: { head: Head; search: GoalsSearch }) {
-  const q = useQuery(goalsTreeQuery);
+  const tree = useSuspenseQuery(goalsTreeQuery).data;
   const needs = useQuery(goalNeedsQuery).data ?? [];
   const open = useDo('company.openPanel');
   const [find, setFind] = useState('');
-  const goals = q.data?.goals ?? [];
+  const goals = tree.goals;
   const panel = search.panel ?? '';
   const at = panel.indexOf(':');
   const kind = at < 0 ? panel : panel.slice(0, at);
@@ -72,14 +72,13 @@ export function GoalsPage({ head, search }: { head: Head; search: GoalsSearch })
           <PageOwner page="goals" />
         </>
       }
-      state={readState(q, !goals.length && !needs.length)}
-      onRetry={() => void q.refetch()}
+      state={goals.length || needs.length ? 'ready' : 'empty'}
       empty={{ title: 'No goals yet', action: add }}
       sections={
         <>
           <NeedsLine open={panel === 'needs'} />
           {top && !words && <TopGoal g={top} />}
-          <GoalTreeView goals={shown} top={words ? undefined : top?.id} waiting={waiting(q.data?.proposals)} selected={kind === 'goal' ? ref : null} />
+          <GoalTreeView goals={shown} top={words ? undefined : top?.id} waiting={waiting(tree.proposals)} selected={kind === 'goal' ? ref : null} />
         </>
       }
       panel={

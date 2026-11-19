@@ -1,8 +1,8 @@
-import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import { useAction } from '@/actions';
-import { directoryQuery, meQuery, useActors } from '@/data';
+import { meQuery, useActor, useActors } from '@/data';
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
@@ -17,7 +17,7 @@ import { LatePill } from '@/kit/Pill';
 import { TaskRow } from '@/kit/Row';
 import { Segmented } from '@/kit/Segmented';
 import { ValueButton } from '@/kit/ValueButton';
-import { Board, BoardColumn, FilterRow, List, PageMore, Section, type FilterChip, type PageState } from '@/pagekinds';
+import { Board, BoardColumn, FilterRow, List, PageMore, Section, type FilterChip } from '@/pagekinds';
 import { usePref, writePref } from '@/prefs';
 import { ArchivedSections, useShelves } from './Archived';
 import { BoardFit } from './BoardFit';
@@ -49,8 +49,8 @@ const FOLD_PREF = 'tasks.fold.v1';
 /** One pipeline's tasks: open ones as a board (stages are columns) or a list (stages are sections), or the archived ones. */
 export function TasksPage({ pipeline, search }: { pipeline: string; search: TasksSearch }) {
   useFollow({ allTasks: true });
-  const pipes = useQuery(pipelinesQuery);
-  const p = pipes.data?.find((x) => x.id === pipeline);
+  const pipes = useSuspenseQuery(pipelinesQuery).data;
+  const p = pipes.find((x) => x.id === pipeline);
   const [saved] = usePref<'board' | 'list'>(`${VIEW_PREF}:${pipeline}`, 'board');
   const view: View = search.view ?? saved;
 
@@ -60,24 +60,24 @@ export function TasksPage({ pipeline, search }: { pipeline: string; search: Task
 
   const head = {
     path: `/tasks/${pipeline}`,
-    after: pipes.data && p && <PipelinePick pipelines={pipes.data} current={p} />,
+    after: p && <PipelinePick pipelines={pipes} current={p} />,
     className: 'tasks-page',
   };
-  if (view === 'archived') return <ArchivedPage pipeline={pipeline} p={p} pipes={pipes} search={search} head={head} />;
+  if (view === 'archived') return <ArchivedPage pipeline={pipeline} p={p} search={search} head={head} />;
   return <OpenPage pipeline={pipeline} p={p} pipes={pipes} search={search} view={view} head={head} />;
 }
 
 interface PageProps {
   pipeline: string;
   p: Pipeline | undefined;
-  pipes: UseQueryResult<Pipeline[]>;
+  pipes: readonly Pipeline[];
   search: TasksSearch;
   head: { path: string; after: ReactNode; className: string };
 }
 
 function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view: 'board' | 'list' }) {
   const filters = filtersOf(search);
-  const tasks = useQuery(pipelineTasksQuery(pipeline, filters));
+  const tasks = useSuspenseQuery(pipelineTasksQuery(pipeline, filters)).data;
   const me = useQuery(meQuery).data?.id;
   const flow = useQuery(flowQuery).data?.count ?? 0;
   const [folds, setFolds] = usePref<string[]>(`${FOLD_PREF}:${pipeline}`, []);
@@ -90,18 +90,11 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
   const [picked, setPicked] = useState<{ pipeline: string; ids: ReadonlySet<string> } | null>(null);
   const picking = picked?.pipeline === pipeline ? picked.ids : null;
 
-  // Another pipeline's rows, kept while this one's first read is out, are not this board.
-  const other = tasks.isPlaceholderData && tasks.data?.tasks.some((t) => t.pipeline_id !== pipeline);
-  const rows = other ? undefined : tasks.data?.tasks;
+  const rows = tasks.tasks;
   const filtered = isFiltered(filters);
-  const cut = !!tasks.data?.next_after;
+  const cut = !!tasks.next_after;
   // A stage's count is the server's (under the filters, past what was read); a read without counts has only its rows.
-  const countOf = (stage: string, loaded: number) => (other ? undefined : stageCount(tasks.data, stage)) ?? (cut ? undefined : loaded);
-
-  let state: PageState = 'ready';
-  if (pipes.isError || tasks.isError) state = 'fault';
-  else if (!pipes.data || !rows) state = 'loading';
-  else if (!p) state = 'empty';
+  const countOf = (stage: string, loaded: number) => stageCount(tasks, stage) ?? (cut ? undefined : loaded);
   const onNew = () => setNewIn({ stage: null });
 
   const page = {
@@ -112,14 +105,13 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
     more: p && (
       <MoreMenu
         p={p}
-        pipes={pipes.data ?? []}
+        pipes={pipes}
         onSelect={() => setPicked({ pipeline, ids: new Set() })}
         phone={cards ? { view, search, onNew, onFind: () => setFinding(true) } : undefined}
       />
     ),
-    state,
+    state: p ? ('ready' as const) : ('empty' as const),
     empty: { title: 'No such pipeline', action: <Link to="/tasks">Open Tasks</Link> },
-    onRetry: () => void (pipes.isError ? pipes.refetch() : tasks.refetch()),
     filter:
       picking && p ? (
         <SelectBar p={p} ids={[...picking]} onDone={() => setPicked(null)} />
@@ -136,10 +128,9 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
     : undefined;
   const fold = (id: string, open: boolean) => setFolds(open ? folds.filter((x) => x !== id) : [...folds, id]);
   const more = cut ? () => void loadMore(pipeline, filters) : undefined;
-  const body: BodyProps | null =
-    p && rows
-      ? { p, rows, me, folds, fold, more, cut, countOf, picking, toggle, onNew: (stage) => setNewIn({ stage }), onEdit: () => void edit.run({ pipeline }) }
-      : null;
+  const body: BodyProps | null = p
+    ? { p, rows, me, folds, fold, more, cut, countOf, picking, toggle, onNew: (stage) => setNewIn({ stage }), onEdit: () => void edit.run({ pipeline }) }
+    : null;
   const bare = body && !body.rows.length && !filtered && <Bare p={body.p} board={view === 'board'} onNew={onNew} />;
 
   return (
@@ -149,11 +140,11 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
       ) : (
         <List {...page} sections={bare || (body ? <Sections {...body} edit={p?.mayChange} /> : null)} />
       )}
-      {pipes.data && newIn && (
+      {newIn && (
         <NewTask
           open
           onOpenChange={(o) => !o && setNewIn(null)}
-          pipelines={pipes.data}
+          pipelines={pipes}
           pipeline={pipeline}
           stage={newIn.stage}
           owner={filters.owner ?? null}
@@ -163,14 +154,11 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
   );
 }
 
-function ArchivedPage({ pipeline, p, pipes, search, head }: PageProps) {
+function ArchivedPage({ pipeline, p, search, head }: Omit<PageProps, 'pipes'>) {
   const filters: Filters = filtersOf(search);
   const shelves = useShelves(pipeline, filters);
   const flow = useQuery(flowQuery).data?.count ?? 0;
-  let state: PageState = 'ready';
-  if (pipes.isError || shelves.fault) state = 'fault';
-  else if (!pipes.data || shelves.loading) state = 'loading';
-  else if (!p || (shelves.empty && !isFiltered(filters))) state = 'empty';
+  const empty = !p || (Object.values(shelves).every((x) => !x.tasks.length) && !isFiltered(filters));
   return (
     <List
       {...head}
@@ -178,9 +166,8 @@ function ArchivedPage({ pipeline, p, pipes, search, head }: PageProps) {
       crumb={[{ label: 'Tasks', to: `/tasks/${encodeURIComponent(pipeline)}` }]}
       search={<TaskFind search={search} />}
       actions={<HeadActions pipeline={pipeline} view="archived" search={search} flow={flow} p={p} />}
-      state={state}
+      state={empty ? 'empty' : 'ready'}
       empty={{ title: p ? `Nothing archived in ${p.name}` : 'No such pipeline' }}
-      onRetry={() => void (pipes.isError ? pipes.refetch() : shelves.retry())}
       filter={<Chips search={search} />}
       sections={p ? <ArchivedSections p={p} filters={filters} shelves={shelves} /> : null}
     />
@@ -320,12 +307,13 @@ function HeadActions({
 /** The filters that are set, one chip each, then Clear. */
 export function Chips({ search }: { search: Filters }) {
   const filter = useAction('tasks.filter');
-  const dir = useQuery(directoryQuery).data;
-  const name = (id: string) => dir?.byId[id]?.name;
+  const owner = useActor(search.owner)?.name;
+  const waiting = useActor(search.waiting)?.name;
+  const asked = useActor(search.asked)?.name;
   const chips: FilterChip[] = [];
-  if (search.owner) chips.push({ label: name(search.owner) ?? 'Owner', onClear: () => void filter.run({ owner: null }) });
-  if (search.waiting) chips.push({ label: `Waiting on ${name(search.waiting) ?? 'someone'}`, onClear: () => void filter.run({ waiting: null }) });
-  if (search.asked) chips.push({ label: `Asked by ${name(search.asked) ?? 'someone'}`, onClear: () => void filter.run({ asked: null }) });
+  if (search.owner) chips.push({ label: owner ?? 'Owner', onClear: () => void filter.run({ owner: null }) });
+  if (search.waiting) chips.push({ label: `Waiting on ${waiting ?? 'someone'}`, onClear: () => void filter.run({ waiting: null }) });
+  if (search.asked) chips.push({ label: `Asked by ${asked ?? 'someone'}`, onClear: () => void filter.run({ asked: null }) });
   if (search.tag) chips.push({ label: search.tag, onClear: () => void filter.run({ tag: null }) });
   if (search.due) chips.push({ label: DUE_NAMES[search.due], onClear: () => void filter.run({ due: null }) });
   if (search.late) chips.push({ label: 'Late', onClear: () => void filter.run({ late: null }) });

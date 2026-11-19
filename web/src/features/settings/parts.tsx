@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
 import { useSyncExternalStore, type ReactNode } from 'react';
 import { refusal, run } from '@/actions';
-import { useActor } from '@/data';
+import { useActor, useDirectory, type Actor, type Directory } from '@/data';
 import { Icon, type IconName } from '@/kit/Icon';
 import { OwnerButton } from '@/kit/OwnerButton';
 import { Switch } from '@/kit/Switch';
@@ -30,11 +30,29 @@ export function useVisible(): boolean {
   return useSyncExternalStore(onVisibility, () => document.visibilityState !== 'hidden', () => true);
 }
 
+/** An actor without its status line: all a settings row draws of them. */
+export type Face = Omit<Actor, 'status' | 'working'>;
+const face = ({ status: _s, working: _w, ...a }: Actor): Face => a;
+const facesOf = (d: Directory) => Object.fromEntries(Object.entries(d.byId).map(([k, a]) => [k, face(a)]));
+const everyoneOf = (d: Directory) => d.actors.map(face);
+const agentsOf = (d: Directory) => d.actors.filter((a) => a.kind === 'agent').map(face);
+const NO_FACES: Record<string, Face> = {};
+const NONE: Face[] = [];
+
+/** Everyone, by each id form the directory answers, without status lines: an agent's status event does not redraw
+    the reader. Empty until the directory is read. */
+export const useFaces = (): Record<string, Face> => useDirectory(facesOf) ?? NO_FACES;
+
+/** Everyone, people first, without status lines. */
+export const useEveryone = (): Face[] => useDirectory(everyoneOf) ?? NONE;
+
+/** Every agent, without status lines. */
+export const useAgentFaces = (): Face[] => useDirectory(agentsOf) ?? NONE;
+
 /** What a section says to a member when its read is for owners and admins (the kind's no-access body). */
 export const NO_ACCESS = { text: 'Owners and admins only.' };
 
-/** The server said this read is for owners and admins. */
-export const isForbidden = (e: unknown) => (e as { status?: number } | null)?.status === 403;
+export { isForbidden } from './main';
 
 /** A label and the control that changes it, on the facts grid. */
 export function Line({ label, target, children }: { label: string; target?: string; children: ReactNode }) {

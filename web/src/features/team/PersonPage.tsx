@@ -1,8 +1,7 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { useAction } from '@/actions';
-import { ApiError } from '@/api/client';
-import { configQuery, meQuery, useActors, type Actor } from '@/data';
+import { configQuery, meQuery, useActor, useActors, type Actor } from '@/data';
 import { goalFigure, goalLink, goalsTreeQuery } from '@/features/company/exports';
 import { useFollow } from '@/live/follow';
 import { Avatar } from '@/kit/Avatar';
@@ -11,7 +10,7 @@ import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
 import { Row, TaskRow } from '@/kit/Row';
 import { Facts, LabelValue } from '@/kit/LabelValue';
-import { FiguresStrip, Record as RecordPage, Section, type PageState } from '@/pagekinds';
+import { FiguresStrip, Record as RecordPage, Section } from '@/pagekinds';
 import { bareId, slackTitle, startOfMonth, teamOf } from './model';
 import { AccessDialog, GiveTaskDialog, PasswordDialog } from './dialogs';
 import { AllTasks, ConfirmDialog, EditDialog, Foot, Fold, MateRow, OwnRow, OwnRows, PickLine, SecLink, waitsOn } from './parts';
@@ -84,11 +83,11 @@ function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: He
   const roster = useQuery(agentsQuery);
   const people = useQuery(peopleQuery);
   const [since] = useState(() => startOfMonth(new Date()).toISOString());
-  const open = useQuery(openTasksQuery(actor.id));
+  const { data: open } = useSuspenseQuery(openTasksQuery(actor.id));
   const goals = (useQuery(goalsTreeQuery).data?.goals ?? []).filter((g) => g.owner_id === actor.id);
   const done = useQuery(doneTasksQuery(actor.id, since));
   const [giving, setGiving] = useState(false);
-  const tasks = open.data?.tasks ?? [];
+  const tasks = open.tasks;
   const waits = tasks.filter((t) => waitsOn(t, me?.id));
   const rest = tasks.filter((t) => !waitsOn(t, me?.id));
   const reports = new Set([
@@ -97,12 +96,9 @@ function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: He
   ]);
   const manages = actors.filter((a) => reports.has(bareId(a.id)));
   const doneN = done.data?.tasks.length ?? 0;
-  const state: PageState = open.isError ? 'fault' : open.isPending ? 'loading' : 'ready';
   return (
     <RecordPage
       {...head}
-      state={state}
-      onRetry={() => void open.refetch()}
       figures={
         <FiguresStrip
           label={`${actor.name} at a glance`}
@@ -173,30 +169,26 @@ const PERMISSIONS = [
 function PersonSettings({ actor, id, head }: { actor: Actor; id: string; head: Head }) {
   const { data: me } = useQuery(meQuery);
   const { data: config } = useQuery(configQuery);
-  const people = useQuery(peopleQuery);
+  const { data: people } = useSuspenseQuery(peopleQuery);
   const groups = useQuery(groupsQuery);
   const { data: access } = useQuery(accessQuery);
-  const actors = useActors();
   const remove = useAction('people.remove');
   const reach = useQuery(teammateAccessQuery('person', id)).data;
   const [editing, setEditing] = useState<'' | 'title' | 'github' | 'remove' | 'access' | 'password'>('');
   const close = (o: boolean) => !o && setEditing('');
 
-  const p = people.data?.find((x) => x.id === id);
+  const p = people.find((x) => x.id === id);
   const role = access?.people.find((x) => x.id === id);
   const admin = access?.you === 'owner' || access?.you === 'admin';
   const self = me?.id === actor.id;
   const manage = !!reach?.you?.manage;
   const team = teamOf(groups.data ?? [], 'person', id);
-  const boss = p?.reports_to ? actors.find((a) => bareId(a.id) === p.reports_to) : undefined;
+  const boss = useActor(p?.reports_to);
   const company = config?.company_name || config?.app_name || 'the company';
-  const state: PageState = people.isError ? 'fault' : people.isPending ? 'loading' : 'ready';
   const title = p?.title ?? actor.title ?? '';
   return (
     <RecordPage
       {...head}
-      state={state}
-      onRetry={() => void people.refetch()}
       sections={
         <Section name="Info">
           <Facts label="Info">
@@ -214,7 +206,7 @@ function PersonSettings({ actor, id, head }: { actor: Actor; id: string; head: H
             />
             <PickLine
               label="Reports to"
-              options={(people.data ?? []).filter((x) => x.id !== id).map((x) => ({ value: x.id, label: x.name }))}
+              options={people.filter((x) => x.id !== id).map((x) => ({ value: x.id, label: x.name }))}
               value={p?.reports_to ?? ''}
               shown={boss?.name ?? 'Nobody'}
               action={manage ? 'people.setReportsTo' : undefined}
@@ -294,8 +286,7 @@ const SLACK_ROWS = 3;
 
 /** One DM with an agent through Tico's Slack app: its newest line, the agent, its age. Opens the thread. */
 function SlackRow({ t }: { t: SlackThread }) {
-  const actors = useActors();
-  const agent = actors.find((a) => a.id === `bot:${t.bot}` || a.slug === t.bot);
+  const agent = useActor(t.bot);
   return (
     <TaskRow
       title={slackTitle(t)}
@@ -335,17 +326,12 @@ function SlackSection({ id, path, handle }: { id: string; path: string; handle?:
 
 /** `?tab=slack`: every Slack thread, one step in from the column (mates.js slackPage). */
 function PersonSlack({ id, head }: { id: string; head: Head }) {
-  const q = useQuery(slackQuery(id));
-  const threads = q.data ?? [];
-  const refused = q.error instanceof ApiError && q.error.status === 403;
-  const state: PageState = refused ? 'no-access' : q.isError ? 'fault' : q.isPending ? 'loading' : threads.length ? 'ready' : 'empty';
+  const { data: threads } = useSuspenseQuery(slackQuery(id));
   return (
     <RecordPage
       {...head}
-      state={state}
-      onRetry={() => void q.refetch()}
+      state={threads.length ? 'ready' : 'empty'}
       empty={{ title: 'Nothing from Slack yet' }}
-      noAccess={{ text: 'Only they and the owner can read their Slack.' }}
       sections={
         <>
           <div className="ins-bar t-label">

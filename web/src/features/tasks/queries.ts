@@ -1,4 +1,4 @@
-import { infiniteQueryOptions, keepPreviousData, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
+import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type { TagCreate, TagResult, TagUpdate } from '@/api/schema';
 import type {
@@ -178,8 +178,6 @@ export const pipelineTasksQuery = (pipeline: string, f: Filters) => {
       const page = await api.get<TaskPage>(`/api/v2/tasks?${query(params)}`, { signal });
       return page.counts ? { ...page, counted: perStage(page.tasks) } : page;
     },
-    // A new filter keeps the rows on screen until its answer lands, instead of flashing the loading bars.
-    placeholderData: keepPreviousData,
   });
 };
 

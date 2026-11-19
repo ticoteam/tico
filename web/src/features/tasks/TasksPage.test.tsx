@@ -183,14 +183,6 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     }
   });
 
-  it('names the page and offers Try again when the read fails', async () => {
-    serve(() => ({ status: 500, body: { error: { code: 'down', detail: 'down' } } }));
-    queryClient.setQueryData(pipelinesQuery.queryKey, [PIPE]);
-    show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
-    expect(await screen.findByRole('heading', { name: 'Tasks did not load' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
-  });
-
   it('shows the filters set in the address as chips', async () => {
     serve(() => ({ status: 200, body: {} }));
     queryClient.setQueryData(keys.tasks.list(listParams('eng', { late: true })), { tasks: [], cursor: 'c1' });
@@ -439,12 +431,5 @@ describe('Flow @s5 @s112', () => {
     show(<FlowPage />, '/flow');
     expect(await screen.findByRole('heading', { name: 'Nothing waits on you' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Tasks' }).getAttribute('href')).toBe('/tasks');
-  });
-
-  it('names the page and offers Try again when the read fails', async () => {
-    serve(() => ({ status: 500, body: { error: { code: 'down', detail: 'down' } } }));
-    show(<FlowPage />, '/flow');
-    expect(await screen.findByRole('heading', { name: 'Tasks did not load' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 });

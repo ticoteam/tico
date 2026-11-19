@@ -4,7 +4,7 @@ import { Fragment, Suspense, lazy, useEffect, useState, type ReactNode } from 'r
 import { ActionsRoot, run } from '@/actions';
 import { reportCallToDesktop, useCallWindow } from '@/desktop';
 import { ticoRoomQuery } from '@/conversation';
-import { configQuery, directoryQuery, meQuery, recordVisit, useActor, useHeldCount, type Actor, type Directory } from '@/data';
+import { configQuery, meQuery, recordVisit, useActor, useDirectory, useHeldCount, type Actor, type Directory } from '@/data';
 import { TOGGLE_MUTE, isCallActive, ringingQuery, useCall } from '@/features/calls/routing';
 import { useFileOpen } from '@/features/library/routing';
 import { AssetRecovery, PlanLock } from '@/features/notices/exports';
@@ -155,20 +155,21 @@ function App() {
   const router = useRouter();
   const me = useQuery(meQuery);
   const signedIn = me.isSuccess;
-  const { data: dir } = useQuery(directoryQuery);
   const status = useLiveStatus();
   const held = useHeldCount();
   const panel = usePagePanelOpen();
 
-  // A teammate's own page is the `agent` arrangement; a team's page and your own page are plain pages.
-  const find = dir ? (key: string) => dir.byId[key] : undefined;
-  const isActor = (who: string) => isTeammate(who, find, me.data?.id);
   const at = {
     path: useLocation({ select: (l) => l.pathname.replace(/^\/next(?=\/|$)/, '') || '/' }),
     chat: useLocation({ select: (l) => word((l.search as Record<string, unknown>).chat) }),
   };
-  const arrangement = arrangementFor(at.path, at.chat ? { chat: at.chat } : {}, isActor);
   const [, top, a, b] = at.path.split('/');
+  // A teammate's own page is the `agent` arrangement; a team's page and your own page are plain pages. Only that one
+  // answer is read from the directory, so an agent's status line does not redraw the shell.
+  const who = top === 'team' && a ? decodeURIComponent(a) : '';
+  const known = useDirectory((d) => (who ? isTeammate(who, (key) => d.byId[key], me.data?.id) : false));
+  const isActor = (w: string) => known ?? isTeammate(w, undefined, me.data?.id);
+  const arrangement = arrangementFor(at.path, at.chat ? { chat: at.chat } : {}, isActor);
 
   // One stream, once the person is known and Tico's room is drawn (its follow then rides the first connection).
   const room = useQuery(ticoRoomQuery);
@@ -304,9 +305,9 @@ const mate = (a: Actor): MenuMate => ({
   live: a.working,
 });
 
-function teamsOf(d: Directory | undefined, meId: string | undefined): MenuTeam[] {
+function teamsOf(d: Directory, meId: string | undefined): MenuTeam[] {
   const by = new Map<string, MenuTeam>();
-  for (const a of d?.actors ?? []) {
+  for (const a of d.actors) {
     if (!a.team || a.id === meId) continue;
     const t = by.get(a.team) ?? { id: a.team, name: a.team, to: `/team/${encodeURIComponent(teamSlug(a.team))}`, members: [] };
     t.members.push(mate(a));
@@ -323,14 +324,14 @@ const press = (id: string, input: unknown = {}) => () => void run(id, input, { v
 function AppMenu({ note }: { note: ReactNode }) {
   const { data: me } = useQuery(meQuery);
   const { data: config } = useQuery(configQuery);
-  const { data: dir } = useQuery(directoryQuery);
+  const self = useActor(me?.id);
+  const teams = useDirectory((d) => teamsOf(d, me?.id));
   const { data: pipelines } = useQuery(pipelinesQuery);
   const { data: flow } = useQuery(flowQuery);
   const { data: catchUp } = useQuery(catchUpQuery);
   const { data: updates } = useInfiniteQuery(updateListQuery('all'));
   const { data: support } = useQuery(supportUnreadQuery);
   const companies = useCompanies();
-  const self = me ? dir?.byId[me.id] : undefined;
   const name = config?.company_name || config?.app_name || '';
   const meMate: MenuMate = self
     ? mate(self)
@@ -339,7 +340,7 @@ function AppMenu({ note }: { note: ReactNode }) {
     <Menu
       company={{ name, mark: name.slice(0, 1).toUpperCase() }}
       me={meMate}
-      teams={teamsOf(dir, me?.id)}
+      teams={teams ?? []}
       pipelines={pipelines && [
         ...pipelines.map((p) => ({ id: p.id, name: p.name, to: `/tasks/${encodeURIComponent(p.id)}` })),
         // the Features pipeline read as horizons: only a company that has one gets the line
@@ -435,8 +436,7 @@ function CallMute() {
 /* ---------------------------------------------------------------- the chats */
 
 function SecondChat({ chat }: { chat: string }) {
-  const { data: dir } = useQuery(directoryQuery);
-  const who = dir?.byId[bare(chat)];
+  const who = useActor(bare(chat));
   return (
     <Sheet kind="chat" label={`Chat with ${who?.name ?? 'teammate'}`}>
       <Suspense fallback={null}>
@@ -448,8 +448,7 @@ function SecondChat({ chat }: { chat: string }) {
 
 /* A teammate's own page: their chat (or, on your own page, Tico's room) stretching beside the page's column. */
 function TeammateSheet({ who }: { who: string }) {
-  const { data: dir } = useQuery(directoryQuery);
-  const actor = dir?.byId[who] ?? dir?.byId[`human:${who}`];
+  const actor = useDirectory((d) => d.byId[who] ?? d.byId[`human:${who}`]);
   const name = actor?.name ?? 'Teammate';
   return (
     <Sheet kind="chat" label={`Chat with ${name}`}>

@@ -1,7 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { run } from '@/actions/run';
-import { directoryQuery } from '@/data';
 import { agentsQuery, computersQuery as teamComputers, whoHref } from '@/features/team/routing';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
@@ -14,7 +13,7 @@ import { Segmented } from '@/kit/Segmented';
 import { toast } from '@/kit/Toast';
 // The Settings kind has no panel prop (List and Record do); the slot itself draws it beside the page.
 import { PanelSlot, SidePanel } from '@/pagekinds';
-import { Line, SwitchLine, act } from './parts';
+import { Line, SwitchLine, act, useAgentFaces } from './parts';
 import { computersQuery } from './queries';
 
 type Mode = 'off' | 'view' | 'control';
@@ -37,7 +36,7 @@ export function ComputerPanel({ id, onClose }: { id: string; onClose: () => void
   const computers = useQuery(teamComputers);
   const settings = useQuery(computersQuery);
   const roster = useQuery(agentsQuery);
-  const dir = useQuery(directoryQuery);
+  const agents = useAgentFaces();
   const [asking, setAsking] = useState<'restart' | 'rename' | 'remove' | null>(null);
   const c = computers.data?.find((x) => x.id === id);
   const own = settings.data?.find((x) => x.id === id);
@@ -129,7 +128,7 @@ export function ComputerPanel({ id, onClose }: { id: string; onClose: () => void
             </div>
           ) : (
             on.map((r) => {
-              const a = dir.data?.actors.find((x) => x.kind === 'agent' && x.slug === r.slug);
+              const a = agents.find((x) => x.slug === r.slug);
               const who = a?.name ?? r.display_name ?? r.slug;
               return (
                 <Link key={r.slug} className="row cp-agent" href={a ? whoHref(a) : `/team/${encodeURIComponent(r.slug)}`} title={who}>

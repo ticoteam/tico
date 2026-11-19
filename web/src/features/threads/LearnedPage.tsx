@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { configQuery, useActors, type Actor } from '@/data';
@@ -25,7 +25,7 @@ const has = (text: string, q: string) => !q || text.toLowerCase().includes(q.toL
  * agents that may read the person's chat with Tico. The face on a line is who it came from: you, or Tico in a chat.
  */
 export function LearnedPage() {
-  const learned = useQuery(learnedQuery);
+  const d = useSuspenseQuery(learnedQuery).data;
   const viewers = useQuery(viewersQuery);
   const companyName = useQuery(configQuery).data?.company_name || 'About the company';
   const [words, setWords] = useState('');
@@ -33,15 +33,13 @@ export function LearnedPage() {
   const [deleting, setDeleting] = useState<LearnedEntry | null>(null);
   const [adding, setAdding] = useState(false);
   const q = words.trim();
-  const d = learned.data;
-  const personal = (d?.personal ?? []).filter((e) => has(e.text, q));
-  const company = d?.company;
+  const personal = d.personal.filter((e) => has(e.text, q));
+  const company = d.company;
   const companyRows = (company?.entries ?? []).filter((e) => has(e.text, q));
   const vision = company?.vision?.trim() && has(company.vision, q) ? company.vision.trim() : null;
   const goals = (company?.priorities ?? []).filter((g) => has(g.title, q));
   const readers = (viewers.data?.bots ?? []).filter((b) => has(b.name ?? b.slug ?? b.bot, q));
-  const nothing = !d?.personal.length && !company?.entries.length && !vision && !goals.length && !viewers.data?.bots.length;
-  const state = learned.isPending ? 'loading' : learned.isError ? 'fault' : nothing ? 'empty' : 'ready';
+  const nothing = !d.personal.length && !company?.entries.length && !vision && !goals.length && !viewers.data?.bots.length;
   const chosen = (editing ?? deleting)?.id;
   const row = (e: LearnedEntry) => <Line key={e.id} e={e} on={e.id === chosen} onEdit={() => setEditing(e)} onDelete={() => setDeleting(e)} />;
 
@@ -57,9 +55,8 @@ export function LearnedPage() {
           <MenuItem label="Add an agent" icon="plus" onSelect={() => setAdding(true)} />
         </PageMore>
       }
-      state={state}
+      state={nothing ? 'empty' : 'ready'}
       empty={{ title: 'Nothing learned yet' }}
-      onRetry={() => void learned.refetch()}
       className="lr-page"
       sections={
         <div className="lr-body">

@@ -4,12 +4,7 @@ import { pipelinesQuery, tagQuery } from '@/features/tasks/routing';
 
 /** One tag: its tasks, by pipeline. */
 export const Route = createFileRoute('/tags/$tag')({
-  // A failed read is the page's own fault state (Try again), not the router's error screen.
-  loader: async ({ context, params }) => {
-    await Promise.all([context.queryClient.ensureQueryData(tagQuery(params.tag)), context.queryClient.ensureQueryData(pipelinesQuery)]).catch(
-      () => undefined,
-    );
-  },
+  loader: ({ context: { queryClient: qc }, params }) => Promise.all([qc.ensureQueryData(tagQuery(params.tag)), qc.ensureQueryData(pipelinesQuery)]),
   component: Page,
 });
 

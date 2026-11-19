@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
 import { refusal, run } from '@/actions';
-import { directoryQuery, meQuery, useActor } from '@/data';
+import { meQuery, useActor, useDirectory, type Directory } from '@/data';
 import { Avatar, type AvatarSize } from '@/kit/Avatar';
 import { OwnerButton } from '@/kit/OwnerButton';
 import { toast } from '@/kit/Toast';
@@ -10,10 +10,12 @@ import { titleOf, type Thread } from './model';
 
 const bare = (actor: string) => actor.slice(actor.indexOf(':') + 1);
 
-/** A name for any actor id, from the directory. */
+const namesOf = (d: Directory) => Object.fromEntries(Object.entries(d.byId).map(([id, a]) => [id, a.name]));
+
+/** A name for any actor id, from the directory; redraws when a name changes, not on an agent's status line. */
 export function useNameOf(): (actor: string) => string | undefined {
-  const { data } = useQuery(directoryQuery);
-  return (actor) => data?.byId[actor]?.name;
+  const names = useDirectory(namesOf);
+  return (actor) => names?.[actor];
 }
 
 export function useMe(): string | undefined {
@@ -23,8 +25,8 @@ export function useMe(): string | undefined {
 /** The thread's one name, as every place shows it. */
 export function useTitle(t: Thread | undefined): string {
   const me = useMe();
-  const nameOf = useNameOf();
-  return t ? titleOf(t, me, nameOf) : '';
+  const title = useDirectory((d) => (t ? titleOf(t, me, (a) => d.byId[a]?.name) : ''));
+  return title ?? (t ? titleOf(t, me, () => undefined) : '');
 }
 
 /** A teammate's face from the directory; a person outside it is a plain circle with their initials. */

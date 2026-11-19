@@ -105,7 +105,7 @@ describe("An agent's column", () => {
     );
     show(<TeamWho who="ana" />, '/team/ana');
     const working = await screen.findByRole('region', { name: /Working/ });
-    expect(within(working).getByText('Write the brief').closest('a')?.getAttribute('href')).toBe('/task/t1');
+    expect((await within(working).findByText('Write the brief')).closest('a')?.getAttribute('href')).toBe('/task/t1');
     const tasks = screen.getByRole('region', { name: /Tasks/ });
     expect(within(tasks).getByText('Pick a font').closest('a')?.getAttribute('href')).toBe('/task/t2');
     expect(within(tasks).queryByText('Write the brief')).toBeNull();

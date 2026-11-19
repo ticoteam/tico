@@ -60,26 +60,34 @@ export function validateListeningSearch(raw: Record<string, unknown>): Listening
   return out;
 }
 
-/** A failed read is the page's own fault state, not the router's. */
-const warm = (reads: Promise<unknown>[]) => Promise.all(reads).catch(() => undefined);
-
+/* Each page's first read is awaited: one that fails is the router's fault, with Try again. What only fills in a part
+   of the page is started, not awaited. */
 export function loadRoutines(qc: QueryClient, search: RoutinesSearch): Promise<unknown> {
-  if (search.tab === 'runs') return warm([qc.ensureInfiniteQueryData(allRunsQuery(search.range ?? RUNS_RANGE, search.status))]);
-  if (search.tab === 'webhooks') return warm([qc.ensureQueryData(hooksQuery)]);
-  return warm([qc.ensureQueryData(routinesQuery)]);
+  if (search.tab === 'runs') return qc.ensureInfiniteQueryData(allRunsQuery(search.range ?? RUNS_RANGE, search.status));
+  if (search.tab === 'webhooks') return qc.ensureQueryData(hooksQuery);
+  return qc.ensureQueryData(routinesQuery);
 }
 
 export function loadRules(qc: QueryClient, search: RulesSearch): Promise<unknown> {
   const t = search.tab;
-  if (!t) return warm([qc.ensureQueryData(orgRulesQuery('active')), qc.ensureQueryData(teamsQuery), qc.ensureQueryData(reachQuery)]);
-  if (t === 'stages') return warm([qc.ensureQueryData(stageRulesQuery('active'))]);
-  if (t === 'outside') return warm([qc.ensureQueryData(orgRulesQuery('active')), qc.ensureQueryData(dueQuery)]);
-  if (t === 'due') return warm([qc.ensureQueryData(dueQuery)]);
-  if (t === 'suggested') return warm([qc.ensureQueryData(orgRulesQuery('suggested')), qc.ensureQueryData(stageRulesQuery('suggested'))]);
-  return warm([qc.ensureQueryData(ruleGroupsQuery)]);
+  if (!t) {
+    void qc.prefetchQuery(teamsQuery);
+    void qc.prefetchQuery(reachQuery);
+    return qc.ensureQueryData(orgRulesQuery('active'));
+  }
+  if (t === 'stages') return qc.ensureQueryData(stageRulesQuery('active'));
+  if (t === 'outside') {
+    void qc.prefetchQuery(dueQuery);
+    return qc.ensureQueryData(orgRulesQuery('active'));
+  }
+  if (t === 'due') return qc.ensureQueryData(dueQuery);
+  // Suggested reads two lists and shows what it has: neither alone faults the page.
+  if (t === 'suggested') return Promise.all([qc.prefetchQuery(orgRulesQuery('suggested')), qc.prefetchQuery(stageRulesQuery('suggested'))]);
+  return qc.ensureQueryData(ruleGroupsQuery);
 }
 
 export function loadListening(qc: QueryClient, search: ListeningSearch): Promise<unknown> {
-  if (!search.watch) return warm([qc.ensureQueryData(watchesQuery)]);
-  return warm([qc.ensureQueryData(watchQuery(search.watch)), ...(search.tab ? [] : [qc.ensureQueryData(matchesQuery(search.watch))])]);
+  if (!search.watch) return qc.ensureQueryData(watchesQuery);
+  // One watch draws from the list while its own read comes, and its matches have their own states.
+  return Promise.all([qc.prefetchQuery(watchQuery(search.watch)), ...(search.tab ? [] : [qc.prefetchQuery(matchesQuery(search.watch))])]);
 }

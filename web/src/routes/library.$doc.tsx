@@ -5,7 +5,8 @@ import { docSearch, loadDoc } from '@/features/library/routing';
 // One doc by id; `sources` is External sources and `ext:<id>` a doc read from one of them.
 export const Route = createFileRoute('/library/$doc')({
   validateSearch: docSearch,
-  loader: ({ params: { doc }, context: { queryClient } }) => loadDoc(queryClient, doc),
+  loaderDeps: ({ search }) => ({ revision: search.revision }),
+  loader: ({ params: { doc }, deps, context: { queryClient } }) => loadDoc(queryClient, doc, deps.revision),
   component: Doc,
 });
 

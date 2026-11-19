@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link, useLocation } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { useAction } from '@/actions';
@@ -13,7 +13,7 @@ import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { TaskRow } from '@/kit/Row';
 import { Table, Td, Th } from '@/kit/Table';
-import { FilterRow, List, PageMore, Section, type FilterChip, type PageState } from '@/pagekinds';
+import { FilterRow, List, PageMore, Section, type FilterChip } from '@/pagekinds';
 import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
 import { NewTask } from './NewTask';
 import { Face, markOf, taskHref } from './parts';
@@ -52,22 +52,21 @@ const nameOf = (t: Pick<Tag, 'label' | 'key'>) => t.label || t.key;
 
 /** Tags: every tag and when it was last used (more.js tagsPage). A tag opens its tasks; + makes one. */
 export function TagsPage() {
-  const tags = useQuery(tagsQuery);
+  const tags = useSuspenseQuery(tagsQuery).data;
   const { q } = useNarrow();
   const [making, setMaking] = useState(false);
   const words = q.toLowerCase();
-  const list = [...(tags.data ?? [])]
+  const list = [...tags]
     .filter((t) => !words || nameOf(t).toLowerCase().includes(words) || t.key.includes(words))
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
-  const state: PageState = tags.isError ? 'fault' : !tags.data ? 'loading' : !list.length ? 'empty' : 'ready';
   return (
     <>
       <List
         title="Tags"
         path="/tags"
-        state={state}
+        state={list.length ? 'ready' : 'empty'}
         empty={
-          tags.data?.length
+          tags.length
             ? { title: 'No tags match' }
             : {
                 title: 'No tags yet',
@@ -78,7 +77,6 @@ export function TagsPage() {
                 ),
               }
         }
-        onRetry={() => void tags.refetch()}
         className="tasks-page"
         search={<Find label="Search tags" q={q} />}
         actions={<IconButton icon="plus" label="New tag" data-phone onClick={() => setMaking(true)} data-target="tags:new" />}
@@ -157,19 +155,19 @@ interface Group {
  */
 export function TagPage({ tag }: { tag: string }) {
   useFollow({ allTasks: true });
-  const detail = useQuery(tagQuery(tag));
-  const pipes = useQuery(pipelinesQuery);
+  const detail = useSuspenseQuery(tagQuery(tag)).data;
+  const pipes = useSuspenseQuery(pipelinesQuery).data;
   const me = useQuery(meQuery).data?.id;
   const narrow = useNarrow();
   const filter = useAction('tags.filter');
   const more = useAction('tags.moreTasks');
   const [editing, setEditing] = useState(false);
   const [filing, setFiling] = useState(false);
-  const t = detail.data?.tag;
-  const name = t ? nameOf(t) : 'Tag';
-  const editable = !!detail.data?.editable;
+  const t = detail.tag;
+  const name = nameOf(t);
+  const editable = !!detail.editable;
   const words = narrow.q.toLowerCase();
-  const all = (detail.data?.tasks ?? []) as TaskItem[];
+  const all = detail.tasks as TaskItem[];
   const tasks = all.filter(
     (x) => (!words || x.title.toLowerCase().includes(words)) && (!narrow.owner || x.owner_id === narrow.owner) && (!narrow.late || !!x.late),
   );
@@ -178,13 +176,13 @@ export function TagPage({ tag }: { tag: string }) {
   const groups: Group[] = [];
   for (const x of open) {
     let g = groups.find((y) => (y.pipe?.id ?? null) === x.pipeline_id);
-    if (!g) groups.push((g = { pipe: pipes.data?.find((p) => p.id === x.pipeline_id), rows: [] }));
+    if (!g) groups.push((g = { pipe: pipes.find((p) => p.id === x.pipeline_id), rows: [] }));
     g.rows.push(x);
   }
   const stageName = (x: TaskItem, p: Pipeline | undefined) =>
     p?.stages.find((s) => s.id === x.stage_id)?.name ?? (p?.done?.id === x.stage_id ? p?.done?.name : p?.closed?.name) ?? '';
   const row = (x: TaskItem) => {
-    const p = pipes.data?.find((y) => y.id === x.pipeline_id);
+    const p = pipes.find((y) => y.id === x.pipeline_id);
     return (
       <TaskRow
         key={x.id}
@@ -200,26 +198,23 @@ export function TagPage({ tag }: { tag: string }) {
     );
   };
   const narrowed = !!(narrow.q || narrow.owner || narrow.late);
-  const state: PageState = detail.isError ? 'fault' : !detail.data ? 'loading' : !tasks.length ? 'empty' : 'ready';
   return (
     <>
       <List
         title={name}
         path={`/tags/${tag}`}
         crumb={[{ label: 'Tags', to: '/tags' }]}
-        state={state}
+        state={tasks.length ? 'ready' : 'empty'}
         empty={{ title: narrowed ? 'No tasks match' : `Nothing tagged ${name}` }}
-        onRetry={() => void detail.refetch()}
         className="tasks-page"
         search={<Find label="Search tasks" q={narrow.q} />}
         actions={
           <>
             <TagFilter owner={narrow.owner} late={narrow.late} />
-            {t && !!pipes.data?.length && <IconButton icon="plus" label="New task" data-phone onClick={() => setFiling(true)} data-target="tags:new-task" />}
+            {!!pipes.length && <IconButton icon="plus" label="New task" data-phone onClick={() => setFiling(true)} data-target="tags:new-task" />}
           </>
         }
         more={
-          t &&
           editable && (
             <PageMore target="tag:more">
               <MenuItem icon="edit" label="Edit" onSelect={() => setEditing(true)} />
@@ -239,7 +234,7 @@ export function TagPage({ tag }: { tag: string }) {
                 <Capped list={done} cap={LIST_CAP} show={LIST_SHOW} height={ROW_H} more={undefined} draw={row} moreRow={(n, open) => <RowMore key="more" n={n} onClick={open} />} />
               </Section>
             )}
-            {detail.data?.next_offset != null && (
+            {detail.next_offset != null && (
               <button className="row task row-more" type="button" disabled={more.pending} onClick={() => void more.run({ tag })}>
                 <span className="row-mark" />
                 <span className="row-title">More tasks</span>
@@ -248,13 +243,13 @@ export function TagPage({ tag }: { tag: string }) {
           </>
         }
       />
-      {t && editable && editing && <EditTagDialog open onOpenChange={setEditing} tag={t} />}
-      {t && pipes.data && filing && (
+      {editable && editing && <EditTagDialog open onOpenChange={setEditing} tag={t} />}
+      {filing && (
         <NewTask
           open
           onOpenChange={(o) => !o && setFiling(false)}
-          pipelines={pipes.data}
-          pipeline={pipes.data[0]!.id}
+          pipelines={pipes}
+          pipeline={pipes[0]!.id}
           owner={narrow.owner || null}
           tag={{ id: tag, key: t.key }}
         />

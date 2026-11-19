@@ -4,6 +4,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
+// eslint-disable-next-line no-restricted-imports -- the router's error component, as the app wires it
+import { PageFault } from '@/shell/PageFault';
 import type { CompanyFloor, GoalTree, Kpi, KpiDetail, ProductList } from '@/api/schema';
 import { CompanyPage } from './CompanyPage';
 import { goalLink } from './exports';
@@ -11,6 +13,7 @@ import { ProductsPage } from './ProductsPage';
 import { brandQuery, floorQuery, goalsTreeQuery, kpiQuery, productsQuery, strategyQuery, strategyVersionsQuery, type Brand, type Strategy } from './queries';
 import { RiskPage } from './RiskPage';
 import { StrategyPage } from './StrategyPage';
+
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 const toasts = vi.hoisted(() => vi.fn());
@@ -37,7 +40,7 @@ const nothing = (): Reply => ({ status: 404, body: { detail: 'not_found' } });
 function show(node: ReactNode, at: string) {
   const root = createRootRoute({ component: Outlet });
   const page = createRoute({ getParentRoute: () => root, path: at.split('?')[0] ?? '/', component: () => node });
-  const router = createRouter({ routeTree: root.addChildren([page]), history: createMemoryHistory({ initialEntries: [at] }) });
+  const router = createRouter({ routeTree: root.addChildren([page]), history: createMemoryHistory({ initialEntries: [at] }), defaultErrorComponent: PageFault });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -125,7 +128,7 @@ describe('Company @s248 @s250', () => {
   it('shows the fault with Try again when the Floor fails', async () => {
     serve((url) => (url.includes('/company/floor') ? { status: 500, body: { detail: 'boom' } } : nothing()));
     show(<CompanyPage search={{}} />, '/company');
-    expect(await screen.findByText('Company did not load')).toBeTruthy();
+    expect(await screen.findByText('This page did not load')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 });

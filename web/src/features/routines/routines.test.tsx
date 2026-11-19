@@ -5,6 +5,8 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
+// eslint-disable-next-line no-restricted-imports -- the router's error component, as the app wires it
+import { PageFault } from '@/shell/PageFault';
 import { ListeningPage } from './ListeningPage';
 import { validateListeningSearch, validateRoutinesSearch, validateRulesSearch } from './load';
 import { dueQuery, hooksQuery, orgRulesQuery, routinesQuery, stageRulesQuery, watchesQuery, type StageRules } from './queries';
@@ -67,7 +69,7 @@ function show(node: ReactNode, at: string) {
       </>
     ),
   });
-  const router = createRouter({ routeTree: root.addChildren([page]), history: createMemoryHistory({ initialEntries: [at] }) });
+  const router = createRouter({ routeTree: root.addChildren([page]), history: createMemoryHistory({ initialEntries: [at] }), defaultErrorComponent: PageFault });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -146,7 +148,7 @@ describe('Routines', () => {
   it('shows the fault with Try again', async () => {
     serve((url) => (url.includes('/automations') ? { status: 500, body: { detail: 'boom' } } : nothing()));
     show(<RoutinesPage search={{}} />, '/company/routines');
-    expect(await screen.findByText('Routines did not load')).toBeTruthy();
+    expect(await screen.findByText('This page did not load')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 });
