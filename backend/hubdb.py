@@ -6696,6 +6696,9 @@ def conversation(conn, conversation_id):
     row = _one(conn, CONVERSATION_SQL, (conversation_id,))
     if row:
         row["participants"] = _json(row.get("participants"), []) or []
+        # The live reads' own mark (migration 20261119223603_dormant_task_rooms): it moves on any post, one the reader
+        # may not read too, so no answer carries it.
+        row.pop("dormant_at", None)
     return row
 
 

@@ -80,7 +80,12 @@ PINNED_SQL = (
 
 
 DM_MATCH_AUDIENCES = f"{_audience()} IN ('company','team','members','personal','participants')"
-OPEN_ROOT = "r.parent_id IS NULL AND r.archived_at IS NULL AND r.closed_at IS NULL"
+# A dormant root (a finished task's, nothing posted since: migration 20261119223603_dormant_task_rooms) is one
+# T.task_open_sql hides from every reader, so an open root is never one.
+OPEN_ROOT = "r.parent_id IS NULL AND r.archived_at IS NULL AND r.closed_at IS NULL AND r.dormant_at IS NULL"
+# Every open root, read from the index of exactly those (its WHERE is OPEN_ROOT): a few thousand roots on a company
+# whose tens of thousands are mostly finished tasks'. Catch up and Browse read their pages from it.
+OPEN_ROOTS_FROM = "conversations r INDEXED BY conversations_awake_open_roots"
 # The open roots a thread list can hold, read from the index of exactly these (migration
 # 20261118222618_open_thread_titles) in the rail's title order: a few hundred roots, not every task thread. Its terms
 # are the index's WHERE, so a query naming the index must AND them in.
@@ -476,7 +481,7 @@ def browse(c, v, *, q=None, cursor=None, limit=BROWSE_LIMIT):
         found = [
             T.thread_row(c, dict(r))
             for r in c.execute(
-                f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM conversations r WHERE {' AND '.join(where)})"
+                f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM {OPEN_ROOTS_FROM} WHERE {' AND '.join(where)})"
                 f"{cond} ORDER BY activity DESC, id DESC LIMIT :fetch",
                 {**args, **at, "fetch": fetch},
             )
@@ -527,7 +532,7 @@ def archived(c, v, *, cursor=None, limit=None):
         found = [
             T.thread_row(c, dict(r))
             for r in c.execute(
-                f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM conversations r WHERE {' AND '.join(where)})"
+                f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM {OPEN_ROOTS_FROM} WHERE {' AND '.join(where)})"
                 f"{cond} ORDER BY activity DESC, id DESC LIMIT :fetch",
                 {**args, **at, "fetch": fetch},
             )
@@ -922,7 +927,7 @@ def _walk(c, v, flags, after=None):
             found = [
                 T.thread_row(c, dict(r))
                 for r in c.execute(
-                    f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM conversations r WHERE "
+                    f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM {OPEN_ROOTS_FROM} WHERE "
                     f"{' AND '.join([*where, phase, open_task])}){cond} ORDER BY activity DESC, id DESC LIMIT :batch",
                     {**args, **at, "batch": batch},
                 )

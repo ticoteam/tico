@@ -86,3 +86,16 @@ def test_the_backfill_marks_only_rooms_no_reader_is_shown_and_running_it_again_c
         assert dict(c.execute("SELECT id, dormant_at FROM conversations").fetchall()) == first
     assert [dormant(api, rooms[k]) for k in "qrl"] == [True, False, False]
     assert [shows(api, rooms[k]) for k in "qrl"] == [(False, False), (True, True), (True, True)]
+
+
+def test_the_mark_is_in_no_answer(api):
+    # It moves on a post the reader may not read, so neither a conversation's answer nor SQL reads it.
+    from backend import sql
+    from backend.store import H
+
+    task = make_task(api)
+    change_task(api, task, {"status": "done"})
+    assert dormant(api, task["conversation_id"])
+    with api.app.state.store.read() as c:
+        assert "dormant_at" not in H.conversation(c, task["conversation_id"])
+    assert "dormant_at" in sql.HIDDEN["conversations"]
