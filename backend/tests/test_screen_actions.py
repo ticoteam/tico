@@ -17,7 +17,7 @@ from clients import hubtools
 
 ANA = Identity("human:ana", "human", "ana@acme.example")
 CARA = Identity("human:cara", "human", "cara@acme.example")
-FILTER = {"action": "tasks.filter", "input": {"pipeline": "engineering", "owner": "agent:qa"}}
+FILTER = {"action": "page.filter", "input": {"search": {"owner": "agent:qa", "q": None}}}
 
 
 @pytest.fixture
@@ -77,7 +77,7 @@ def test_the_event_reaches_only_its_person_and_her_report_is_what_the_tool_says(
         [event] = screen_events(api, ANA, after)
         assert {k: event[k] for k in ("id", "action", "input", "done", "actor")} == {
             "id": request.id,
-            "action": "tasks.filter",
+            "action": "page.filter",
             "input": FILTER["input"],
             "done": False,
             "actor": "human:ana",
@@ -102,7 +102,7 @@ def test_the_event_reaches_only_its_person_and_her_report_is_what_the_tool_says(
 
 def test_the_apps_error_is_what_the_tool_says(api, hub, monkeypatch):
     monkeypatch.setattr(SA, "WAIT_SECONDS", 30)
-    with showing(api, monkeypatch, {"action": "tasks.open", "input": {"task": 412}, "done": True}) as (
+    with showing(api, monkeypatch, {"action": "task.open", "input": {"task": 412}, "done": True}) as (
         request,
         answers,
     ):
@@ -146,11 +146,21 @@ def test_an_action_the_app_does_not_have_or_input_it_does_not_take_is_refused(ap
     unknown = api.post("/api/v2/screen-actions", json={"action": "tasks.delete", "input": {}}, headers=headers())
     assert unknown.status_code == 422
     detail = unknown.json()["error"]["detail"]
-    assert "tasks.delete" in detail and "tasks.open (Open a task)" in detail
-    wrong = api.post(
-        "/api/v2/screen-actions", json={"action": "tasks.filter", "input": {"owner": "x"}}, headers=headers()
+    assert "tasks.delete" in detail and "task.open (Open a task)" in detail
+    for wrong_input, says in (
+        ({}, "input.task: required"),
+        ({"task": 0}, "input.task: minimum is 1"),
+        ({"task": 4, "owner": "x"}, "input.owner: unknown argument"),
+    ):
+        wrong = api.post(
+            "/api/v2/screen-actions", json={"action": "task.open", "input": wrong_input}, headers=headers()
+        )
+        assert wrong.status_code == 422 and says in wrong.json()["error"]["detail"], wrong_input
+    # A value that fits none of anyOf's choices (a string or null) is refused too.
+    odd = api.post(
+        "/api/v2/screen-actions", json={"action": "page.filter", "input": {"search": {"q": 5}}}, headers=headers()
     )
-    assert wrong.status_code == 422 and "input.pipeline: required" in wrong.json()["error"]["detail"]
+    assert odd.status_code == 422 and "input.search.q" in odd.json()["error"]["detail"]
 
 
 def test_the_assistant_is_offered_the_tool_and_its_turn_may_call_it_without_a_card():

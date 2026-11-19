@@ -16,13 +16,14 @@ _s = cast(Callable[..., dict[str, Any]], _schemas._s)  # pyright: ignore[reportP
 
 @tool(
     "tico_screen_show",
-    "Move the person's open Tico app with one action from its list: shell.go {path}, shell.openChat {chat: "
-    "agent:<slug>|person:<id>|thread:<id>}, shell.closeChat, shell.fold or shell.unfold {sheet: tico|menu|chat}, "
-    "tasks.open {task}, tasks.filter {pipeline, q, owner}; an unknown one is refused with the list. After a change you "
-    "made with another tool, done=true only shows it. Waits up to 3 s for the app: say the screen moved only when "
-    "status is shown; not_open, no_answer and failed mean it did not.",
+    "Move the person's open Tico app with one action from contracts/screen-actions.json, such as shell.goTo {to: "
+    "/tasks/engineering}, task.open {task, pipeline?}, page.filter {search: {key: value}}, search.open {q}, "
+    "shell.openChat {chat: agent:<slug>|person:<id>|thread:<id>}, shell.closeChat, shell.fold {sheet, folded?}; an "
+    "unknown one is refused with the current list. After a change you made with another tool, done=true only shows "
+    "it. Waits up to 3 s for the app: say the screen moved only when status is shown; not_open, no_answer and failed "
+    "mean it did not.",
     {
-        "action": _s("Action id, such as tasks.open"),
+        "action": _s("Action id, such as task.open"),
         "input": {"type": "object", "description": "The action's input"},
         "done": {"type": "boolean", "description": "The change is already made: only show it"},
     },
