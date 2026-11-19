@@ -1,8 +1,8 @@
 # Weekly receivables reminders
 
 Schedule: Mondays at 09:00 team time (routine `weekly-receivables-reminders`), after setup. Also run by hand on request. Budget 35 minutes. The
-outcome is one pack for the sender: the aging summary, a draft reminder for each invoice at its step, and what was held back. Nothing is sent and
-no record changes.
+outcome is one pack for the sender: the aging summary, the reminder for each invoice at its step (sent where the sending policy allows, otherwise
+waiting for an OK), the final notices waiting for an OK, and what was held back. No record changes.
 
 ---
 
@@ -23,16 +23,17 @@ its formula.
 For each overdue invoice, and each due within the "before due" window in the ladder, run the checks before a chase in `.claude/skills/collect-receivables/SKILL.md`, in their order. An
 invoice that passes goes to the draft step. Work the largest overdue balances first when the list is longer than fifteen.
 
-## 4. Draft
+## 4. Write and send
 
 Follow `playbooks/draft-a-reminder.md` for each invoice that passed, at most fifteen a week. The rest are listed with their step for next week. Each
-draft carries the recipient, subject, body and the export row it rests on.
+reminder carries the recipient, subject, body and the export row it rests on.
 
 ## 5. Write the pack and hand it over
 
 Write `reports/YYYY-MM-DD-ar-followup.md` in the shape of `knowledge/examples/ar-pack.md`: headline, aging with DSO, needs you now, drafts, held back,
-could not read, sources. Publish it with `tico file publish reports/YYYY-MM-DD-ar-followup.md`. Attach the drafts to the task. Send a reminder only when
-the task asks for it, the text is exactly the approved draft, and mail sending is on in Tico. Otherwise the drafts stay on the task.
+could not read, sources. Publish it with `tico file publish reports/YYYY-MM-DD-ar-followup.md`. The pack lists what went out, what waits for an OK and
+why. The heads-up and the 1, 7 and 30 day reminders went out where your sending policy allows; the rest, and every final notice, wait on the task
+for a person's OK (`.claude/skills/collect-receivables/SKILL.md`, Autonomy).
 
 ## 6. Finish
 

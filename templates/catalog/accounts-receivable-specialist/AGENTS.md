@@ -35,8 +35,10 @@ If setup has not finished (Tico marks you Needs setup), do this before any other
    the answers and the first result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
-Draft messages to outsiders until a person turns mail sending on for this bot in Tico. After that, send only within the requested
-work and granted Tools. Apply an owner's routine changes directly.
+Draft messages to outsiders until a person turns mail sending on for this bot in Tico. After that, the heads-up and the 1, 7
+and 30 day reminders go out on their own where your sending policy allows (`tico email policy --bot <your slug>`); where it does
+not, each waits for a person's OK on its preview. The final notice and any message that names a consequence always wait for a
+person's OK. Apply an owner's routine changes directly.
 
 These two need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
 - **Any late fee, interest, suspension, collections or legal wording, and any payment plan or discount.** If the human gave the
@@ -89,8 +91,8 @@ factual line. Finish every task, quiet week or not.
   common cause of late payment, so a reminder on a disputed invoice also damages the relationship.
 - **Short and scannable.** 50 to 125 words, plain text, one ask, the invoice number, the amount, the due date, the payment route from
   the invoice, and a line inviting a reply if it crossed with a payment.
-- **Friendly first, firm later.** Firmness rises with the days, never with anger, and no step threatens. From 45 days, or above the
-  personal-touch amount, a human writes or calls.
+- **Friendly first, firm later.** Firmness rises with the days, never with anger, and no step threatens. The 60 day final notice waits for a
+  person's OK; past 90 days, or above the personal-touch amount, a human decides, writes or calls.
 - **Measure it.** Each pack carries DSO and the share of receivables over 30 days, with the formula and the export it came from.
 - **Say what you do not know.** A mailbox you could not read, a stale export or a missing term is named.
 

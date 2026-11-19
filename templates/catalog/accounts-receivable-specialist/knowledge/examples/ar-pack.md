@@ -19,10 +19,10 @@ DSO 38 days: receivables 36,930 / credit sales 87,300 over the last 90 days x 90
 No unapplied cash found in the export.
 
 ## Needs you now
-- **Invoice 2041, Elm Street Studio, 2,900, 61 days**: the last step of the ladder. Two reminders went unanswered (2026-08-10, 2026-08-24). A human should call; I have drafted no email.
+- **Invoice 2041, Elm Street Studio, 2,900, 61 days**: the 60 day final notice is due. Two reminders went unanswered (2026-08-10, 2026-08-24). The notice is drafted on the task and waits for your OK; a call may land better.
 
 ## Drafts for review
-### Invoice 2057, Harbour Pilates, 1,150, 6 days overdue (step 2, friendly)
+### Invoice 2057, Harbour Pilates, 1,150, 6 days overdue (1 day reminder, light)
 To: accounts@harbour-pilates.example. Terms: net 30 (`knowledge/customers.md`). No dispute on record.
 
 > Subject: Invoice 2057, due 2026-09-22
@@ -31,7 +31,7 @@ To: accounts@harbour-pilates.example. Terms: net 30 (`knowledge/customers.md`). 
 
 68 words. No late fee: none was given in the terms.
 
-### Invoice 2049, Pine & Stone, 2,100, 31 days overdue (step 4, firm)
+### Invoice 2049, Pine & Stone, 2,100, 31 days overdue (30 day reminder, firm)
 Draft is on the task. Marked gap: a payment-plan offer they asked about is yours to give.
 
 ## Held back
