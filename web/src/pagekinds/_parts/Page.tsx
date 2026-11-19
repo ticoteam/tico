@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Button } from '@/kit/Button';
+import { Button, FillContext } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { Skeleton, useDelayed } from '@/kit/Skeleton';
 import '@/pagekinds/pagekinds.css';
@@ -40,6 +40,14 @@ export function StateBody({ state = 'ready', title, empty, onRetry, noAccess, sk
       )}
     </PageBody>
   );
+}
+
+/**
+ * Whether the head may hold the filled button. An empty page's action and a fault's Try again are the page's one
+ * filled button, so while either shows, the head's own filled button draws plain.
+ */
+export function headFills({ state = 'ready', empty, onRetry }: StateProps) {
+  return !((state === 'empty' && !!empty?.action) || (state === 'fault' && !!onRetry));
 }
 
 /** A read faster than 150 ms never shows bars (architecture.md 8). No spinner, ever. */
@@ -98,8 +106,10 @@ export function Page({ kind, className, tabs, tabsAfter, under, skeleton, over, 
   }
   return (
     <main className={cls} aria-label={head.title}>
-      <PageHead {...head} />
-      {tabs && tabs.length > 0 && <PageTabs tabs={tabs} label={`${head.title} pages`} after={tabsAfter} />}
+      <FillContext value={headFills({ state, empty, onRetry })}>
+        <PageHead {...head} />
+        {tabs && tabs.length > 0 && <PageTabs tabs={tabs} label={`${head.title} pages`} after={tabsAfter} />}
+      </FillContext>
       {(state ?? 'ready') === 'ready' && under}
       <StateBody state={state} title={head.title} empty={empty} onRetry={onRetry} skeleton={skeleton}>
         {children}

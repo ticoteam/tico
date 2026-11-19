@@ -634,7 +634,7 @@ export function ChatArea() {
         </Specimens>
       </Section>
       <Section name="Tico asks first">
-        <div className="sg-in sg-card">
+        <div className="sg-in sg-card" data-sheet>
           <ConfirmCard
             mark={<Dot size={12} state="wait" />}
             question="Send these 3 emails?"
@@ -811,7 +811,7 @@ export function PagesArea() {
           <Sp name="Empty">
             <Empty title="Nothing in Review" />
           </Sp>
-          <Sp name="Did not load">
+          <Sp name="Did not load" sheet>
             <Empty icon="alert" title="Tasks did not load" text="Check your connection and try again.">
               <Button variant="primary" onClick={noop}>
                 Try again

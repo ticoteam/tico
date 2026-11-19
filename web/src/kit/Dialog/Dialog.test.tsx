@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { Button } from '@/kit/Button';
+import { Button, FillContext } from '@/kit/Button';
 import { Dialog } from './Dialog';
 
 function Harness({ onDelete = () => {} }) {
@@ -29,6 +29,17 @@ function Harness({ onDelete = () => {} }) {
 }
 
 describe('Dialog', () => {
+  it('is a sheet of its own: opened from a head that draws plain, its act stays filled', async () => {
+    render(
+      <FillContext value={false}>
+        <Button variant="primary">Add watch</Button>
+        <Dialog open onOpenChange={() => {}} title="Add a watch" actions={<Button variant="primary">Save</Button>} />
+      </FillContext>,
+    );
+    expect((await screen.findByRole('button', { name: 'Save' })).className).toBe('btn btn-fill');
+    expect(screen.getByRole('button', { name: 'Add watch', hidden: true }).className).toBe('btn');
+  });
+
   it('opens named by its title, keeps focus inside, and acts', async () => {
     const onDelete = vi.fn();
     render(<Harness onDelete={onDelete} />);

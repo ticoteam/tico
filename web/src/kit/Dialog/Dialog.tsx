@@ -1,5 +1,6 @@
 import type { ReactElement, ReactNode } from 'react';
 import { Dialog as BaseDialog } from '@base-ui/react/dialog';
+import { FillContext } from '@/kit/Button';
 import './Dialog.css';
 
 export type DialogProps = {
@@ -33,11 +34,13 @@ export function Dialog({ open, onOpenChange, lead, title, description, children,
         <BaseDialog.Backdrop className="scrim kit-scrim" />
         <BaseDialog.Viewport className="scrim kit-viewport">
           <BaseDialog.Popup className={className ? `modal kit-modal ${className}` : 'modal kit-modal'} role={alert ? 'alertdialog' : 'dialog'}>
-            {lead}
-            <BaseDialog.Title>{title}</BaseDialog.Title>
-            {description && <BaseDialog.Description>{description}</BaseDialog.Description>}
-            {children}
-            {actions !== undefined && <div className="modal-row">{actions}</div>}
+            <FillContext value>
+              {lead}
+              <BaseDialog.Title>{title}</BaseDialog.Title>
+              {description && <BaseDialog.Description>{description}</BaseDialog.Description>}
+              {children}
+              {actions !== undefined && <div className="modal-row">{actions}</div>}
+            </FillContext>
           </BaseDialog.Popup>
         </BaseDialog.Viewport>
       </BaseDialog.Portal>

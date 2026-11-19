@@ -1,5 +1,6 @@
 import type { ReactElement, ReactNode } from 'react';
 import { Popover as BasePopover } from '@base-ui/react/popover';
+import { FillContext } from '@/kit/Button';
 import './Popover.css';
 
 /** On a positioner: the overlay layer (menus, pickers). */
@@ -29,7 +30,7 @@ export function Popover({ trigger, className, label, children, open, onOpenChang
       <BasePopover.Portal>
         <BasePopover.Positioner className={popLayer} side={side} align={align} sideOffset={6}>
           <BasePopover.Popup className={`${className} ${popMotion}`} aria-label={label}>
-            {children}
+            <FillContext value>{children}</FillContext>
           </BasePopover.Popup>
         </BasePopover.Positioner>
       </BasePopover.Portal>

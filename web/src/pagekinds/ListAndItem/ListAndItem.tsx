@@ -1,8 +1,9 @@
 import { Link, type LinkProps } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
+import { FillContext } from '@/kit/Button';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { EditableTitle, PageHead, PageTabs, SkRows, StateBody } from '@/pagekinds/_parts';
+import { EditableTitle, headFills, PageHead, PageTabs, SkRows, StateBody } from '@/pagekinds/_parts';
 import type { PageBaseProps, PageTab } from '@/pagekinds/types';
 
 export interface ListAndItemProps extends PageBaseProps {
@@ -63,9 +64,11 @@ export function ListAndItem({
   return (
     <main className={cls} aria-label={head.title}>
       <section className="tl" aria-label={listLabel ?? head.title}>
-        <PageHead {...head} />
-        {state === 'ready' && search}
-        {tabs && tabs.length > 0 && <PageTabs tabs={tabs} label={`${head.title} pages`} after={tabsAfter} />}
+        <FillContext value={headFills({ state, empty, onRetry })}>
+          <PageHead {...head} />
+          {state === 'ready' && search}
+          {tabs && tabs.length > 0 && <PageTabs tabs={tabs} label={`${head.title} pages`} after={tabsAfter} />}
+        </FillContext>
         <StateBody
           state={state}
           title={head.title}

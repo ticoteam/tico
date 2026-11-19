@@ -221,7 +221,10 @@ html[data-layout="cards"]{--page-top:env(safe-area-inset-top,0px)}
 html[data-layout="cards"] .pk{--page-x:var(--s-4)}
 html[data-layout="cards"] .pk-head,
 html[data-layout="cards"] .pk-split .conv>.conv-head{height:calc(var(--head-h) + var(--page-top));padding-top:var(--page-top)}
-html[data-layout="cards"] .pk-head{padding-right:var(--s-1);padding-left:var(--page-x)}
+html[data-layout="cards"] .pk-head{padding-right:var(--page-x);padding-left:var(--page-x)}
+/* a filled button at the end keeps the gutter; an icon button there lets its own padding hang into it, so its glyph
+   lines up with the page's words */
+:where(html[data-layout="cards"]) :is(.pk-head>.ib:last-child,.pk-head>.pk-acts:last-child>.ib:last-child){margin-right:calc(var(--s-1) - var(--page-x))}
 :where(html[data-layout="cards"]) .pk-body{--page-x:var(--s-2);padding-right:var(--s-2);padding-left:var(--s-2)}
 :where(html[data-layout="cards"] .pk-body) .stage-head{padding-left:var(--page-x)}
 :where(html[data-layout="cards"]) :is(.pk-body>.table,.pk-sec .table:not(.md-table *)) :is(th,td):first-child:not(.t-mark){padding-left:var(--page-x)}

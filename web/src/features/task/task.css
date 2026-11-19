@@ -19,6 +19,10 @@ html[data-layout="cards"] .tv .pk-title h1{white-space:normal;font-size:var(--t-
 html[data-layout="cards"] .tv .pk-where{margin-top:var(--s-2)}
 /* back and "⋯" sit on the title's first line */
 html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(--lh-tight) - var(--ctl)) / 2)}
+/* the trail's steps, the stage and who has it look 22 high but take a press a control's height (--ctl, 44 on a phone),
+   centered on them, without moving anything */
+:where(html[data-layout="cards"]) .tv .pk-where :is(a,.tv-pick){position:relative}
+:where(html[data-layout="cards"]) .tv .pk-where :is(a,.tv-pick)::after{content:"";position:absolute;top:50%;right:0;left:0;height:var(--ctl);transform:translateY(-50%)}
 
 /* the framed body: the open page or Details, then the answer on a phone */
 .tv-view{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;position:relative}

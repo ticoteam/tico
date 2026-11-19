@@ -18,10 +18,11 @@ export function Area({ id, title, rule, children }: { id: string; title: string;
   );
 }
 
-/** A part, then its name. */
-export function Sp({ name, children }: { name: ReactNode; children: ReactNode }) {
+/** A part, then its name. `sheet`: the part stands for a sheet of its own (a page's state), so its filled button is
+    not a second one on the guide's page. */
+export function Sp({ name, sheet, children }: { name: ReactNode; sheet?: boolean; children: ReactNode }) {
   return (
-    <figure className="sg-sp">
+    <figure className="sg-sp" data-sheet={sheet || undefined}>
       {children}
       <figcaption>{name}</figcaption>
     </figure>

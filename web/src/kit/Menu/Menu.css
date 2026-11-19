@@ -6,3 +6,9 @@
 .menu a em+.ico{margin-left:0}
 /* a row that opens a second level (pages/1-tasks/list.css) */
 .menu a>.ico.is-next{width:14px;height:14px;color:var(--muted);stroke-width:1.8}
+/* A long press opens the context menu; on touch (and on the phone's cards) it must not also start a text selection or
+   the system's callout. */
+:where(html[data-layout="cards"]) [data-long-press]{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+@media (hover:none){
+  [data-long-press]{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+}

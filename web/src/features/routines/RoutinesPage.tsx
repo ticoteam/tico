@@ -75,17 +75,20 @@ function RoutinesTab({ panel }: { panel?: string }) {
     ...SECTIONS.map(([t, name]): [string, Routine[]] => [name, routines.filter((r) => r.trigger.type === t)]),
     ['Other', routines.filter((r) => !known.has(r.trigger.type))],
   ];
-  const add = (
-    <Button variant="primary" onClick={() => void press('routines.new', {})}>
+  const add = (variant: 'primary' | 'plain') => (
+    <Button variant={variant} onClick={() => void press('routines.new', {})}>
       Add routine
     </Button>
   );
+  // The built-in section keeps the page ready while there are no routines, so the page kind cannot see it is empty:
+  // the empty state's Add is the one filled button then, and the head's draws plain.
+  const none = list.isSuccess && !routines.length;
   return (
     <List
       {...head}
       state={list.isPending ? 'loading' : list.isError ? 'fault' : 'ready'}
       onRetry={() => void list.refetch()}
-      actions={add}
+      actions={add(none ? 'plain' : 'primary')}
       sections={
         <>
           {routines.length ? (
@@ -99,7 +102,7 @@ function RoutinesTab({ panel }: { panel?: string }) {
                 </Section>
               ))
           ) : (
-            <Empty title="No routines yet">{add}</Empty>
+            <Empty title="No routines yet">{add('primary')}</Empty>
           )}
           <BuiltInSection selected={built} />
         </>

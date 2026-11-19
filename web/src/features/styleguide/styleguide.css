@@ -91,9 +91,11 @@
     padding-left: var(--s-8);
   }
 
+  /* One grid for the whole column: every group's tokens and uses line up (the groups are its subgrids). */
   & .sg-theme {
     display: grid;
-    gap: var(--s-4);
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    gap: var(--s-4) var(--s-3);
     padding: var(--s-4);
     border-radius: var(--r-card);
     background: var(--sheet);
@@ -103,11 +105,16 @@
       inset 0 0 0 1px var(--line);
   }
 
+  & .sg-theme-name {
+    grid-column: 1 / -1;
+  }
+
   & .sw-group {
     display: grid;
-    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
     align-items: center;
-    gap: var(--s-2) var(--s-3);
+    row-gap: var(--s-2);
   }
 
   & .sw-group h3 {

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Button } from './Button';
+import { Button, FillContext } from './Button';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -37,6 +37,28 @@ describe('Button', () => {
       </div>,
     );
     expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it('draws a primary button plain where the filled button stands elsewhere', () => {
+    render(
+      <FillContext value={false}>
+        <Button variant="primary">Add watch</Button>
+      </FillContext>,
+    );
+    expect(screen.getByRole('button', { name: 'Add watch' }).className).toBe('btn');
+  });
+
+  it('counts a part marked as a sheet of its own apart from the page around it', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(
+      <div className="pane">
+        <Button variant="primary">Approve</Button>
+        <figure data-sheet>
+          <Button variant="primary">Try again</Button>
+        </figure>
+      </div>,
+    );
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('stays quiet with one filled button to a sheet', () => {

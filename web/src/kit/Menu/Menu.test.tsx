@@ -46,6 +46,15 @@ describe('Menu', () => {
 });
 
 describe('ContextMenu', () => {
+  it('marks the long-pressed row so a touch does not select its text', () => {
+    render(
+      <ContextMenu items={<MenuItem label="Open" onSelect={() => {}} />}>
+        <div>Launch plan</div>
+      </ContextMenu>,
+    );
+    expect(screen.getByText('Launch plan').hasAttribute('data-long-press')).toBe(true);
+  });
+
   it('opens on a right click', async () => {
     const onSelect = vi.fn();
     render(

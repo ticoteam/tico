@@ -1,4 +1,4 @@
-import type { ComponentProps, ReactNode } from 'react';
+import { createContext, use, type ComponentProps, type ReactNode } from 'react';
 import { Icon } from '@/kit/Icon';
 import './Button.css';
 
@@ -18,8 +18,16 @@ export type ButtonProps = Omit<ComponentProps<'button'>, 'children'> & {
 
 const VARIANT: Record<ButtonVariant, string | undefined> = { plain: undefined, primary: 'btn-fill', quiet: 'btn-quiet' };
 
+/**
+ * False: this sheet's one filled button stands elsewhere (an empty page's action in its empty state), so a `primary`
+ * button inside draws plain. A dialog or a popover is a sheet of its own and sets it back to true.
+ */
+export const FillContext = createContext(true);
+
 export function Button({ variant = 'plain', icon, busy = false, className, children, ref, type = 'button', ...rest }: ButtonProps) {
-  const own = variant === 'primary' && import.meta.env.DEV ? warnOnSecondPrimary : undefined;
+  const fill = use(FillContext);
+  const look = variant === 'primary' && !fill ? 'plain' : variant;
+  const own = look === 'primary' && import.meta.env.DEV ? warnOnSecondPrimary : undefined;
   return (
     <button
       {...rest}
@@ -33,7 +41,7 @@ export function Button({ variant = 'plain', icon, busy = false, className, child
           : ref
       }
       type={type}
-      className={['btn', VARIANT[variant], className].filter(Boolean).join(' ')}
+      className={['btn', VARIANT[look], className].filter(Boolean).join(' ')}
       aria-busy={busy || undefined}
     >
       {icon && <Icon name={icon} />}
@@ -44,11 +52,14 @@ export function Button({ variant = 'plain', icon, busy = false, className, child
 
 const warned = new WeakSet<Element>();
 
-/** Dev only: a sheet (a pane, a dialog, the date picker) holds one filled button. */
+const SHEET = '.pane, .modal, .date-pick, [data-sheet]';
+
+/** Dev only: a sheet (a pane, a dialog, the date picker, anything marked `data-sheet`) holds one filled button; one in
+    a sheet inside it counts there. */
 function warnOnSecondPrimary(el: HTMLButtonElement | null) {
-  const sheet = el?.closest('.pane, .modal, .date-pick');
+  const sheet = el?.closest(SHEET);
   if (!sheet || warned.has(sheet)) return;
-  if (sheet.querySelectorAll('.btn-fill').length > 1) {
+  if (Array.from(sheet.querySelectorAll('.btn-fill')).filter((b) => b.closest(SHEET) === sheet).length > 1) {
     warned.add(sheet);
     console.warn('Two filled buttons in one sheet; keep one primary.', sheet);
   }

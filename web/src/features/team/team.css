@@ -73,7 +73,8 @@
 
 /* ---------- Add teammate ---------- */
 .modal.add{width:520px;gap:var(--s-4);padding:var(--s-4) var(--s-5) var(--s-5)}
-.add-picks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--s-2)}
+/* the cards share the row: two fill it, three take a third each; no empty slot */
+.add-picks{display:grid;grid-auto-columns:minmax(0,1fr);grid-auto-flow:column;gap:var(--s-2)}
 .add-pick{height:104px;display:flex;flex-direction:column;justify-content:space-between;padding:var(--s-3h);border-radius:var(--r-block);box-shadow:inset 0 0 0 1px var(--line-strong);
   transition:background var(--dur-fast) var(--ease)}
 .add-pick .ico{width:22px;height:22px;stroke-width:1.5;color:var(--ink-2)}
@@ -264,7 +265,7 @@ button.add-pick:hover,button.add-person:hover,button.tpl:hover,button.tpl.is-on{
   .rec .foot .verb{height:auto;min-height:var(--ctl);display:inline-flex;align-items:center}
   .mp-list .radio{min-height:var(--ctl)}
   .modal.add{padding:var(--s-5) var(--s-4) var(--s-4)}
-  .add-picks{grid-template-columns:minmax(0,1fr);gap:var(--s-2)}
+  .add-picks{grid-template-columns:minmax(0,1fr);grid-auto-flow:row;gap:var(--s-2)}
   .add-pick{height:56px;flex-direction:row;justify-content:flex-start;align-items:center;gap:var(--s-3);border-radius:var(--r-pane)}
   .add-person{height:52px;margin:0 0 calc(var(--s-1)*-1);padding:0 var(--s-3h)}
   .tpl{height:auto;min-height:56px;grid-template-columns:var(--av-md) minmax(0,1fr) 16px;grid-template-areas:"av name check" "av line check";row-gap:calc(var(--s-0) / 2);padding:var(--s-2) var(--s-2h) var(--s-2) var(--s-2);align-content:center}
