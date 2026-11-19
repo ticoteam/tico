@@ -107,6 +107,7 @@ function Body({ f, v, onPicture }: { f: TaskFileView; v: FileVersion; onPicture?
     ) : (
       <img src={v.url} alt={`${name}, v${v.n}`} />
     );
+  if (isWord(f.name, v.mime)) return <WordPages url={v.url} name={`${name}, v${v.n}`} />;
   return <FileFrame id={f.id} version={v.n} mime={v.mime} title={`${name}, v${v.n}`} url={v.url} name={f.name} size={v.size} />;
 }
 

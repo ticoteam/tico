@@ -5,6 +5,8 @@ import { run } from '@/actions';
 import { ApiError } from '@/api/client';
 import { Conversation, MessageBones } from '@/conversation';
 import { meQuery, useActor } from '@/data';
+import { Button } from '@/kit/Button';
+import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
@@ -16,7 +18,7 @@ import { Decision } from './Answer';
 import { AddMenu, Details, type Adding } from './Details';
 import type { TaskSearch } from './exports';
 import { Email as EmailView } from './Email';
-import { FileTab, FileView } from './FileView';
+import { FileTab, FileView, PageBones } from './FileView';
 import { FlowSteps, FlowTop, MoreMenu, QuietLine, WhereLine } from './Head';
 import { changesAskedOf, decisionOf, defaultTab, DETAILS, failedToast, sendTitle, tabAddress, tabsOf, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
@@ -89,26 +91,27 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   const navigate = useNavigate();
   const files = useQuery(taskFilesQuery(t.id));
   const tabs = tabsOf(t, files.data);
-  const known = !!tab && tabs.some((x) => x.slug === tab);
+  const known = tab !== undefined && tabs.some((x) => x.slug === tab);
+  const unresolved = !!tab && !known && !files.isSuccess;
   // With no tab in the address, the page that waits on the person opens, and the address names it: the tab row reads
   // the address, and an answer that changes which page waits does not move the person off the page they read. A
   // file's tab is known once the files are read, so nothing is picked before.
   const [first, setFirst] = useState<string | null>(null);
-  if (files.isFetched && first === null) setFirst(defaultTab(tabs));
+  if (first === null && (files.isSuccess || (!tab && files.isError))) setFirst(defaultTab(tabs));
   const opened = first ?? defaultTab(tabs);
-  const on = known ? (tab as string) : opened;
+  const on = known ? tab : opened;
   useEffect(() => {
-    if (known || first === null) return;
+    if (known || unresolved || first === null) return;
     const a = tabAddress(t, opened, flow);
     void navigate({ to: a.to as never, search: a.search as never, replace: true });
-  }, [known, first, opened, flow, t, navigate]);
+  }, [known, unresolved, first, opened, flow, t, navigate]);
   const [adding, setAdding] = useState<Adding | null>(null);
   const [asking, setAsking] = useState(false);
   const search = useSearch({ strict: false }) as TaskSearch;
   const me = useQuery(meQuery).data?.id;
   const owner = useActor(t.owner_id);
 
-  const current = tabs.find((x) => x.slug === on);
+  const current = unresolved ? undefined : tabs.find((x) => x.slug === on);
   const versions = useVersions(current?.doc, search.v, search.vs);
   // The change stepped to, from Changes' two arrows; a new page, version or comparison starts before the first.
   const [step, setStep] = useState({ key: '', at: -1 });
@@ -116,7 +119,7 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   const at = step.key === key ? step.at : -1;
   const onAt = (n: number) => setStep({ key, at: n });
   const address = tabAddress(t, on, flow);
-  const details = on === DETAILS;
+  const details = !unresolved && on === DETAILS;
   // An approval's view (plan/approvals.html): the title, one quiet line and the thing's tabs; its facts are under ⋯.
   const quiet = !details && !!(decisionOf(t) ?? changesAskedOf(t, me));
   // The page alone: the sheets beside it fold (the shell's own keys unfold them).
@@ -136,7 +139,15 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
     });
 
   const body =
-    file && details ? (
+    unresolved ? (
+      files.isError ? (
+        <Empty icon="alert" title="This file did not load">
+          <Button onClick={() => void files.refetch()}>Try again</Button>
+        </Empty>
+      ) : (
+        <PageBones />
+      )
+    ) : file && details ? (
       <FileView t={t} file={file} flow={flow} full={search.full} />
     ) : details ? (
       <Details t={t} flow={flow} adding={adding} onAdding={setAdding} />

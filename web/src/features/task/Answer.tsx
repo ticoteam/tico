@@ -92,13 +92,14 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
   const busy = approve.pending || request.pending;
 
   // What Approve binds to, and what the person first saw: when it moves while the box is open, it says Changed.
-  const key = shown.data ? (shown.data.hash ?? pageKey(r)) : null;
+  const preview = shown.data;
+  const ready = preview?.complete === true && !shown.isPlaceholderData;
+  const key = ready ? (preview.hash ?? pageKey(r)) : null;
   const [seen, setSeen] = useState<string | null>(null);
   if (key !== null && seen === null) setSeen(key);
   const changed = key !== null && seen !== null && key !== seen;
-  const ready = !!shown.data?.complete && !shown.isPlaceholderData;
   // A refusal, or what Approve binds to did not load: said in place of what Approve does, never over it.
-  const fault = !!error || shown.isError;
+  const fault = !!error || shown.isError || (preview?.complete === false && !shown.isPlaceholderData);
 
   useEffect(() => {
     if (!asking) return;
@@ -118,7 +119,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
     setSeen(key);
     const next = nextUp();
     hold?.(r, true);
-    const res = await approve.run({ task: t.id, requirement: r.requirement_id, shown: shown.data?.hash ?? null });
+    const res = await approve.run({ task: t.id, requirement: r.requirement_id, shown: preview?.hash ?? null });
     hold?.(res.ok ? null : r);
     if (!res.ok) {
       // It moved under the person: read it again, say Changed, and wait for a new press.

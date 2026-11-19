@@ -104,7 +104,7 @@ export function VersionBar({ task, vs, at, onAt }: { task: string; vs: Versions;
           aria-pressed={vs.on}
           title={`Changes since v${vs.before}`}
           data-target={`task-changes:${task}`}
-          disabled={vs.count === 0}
+          disabled={!vs.on && vs.count === 0}
           onClick={() => void run('task.compare', { task, against: vs.on ? null : (vs.before ?? null) }, { via: 'click' })}
         >
           {vs.count == null ? 'Changes' : vs.count === 0 ? 'No changes' : `${vs.count} change${vs.count === 1 ? '' : 's'}`}
