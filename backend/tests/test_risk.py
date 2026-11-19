@@ -2,6 +2,8 @@
 its matter facts; rules and documents link to it. Every teammate lists every risk; its counts and sums follow task
 privacy, so a teammate who reads none of its tasks sees it with 0."""
 
+import pytest
+
 from backend import hubdb as H
 from backend.entities import store as ES
 from backend.tests.helpers.tasks_board import api, bot_token, get, headers, post  # noqa: F401
@@ -337,6 +339,8 @@ def test_the_answers_match_the_contract_and_the_migration_runs_again(api):
     # Pending files run in any order and may run on a database that has the change: running it again changes nothing.
     up = import_module("backend.migrations.20261119025516_risks_and_matters").up
     with api.app.state.store.transaction() as c:
+        with pytest.raises(H.Refused):
+            H.tag_create(c, ANA, "acme-other", kind="contract")  # a kind is '' or risk
         up(c)
         assert c.execute("SELECT kind FROM tags WHERE key=?", (RISK,)).fetchone()[0] == "risk"
         assert c.execute("SELECT count(*) FROM matters").fetchone()[0] == 1

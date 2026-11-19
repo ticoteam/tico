@@ -425,12 +425,9 @@ MATTER_FIELDS = (
 )
 
 
-def _page(limit: Any, offset: Any) -> tuple[int, int]:
-    try:
-        limit, offset = int(limit), int(offset)
-    except (TypeError, ValueError):
-        raise Problem("validation", "limit and offset are whole numbers", 422) from None
-    return max(1, min(limit, LIMIT_MAX)), max(0, offset)
+def _page(limit: int, offset: int) -> tuple[int, int]:
+    """The routes parse both as whole numbers (FastAPI refuses anything else); out of range is brought in."""
+    return max(1, min(int(limit), LIMIT_MAX)), max(0, int(offset))
 
 
 def matters(
