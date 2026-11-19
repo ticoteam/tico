@@ -1107,10 +1107,7 @@ def candidates(conn: "sqlite3.Connection", person: str) -> list[str]:
                     "AND r.kind='item' AND r.withdrawn_at IS NULL"
                 ).fetchall()
             }
-    if company or pipelines:
-        found |= _ladder_tasks(conn, person, company, pipelines, stage_asks)
-    else:
-        found |= _private_ladder_tasks(conn, person, stage_asks)
+    found |= _ladder_tasks(conn, person, company, pipelines, stage_asks)
     if stages:
         visits |= {
             str(row[0])
@@ -1169,16 +1166,37 @@ def _ladder_tasks(
 ) -> set[str]:
     """The open tasks that may fall to `person` by the ladder (`_falls`), reading a few columns of each open task of
     the pipelines whose ladder reaches them (every pipeline, for the company's person), and of private tasks they ask
-    for or read."""
+    for or read. Anyone but the company's person reads only those rows and the requirements of their visits: a manager
+    of one small pipeline does not read every open task and visit to keep a few."""
+    sql, args = _OPEN_SQL.replace("FROM tasks t", "FROM " + _OPEN_JOIN), ()
+    if not company:
+        # Their pipelines' tasks, and the private tasks they ask for or whose reader list may name them (`_reads`:
+        # a group is read by its members now, so any list may).
+        mine = "(t.private IS NOT 0 AND (t.requester_id=? OR t.readers IS NOT NULL))"
+        if pipelines:
+            mine, args = f"(t.pipeline_id IN (SELECT value FROM json_each(?)) OR {mine})", (*_listed(pipelines), person)
+        else:
+            args = (person,)
+        sql = sql.replace("WHERE ", f"WHERE {mine} AND ", 1)
+    rows = [
+        row
+        for row in _dicts(conn.execute(sql % _OPEN_ROWS, args))
+        if company or row["pipeline_id"] in pipelines or _reads(conn, person, row)
+    ]
+    if not rows:
+        return set()
     asks = _asks_by(stage_asks)
-    visit_asks = _asks_by(conn.execute(_VISIT_ASKS).fetchall())
-    out: set[str] = set()
-    for row in _dicts(conn.execute(_OPEN_SQL.replace("FROM tasks t", "FROM " + _OPEN_JOIN) % _OPEN_ROWS)):
-        if not (company or row["pipeline_id"] in pipelines or _reads(conn, person, row)):
-            continue
-        if _falls(conn, row, asks, visit_asks):
-            out.add(str(row["id"]))
-    return out
+    if company:
+        visit_asks = _asks_by(conn.execute(_VISIT_ASKS).fetchall())
+    else:
+        visit_asks = _asks_by(
+            conn.execute(
+                "SELECT visit_id, kind, person_id, condition FROM requirements WHERE withdrawn_at IS NULL "
+                "AND visit_id IN (SELECT value FROM json_each(?))",
+                _listed(str(row["visit_id"]) for row in rows if row["visit_id"]),
+            ).fetchall()
+        )
+    return {str(row["id"]) for row in rows if _falls(conn, row, asks, visit_asks)}
 
 
 def _reads(conn: "sqlite3.Connection", person: str, row: Row) -> bool:
@@ -1189,34 +1207,6 @@ def _reads(conn: "sqlite3.Connection", person: str, row: Row) -> bool:
     if not (row["private"] is None or row["private"]):
         return False
     return row["requester_id"] == person or person in H.reader_actors(conn, row)
-
-
-def _private_ladder_tasks(conn: "sqlite3.Connection", person: str, stage_asks: list[Any]) -> set[str]:
-    """`_ladder_tasks` for someone whose ladder reaches no pipeline: only private tasks they ask for or read."""
-    rows = [
-        row
-        for row in _dicts(
-            conn.execute(
-                _OPEN_SQL.replace("FROM tasks t", "FROM " + _OPEN_JOIN).replace(
-                    "WHERE ", "WHERE (t.private IS NOT 0) AND (t.requester_id=? OR t.readers IS NOT NULL) AND ", 1
-                )
-                % _OPEN_ROWS,
-                (person,),
-            )
-        )
-        if _reads(conn, person, row)
-    ]
-    if not rows:
-        return set()
-    asks = _asks_by(stage_asks)
-    visit_asks = _asks_by(
-        conn.execute(
-            "SELECT visit_id, kind, person_id, condition FROM requirements WHERE withdrawn_at IS NULL "
-            "AND visit_id IN (SELECT value FROM json_each(?))",
-            _listed(str(row["visit_id"]) for row in rows),
-        ).fetchall()
-    )
-    return {str(row["id"]) for row in rows if _falls(conn, row, asks, visit_asks)}
 
 
 def needs(
