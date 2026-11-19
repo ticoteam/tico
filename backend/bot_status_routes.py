@@ -234,6 +234,8 @@ def register(app, auth, delegated_identity, mutate, settings_admin, store, reset
             found = list(H.turns(c, bot, since=since_at))
             stored = H.prime_messages(c, [turn["message_id"] for turn in found])
             privacy.prime_messages(c, list(stored.values()))
+            # Each room's C1 check (auth.run_conversation) reads the task it and its root belong to: read them together.
+            privacy.prime_rooms(c, {row["conversation_id"] for row in stored.values()})
             from . import threads
 
             threads.prime_members(c, who, [row["conversation_id"] for row in stored.values()])

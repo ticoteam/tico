@@ -15,16 +15,19 @@ from backend.tests.helpers.api import as_member, assign, claim, post, ready, run
 STEPS = 10
 
 
-def runs(api, count, room=False, failed=False, machine=None):
-    """`count` runs of bot `ops`, each answering a message from Ana: a direct chat, or (`room`) a room Ana and Ben share
-    with the bot. A `failed` run ends failed instead of completed and keeps no turn row."""
+def runs(api, count, room=False, failed=False, machine=None, task=False):
+    """`count` runs of bot `ops`, each answering a message from Ana: a direct chat, (`room`) a room Ana and Ben share
+    with the bot, or (`task`) a task Ana gives the bot, run in its own room. A `failed` run ends failed instead of
+    completed and keeps no turn row."""
     if machine is None:
         as_member(api, "ben@acme.example")
         machine = runner(api, "ana")
         assign(api, machine, "ops")
         ready(api, machine, ["ops"])
     for k in range(count):
-        if room:
+        if task:
+            post(api, "tasks", {"owner": "ops", "title": f"Task {k}", "body": f"Do thing {k}."})
+        elif room:
             with api.app.state.store.transaction() as c:
                 shared = H.open_conversation(c, "human:ana", ["human:ana", "human:ben", "bot:ops"], subject=f"Room {k}")
             post(api, "messages", {"to": "ops", "text": f"Question {k}", "conversation_id": shared["id"]})
@@ -85,7 +88,8 @@ def turns_statements(api, monkeypatch, path, token="ana-test"):
 
 
 def test_the_turns_list_takes_the_same_statements_however_many_turns_it_reads(tmp_path, monkeypatch):
-    """Direct chats, rooms with people in them and failed runs in rooms, read together from one install."""
+    """Direct chats, rooms with people in them, tasks' rooms and failed runs in rooms and on tasks, read together from
+    one install: each task room's C1 check reads its task, and those are read together (task_privacy.prime_rooms)."""
     counted = {}
     for name, count in (("small", 3), ("big", 20)):
         (tmp_path / name).mkdir()
@@ -93,10 +97,11 @@ def test_the_turns_list_takes_the_same_statements_however_many_turns_it_reads(tm
         api = next(install)
         try:
             machine = None
-            for shape in ({}, {"room": True}, {"room": True, "failed": True}):
+            shapes = ({}, {"room": True}, {"room": True, "failed": True}, {"task": True}, {"task": True, "failed": True})
+            for shape in shapes:
                 machine = runs(api, count, machine=machine, **shape)
             body, counted[name] = turns_statements(api, monkeypatch, "/api/v2/bots/ops/turns")
-            assert len(body) == count * 3, len(body)
+            assert len(body) == count * len(shapes), len(body)
         finally:
             install.close()
     few, many = counted["small"], counted["big"]

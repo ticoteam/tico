@@ -174,6 +174,8 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
     )
     stored = H.prime_messages(c, [row["message_id"] for row in found])
     privacy.prime_messages(c, list(stored.values()))
+    # Each room's C1 check (auth.run_conversation) reads the task it and its root belong to: read them together.
+    privacy.prime_rooms(c, {row["conversation_id"] for row in stored.values()})
     from . import threads
 
     threads.prime_members(c, who, [row["conversation_id"] for row in stored.values()])
