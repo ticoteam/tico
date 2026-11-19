@@ -13,6 +13,7 @@ from backend import people as P
 from backend.tests.helpers.onboarding import OWNER_EMAIL, environment, signed_in  # noqa: F401
 from backend.tests.helpers.people_access import person_headers
 from backend.tests.helpers.directory import events, roster_of
+from backend.tests.helpers.openapi_v2 import conforms
 
 KEY = (
     rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -229,3 +230,48 @@ def test_only_the_owner_manages_directory_sync_and_stale_revisions_are_refused(g
     put_config(api)
     r = api.put("/api/v2/directory", json={"source": "", "expected_revision": 0}, headers=signed_in())
     assert r.status_code == 409
+
+
+def test_every_directory_route_answers_its_declared_shape_and_only_the_owner_reaches_it(google_api):
+    api, _ = google_api
+    document = api.get("/api/v2/openapi.json", headers=signed_in()).json()
+
+    def check(method, path, answer):
+        assert answer.status_code == 200, answer.text
+        schema = document["paths"][path][method]["responses"]["200"]["content"]["application/json"]["schema"]
+        assert conforms(answer.json(), schema, document) is None, (path, answer.json())
+        return answer.json()
+
+    riley = person_headers(api, "riley")
+    for method, path in (
+        ("get", "/api/v2/directory"),
+        ("put", "/api/v2/directory"),
+        ("post", "/api/v2/directory/scim-token"),
+        ("post", "/api/v2/directory/preview"),
+        ("post", "/api/v2/directory/sync"),
+    ):
+        body = None if method == "get" else {"expected_revision": 0} if method == "put" else {}
+        refused = api.request(method.upper(), path, json=body, headers=riley)
+        assert (refused.status_code, refused.json()["error"]["code"]) == (403, "forbidden"), path
+    body = {
+        "source": "google",
+        "filter": {},
+        "expected_revision": 0,
+        "credentials": {"service_account_json": json.dumps(SERVICE_ACCOUNT), "admin_email": "admin@acme.example"},
+    }
+    check("put", "/api/v2/directory", api.put("/api/v2/directory", json=body, headers=signed_in()))
+    token = check(
+        "post", "/api/v2/directory/scim-token", api.post("/api/v2/directory/scim-token", json={}, headers=signed_in())
+    )
+    view = check("get", "/api/v2/directory", api.get("/api/v2/directory", headers=signed_in()))
+    assert token["token"] not in json.dumps(view) and "PRIVATE KEY" not in json.dumps(view)  # write-only
+    preview = check(
+        "post", "/api/v2/directory/preview", api.post("/api/v2/directory/preview", json={}, headers=signed_in())
+    )
+    held = check("post", "/api/v2/directory/sync", api.post("/api/v2/directory/sync", json={}, headers=signed_in()))
+    assert held["applied"] is False
+    confirm = {"confirm": True, "plan_hash": preview["plan"]["hash"]}
+    done = check(
+        "post", "/api/v2/directory/sync", api.post("/api/v2/directory/sync", json=confirm, headers=signed_in())
+    )
+    assert done["applied"] is True and done["done"]["adds"] == 2
