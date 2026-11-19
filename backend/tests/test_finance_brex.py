@@ -1171,3 +1171,133 @@ def test_a_mercury_io_payment_pairs_on_its_own_connection_before_a_waiting_brex_
     with books.read() as c:
         assert _paired(c, "io-0", "mp-0") and _feed(c, "ctx_pay")["entry_id"] is None
         assert _every_entry_balances(c)
+
+
+def _both(books: Any) -> tuple[Any, FakeBrex]:
+    mercury, fake = FakeMercury(), FakeBrex()
+    connect_mercury(books, mercury)
+    connect_brex(books, fake)
+    return mercury, fake
+
+
+def _on_other(c: Any, provider_id: str) -> bool:
+    entry = _feed(c, provider_id)["entry_id"]
+    codes = {
+        str(r[0])
+        for r in c.execute(
+            "SELECT a.code FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id WHERE l.entry_id=?", (entry,)
+        )
+    }
+    return entry is not None and "6900" in codes
+
+
+@pytest.mark.parametrize("credit_first", [True, False])
+def test_a_mercury_io_credit_never_takes_another_connections_debit_while_its_own_is_on_the_way(books, credit_first):
+    """Across connections is looked at only at the end of the card's pass: the IO credit pairs with the checking debit
+    that comes later in the same pass, never with the Brex cash debit already on Other expenses."""
+    mercury, fake = _both(books)
+    fake.cash_txns[CASH].append(cash_txn("cash_out", "PAYMENT", -50_000, day="2026-10-08"))
+    assert brex_pass(books, fake) == "ok"
+    credit = ("io-0", _txn("io-0", "credit-io", 500.0, "other", day="2026-10-08"))
+    debit = ("mp-0", _txn("mp-0", "acct-chk", -500.0, "other", day="2026-10-08"))
+    mercury.txns = dict([credit, debit] if credit_first else [debit, credit])
+    _mercury_pass(books, mercury)
+    with books.read() as c:
+        assert _paired(c, "io-0", "mp-0") and _on_other(c, "cash_out")
+
+
+def test_a_debit_that_could_pay_two_waiting_card_payments_pays_neither(books):
+    _mercury, fake = _paid_from_mercury(books, "2026-10-06")
+    fake.card_txns += [
+        card_txn("ctx_a", "COLLECTION", 50_000, day="2026-10-08"),
+        card_txn("ctx_b", "COLLECTION", 50_000, day="2026-10-10"),
+    ]
+    assert brex_pass(books, fake, LATER[0]) == "ok"
+    with books.read() as c:
+        assert _feed(c, "ctx_a")["entry_id"] is None and _feed(c, "ctx_b")["entry_id"] is None
+        assert _on_other(c, "mp-0")
+
+
+def test_a_bank_whose_sign_is_unchecked_is_not_looked_at_across(books):
+    mercury, fake = _both(books)
+    fake.cash_txns[CASH].append(cash_txn("cash_out", "PAYMENT", -50_000, day="2026-10-08"))
+    assert brex_pass(books, fake) == "ok"
+    with books.transaction() as c:
+        c.execute(
+            "UPDATE fin_connections SET settings=json_set(settings, '$.sign', 'unverified') WHERE provider='brex'"
+        )
+    mercury.txns["io-0"] = _txn("io-0", "credit-io", 500.0, "other", day="2026-10-08")
+    _mercury_pass(books, mercury)
+    with books.read() as c:
+        assert _feed(c, "io-0")["entry_id"] is None and _on_other(c, "cash_out")
+
+
+def test_a_debit_held_for_a_person_between_two_bills_is_not_taken_across(books):
+    from backend.tests.helpers.finance_ap import _bill, _vendor
+
+    mercury, fake = _both(books)
+    with books.transaction() as c:
+        vendor = _vendor(c, "Example Card Co")
+        for n in (1, 2):
+            bill = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 50_000}], number=f"B-{n}")
+            assert act(c, OWNER, "bill_approve", {"bill_id": bill}).status == "committed"
+    mercury.txns["mp-0"] = _txn(
+        "mp-0", "acct-chk", -500.0, "other", day="2026-10-06", counterpartyName="Example Card Co"
+    )
+    _mercury_pass(books, mercury)
+    fake.card_txns.append(card_txn("ctx_pay", "COLLECTION", 50_000, day="2026-10-10"))
+    assert brex_pass(books, fake, LATER[0]) == "ok"
+    with books.read() as c:
+        assert _feed(c, "ctx_pay")["entry_id"] is None and _feed(c, "mp-0")["entry_id"] is None
+
+
+def test_a_debit_on_other_expenses_by_a_contact_default_or_with_a_refund_is_not_taken_across(books):
+    mercury, fake = _both(books)
+    with books.transaction() as c:
+        made = act(
+            c,
+            OWNER,
+            "contact_create",
+            {"name": "Example Card Co", "kind": "vendor", "default_account_id": account(c, "6900")},
+        )
+        assert made.status == "committed", made
+    mercury.txns["mp-0"] = _txn(
+        "mp-0", "acct-chk", -500.0, "other", day="2026-10-06", counterpartyName="Example Card Co"
+    )
+    mercury.txns["shop-0"] = _txn(
+        "shop-0", "acct-chk", -400.0, "other", day="2026-10-06", counterpartyName="Example Shop"
+    )
+    mercury.txns["shop-back"] = _txn(
+        "shop-back", "acct-chk", 100.0, "other", day="2026-10-07", counterpartyName="Example Shop"
+    )
+    _mercury_pass(books, mercury)
+    with books.read() as c:
+        assert _on_other(c, "mp-0") and _waiting(c, "mp-0") == 0  # the contact's default: no ask
+        assert _on_other(c, "shop-0") and _feed(c, "shop-back")["entry_id"] is not None  # its refund posted
+    fake.card_txns += [
+        card_txn("ctx_pay", "COLLECTION", 50_000, day="2026-10-10"),
+        card_txn("ctx_shop", "COLLECTION", 40_000, day="2026-10-10"),
+    ]
+    assert brex_pass(books, fake, LATER[0]) == "ok"
+    with books.read() as c:
+        assert _feed(c, "ctx_pay")["entry_id"] is None and _on_other(c, "mp-0")
+        assert _feed(c, "ctx_shop")["entry_id"] is None and _on_other(c, "shop-0")
+
+
+def test_a_card_account_with_no_connection_never_looks_across(books):
+    from backend.finance import banking
+
+    _mercury, fake = _paid_from_mercury(books, "2026-10-08")
+    fake.card_txns.append(card_txn("ctx_pay", "COLLECTION", 50_000, day="2026-10-10"))
+    with books.transaction() as c:
+        c.execute(
+            "UPDATE fin_connections SET settings=json_set(settings, '$.sign', 'unverified') WHERE provider='brex'"
+        )
+    assert brex_pass(books, fake, LATER[0]) == "ok"  # the card side comes in; an unchecked sign holds pairing back
+    with books.transaction() as c:
+        row = _feed(c, "ctx_pay")
+        assert row["entry_id"] is None
+        c.execute("UPDATE fin_money_accounts SET connection_id=NULL WHERE id=?", (str(row["money_account_id"]),))
+        money = c.execute("SELECT * FROM fin_money_accounts WHERE id=?", (str(row["money_account_id"]),)).fetchone()
+        assert banking._card_payment(load(c, AT), row, money, across=True) is False
+        assert _on_other(c, "mp-0")
