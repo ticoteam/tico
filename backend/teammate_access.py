@@ -393,10 +393,11 @@ def bot_levels(c, viewer, slugs=None, admin=None, auth=None, ctx=None):
     return out
 
 
-def _bot_manage(c, viewer, slug, ctx):
-    """`Auth.bot_manager` (from the database when there is no Auth): who may edit the bot's settings and access."""
+def _bot_manage(c, viewer, slug, ctx, config=False):
+    """`Auth.bot_manager` (from the database when there is no Auth): who may edit the bot's settings and access.
+    `config`: the bot's bot_config row, or None for none, when the caller read every bot's already."""
     if ctx.auth is not None:
-        return ctx.auth.bot_manager(c, viewer, slug)
+        return ctx.auth.bot_manager(c, viewer, slug, config=config)
     role = ctx.role
     if role == "owner":
         return True
@@ -404,7 +405,11 @@ def _bot_manage(c, viewer, slug, ctx):
         return False
     if ctx.admin:
         return True
-    row = c.execute("SELECT owner_id,bot_owners FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    row = (
+        c.execute("SELECT owner_id,bot_owners FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        if config is False
+        else config
+    )
     if row and (row["owner_id"] == ctx.me or ctx.me in A.owner_ids(row["bot_owners"])):
         return True
     return P.manages(ctx.me, "bot", slug, ctx.roster, ctx.entries, ctx.archived, True)
@@ -454,10 +459,14 @@ def levels_many(c, viewer, targets, auth=None):
     ctx = _Context(c, viewer, auth)
     bots = [ident for kind, ident in parsed.values() if kind == "bot"]
     bot_out = bot_levels(c, viewer, bots, auth=auth, ctx=ctx) if bots else {}
+    # Each bot's owners for the manage rule, read with the rest (a fleet-wide page asked them once a bot).
+    from . import read_cache
+
+    configs = {r["bot"]: r for r in read_cache.configs(c, bots)} if bots else {}
     out = {}
     for target, (kind, ident) in parsed.items():
         if kind == "bot":
-            manage = _bot_manage(c, viewer, ident, ctx)
+            manage = _bot_manage(c, viewer, ident, ctx, config=configs.get(ident))
             levels = dict(FULL) if manage else {**bot_out[ident], "manage": False}
         elif kind == "human":
             levels = _human_levels(ctx, ident)
@@ -979,7 +988,7 @@ class Known:
         too, and never who added whom they may not see."""
         if self.member(conversation_id):
             return rows
-        strangers = self.strangers
+        strangers = self.strangers_of([row["actor"] for row in rows] + [row.get("added_by") for row in rows])
         return [
             {**row, "added_by": "" if row.get("added_by") in strangers else row.get("added_by")}
             for row in rows
@@ -992,6 +1001,34 @@ class Known:
         if self._strangers is None:
             self._strangers = hidden(self.c, self.viewer, "see", KINDS, self.auth)
         return self._strangers
+
+    def strangers_of(self, actors):
+        """Which of these actors are in `strangers`, read for just them (a page of a thread's members), not for every
+        teammate in the company: the same teammates `hidden` decides, each decided alone."""
+        actors = [a for a in dict.fromkeys(actors) if a]
+        if self._strangers is not None:
+            return {a for a in actors if a in self._strangers}
+        role = getattr(self.viewer, "role", "")
+        if not actors or role not in ("human", "bot") or is_admin(self.c, self.viewer, self.auth):
+            return set()
+        from . import views
+
+        roster = views.roster(self.c, shared=True)
+        people = {"human:" + p["id"] for p in roster.get("people") or []}
+        groups = {"group:" + gid for gid in roster.get("org_groups") or {}}
+        slugs = [a[4:] for a in actors if a.startswith("bot:")]
+        bots = set()
+        for part in H.chunks(slugs):
+            bots |= {
+                "bot:" + r["bot"]
+                for r in self.c.execute(
+                    "SELECT bot FROM bot_config WHERE bot IN (%s)" % ",".join("?" * len(part)), part
+                )
+            }
+        targets = [a for a in actors if a in people or a in groups or a in bots]
+        if not targets:
+            return set()
+        return {t for t, levels in levels_many(self.c, self.viewer, targets, self.auth).items() if not levels["see"]}
 
     def unseen_of(self, actors):
         """Which of these actors the viewer may not see, read for just them: cheaper than `strangers` for a short

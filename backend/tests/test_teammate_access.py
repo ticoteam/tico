@@ -576,3 +576,40 @@ def test_the_people_list_carries_the_callers_access_and_a_manager_edits_their_re
     # The list says what the server does: her manager edits Cara's profile and a peer does not.
     assert api.post("/api/v2/humans/cara", json={"title": "Counsel"}, headers=headers("dee-test")).status_code == 200
     assert api.post("/api/v2/humans/cara", json={"title": "Peer"}, headers=headers("eve-test")).status_code == 403
+
+
+def test_a_page_of_teammates_hides_exactly_the_strangers_and_its_thread_view_agrees(acme):
+    """A thread's member page asks about only its own members and adders (Known.strangers_of), not every teammate in
+    the company; it must hide exactly whom the company-wide `strangers` would."""
+    from backend import threads
+    from backend.teammate_access import Known
+
+    api, tokens = acme
+    hide(api, "humans/cara", "fay")
+    hide(api, "bots/counsel", "fay", "cara")
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.transaction() as c:
+        out = threads.post(c, "human:ana", None, "Lease plan", start={"title": "Lease", "audience": "company"})
+        thread_id = out.get("thread_id") or out.get("conversation_id")
+        for member in ("human:cara", "human:fay", "bot:counsel", "bot:analyst"):
+            threads.add_member(c, "human:ana", thread_id, member)
+        c.execute(
+            "UPDATE thread_members SET added_by='human:cara' WHERE thread_id=? AND actor='human:fay'", (thread_id,)
+        )
+    with store.read() as c:
+        everyone = [r[0] for r in c.execute("SELECT 'human:'||id FROM humans")] + ["group:legal", "group:contracts"]
+        everyone += ["bot:" + r[0] for r in c.execute("SELECT bot FROM bot_config")] + [
+            "keeper",
+            "slack:U1",
+            "human:gone",
+        ]
+        for name in ("ana", "ben", "dee", "eve", "fay", "counsel"):
+            viewer = who(api, name)
+            assert Known(c, viewer, auth).strangers_of(everyone) == Known(c, viewer, auth).strangers & set(everyone), (
+                name
+            )
+    for name, sees in {"eve": False, "fay": True}.items():
+        members = api.get(f"/api/v2/threads/{thread_id}", headers=headers(tokens[name])).json()["members"]["members"]
+        actors = {m["actor"]: m["added_by"] for m in members}
+        assert ("human:cara" in actors) is sees and ("bot:counsel" in actors) is sees, name
+        assert actors["human:fay"] == ("human:cara" if sees else ""), name

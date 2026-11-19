@@ -858,17 +858,22 @@ class Auth:
             H.TOOLS_OWNER,
         )
 
-    def bot_manager(self, c, who, slug, operator=None):
+    def bot_manager(self, c, who, slug, operator=None, config=False):
         """Whether this person may manage the bot: the one "can manage this bot" rule (docs/permissions.md).
         The owner, an Admin, one of the bot's owners (its creator and any co-owner, and its operator),
-        or a person above it on the org chart. A built-in bot is the owner's alone."""
+        or a person above it on the org chart. A built-in bot is the owner's alone. `config`: the bot's bot_config
+        row (owner_id and bot_owners), or None for none, when the caller read every bot's already."""
         if who.role == "owner":
             return True
         if who.role != "human" or self.system_bot(slug):
             return False
         if self.bot_admin(who):
             return True
-        row = c.execute("SELECT owner_id,bot_owners FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = (
+            c.execute("SELECT owner_id,bot_owners FROM bot_config WHERE bot=?", (slug,)).fetchone()
+            if config is False
+            else config
+        )
         pid = H.actor_id(who.actor)
         if row and (row["owner_id"] == pid or pid in A.owner_ids(row["bot_owners"])):
             return True

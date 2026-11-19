@@ -125,6 +125,9 @@ def test_a_restricted_post_brings_a_closed_task_thread_back_only_for_a_reader_wh
     post_as(api, thread["id"], "human:cara", "Private numbers", refs={"task": secret})
     assert shows(api, thread["id"], "cara-test") == (True, True)
     assert shows(api, thread["id"], "ben-test") == (False, False)
+    # A thread's own view (its checks per row, not over every thread) says the same to each.
+    assert not view_of(api, thread["id"], "cara-test").get("task_hidden")
+    assert view_of(api, thread["id"], "ben-test")["task_hidden"] is True
 
 
 def test_a_thread_view_says_when_its_task_hides_it_and_a_post_clears_that(api):
