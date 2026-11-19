@@ -5,6 +5,7 @@ import { run } from '@/actions/run';
 import { configQuery, directoryQuery, meQuery, useActor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
+import { Checkbox } from '@/kit/Checkbox';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Field } from '@/kit/Field';
@@ -131,8 +132,97 @@ function AddPerson() {
   );
 }
 
-function PersonOpen({ p, mayEdit }: { p: AccessPerson; mayEdit: boolean }) {
+const looksLikeEmail = (s: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s);
+
+/** The owner hands the company to another person: typed to confirm, and only by the owner's own press. */
+function OwnerDialog({ p, ownerName, onClose }: { p: AccessPerson; ownerName: string; onClose: () => void }) {
+  const [keep, setKeep] = useState(true);
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState(false);
+  const ready = typed.trim().toLowerCase() === p.email.toLowerCase();
+  const go = async () => {
+    setBusy(true);
+    const r = await run('settings.makeOwner', { person: p.id, keepAdmin: keep }, { via: 'click' });
+    setBusy(false);
+    if (!r.ok) return toast({ text: "Couldn't change the owner", kind: 'failed' });
+    // The owner's controls are gone from this screen: start again from the top.
+    window.location.assign('/');
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      alert
+      title={`Make ${p.name} the owner?`}
+      description={`${p.name} becomes the owner now. You lose the owner's controls.`}
+      actions={
+        <>
+          <Button variant="quiet" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void go()}>
+            Make owner
+          </Button>
+        </>
+      }
+    >
+      <div className="set-add">
+        <Checkbox label={`Keep ${ownerName} as an admin`} checked={keep} onCheckedChange={setKeep} />
+        <Field label={`Type ${p.email} to confirm`} value={typed} onValueChange={setTyped} autoComplete="off" />
+      </div>
+    </Dialog>
+  );
+}
+
+/** The owner's own sign-in address, typed twice. The old one stops signing in at once. */
+function EmailDialog({ p, onClose }: { p: AccessPerson; onClose: () => void }) {
+  const me = useQuery(meQuery);
+  const [email, setEmail] = useState('');
+  const [again, setAgain] = useState('');
+  const [busy, setBusy] = useState(false);
+  const to = email.trim().toLowerCase();
+  const ready = looksLikeEmail(to) && to === again.trim().toLowerCase() && to !== p.email.toLowerCase();
+  const go = async () => {
+    setBusy(true);
+    const r = await run('settings.changeEmail', { email: to, again: again.trim().toLowerCase() }, { via: 'click' });
+    setBusy(false);
+    if (!r.ok) return toast({ text: "Couldn't change the email", kind: 'failed' });
+    // This browser signed in with the old address: a proxy session signs in again as the new one.
+    if ((me.data as { proxy_session?: boolean } | undefined)?.proxy_session) window.location.assign('/api/v2/logout');
+    else window.location.assign('/');
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      alert
+      title="Change your sign-in email?"
+      description={`${p.email} stops working here at once. Set up the new address in your sign-in provider first.`}
+      actions={
+        <>
+          <Button variant="quiet" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void go()}>
+            Change email
+          </Button>
+        </>
+      }
+    >
+      <div className="set-add">
+        <Field label="New sign-in email" type="email" value={email} onValueChange={setEmail} autoComplete="off" autoFocus />
+        <Field label="Type it again" type="email" value={again} onValueChange={setAgain} autoComplete="off" />
+      </div>
+    </Dialog>
+  );
+}
+
+function PersonOpen({ p, mayEdit, youOwn, ownerName }: { p: AccessPerson; mayEdit: boolean; youOwn: boolean; ownerName: string }) {
   const [confirm, setConfirm] = useState(false);
+  const [handing, setHanding] = useState<'owner' | 'email' | null>(null);
+  // Only the owner sees these: hand the company over, or change their own sign-in address.
+  const mayHand = youOwn && !p.owner && !!p.email && (p.can_sign_in ?? p.sign_in);
+  const myEmail = youOwn && p.owner;
   return (
     <>
       <Facts label={p.name}>
@@ -158,12 +248,20 @@ function PersonOpen({ p, mayEdit }: { p: AccessPerson; mayEdit: boolean }) {
         </Line>
         <LabelValue label="Signs in">{p.sign_in ? 'Yes' : 'Not yet'}</LabelValue>
       </Facts>
-      {mayEdit && !p.owner && (
+      {((mayEdit && !p.owner) || mayHand || myEmail) && (
         <Foot open>
-          {!p.sign_in && <Verb onClick={() => void act('settings.resendInvite', { person: p.id }).then((ok) => ok && toast({ text: 'Invite sent', kind: 'done' }))}>Send invite again</Verb>}
-          {p.removable !== false && <Verb onClick={() => setConfirm(true)}>Remove</Verb>}
+          {mayEdit && !p.owner && !p.sign_in && (
+            <Verb onClick={() => void act('settings.resendInvite', { person: p.id }).then((ok) => ok && toast({ text: 'Invite sent', kind: 'done' }))}>
+              Send invite again
+            </Verb>
+          )}
+          {mayHand && <Verb onClick={() => setHanding('owner')}>Make owner</Verb>}
+          {myEmail && <Verb onClick={() => setHanding('email')}>Change email</Verb>}
+          {mayEdit && !p.owner && p.removable !== false && <Verb onClick={() => setConfirm(true)}>Remove</Verb>}
         </Foot>
       )}
+      {handing === 'owner' && <OwnerDialog p={p} ownerName={ownerName} onClose={() => setHanding(null)} />}
+      {handing === 'email' && <EmailDialog p={p} onClose={() => setHanding(null)} />}
       <Dialog
         open={confirm}
         onOpenChange={setConfirm}
@@ -198,6 +296,7 @@ export function People({ open }: { open?: string }) {
   const people = v.people.filter((p) => !p.left);
   // `you` is the reader's company role; only owners and admins read this at all.
   const mayEdit = v.you === 'owner' || v.you === 'admin';
+  const owner = v.people.find((p) => p.owner);
   return (
     <Section name="People" count={people.length} actions={mayEdit ? <AddPerson /> : undefined}>
       {people.length === 0 ? (
@@ -233,7 +332,7 @@ export function People({ open }: { open?: string }) {
             return open === p.id ? (
               <div key={p.id} className="open">
                 {row}
-                <PersonOpen p={p} mayEdit={mayEdit} />
+                <PersonOpen p={p} mayEdit={mayEdit} youOwn={v.you === 'owner'} ownerName={owner?.name ?? 'yourself'} />
               </div>
             ) : (
               row

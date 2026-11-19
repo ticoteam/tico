@@ -11,7 +11,7 @@ import type {
   UsageFigures,
   UsageLimits,
 } from '@/api/schema';
-import { QUIET_STALE_MS, quietRoot, write } from '@/data';
+import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
 
 /* Settings and Usage have no live topic: both are read again after the person's own writes, on reconnect, and when a
    section opens with data older than a minute. The one timer is a model sign-in under way (signInQuery). */
@@ -33,11 +33,13 @@ export interface AccessPerson {
   owner: boolean;
   role: string;
   sign_in: boolean;
+  can_sign_in?: boolean;
   removable?: boolean;
 }
 
 export interface AccessView {
-  owner: { email: string; person: string };
+  /** `revision` is the owner record's, which a transfer or a new sign-in email is sent against. */
+  owner: { email: string; person: string; revision?: number };
   people: AccessPerson[];
   allowed: string[];
   allowed_domains: string[];
@@ -90,6 +92,26 @@ export async function addPerson(email: string, name: string): Promise<{ person: 
 }
 
 export const sendInvite = (pid: string) => api.post(`/api/v2/access/humans/${enc(pid)}/invite`, {});
+
+const ownerRevision = () => queryClient.getQueryData<AccessView>(accessQuery.queryKey)?.owner.revision ?? 0;
+
+/** Hand the company to another person, against the owner record on screen (POST /api/v2/access/owner). */
+export const transferOwner = (pid: string, keepAdmin: boolean) =>
+  api.post<{ owner: string; revision: number }>('/api/v2/access/owner', {
+    person: pid,
+    previous_owner_bot_admin: keepAdmin,
+    expected_revision: ownerRevision(),
+    confirm: true,
+  });
+
+/** The owner's own sign-in address, typed twice; the old one stops signing in at once. */
+export const changeOwnerEmail = (email: string, again: string) =>
+  api.post<{ owner: string; revision: number }>('/api/v2/access/owner/email', {
+    email,
+    confirm_email: again,
+    expected_revision: ownerRevision(),
+    confirm: true,
+  });
 
 export const setRule = (rule: string, value: boolean) =>
   write({
@@ -302,6 +324,12 @@ export const changelogQuery = queryOptions({
   ...quiet,
 });
 
+/** A product update by hand (owner): a title and its bullets. */
+export const addProductUpdate = async (title: string, bullets: string[]) => {
+  await api.post('/api/changelog', { title, bullets });
+  await queryClient.invalidateQueries({ queryKey: changelogQuery.queryKey });
+};
+
 // ---------------------------------------------------------------- model subscriptions (Settings, Agents)
 
 /** The agents on a subscription: the server adds `agents` (S2); until it does there are none to draw. */
@@ -328,6 +356,20 @@ export const removeSubscription = (id: string) =>
   });
 
 export const refreshSubscription = (id: string) => api.post(`/api/v2/model-subscriptions/${enc(id)}/usage-refresh`, {});
+
+/** A new name, and for a plan a new person who holds it (`owner`: a person id), sent only when it changed. */
+export const editSubscription = (id: string, name: string, owner?: string) =>
+  write({
+    key: subscriptionsQuery.queryKey,
+    optimistic: (v: ModelSubscriptionList | undefined) =>
+      v && { ...v, subscriptions: v.subscriptions.map((x) => (x.id === id ? { ...x, name, ...(owner ? { owner_id: `human:${owner}` } : {}) } : x)) },
+    send: (idempotencyKey) =>
+      api.post<ModelSubscription>(
+        `/api/v2/model-subscriptions/${enc(id)}`,
+        { name, ...(owner ? { owner_id: `human:${owner}` } : {}) },
+        { idempotencyKey },
+      ),
+  });
 
 /** A key or a token: the secret goes to the server once and is never read back. */
 export const addSubscription = (kind: string, secret: string, name?: string) =>
@@ -420,14 +462,258 @@ export interface CatalogModel {
   deprecated?: boolean;
   runtime?: string;
   context_tokens?: number | null;
+  /** The harnesses that run it; none listed means any. */
+  harnesses?: string[];
+  efforts?: string[];
 }
 
 export const modelsQuery = queryOptions({
   queryKey: ['settings', 'models'],
   queryFn: ({ signal }) =>
-    api.get<{ models: CatalogModel[]; enabled_providers?: string[]; default?: { model?: string } }>('/api/v2/models', { signal }),
+    api.get<{ models: CatalogModel[]; enabled_providers?: string[]; harnesses?: { id: string; name: string }[]; default?: { model?: string } }>(
+      '/api/v2/models',
+      { signal },
+    ),
   ...quiet,
 });
+
+/** GET /api/v2/providers: the model a new agent uses and the one meetings reply on ('' for each agent's own). */
+export interface ProvidersView {
+  enabled: string[];
+  default: { runtime?: string; model?: string };
+  revision: number;
+  meeting_model?: string;
+}
+
+export const providersQuery = queryOptions({
+  queryKey: ['settings', 'providers'],
+  queryFn: ({ signal }) => api.get<ProvidersView>('/api/v2/providers', { signal }),
+  ...quiet,
+});
+
+/** The owner's defaults, against the revision on screen; the providers turned on are sent back unchanged. */
+export const setDefaults = async (change: { model?: string; meeting?: string }) => {
+  const before = queryClient.getQueryData<ProvidersView>(providersQuery.queryKey);
+  await write({
+    key: providersQuery.queryKey,
+    optimistic: (v: ProvidersView | undefined) =>
+      v && {
+        ...v,
+        default: change.model === undefined ? v.default : { ...v.default, model: change.model },
+        meeting_model: change.meeting ?? v.meeting_model,
+      },
+    send: (idempotencyKey) =>
+      api.put<ProvidersView>(
+        '/api/v2/providers',
+        {
+          enabled: before?.enabled ?? [],
+          model: change.model ?? before?.default.model ?? '',
+          expected_revision: before?.revision ?? 0,
+          ...(change.meeting === undefined ? {} : { meeting_model: change.meeting }),
+        },
+        { idempotencyKey },
+      ),
+  });
+  // The catalog's own `default` follows the saved one.
+  void queryClient.invalidateQueries({ queryKey: modelsQuery.queryKey });
+};
+
+// ---------------------------------------------------------------- agents: retired ones, owners, access, mail, stopped runs
+
+/** An agent as GET /api/v2/bots?include_archived=1 lists it: who may bring a retired one back. */
+export interface BotListed {
+  id?: string;
+  slug?: string;
+  display_name?: string;
+  state?: string;
+  owner_id?: string | null;
+  bot_owners?: { id: string; name?: string; email?: string }[];
+}
+
+export const botsQuery = queryOptions({
+  queryKey: ['settings', 'bots'],
+  queryFn: ({ signal }) => api.get<BotListed[]>('/api/v2/bots?include_archived=1', { signal }),
+  ...quiet,
+});
+
+export const restoreAgent = (bot: string) =>
+  write({
+    key: botsQuery.queryKey,
+    optimistic: (v: BotListed[] | undefined) => v?.map((b) => ((b.id ?? b.slug) === bot ? { ...b, state: 'active' } : b)),
+    send: (idempotencyKey) => api.post(`/api/v2/bots/${enc(bot)}/restore`, {}, { idempotencyKey }),
+  });
+
+/** Add and take away co-owners (person ids); the agent's creator always stays. */
+export const setCoOwners = (bot: string, add: string[], remove: string[]) =>
+  write({
+    key: botsQuery.queryKey,
+    optimistic: (v: BotListed[] | undefined) =>
+      v?.map((b) => {
+        if ((b.id ?? b.slug) !== bot) return b;
+        const kept = (b.bot_owners ?? []).filter((o) => !remove.includes(o.id));
+        return { ...b, bot_owners: [...kept, ...add.filter((id) => !kept.some((o) => o.id === id)).map((id) => ({ id }))] };
+      }),
+    send: (idempotencyKey) => api.post(`/api/v2/bots/${enc(bot)}/co-owners`, { add, remove }, { idempotencyKey }),
+  });
+
+/** Who sees, reads and writes to an agent: everyone, or the people, teams and agents named. */
+export interface Audience {
+  everyone: boolean;
+  people: string[];
+  teams: string[];
+  bots: string[];
+}
+
+export interface BotAccess {
+  bot: string;
+  see: Audience;
+  read: Audience;
+  write: Audience;
+  teams?: { id: string; name: string }[];
+  revision: number;
+}
+
+export const botAccessQuery = (bot: string) =>
+  queryOptions({
+    queryKey: ['settings', 'bot-access', bot],
+    queryFn: ({ signal }) => api.get<BotAccess>(`/api/v2/bots/${enc(bot)}/access`, { signal }),
+    ...quiet,
+  });
+
+export const setBotAccess = (bot: string, change: Pick<BotAccess, 'see' | 'read' | 'write'>) => {
+  const key = botAccessQuery(bot).queryKey;
+  const revision = queryClient.getQueryData<BotAccess>(key)?.revision ?? 0;
+  return write({
+    key,
+    optimistic: (v: BotAccess | undefined) => v && { ...v, ...change },
+    send: (idempotencyKey) => api.put(`/api/v2/bots/${enc(bot)}/access`, { ...change, revision }, { idempotencyKey }),
+  });
+};
+
+export interface BotMail {
+  set?: boolean;
+  outbound_send: boolean;
+  sending_policy?: string;
+  company_send?: boolean;
+}
+
+export const botMailQuery = (bot: string) =>
+  queryOptions({
+    queryKey: ['settings', 'bot-mail', bot],
+    queryFn: ({ signal }) => api.get<BotMail>(`/api/v2/bots/${enc(bot)}/mail-settings`, { signal }),
+    ...quiet,
+  });
+
+export const setBotMail = (bot: string, on: boolean) =>
+  write({
+    key: botMailQuery(bot).queryKey,
+    optimistic: (v: BotMail | undefined) => v && { ...v, outbound_send: on },
+    send: (idempotencyKey) => api.post(`/api/v2/bots/${enc(bot)}/mail-settings`, { outbound_send: on }, { idempotencyKey }),
+  });
+
+/** A run that stopped part way (GET /api/v2/bots/{bot}/execution-review): try it again or let it go. */
+export interface StoppedRun {
+  id: string;
+  run_id: string;
+  stopped: 'read' | 'restarted' | 'timeout' | 'changed' | 'twice' | 'unknown' | string;
+  reason?: string;
+  request?: string;
+  run?: { final_text?: string | null; started_at?: string | null; created_at?: string | null } | null;
+  task?: { title?: string; status?: string; owner_name?: string } | null;
+  pending_decision?: { decision?: string } | null;
+}
+
+export const stoppedRunsQuery = (bot: string) =>
+  queryOptions({
+    queryKey: ['settings', 'stopped-runs', bot],
+    queryFn: async ({ signal }) => (await api.get<{ jobs?: StoppedRun[] }>(`/api/v2/bots/${enc(bot)}/execution-review`, { signal })).jobs ?? [],
+    ...quiet,
+  });
+
+/** Retrying is safe only when the run stopped before it could have acted. */
+export const SAFE_RETRY = ['read', 'restarted', 'timeout'];
+
+const RECONCILE_NOTE = {
+  resume: 'The human chose to retry this request. Check existing work and external effects before repeating any step.',
+  dismiss: 'The human chose not to retry this delivery. Inspect the task separately.',
+};
+
+export const reconcileRun = (bot: string, job: string, run: string, decision: 'resume' | 'dismiss', detail = '') =>
+  write({
+    key: stoppedRunsQuery(bot).queryKey,
+    optimistic: (v: StoppedRun[] | undefined) => v?.filter((j) => j.id !== job),
+    send: (idempotencyKey) =>
+      api.post<{ deferred?: boolean }>(
+        `/api/v2/jobs/${enc(job)}/reconcile`,
+        {
+          run_id: run,
+          decision,
+          note: `${RECONCILE_NOTE[decision]}${detail.trim() ? ` Details: ${detail.trim()}` : ''}`.slice(0, 4000),
+          acknowledge_uncertain_effects: true,
+        },
+        { idempotencyKey },
+      ),
+  });
+
+// ---------------------------------------------------------------- computers: sleep when idle, hosted servers
+
+/** GET /api/v2/sleep: one setting for the company's hosted server (and, with `runners`, its agents' computers). */
+export interface SleepView {
+  hosted: boolean;
+  managed: boolean;
+  hours: number | null;
+  runners: boolean;
+  blocker?: string | null;
+  active?: boolean;
+}
+
+export const sleepQuery = queryOptions({
+  queryKey: ['settings', 'sleep'],
+  queryFn: async ({ signal }) => (await api.get<{ sleep: SleepView }>('/api/v2/sleep', { signal })).sleep,
+  ...quiet,
+});
+
+export const setSleep = (change: { hours: number } | { runners: boolean }) =>
+  write({
+    key: sleepQuery.queryKey,
+    optimistic: (v: SleepView | undefined) => v && { ...v, ...change },
+    send: (idempotencyKey) => api.post('/api/v2/sleep', change, { idempotencyKey }),
+  });
+
+export interface HostedServer {
+  server_id: string;
+  kind: string;
+  power: 'on' | 'stopped' | string;
+}
+
+/** `ok` with the servers HQ hosts; `deactivated` once hosting ended; anything else draws nothing. */
+export const hostedQuery = queryOptions({
+  queryKey: ['settings', 'hosted'],
+  queryFn: ({ signal }) => api.get<{ state: string; servers?: HostedServer[] }>('/api/v2/hosted-servers', { signal }),
+  ...quiet,
+});
+
+export const startServer = (id: string) =>
+  api.post<{ state: string; message?: string; credit_url?: string }>(`/api/v2/hosted-servers/${enc(id)}/start`, {});
+
+// ---------------------------------------------------------------- settings search (GET /api/v2/settings/catalog)
+
+export interface SettingHit {
+  key: string;
+  name: string;
+  where?: string;
+  who?: string;
+  /** The old app's address, '#/settings/<tab>/<card>' or '#/usage'. */
+  card?: string;
+}
+
+export const settingsCatalogQuery = (q: string) =>
+  queryOptions({
+    queryKey: ['settings', 'catalog', q],
+    queryFn: async ({ signal }) =>
+      (await api.get<{ settings?: SettingHit[] }>(`/api/v2/settings/catalog?limit=40&q=${enc(q.slice(0, 200))}`, { signal })).settings ?? [],
+    ...quiet,
+  });
 
 // ---- usage (anchor: the Usage builder adds its calls below) ----
 
@@ -513,6 +799,10 @@ export const setDefaultLimit = (monthly: number | null) =>
     optimistic: (v: UsageLimits | undefined) => v && { ...v, default: { ...v.default, monthly_usd: monthly } },
     send: (idempotencyKey) => api.put('/api/v2/usage/limits', { monthly_usd: monthly }, { idempotencyKey }),
   });
+
+/** Cancel queued automatic wakes and waits; tasks, people's messages and running work stay. */
+export const purgeQueue = (scope: string) =>
+  api.post<{ cancelled: number; kept_people: number; still_running: number }>('/api/v2/usage/queues/purge', { scope });
 
 // ---------------------------------------------------------------- tasks: the public roadmap (GET /api/v2/roadmaps/settings)
 

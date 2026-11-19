@@ -1,5 +1,7 @@
 import { defineAction, s } from '@/actions';
+import { run } from '@/actions/run';
 import { meQuery } from '@/data';
+import { agentsQuery } from '@/features/team/exports';
 import { setMotionChoice } from '@/motion';
 import { setThemeChoice, type Theme } from '@/prefs';
 import {
@@ -25,6 +27,20 @@ import {
   setPageOwner,
   setRoadmap,
   addContactField,
+  addProductUpdate,
+  changeOwnerEmail,
+  editSubscription,
+  modelsQuery,
+  purgeQueue,
+  reconcileRun,
+  restoreAgent,
+  setBotAccess,
+  setBotMail,
+  setCoOwners,
+  setDefaults,
+  setSleep,
+  startServer,
+  transferOwner,
   contactTypeQuery,
   contactTypesQuery,
   FIELD_KINDS,
@@ -177,8 +193,36 @@ export const remove = defineAction({
   title: 'Remove a person',
   kind: 'change',
   input: s.object({ person: id('a person id') }),
+  // Takes away someone's sign-in: the person's own press.
+  tico: false,
   run: (_ctx, { person }) => removePerson(person),
   did: () => 'Removed',
+  target: () => setting('people'),
+});
+
+export const makeOwner = defineAction({
+  id: 'settings.makeOwner',
+  title: 'Make someone the owner',
+  kind: 'change',
+  input: s.object({ person: id('a person id'), keepAdmin: s.boolean() }),
+  // Hands the whole company to someone else, and the owner's controls go with it.
+  tico: false,
+  run: (_ctx, { person, keepAdmin }) => transferOwner(person, keepAdmin),
+  did: () => 'Owner changed',
+  target: ({ person }) => ({ kind: 'person', id: person }),
+});
+
+const email = s.string({ min: 3, max: 320, pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, what: 'an email address' });
+
+export const changeEmail = defineAction({
+  id: 'settings.changeEmail',
+  title: "Change the owner's sign-in email",
+  kind: 'change',
+  input: s.object({ email, again: email }),
+  // The old address stops signing in at once: a security change only the owner makes.
+  tico: false,
+  run: (_ctx, { email: to, again }) => changeOwnerEmail(to, again),
+  did: () => 'Email changed',
   target: () => setting('people'),
 });
 
@@ -362,6 +406,191 @@ export const addComputer = defineAction({
   target: () => setting('computers'),
 });
 
+export const editSub = defineAction({
+  id: 'settings.editSubscription',
+  title: 'Rename a subscription or change who holds it',
+  kind: 'change',
+  input: s.object({
+    subscription: id('a subscription id'),
+    name: s.string({ min: 1, max: 80 }),
+    owner: s.optional(s.string({ max: 200, what: 'a person id, for a plan' })),
+  }),
+  run: (_ctx, { subscription, name, owner }) => editSubscription(subscription, name, owner || undefined),
+  did: ({ name }) => `Saved ${name}`,
+  target: ({ subscription }) => sub(subscription),
+});
+
+export const setSleepHours = defineAction({
+  id: 'settings.setSleep',
+  title: 'Sleep the server when idle',
+  kind: 'change',
+  input: s.object({ hours: s.number({ int: true, min: 0, max: 24 }) }),
+  run: (_ctx, { hours }) => setSleep({ hours }),
+  did: ({ hours }) => (hours ? `Sleeps after ${hours} h` : 'Sleep off'),
+  target: () => setting('sleep'),
+});
+
+export const sleepComputers = defineAction({
+  id: 'settings.sleepComputers',
+  title: "Let agents' computers sleep too",
+  kind: 'change',
+  input: s.object({ on: s.boolean() }),
+  run: (_ctx, { on }) => setSleep({ runners: on }),
+  did: ({ on }) => (on ? 'Turned on' : 'Turned off'),
+  target: () => setting('sleep'),
+});
+
+export const startHosted = defineAction({
+  id: 'settings.startServer',
+  title: 'Start a hosted server',
+  kind: 'change',
+  input: s.object({ server: id('a hosted server id') }),
+  run: async (ctx, { server }) => {
+    const r = await startServer(server);
+    if (r.state === 'started') void ctx.queryClient.invalidateQueries({ queryKey: ['settings', 'hosted'] });
+    return r;
+  },
+  did: (_input, out) => (out?.state === 'started' ? 'Starting' : (out?.message ?? 'Not started')),
+  target: () => setting('hosted'),
+});
+
+// ---------------------------------------------------------------- models and agents
+
+export const setDefaultModel = defineAction({
+  id: 'settings.defaultModel',
+  title: 'Change the model a new agent uses',
+  kind: 'change',
+  input: s.object({ model: s.string({ min: 1, max: 100, what: 'a model id from GET /api/v2/models' }) }),
+  run: (_ctx, { model }) => setDefaults({ model }),
+  did: () => 'Default changed',
+  target: () => setting('default-model'),
+});
+
+export const setMeetingModel = defineAction({
+  id: 'settings.meetingModel',
+  title: 'Change the model meetings reply on',
+  kind: 'change',
+  input: s.object({ model: s.string({ max: 100, what: "a model id; empty for each agent's own" }) }),
+  run: (_ctx, { model }) => setDefaults({ meeting: model }),
+  did: () => 'Meeting model changed',
+  target: () => setting('meeting-model'),
+});
+
+export const changeModels = defineAction({
+  id: 'settings.changeModels',
+  title: 'Change the model for several agents',
+  kind: 'change',
+  input: s.object({
+    agents: s.array(s.string({ min: 1, max: 120, what: 'an agent slug' }), { max: 200 }),
+    model: s.string({ min: 1, max: 120, what: 'a model id from GET /api/v2/models' }),
+    effort: s.optional(s.string({ max: 20 })),
+    harness: s.optional(s.string({ max: 40 })),
+  }),
+  run: async (ctx, { agents, model, effort, harness }) => {
+    if (!agents.length) throw new Error('Pick at least one agent');
+    const [rows, catalog] = await Promise.all([ctx.queryClient.ensureQueryData(agentsQuery), ctx.queryClient.ensureQueryData(modelsQuery)]);
+    const runs = catalog.models.find((m) => m.id === model)?.harnesses;
+    // Each agent keeps its own harness when the model runs there; otherwise the one asked for, or the model's first.
+    const pick = (slug: string) => {
+      const own = rows.find((r) => r.slug === slug)?.harness;
+      if (!runs?.length || (own && runs.includes(own))) return harness || own;
+      return harness && runs.includes(harness) ? harness : runs[0];
+    };
+    const done = await Promise.all(
+      agents.map((slug) => {
+        const h = pick(slug);
+        return run('agents.setModel', { slug, model, ...(effort ? { effort } : {}), ...(h ? { harness: h } : {}) }, { via: 'click' });
+      }),
+    );
+    const failed = agents.filter((_slug, i) => !done[i]?.ok);
+    if (failed.length === agents.length) throw new Error(done[0] && !done[0].ok ? done[0].error : "Couldn't change the model");
+    return { changed: agents.length - failed.length, failed };
+  },
+  did: (_input, out) => (out ? `Changed ${out.changed}${out.failed.length ? `, ${out.failed.length} failed` : ''}` : 'Changed'),
+  target: () => setting('agents'),
+});
+
+const agent = (bot: string) => ({ kind: 'agent', id: bot });
+
+export const restore = defineAction({
+  id: 'settings.restoreAgent',
+  title: 'Bring back a retired agent',
+  kind: 'change',
+  input: s.object({ agent: id('an agent id or slug') }),
+  run: async (ctx, { agent: bot }) => {
+    await restoreAgent(bot);
+    void ctx.queryClient.invalidateQueries({ queryKey: agentsQuery.queryKey });
+  },
+  did: () => 'Restored',
+  target: ({ agent: bot }) => agent(bot),
+});
+
+export const owners = defineAction({
+  id: 'settings.agentOwners',
+  title: "Change who owns an agent",
+  kind: 'change',
+  input: s.object({
+    agent: id('an agent id or slug'),
+    add: s.array(s.string({ min: 1, max: 200 }), { max: 100 }),
+    remove: s.array(s.string({ min: 1, max: 200 }), { max: 100 }),
+  }),
+  // Owners manage the agent and its access: a permission change.
+  tico: false,
+  run: (_ctx, { agent: bot, add, remove: drop }) => setCoOwners(bot, add, drop),
+  did: () => 'Owners changed',
+  target: ({ agent: bot }) => agent(bot),
+});
+
+const audience = s.object({
+  everyone: s.boolean(),
+  people: s.array(s.string({ min: 1, max: 200 }), { max: 500 }),
+  teams: s.array(s.string({ min: 1, max: 200 }), { max: 200 }),
+  bots: s.array(s.string({ min: 1, max: 200 }), { max: 500 }),
+});
+
+export const access = defineAction({
+  id: 'settings.agentAccess',
+  title: 'Change who can see, read and write to an agent',
+  kind: 'change',
+  input: s.object({ agent: id('an agent id or slug'), see: audience, read: audience, write: audience }),
+  // Who reaches an agent's work is a permission change.
+  tico: false,
+  run: (_ctx, { agent: bot, ...levels }) => setBotAccess(bot, levels),
+  did: () => 'Access changed',
+  target: ({ agent: bot }) => agent(bot),
+});
+
+export const mail = defineAction({
+  id: 'settings.agentMail',
+  title: 'Let an agent send mail without asking',
+  kind: 'change',
+  input: s.object({ agent: id('an agent id or slug'), on: s.boolean() }),
+  // Mail that leaves the company with no one's OK cannot be called back.
+  tico: false,
+  run: (_ctx, { agent: bot, on }) => setBotMail(bot, on),
+  did: ({ on }) => (on ? 'Sends on its own' : 'Asks first'),
+  target: ({ agent: bot }) => agent(bot),
+});
+
+export const settleRun = defineAction({
+  id: 'settings.stoppedRun',
+  title: 'Try a stopped run again, or let it go',
+  kind: 'change',
+  input: s.object({
+    agent: id('an agent id or slug'),
+    job: id('a job id'),
+    run: id('a run id'),
+    decision: s.oneOf(['resume', 'dismiss'] as const),
+    detail: s.optional(s.string({ max: 3000 })),
+  }),
+  // A retry may repeat work that already reached the outside world.
+  tico: false,
+  run: (_ctx, { agent: bot, job, run: rid, decision, detail }) => reconcileRun(bot, job, rid, decision, detail),
+  did: ({ decision }, out) =>
+    out?.deferred ? 'Saved for when its turn ends' : decision === 'resume' ? 'Queued to try again' : "Dismissed; it won't retry",
+  target: ({ agent: bot }) => agent(bot),
+});
+
 // ---------------------------------------------------------------- tasks and contacts
 
 export const roadmapLabels = defineAction({
@@ -407,6 +636,22 @@ export const addField = defineAction({
   target: ({ type }) => ({ kind: 'contact-type', id: type }),
 });
 
+export const productUpdate = defineAction({
+  id: 'settings.productUpdate',
+  title: 'Add a product update',
+  kind: 'change',
+  input: s.object({
+    title: s.string({ min: 1, max: 90 }),
+    bullets: s.array(s.string({ min: 1, max: 500 }), { max: 12 }),
+  }),
+  run: (_ctx, { title, bullets }) => {
+    if (!bullets.length) throw new Error('Add at least one bullet');
+    return addProductUpdate(title, bullets);
+  },
+  did: () => 'Published',
+  target: () => ({ kind: 'page', id: '/settings/changelog' }),
+});
+
 // ---- usage (anchor: the Usage builder adds its actions below) ----
 
 const money = s.optional(s.number({ min: 0, max: 1_000_000 }));
@@ -444,5 +689,19 @@ export const defaultLimit = defineAction({
   input: s.object({ monthly: money }),
   run: (_ctx, { monthly }) => setDefaultLimit(monthly ?? null),
   did: ({ monthly }) => (monthly == null ? 'Limit removed' : `Limit set to $${monthly}`),
+  target: () => ({ kind: 'limit', id: 'default' }),
+});
+
+export const clearQueue = defineAction({
+  id: 'usage.clearQueue',
+  title: 'Clear the automatic queue',
+  kind: 'change',
+  input: s.object({ scope: s.optional(s.string({ max: 200, what: "'company' or 'group:<id>'" })) }),
+  run: (ctx, { scope }) => {
+    const done = purgeQueue(scope || 'company');
+    void done.then(() => ctx.queryClient.invalidateQueries({ queryKey: ['usage'] }));
+    return done;
+  },
+  did: (_input, out) => (out ? `Cleared ${out.cancelled} queued, ${out.kept_people} kept, ${out.still_running} running` : 'Cleared'),
   target: () => ({ kind: 'limit', id: 'default' }),
 });

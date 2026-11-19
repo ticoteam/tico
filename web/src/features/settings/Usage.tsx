@@ -13,6 +13,7 @@ import { Field } from '@/kit/Field';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Pill } from '@/kit/Pill';
 import { Segmented } from '@/kit/Segmented';
+import { toast } from '@/kit/Toast';
 import { Dashboard, FiguresStrip, Section } from '@/pagekinds';
 import { Foot, Meter, Verb, Word, act, isForbidden, usd } from './parts';
 import { agentUsageQuery, limitsQuery, usageQuery, type UsageRange, type UsageRow } from './queries';
@@ -277,6 +278,43 @@ function LimitDialog({ who, now, agent, onClose }: { who: string; now: number | 
   );
 }
 
+/** Cancel the queued automatic wakes and waits, company-wide; asked first. */
+function ClearQueue() {
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const clear = async () => {
+    setBusy(true);
+    const r = await run('usage.clearQueue', { scope: 'company' }, { via: 'click' });
+    setBusy(false);
+    setAsking(false);
+    toast(r.ok ? { text: r.did ?? 'Cleared', kind: 'done' } : { text: "Couldn't clear", kind: 'failed' });
+  };
+  return (
+    <>
+      <Foot>
+        <Verb onClick={() => setAsking(true)}>Clear queue</Verb>
+      </Foot>
+      <Dialog
+        open={asking}
+        onOpenChange={setAsking}
+        alert
+        title="Clear the automatic queue?"
+        description="Cancels queued automatic wakes and waits. Keeps tasks, people's messages and running work."
+        actions={
+          <>
+            <Button variant="quiet" onClick={() => setAsking(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" busy={busy} onClick={() => void clear()}>
+              Clear queue
+            </Button>
+          </>
+        }
+      />
+    </>
+  );
+}
+
 function Limits({ search }: { search: UsageSearch }) {
   const limits = useQuery(limitsQuery);
   const dir = useQuery(directoryQuery);
@@ -297,6 +335,7 @@ function Limits({ search }: { search: UsageSearch }) {
           <LabelValue label="When reached">New work waits</LabelValue>
           <LabelValue label="Count plan runs">{v.default.count_subscription ? 'Yes' : 'No'}</LabelValue>
         </Facts>
+        {v.may_edit_default && <ClearQueue />}
       </Section>
       <Section name="Agents" count={bots.length} target="setting:limits">
         {bots.length === 0 ? (

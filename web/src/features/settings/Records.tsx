@@ -1,14 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { directoryQuery } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
+import { Button } from '@/kit/Button';
+import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
+import { Field } from '@/kit/Field';
 import { Link as To } from '@/kit/Link';
 import { Select } from '@/kit/Select';
 import { run } from '@/actions/run';
 import { FiguresStrip, Section } from '@/pagekinds';
 import { fixHref } from './fixes';
-import { Foot, Word, micros } from './parts';
+import { Foot, Verb, Word, act, micros } from './parts';
 import { billingQuery, changelogQuery, healthQuery, historyFilter, historyFor, type HealthFix } from './queries';
 
 /* The sections that are mostly read: Billing, History, Health, Changelog. */
@@ -177,11 +181,67 @@ export function Health() {
   );
 }
 
+/** A product update by hand: a title and its bullets, one a line. */
+function AddUpdate() {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState('');
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const bullets = text
+    .split('\n')
+    .map((b) => b.replace(/^\s*[-*•]\s*/, '').trim())
+    .filter(Boolean);
+  const ready = !!title.trim() && title.trim().length <= 90 && bullets.length > 0 && bullets.length <= 12;
+  const publish = async () => {
+    setBusy(true);
+    const ok = await act('settings.productUpdate', { title: title.trim(), bullets });
+    setBusy(false);
+    if (!ok) return;
+    setOpen(false);
+    setTitle('');
+    setText('');
+  };
+  return (
+    <>
+      <Foot>
+        <Verb onClick={() => setOpen(true)}>Add update</Verb>
+      </Foot>
+      <Dialog
+        open={open}
+        onOpenChange={setOpen}
+        title="Product update"
+        actions={
+          <>
+            <Button variant="quiet" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void publish()}>
+              Publish
+            </Button>
+          </>
+        }
+      >
+        <div className="set-add">
+          <Field label="Title" value={title} onValueChange={setTitle} autoFocus />
+          <Field label="Bullets, one a line" value={text} onValueChange={setText} area />
+        </div>
+      </Dialog>
+    </>
+  );
+}
+
 export function Changelog() {
   const log = useQuery(changelogQuery);
   const entries = log.data?.entries ?? [];
   if (!log.data) return null;
-  if (entries.length === 0) return <Empty title="No changes yet" />;
+  const add = log.data.can_add ? <AddUpdate /> : null;
+  if (entries.length === 0)
+    return (
+      <>
+        <Empty title="No changes yet" />
+        {add}
+      </>
+    );
   const versions = new Map<string, typeof entries>();
   for (const e of entries) {
     const v = e.version ?? 'Earlier';
@@ -201,6 +261,7 @@ export function Changelog() {
           </ul>
         </Section>
       ))}
+      {add}
     </>
   );
 }

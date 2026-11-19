@@ -2,27 +2,30 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { run } from '@/actions/run';
-import { configQuery, directoryQuery } from '@/data';
-import { Avatar } from '@/kit/Avatar';
+import { configQuery, meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Field } from '@/kit/Field';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
-import { Link as To } from '@/kit/Link';
 import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Segmented } from '@/kit/Segmented';
+import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
+import { AgentList } from './AgentList';
 import { installCommands, type Command, type ComputerKind, type RunnerConfig } from './install';
 import { Foot, Line, Meter, SwitchLine, Verb, Word, act, usd, useVisible } from './parts';
 import {
   LIVE_SIGN_IN,
+  accessQuery,
   computersQuery,
-  limitsQuery,
+  hostedQuery,
   modelsQuery,
+  providersQuery,
+  sleepQuery,
   signInQuery,
   subscriptionsQuery,
   type Computer,
@@ -177,8 +180,48 @@ const usedWords = (s: Subscription) => {
   return null;
 };
 
-function SubRow({ s, open }: { s: Subscription; open: boolean }) {
+function EditSubDialog({ s, owned, onClose }: { s: Subscription; owned: boolean; onClose: () => void }) {
+  const access = useQuery({ ...accessQuery, enabled: owned });
+  const was = s.owner_id.replace(/^human:/, '');
+  const [name, setName] = useState(s.name);
+  const [owner, setOwner] = useState(was);
+  const [busy, setBusy] = useState(false);
+  const people = (access.data?.people ?? []).filter((p) => !p.left && p.can_sign_in !== false);
+  const save = async () => {
+    setBusy(true);
+    const ok = await act('settings.editSubscription', { subscription: s.id, name: name.trim(), ...(owned && owner !== was ? { owner } : {}) });
+    setBusy(false);
+    if (ok) onClose();
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={`Edit ${s.name}`}
+      actions={
+        <>
+          <Button variant="quiet" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" busy={busy} disabled={!name.trim() || name.trim().length > 80} onClick={() => void save()}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <div className="set-add">
+        <Field label="Name" value={name} onValueChange={setName} autoFocus />
+        {owned && people.length > 0 && (
+          <Select label="Held by" value={owner} options={people.map((p) => ({ value: p.id, label: p.name }))} onValueChange={setOwner} />
+        )}
+      </div>
+    </Dialog>
+  );
+}
+
+function SubRow({ s, open, owned }: { s: Subscription; open: boolean; owned: boolean }) {
   const [confirm, setConfirm] = useState(false);
+  const [editing, setEditing] = useState(false);
   const words = usedWords(s);
   const agents = s.agents ?? [];
   const out = s.status === 'needs_reconnect';
@@ -234,9 +277,11 @@ function SubRow({ s, open }: { s: Subscription; open: boolean }) {
         )}
       </Facts>
       <Foot open>
+        <Verb onClick={() => setEditing(true)}>Edit</Verb>
         <Verb onClick={() => void act('settings.refreshUsage', { subscription: s.id })}>Check use</Verb>
         {s.can_remove !== false && <Verb onClick={() => setConfirm(true)}>Remove</Verb>}
       </Foot>
+      {editing && <EditSubDialog s={s} owned={owned} onClose={() => setEditing(false)} />}
       <Dialog
         open={confirm}
         onOpenChange={setConfirm}
@@ -269,15 +314,13 @@ type Adding = { sign: 'claude_login' | 'codex_login' } | { key: string; label: s
 export function Agents({ open }: { open?: string }) {
   const subs = useQuery(subscriptionsQuery);
   const computers = useQuery(computersQuery);
-  const limits = useQuery(limitsQuery);
-  const dir = useQuery(directoryQuery);
   const [adding, setAdding] = useState<Adding>(null);
   const v = subs.data;
   if (!v) return null;
   const list = v.subscriptions as Subscription[];
   const signIns = v.kinds.filter((k) => k.kind === 'claude_login' || k.kind === 'codex_login');
   const keys = v.kinds.filter((k) => !k.connect && k.kind !== 'claude_login' && k.kind !== 'codex_login');
-  const agents = (dir.data?.actors ?? []).filter((a) => a.kind === 'agent');
+  const owned = new Set<string>(v.kinds.filter((k) => k.owned).map((k) => k.kind));
   const live = (computers.data ?? []).filter((c) => !c.revoked_at);
   const add = (
     <Menu trigger={<Button icon="plus">Add</Button>}>
@@ -296,7 +339,7 @@ export function Agents({ open }: { open?: string }) {
         {list.length === 0 ? (
           <Empty title="Nothing connected" text="Agents run on a Claude or Codex plan, or on a key." />
         ) : (
-          list.map((s) => <SubRow key={s.id} s={s} open={open === s.id} />)
+          list.map((s) => <SubRow key={s.id} s={s} open={open === s.id} owned={owned.has(s.kind)} />)
         )}
       </Section>
       {live.length > 0 && (
@@ -319,39 +362,7 @@ export function Agents({ open }: { open?: string }) {
           </Facts>
         </Section>
       )}
-      <Section name="Agents" count={agents.length} target="setting:agents">
-        {agents.length === 0 ? (
-          <Empty title="No agents yet" />
-        ) : (
-          <>
-            <div className="tbl-head g-bot" aria-hidden="true">
-              <span />
-              <span>Agent</span>
-              <span>Team</span>
-              <span>This month</span>
-              <span className="is-num">Limit</span>
-            </div>
-            {agents.map((a) => {
-              const l = a.slug ? limits.data?.bots[a.slug] : undefined;
-              return (
-                <To
-                  key={a.id}
-                  href={`/team/${encodeURIComponent(a.slug ?? a.id)}?tab=settings`}
-                  className={l?.blocked ? 'row g-bot is-bad' : 'row g-bot'}
-                  title={a.name}
-                  data-target={`agent:${a.slug ?? a.id}`}
-                >
-                  <Avatar kind="agent" name={a.name} hue={a.hue} decorative />
-                  <span className="row-title">{a.name}</span>
-                  <span className="row-cell">{a.team ?? ''}</span>
-                  <span className="row-cell">{l ? <Meter pct={l.percent} over={!!l.blocked} /> : null}</span>
-                  <span className="row-fig">{l?.monthly_usd != null ? usd(l.monthly_usd) : 'None'}</span>
-                </To>
-              );
-            })}
-          </>
-        )}
-      </Section>
+      <AgentList open={open} />
       {adding && 'sign' in adding && <SignInDialog kind={adding.sign} onClose={() => setAdding(null)} />}
       {adding && 'key' in adding && <KeyDialog kind={adding.key} label={adding.label} onClose={() => setAdding(null)} />}
     </>
@@ -528,58 +539,190 @@ function AddComputer() {
   );
 }
 
+/** Owners and admins change company-wide settings; a member's read of the roster is refused (403). */
+function useAdmin(): boolean {
+  const me = useQuery(meQuery);
+  const access = useQuery({ ...accessQuery, retry: false });
+  return me.data?.role === 'owner' || access.data?.you === 'owner' || access.data?.you === 'admin';
+}
+
+const HOSTED_KINDS: Record<string, string> = { tico: 'Tico server', bot_computer: 'Agent computer' };
+
+function Hosted() {
+  const hosted = useQuery({ ...hostedQuery, retry: false });
+  const admin = useAdmin();
+  const [said, setSaid] = useState<Record<string, string>>({});
+  const v = hosted.data;
+  if (v?.state === 'deactivated')
+    return (
+      <Section name="Hosted servers" target="setting:hosted">
+        <Empty title="Hosting has ended" text="Ask Tico support to start it again." />
+      </Section>
+    );
+  if (v?.state !== 'ok' || !v.servers?.length) return null;
+  const start = async (id: string) => {
+    const r = await run('settings.startServer', { server: id }, { via: 'click' });
+    const out = r.out as { state?: string; message?: string } | undefined;
+    if (!r.ok) return toast({ text: "Couldn't start", kind: 'failed' });
+    if (out?.state !== 'started') setSaid((s) => ({ ...s, [id]: out?.message ?? 'Not started' }));
+  };
+  return (
+    <Section name="Hosted servers" count={v.servers.length} target="setting:hosted">
+      {v.servers.map((s) => (
+        <div key={s.server_id} className="row g-host" data-target={`hosted:${s.server_id}`} title={said[s.server_id]}>
+          <span className="row-title">{HOSTED_KINDS[s.kind] ?? s.kind}</span>
+          <span className="row-state">
+            <Word fine={s.power === 'on'}>{s.power === 'on' ? 'On' : (said[s.server_id] ?? 'Stopped')}</Word>
+          </span>
+          <span>{admin && s.power !== 'on' && <Verb onClick={() => void start(s.server_id)}>Start</Verb>}</span>
+        </div>
+      ))}
+    </Section>
+  );
+}
+
+const SLEEP_HOURS = [0, 1, 2, 3, 4, 6, 8, 12, 24];
+const AWAKE: Record<string, string> = {
+  run_queued: 'A run is waiting',
+  run_in_progress: 'A run is going',
+  task_session: 'A task is waiting',
+  runner_job: 'A computer job is running',
+  send_pending: 'A send is waiting',
+  routine_due: 'A routine is due soon',
+};
+
+function Sleep() {
+  const sleep = useQuery({ ...sleepQuery, retry: false });
+  const admin = useAdmin();
+  const v = sleep.data;
+  if (!v?.hosted || v.managed) return null;
+  const now = v.hours ?? 0;
+  const hours = SLEEP_HOURS.includes(now) ? SLEEP_HOURS : [...SLEEP_HOURS, now].sort((a, b) => a - b);
+  return (
+    <Section name="When idle" target="setting:sleep">
+      <Facts label="When idle">
+        <Line label="Sleep when idle">
+          <Select
+            label="Sleep when idle"
+            labelHidden
+            look="quiet"
+            disabled={!admin}
+            value={String(now)}
+            options={hours.map((h) => ({ value: String(h), label: h ? `After ${h} ${h === 1 ? 'hour' : 'hours'}` : 'Off' }))}
+            onValueChange={(h) => void act('settings.setSleep', { hours: Number(h) })}
+          />
+        </Line>
+        {now > 0 && (
+          <SwitchLine
+            label="Agents' computers sleep too"
+            checked={v.runners}
+            disabled={!admin}
+            onChange={(on) => void act('settings.sleepComputers', { on })}
+          />
+        )}
+        {now > 0 && v.blocker && <Line label="Awake">{AWAKE[v.blocker] ?? v.blocker}</Line>}
+      </Facts>
+    </Section>
+  );
+}
+
 export function Computers({ open }: { open?: string }) {
   const computers = useQuery(computersQuery);
   const list = (computers.data ?? []).filter((c) => !c.revoked_at);
   if (!computers.data) return null;
   return (
-    <Section name="Computers" count={list.length} actions={<AddComputer />} target="setting:computers">
-      {list.length === 0 ? (
-        <Empty icon="computer" title="No computers yet" text="Agents run on a computer: yours, or one in the cloud." />
-      ) : (
-        <>
-          <div className="tbl-head g-comp" aria-hidden="true">
-            <span>Computer</span>
-            <span>Kind</span>
-            <span>Agents</span>
-            <span>State</span>
-          </div>
-          {list.map((c) => {
-            const row = (
-              <Link
-                key={c.id}
-                to="/settings/$section"
-                params={{ section: 'computers' }}
-                search={open === c.id ? {} : { open: c.id }}
-                className={c.online ? 'row g-comp' : 'row g-comp is-bad'}
-                data-target={`computer:${c.id}`}
-                aria-expanded={open === c.id}
-                title={c.label || c.id}
-              >
-                <span className="row-title">{c.label || c.id}</span>
-                <span className="row-cell">{c.cloud_machine?.shared ? 'Shared' : c.cloud_machine ? 'Cloud' : 'Own'}</span>
-                <span className="row-cell">{Object.keys(c.readiness?.bots ?? {}).length}</span>
-                <span className="row-state">
-                  <Word fine={c.online}>{c.online ? 'Online' : 'Offline'}</Word>
-                </span>
-              </Link>
-            );
-            return open === c.id ? (
-              <div key={c.id} className="open">
-                {row}
-                <ComputerOpen c={c} />
-              </div>
-            ) : (
-              row
-            );
-          })}
-        </>
-      )}
-    </Section>
+    <>
+      <Section name="Computers" count={list.length} actions={<AddComputer />} target="setting:computers">
+        {list.length === 0 ? (
+          <Empty icon="computer" title="No computers yet" text="Agents run on a computer: yours, or one in the cloud." />
+        ) : (
+          <>
+            <div className="tbl-head g-comp" aria-hidden="true">
+              <span>Computer</span>
+              <span>Kind</span>
+              <span>Agents</span>
+              <span>State</span>
+            </div>
+            {list.map((c) => {
+              const row = (
+                <Link
+                  key={c.id}
+                  to="/settings/$section"
+                  params={{ section: 'computers' }}
+                  search={open === c.id ? {} : { open: c.id }}
+                  className={c.online ? 'row g-comp' : 'row g-comp is-bad'}
+                  data-target={`computer:${c.id}`}
+                  aria-expanded={open === c.id}
+                  title={c.label || c.id}
+                >
+                  <span className="row-title">{c.label || c.id}</span>
+                  <span className="row-cell">{c.cloud_machine?.shared ? 'Shared' : c.cloud_machine ? 'Cloud' : 'Own'}</span>
+                  <span className="row-cell">{Object.keys(c.readiness?.bots ?? {}).length}</span>
+                  <span className="row-state">
+                    <Word fine={c.online}>{c.online ? 'Online' : 'Offline'}</Word>
+                  </span>
+                </Link>
+              );
+              return open === c.id ? (
+                <div key={c.id} className="open">
+                  {row}
+                  <ComputerOpen c={c} />
+                </div>
+              ) : (
+                row
+              );
+            })}
+          </>
+        )}
+      </Section>
+      <Hosted />
+      <Sleep />
+    </>
   );
 }
 
 // ---------------------------------------------------------------- Models
+
+function Defaults({ names }: { names: { value: string; label: string }[] }) {
+  const providers = useQuery({ ...providersQuery, retry: false });
+  const me = useQuery(meQuery);
+  const v = providers.data;
+  if (!v) return null;
+  // The owner chooses; everyone else sees the choice.
+  const owner = me.data?.role === 'owner';
+  const model = v.default.model ?? '';
+  const meeting = v.meeting_model ?? '';
+  const known = (id: string) => (id && !names.some((n) => n.value === id) ? [{ value: id, label: id }] : []);
+  return (
+    <Section name="Defaults" target="setting:defaults">
+      <Facts label="Defaults">
+        <Line label="A new agent uses" target="setting:default-model">
+          <Select
+            label="A new agent uses"
+            labelHidden
+            look="quiet"
+            disabled={!owner}
+            value={model || null}
+            placeholder="None"
+            options={[...known(model), ...names]}
+            onValueChange={(m) => void act('settings.defaultModel', { model: m })}
+          />
+        </Line>
+        <Line label="Meetings" target="setting:meeting-model">
+          <Select
+            label="Meetings"
+            labelHidden
+            look="quiet"
+            disabled={!owner}
+            value={meeting}
+            options={[{ value: '', label: "Agent's own model" }, ...known(meeting), ...names]}
+            onValueChange={(m) => void act('settings.meetingModel', { model: m })}
+          />
+        </Line>
+      </Facts>
+    </Section>
+  );
+}
 
 export function Models() {
   const models = useQuery(modelsQuery);
@@ -588,15 +731,10 @@ export function Models() {
   const on = v.enabled_providers;
   const shown = v.models.filter((m) => !m.deprecated && (!on || on.includes(m.provider)));
   const providers = [...new Set(shown.map((m) => m.provider))];
-  const fallbackName = v.models.find((m) => m.id === v.default?.model)?.label;
   if (shown.length === 0) return <Empty title="No models yet" text="Connect a subscription or a key under Agents." />;
   return (
     <>
-      {fallbackName && (
-        <Facts label="Models">
-          <LabelValue label="A new agent uses">{fallbackName}</LabelValue>
-        </Facts>
-      )}
+      <Defaults names={shown.map((m) => ({ value: m.id, label: m.label }))} />
       {providers.map((p) => {
         const rows = shown.filter((m) => m.provider === p);
         return (

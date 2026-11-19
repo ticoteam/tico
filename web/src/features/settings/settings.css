@@ -52,7 +52,9 @@ div.row{cursor:default}
 .g-cred{--g:minmax(0,1fr) 96px 96px 96px}
 .g-comp{--g:minmax(0,1fr) 120px 96px 118px}
 .g-model{--g:minmax(0,1fr) 120px 96px}
-.g-bot{--g:var(--av-sm) minmax(0,1fr) 124px 120px 76px}
+.g-bots{--g:16px var(--av-sm) minmax(0,1fr) 164px 124px 120px 76px}
+.g-ret{--g:minmax(0,1fr) auto}
+.g-host{--g:minmax(0,1fr) 118px 72px}
 .g-fsub{--g:minmax(0,1fr) 128px 74px 172px 28px}
 .g-use{--g:var(--av-sm) minmax(0,1fr) 112px 44px 44px 76px 52px}
 .g-mod{--g:minmax(0,1fr) 136px 44px 44px 76px 52px}
@@ -129,6 +131,21 @@ div.row{cursor:default}
 
 /* ---- agents, computers and models (anchor) ---- */
 
+/* Agents: search the list, and once agents are checked, what to do with them (settings.css list-tools) */
+.list-tools{display:flex;align-items:center;gap:var(--s-3);padding:var(--s-1h) var(--s-2) var(--s-2)}
+.list-tools .search{flex:1;width:auto;max-width:300px}
+.tools-n{margin-left:auto;font-size:var(--t-sm);color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.bulk{margin-left:auto;display:flex;align-items:center;gap:var(--s-3);white-space:nowrap}
+.bulk b{font-weight:var(--w-strong);font-size:var(--t-sm);font-variant-numeric:tabular-nums}
+.bulk .verb{margin:0 calc(var(--s-2) * -1) 0 0;font-weight:var(--w-text);color:var(--ink-2)}
+.row .check{min-height:0;gap:0}
+/* a row's box is named for the screen reader only */
+.set-hide{position:absolute;clip-path:inset(50%);overflow:hidden;white-space:nowrap}
+.g-ret .verb,.g-host .verb{justify-self:end;margin:0}
+/* a dialog's list of people to check, and a stopped run's words and verbs */
+.set-picks,.set-level,.set-stop{display:grid;gap:var(--s-1)}
+.set-stop .open-foot{margin-top:0;padding:var(--s-1) 0 0;box-shadow:none}
+
 /* ---- usage (anchor) ---- */
 
 /* ---------------- phone: rows put the name on the first line, the rest under it ---------------- */
@@ -152,12 +169,16 @@ html[data-layout="cards"] .g-hl .row-title{grid-area:name}
 html[data-layout="cards"] .g-hl .row-sub{grid-area:sub;white-space:normal;line-height:1.35}
 html[data-layout="cards"] .g-hl .row-state{grid-area:word}
 html[data-layout="cards"] .g-hl .hl-act{display:none}
+html[data-layout="cards"] .g-host{--g:minmax(0,1fr) auto auto}
+html[data-layout="cards"] .list-tools .search{max-width:none}
 html[data-layout="cards"] .g-tok,html[data-layout="cards"] .g-comp,html[data-layout="cards"] .g-cred,html[data-layout="cards"] .g-model{--g:minmax(0,1fr) auto}
 html[data-layout="cards"] .g-tok>:nth-child(n+3),html[data-layout="cards"] .g-comp>:nth-child(n+3),html[data-layout="cards"] .g-cred>:nth-child(n+3),html[data-layout="cards"] .g-model>:nth-child(n+3){display:none}
 html[data-layout="cards"] .g-fsub{--g:minmax(0,1fr) 116px 28px}
 html[data-layout="cards"] .g-fsub>:nth-child(2),html[data-layout="cards"] .g-fsub>:nth-child(3){display:none}
-html[data-layout="cards"] .g-bot,html[data-layout="cards"] .g-use{--g:var(--av-sm) minmax(0,1fr) auto}
-html[data-layout="cards"] .g-bot>:nth-child(3),html[data-layout="cards"] .g-bot>:nth-child(4),html[data-layout="cards"] .g-use>:nth-child(n+3):not(.is-strong){display:none}
+html[data-layout="cards"] .g-use{--g:var(--av-sm) minmax(0,1fr) auto}
+html[data-layout="cards"] .g-use>:nth-child(n+3):not(.is-strong){display:none}
+html[data-layout="cards"] .g-bots{--g:16px var(--av-sm) minmax(0,1fr) auto}
+html[data-layout="cards"] .g-bots>:nth-child(n+4):not(:last-child){display:none}
 html[data-layout="cards"] .g-mod{--g:minmax(0,1fr) auto}
 html[data-layout="cards"] .g-mod>:nth-child(n+2):not(.is-strong){display:none}
 html[data-layout="cards"] .g-lim{--g:var(--av-sm) minmax(0,1fr) auto auto;grid-template-areas:"av name used of" "bar bar bar per"}
