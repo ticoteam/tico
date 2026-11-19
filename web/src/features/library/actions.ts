@@ -29,6 +29,7 @@ import {
   archiveDoc,
   addSource,
   addWebsite,
+  apiToolQuery,
   approveProposal,
   cancelLetter,
   checkTool,
@@ -49,6 +50,7 @@ import {
   startSignIn,
   toolsQuery,
   uploadFile,
+  websiteToolQuery,
   type DocRow,
   type SkillRow,
 } from './queries';
@@ -60,6 +62,12 @@ import { viewing } from './viewing';
 
 const id = s.string({ min: 1, max: 200 });
 const text = (max: number) => s.string({ max });
+
+/* Where a stored key or login is sent, and who may use one, are the person's own press. From Tico a change that sends a
+   stored credential somewhere new or widens who uses it is refused; narrowing stays Tico's. A tool not read yet is
+   refused too: the screen cannot tell, and the person can do it themselves. */
+const LEVEL = { none: 0, read: 1, read_write: 2 } as const;
+const adds = (next: readonly string[] | undefined, had: readonly string[]) => !!next?.some((x) => !had.includes(x));
 
 /** Go to a Library page, keeping only the search words given (an empty one is dropped). */
 const go = (router: AnyRouter, to: string, search: Record<string, string | number | undefined> = {}, replace = false) =>
@@ -457,6 +465,8 @@ export const toolsRemoveKey = defineAction({
   title: 'Remove a key',
   kind: 'change',
   input: s.object({ tool: id, key: id }),
+  // For good, and the agents using it stop: the person's own press.
+  tico: false,
   run: (_ctx, i) => removeKey(i.tool, i.key),
   did: () => 'Removed the key',
   target: (i) => ({ kind: 'tool-keys', id: i.tool }),
@@ -477,6 +487,9 @@ export const toolsSetAccess = defineAction({
   title: 'Change who may use a tool',
   kind: 'change',
   input: s.object({ tool: id, subject: id, level: s.oneOf(['read', 'read_write', 'none'] as const) }),
+  can: (ctx, i) =>
+    ctx.via !== 'tico' ||
+    LEVEL[i.level] <= LEVEL[ctx.queryClient.getQueryData(apiToolQuery(i.tool).queryKey)?.access.find((a) => a.subject === i.subject)?.level ?? 'none'],
   run: (_ctx, i) => setAccess(i.tool, i.subject, i.level),
   did: (i) => (i.level === 'none' ? 'Removed' : 'Changed'),
   target: (i) => ({ kind: 'tool-who', id: i.tool }),
@@ -622,8 +635,8 @@ export const toolsCancelLetter = defineAction({
   target: (i) => ({ kind: 'letter', id: i.letter }),
 });
 
-/* Changing a tool. Tico may rename it, move its address, set a key's end date or a run setting: nothing secret is
-   typed. Reading a stored secret, a sign-in code, a paste of keys, or anything paid or for good is the person's own. */
+/* Changing a tool. Tico may rename it, move the address of a tool with no stored key, set a key's end date or a run
+   setting: nothing secret is typed. Reading a stored secret, a sign-in code, a paste of keys, or anything paid or for good is the person's own. */
 
 const api = (tool: string) => ({ kind: 'tool', id: `api:${tool}` });
 const site = (tool: string) => ({ kind: 'tool', id: `website:${tool}` });
@@ -641,6 +654,13 @@ export const toolsEditApi = defineAction({
     auth_scheme: s.optional(s.string({ min: 1, max: 80, pattern: /^(bearer|basic_user|basic_password|(header|query):[\w-]+)$/ })),
     check_path: s.optional(text(500)),
   }),
+  can: (ctx, i) => {
+    if (ctx.via !== 'tico' || (i.base_url === undefined && i.auth_scheme === undefined)) return true;
+    const t = ctx.queryClient.getQueryData(apiToolQuery(i.tool).queryKey);
+    if (!t) return false;
+    const moved = (i.base_url !== undefined && i.base_url !== t.tool?.base_url) || (i.auth_scheme !== undefined && i.auth_scheme !== t.tool?.auth_scheme);
+    return !moved || t.keys.length === 0;
+  },
   run: (_ctx, { tool, ...change }) => editApiTool(tool, change),
   did: () => 'Saved',
   target: (i) => api(i.tool),
@@ -720,6 +740,13 @@ export const toolsEditWebsite = defineAction({
     sites: s.optional(s.array(s.string({ min: 1, max: 300 }), { max: 50 })),
     central_only: s.optional(s.boolean()),
   }),
+  can: (ctx, i) => {
+    if (ctx.via !== 'tico' || (i.sites === undefined && i.central_only !== false)) return true;
+    const t = ctx.queryClient.getQueryData(websiteToolQuery(i.tool).queryKey);
+    if (!t) return false;
+    const widened = adds(i.sites, t.tool.sites) || (i.central_only === false && t.tool.central_only);
+    return !widened || t.accounts.length === 0;
+  },
   run: (_ctx, { tool, ...change }) => editWebsite(tool, change),
   did: () => 'Saved',
   target: (i) => site(i.tool),

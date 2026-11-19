@@ -11,7 +11,7 @@ export interface Row {
   path: RegExp;
   when?: (q: URLSearchParams) => boolean;
   /** The new address (path and search, without the `/next` base), or null when the new app has no page for it. */
-  to: (m: readonly string[], q: URLSearchParams, rawQuery: string) => string | null;
+  to: (m: readonly string[], q: URLSearchParams) => string | null;
 }
 
 /* ---------------------------------------------------------------- building addresses */
@@ -47,10 +47,24 @@ function at(path: string, search: Record<string, string | number | null | undefi
   const s = q.toString().replace(/%3A/gi, ':');
   return s ? `${path}?${s}` : path;
 }
-/** `address` with the old query added unchanged (a sign-in's return: the page reads it as the server wrote it). */
 /** A file version from the old query (a whole number above 0), or nothing. */
 const version = (q: URLSearchParams): number | null => (/^[1-9]\d{0,8}$/.test(q.get('v') ?? '') ? Number(q.get('v')) : null);
-const carry = (address: string, rawQuery: string): string => (rawQuery ? address + (address.includes('?') ? '&' : '?') + rawQuery : address);
+
+/* A sign-in's return carries only the names and shapes its page reads; anything else in the old query (a stray `code`,
+   a forged value) is dropped here, before any page sees it. */
+/** GitHub's return words (backend/github_app.py). */
+const GITHUB_WORDS = new Set(['connected', 'installed', 'authorized', 'pending', 'declined', 'finish', 'again', 'expired']);
+/** A QuickBooks or Xero return (backend/finance_routes.py): `books`, and on an error a reason code. */
+const booksReturn = (q: URLSearchParams) => {
+  const books = q.get('books');
+  const reason = q.get('reason') ?? '';
+  return {
+    books: books === 'connected' || books === 'error' ? books : null,
+    reason: books === 'error' && /^[a-z_]{1,40}$/.test(reason) ? reason : null,
+  };
+};
+/** The skills helper's code (backend/skill_devices.py: eight letters and digits, shown as two fours). */
+const SKILL_CODE = /^[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}$/;
 
 /* ---------------------------------------------------------------- old names at new ones */
 
@@ -135,7 +149,7 @@ const tool = (id: string): string => at('/library/tools', { tool: id });
 const MAIL_TOOLS = '/library/tools?kind=mailbox';
 
 /** One part of Tools (what follows `#/tools/`), as ui/app/pages-shell.ts toolsRoute reads it. */
-function toolsAddress(rest: string, q: URLSearchParams, rawQuery: string): string {
+function toolsAddress(rest: string, q: URLSearchParams): string {
   const [head = '', id] = rest.split('/').filter(Boolean);
   const name = dec(id);
   if (!head) return toolsList(q);
@@ -153,8 +167,12 @@ function toolsAddress(rest: string, q: URLSearchParams, rawQuery: string): strin
   // Tools › Settings (email, texts, letters) has no page in the new design: the inboxes it set up.
   if (head === 'settings') return MAIL_TOOLS;
   if (head === 'messages') return '/threads/messaging';
-  // GitHub's install and sign-in return here with ?github=… (backend/github_app.py): carried for the page to read.
-  if (head === 'github') return carry(tool('github'), rawQuery);
+  // GitHub's install and sign-in return here with ?github=… (backend/github_app.py): a known word is carried for the
+  // page to read; nothing else is.
+  if (head === 'github') {
+    const word = q.get('github') ?? '';
+    return at('/library/tools', { tool: 'github', github: GITHUB_WORDS.has(word) ? word : null });
+  }
   return tool(dec(head));
 }
 
@@ -204,9 +222,9 @@ export const ROWS: readonly Row[] = [
   { page: 'Listening', path: /^#\/listening(?:\/([^/]+)(?:\/.*)?)?$/, to: ([id]) => at('/company/listening', { watch: id && id !== 'bot' ? dec(id) : null }) },
 
   /* toolsRoute (ui/app/pages-shell.ts): Tools and every old address of what it holds */
-  { page: 'Library › Tools (old address)', path: new RegExp(`^#/library/tools${tail}$`), to: ([rest], q, raw) => (rest?.startsWith('credentials/') ? '/library/tools' : toolsAddress(rest ?? '', q, raw)) },
-  { page: 'Integrations (old Tools)', path: new RegExp(`^#/integrations${tail}$`), to: ([rest], q, raw) => (rest?.startsWith('credentials/') ? '/library/tools' : toolsAddress(rest ?? '', q, raw)) },
-  { page: 'Library › Connections (old Tools)', path: new RegExp(`^#/library/connections${tail}$`), to: ([rest], q, raw) => toolsAddress(rest ?? '', q, raw) },
+  { page: 'Library › Tools (old address)', path: new RegExp(`^#/library/tools${tail}$`), to: ([rest], q) => (rest?.startsWith('credentials/') ? '/library/tools' : toolsAddress(rest ?? '', q)) },
+  { page: 'Integrations (old Tools)', path: new RegExp(`^#/integrations${tail}$`), to: ([rest], q) => (rest?.startsWith('credentials/') ? '/library/tools' : toolsAddress(rest ?? '', q)) },
+  { page: 'Library › Connections (old Tools)', path: new RegExp(`^#/library/connections${tail}$`), to: ([rest], q) => toolsAddress(rest ?? '', q) },
   // Credentials was the keys list; keys live on each tool now.
   { page: 'Credentials', path: new RegExp(`^#/credentials${tail}$`), to: () => '/library/tools' },
   { page: 'Settings › Inboxes', path: new RegExp(`^#/settings/inboxes${tail}$`), to: ([rest]) => inboxesAddress(rest ?? '') },
@@ -215,7 +233,7 @@ export const ROWS: readonly Row[] = [
     path: /^#\/settings\/(mailboxes|inbound|company-inbox|email-phone|mail|inbox|google)(?:\/([^/]+))?\/?$/,
     to: ([tab, id]) => (tab === 'mailboxes' && id ? tool(`mailbox:${dec(id)}`) : MAIL_TOOLS),
   },
-  { page: 'Tools', path: new RegExp(`^#/tools${tail}$`), to: ([rest], q, raw) => toolsAddress(rest ?? '', q, raw) },
+  { page: 'Tools', path: new RegExp(`^#/tools${tail}$`), to: ([rest], q) => toolsAddress(rest ?? '', q) },
 
   { page: 'Strategy › Brand', path: new RegExp(`^#/strategy/brand${tail}$`), to: () => '/company/strategy/brand' },
   { page: 'Growth', path: new RegExp(`^#/growth${tail}$`), to: () => '/company/growth' },
@@ -247,12 +265,12 @@ export const ROWS: readonly Row[] = [
   // Budget is not a Strategy tab in the new design: budgets are Finance's Budgets tab.
   { page: 'Strategy › Budget', path: new RegExp(`^#/strategy/budget${tail}$`), to: () => at('/company/finance', { tab: 'budgets' }) },
   // Finance; QuickBooks and Xero sign-ins come back to #/finance?books=connected (or =error&reason=…,
-  // backend/finance_routes.py): they land on Sources, where the connection shows, with that query carried.
+  // backend/finance_routes.py): they land on Sources, where the connection shows, with those two words carried.
   {
     page: 'Finance',
     path: /^#\/finance(?:\/([^/]+))?(?:\/.*)?$/,
-    to: ([tab], q, raw) => {
-      if (q.has('books')) return carry(at('/company/finance', { tab: 'sources' }), raw);
+    to: ([tab], q) => {
+      if (q.has('books')) return at('/company/finance', { tab: 'sources', ...booksReturn(q) });
       const t = dec(tab);
       return at('/company/finance', { tab: FINANCE_TABS.has(t) ? t : null });
     },
@@ -306,8 +324,13 @@ export const ROWS: readonly Row[] = [
   // The Assistant's private chat is Tico's sheet, on every page: the home page.
   { page: 'Assistant', path: /^#\/assistant$/, to: () => '/' },
   { page: 'What the Assistant learned', path: /^#\/assistant\/learned$/, to: () => '/learned' },
-  // The skills helper's approve page: `code` is what the helper on a computer shows (backend/skill_devices.py).
-  { page: 'Skills connect', path: /^#\/skills\/connect$/, to: (_m, q) => at('/library/skills', { connect: q.get('code') || 'setup' }) },
+  // The skills helper's approve page: `code` is what the helper on a computer shows (backend/skill_devices.py). Only a
+  // code's shape is carried; the Skills page takes it out of the address as soon as it reads it.
+  {
+    page: 'Skills connect',
+    path: /^#\/skills\/connect$/,
+    to: (_m, q) => at('/library/skills', { connect: SKILL_CODE.test(q.get('code') ?? '') ? q.get('code') : 'setup' }),
+  },
   { page: 'Person', path: /^#\/person\/([^/]+)(?:\/([^/]+))?(?:\/.*)?$/, to: ([id, tab]) => at(`/team/${seg(id)}`, { tab: tab === 'settings' ? tab : null }) },
   // Tasks; Needs you (view=foryou) is Flow. The old filters were across pipelines and Tasks is one pipeline now: dropped.
   { page: 'Tasks', path: /^#\/tasks$/, to: (_m, q) => (q.get('view') === 'foryou' ? '/flow' : '/tasks') },
@@ -391,12 +414,12 @@ function split(oldHash: string): [string, string] {
 }
 
 /** The row an old address matches, with its captures, or null. */
-export function rowFor(oldHash: string): { row: Row; m: string[]; q: URLSearchParams; raw: string } | null {
+export function rowFor(oldHash: string): { row: Row; m: string[]; q: URLSearchParams } | null {
   const [path, raw] = split(oldHash);
   const q = new URLSearchParams(raw);
   for (const row of ROWS) {
     const hit = row.path.exec(path);
-    if (hit && (!row.when || row.when(q))) return { row, m: hit.slice(1).map((x) => x ?? ''), q, raw };
+    if (hit && (!row.when || row.when(q))) return { row, m: hit.slice(1).map((x) => x ?? ''), q };
   }
   return null;
 }
@@ -407,5 +430,5 @@ export function rowFor(oldHash: string): { row: Row; m: string[]; q: URLSearchPa
  */
 export function newAddressFor(oldHash: string): string | null {
   const hit = rowFor(oldHash);
-  return hit ? hit.row.to(hit.m, hit.q, hit.raw) : null;
+  return hit ? hit.row.to(hit.m, hit.q) : null;
 }

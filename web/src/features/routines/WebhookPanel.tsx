@@ -14,7 +14,7 @@ import { toast } from '@/kit/Toast';
 import { fmtDate } from '@/lib';
 import { SidePanel } from '@/pagekinds';
 import { press, pressOut, RemoveItem, useConfirmRemove, Verb, Word } from './parts';
-import { deliveriesQuery, hooksQuery, payloadQuery, shownOnceQuery } from './queries';
+import { deliveriesQuery, hooksQuery, payloadQuery } from './queries';
 import type { Delivery, Hook } from './types';
 import { cap, startsWords } from './words';
 
@@ -46,10 +46,10 @@ const PRESETS = [
   { value: 'slack', label: 'Slack' },
 ];
 
-export function WebhookPanel({ id, onClose }: { id: string; onClose: () => void }) {
+/** `shown` is the full address held by the page (state only) right after it was made or given a new secret. */
+export function WebhookPanel({ id, shown, onShown, onClose }: { id: string; shown: string | null; onShown: (url: string) => void; onClose: () => void }) {
   const hooks = useQuery(hooksQuery);
   const h = hooks.data?.find((x) => x.id === id);
-  const shown = useQuery(shownOnceQuery(id)).data;
   const remove = useConfirmRemove();
   const [signing, setSigning] = useState(false);
   // a signing secret shown once: this state only, never the cache, a toast or the address
@@ -71,7 +71,7 @@ export function WebhookPanel({ id, onClose }: { id: string; onClose: () => void 
       actions={
         !h.builtin && (
           <Menu trigger={<IconButton icon="more" label="More" quiet disabled={tmp} />}>
-            <MenuItem label="New secret" icon="keys" onSelect={() => void press('webhooks.rotate', { hook: h.id })} />
+            <MenuItem label="New secret" icon="keys" onSelect={() => void rotate(h.id, onShown)} />
             <MenuItem label="Signing" icon="lock" onSelect={() => setSigning(true)} />
             <RemoveItem onSelect={() => remove.confirm(h.name, () => void press('webhooks.remove', { hook: h.id }))} />
           </Menu>
@@ -115,6 +115,11 @@ export function WebhookPanel({ id, onClose }: { id: string; onClose: () => void 
       {signing && <Signing hook={h} onSecret={setSecret} onClose={() => setSigning(false)} />}
     </SidePanel>
   );
+}
+
+async function rotate(hook: string, onShown: (url: string) => void) {
+  const r = await pressOut<{ url: string }>('webhooks.rotate', { hook });
+  if (r?.out?.url) onShown(r.out.url);
 }
 
 /** Check each call with a preset and a secret: typed, or left empty for the server to make one (shown once). Replacing

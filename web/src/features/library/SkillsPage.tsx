@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useRouter } from '@tanstack/react-router';
+import { useEffect, useState } from 'react';
 import { run } from '@/actions';
 import { useActor } from '@/data';
 import { Ago } from '@/kit/Ago';
@@ -20,7 +21,6 @@ import { Markdown } from '@/kit/Markdown';
 import { Foot, useGo } from './AddTool';
 import { Face, Find, OwnerButton, press, when, Who } from './parts';
 import {
-  deviceCodeQuery,
   installTargetsQuery,
   proposalQuery,
   proposalsQuery,
@@ -35,6 +35,7 @@ import {
   type SkillRow,
   type SkillUse,
   type SkillVersion,
+  previewDevice,
 } from './queries';
 import type { SkillsSearch } from './search';
 import './library.css';
@@ -49,6 +50,15 @@ const CRUMB = [{ label: 'Skills', to: '/library/skills' }];
 export const actorOf = (a: { type: string; id: string }) => `${a.type === 'Bot' ? 'bot' : 'human'}:${a.id}`;
 
 export function SkillsPage({ search }: { search: SkillsSearch }) {
+  const router = useRouter();
+  // A helper's code from an old link is a one-time approval: held in this state, and out of the address at once.
+  const [device, setDevice] = useState<string | null>(null);
+  const incoming = search.connect && search.connect !== 'setup' ? search.connect : null;
+  if (incoming && incoming !== device) setDevice(incoming);
+  useEffect(() => {
+    if (!incoming) return;
+    void router.navigate({ to: '.', search: ((prev: Record<string, unknown>) => ({ ...prev, connect: undefined })) as never, replace: true });
+  }, [incoming, router]);
   let page;
   if (search.proposal) page = <ProposalPage id={search.proposal} />;
   else if (search.skill) page = <SkillPage name={search.skill} />;
@@ -56,7 +66,17 @@ export function SkillsPage({ search }: { search: SkillsSearch }) {
   return (
     <>
       {page}
-      {search.connect && <ConnectDialog code={search.connect === 'setup' ? undefined : search.connect} />}
+      {device ? (
+        <ApproveDevice
+          code={device}
+          onClose={() => {
+            setDevice(null);
+            closeConnect();
+          }}
+        />
+      ) : (
+        search.connect === 'setup' && <ConnectDialog />
+      )}
     </>
   );
 }
@@ -507,12 +527,8 @@ const helperCommand = () =>
 
 const closeConnect = () => void press('skills.list', {});
 
-/**
- * Connect Claude Code (ui/app/skills-connect.ts): the one line to run on a computer, or, with the code the helper
- * shows, approving that computer.
- */
-function ConnectDialog({ code }: { code?: string }) {
-  if (code) return <ApproveDevice code={code} />;
+/** Connect Claude Code (ui/app/skills-connect.ts): the one line to run on a computer. */
+function ConnectDialog() {
   const command = helperCommand();
   const copy = () =>
     void navigator.clipboard.writeText(command).then(
@@ -535,8 +551,21 @@ function ConnectDialog({ code }: { code?: string }) {
   );
 }
 
-function ApproveDevice({ code }: { code: string }) {
-  const d = useQuery(deviceCodeQuery(code));
+type Device = Awaited<ReturnType<typeof previewDevice>>;
+
+/** With the code the helper shows: approving that computer. The code and the server's answer stay in this state. */
+function ApproveDevice({ code, onClose }: { code: string; onClose: () => void }) {
+  const [d, setD] = useState<{ data?: Device; isError?: boolean }>({});
+  useEffect(() => {
+    let live = true;
+    void previewDevice(code).then(
+      (data) => live && setD({ data }),
+      () => live && setD({ isError: true }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [code]);
   const [share, setShare] = useState(false);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<'approved' | 'denied' | null>(null);
@@ -550,14 +579,14 @@ function ApproveDevice({ code }: { code: string }) {
   return (
     <Dialog
       open
-      onOpenChange={(o) => !o && closeConnect()}
+      onOpenChange={(o) => !o && onClose()}
       title="Connect Claude Code"
       description={
         done === 'approved' ? 'Connected. Go back to your terminal.' : done === 'denied' ? 'Denied.' : gone ? 'This code has expired or was used. Run setup again.' : undefined
       }
       actions={
         done || gone ? (
-          <Button onClick={closeConnect}>Done</Button>
+          <Button onClick={onClose}>Done</Button>
         ) : (
           <>
             <Button disabled={busy || !d.data} onClick={() => void decide(false)}>

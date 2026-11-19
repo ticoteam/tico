@@ -227,33 +227,45 @@ const LIVE = new Set(['requested', 'starting', 'waiting', 'finishing']);
 export const loginLive = (l: PlanLogin | null | undefined): boolean => !!l && (!l.id || LIVE.has(l.state ?? ''));
 const loginPath = (l: PlanLogin) => `/api/v2/computers/${enc(l.runner_id ?? '')}/logins/${enc(l.id ?? '')}` as const;
 
-/**
- * The sign-in, followed while it runs. No topic carries a sign-in's steps (backend/model_login.py), so this one read
- * asks every two seconds while the person signs in, and stops when it ends.
- */
+/** What the cache keeps of a sign-in: its state, never its one-time code, the provider's page (which can carry the
+    code) or the terminal lines. Those go to the component that shows them, from `readLogin`, and stay in its state. */
+const statusOf = (l: PlanLogin): PlanLogin => {
+  const { url: _url, code: _code, lines: _lines, ...status } = l as PlanLogin & { lines?: unknown };
+  return status;
+};
+const hold = (l: PlanLogin | null) => queryClient.setQueryData<PlanLogin | null>(LOGIN, () => l && statusOf(l));
+
+/** The sign-in's state (no code; see `statusOf`). Set by the writes below and by `readLogin`; never fetched itself. */
 export const loginQuery = queryOptions({
   queryKey: LOGIN,
-  queryFn: async ({ signal }): Promise<PlanLogin | null> => {
-    const was = queryClient.getQueryData<PlanLogin | null>(LOGIN) ?? null;
-    if (!was || !loginLive(was)) return was;
-    // Its computer was starting: ask again; the server picks up a sign-in already going.
-    if (!was.id) return was.waking ? { ...(await api.post<PlanLogin>('/api/v2/model-subscriptions/connect', { kind: was.kind })), kind: was.kind } : was;
-    let next: PlanLogin;
-    try {
-      next = { ...was, ...(await api.get<PlanLogin>(loginPath(was), { signal })) };
-    } catch (e) {
-      // Gone from the server (a restart ends it); anything else is the server away for a moment.
-      if (e instanceof ApiError && e.status === 404) return { ...was, state: 'failed', message: null };
-      return was;
-    }
-    if (next.state === 'done') void queryClient.invalidateQueries({ queryKey: subscriptionsQuery.queryKey });
-    return next;
-  },
-  refetchInterval: (q) => (loginLive(q.state.data) ? 2000 : false),
-  staleTime: 0,
+  queryFn: (): PlanLogin | null => queryClient.getQueryData<PlanLogin | null>(LOGIN) ?? null,
+  staleTime: Infinity,
 });
 
-const hold = (l: PlanLogin | null) => queryClient.setQueryData<PlanLogin | null>(LOGIN, () => l);
+/**
+ * One read of the sign-in while it runs. No topic carries a sign-in's steps (backend/model_login.py), so the first run
+ * calls this every two seconds (`poll` from @/lib) while the person signs in. The cache takes the state; the whole
+ * answer, code and page included, goes back to the caller's component state only.
+ */
+export async function readLogin(signal?: AbortSignal): Promise<PlanLogin | null> {
+  const was = queryClient.getQueryData<PlanLogin | null>(LOGIN) ?? null;
+  if (!was || !loginLive(was) || (!was.id && !was.waking)) return was;
+  let next: PlanLogin;
+  try {
+    // Its computer was starting: ask again; the server picks up a sign-in already going.
+    if (!was.id) next = { ...(await api.post<PlanLogin>('/api/v2/model-subscriptions/connect', { kind: was.kind })), kind: was.kind };
+    else next = { ...was, ...(await api.get<PlanLogin>(loginPath(was), { signal })) };
+  } catch (e) {
+    // Gone from the server (a restart ends it); anything else is the server away for a moment.
+    if (!(e instanceof ApiError && e.status === 404)) return was;
+    next = { ...was, state: 'failed', message: null };
+  }
+  // Ended or changed meanwhile (left the first run, a code sent): this answer is old.
+  if (queryClient.getQueryData(LOGIN) !== was) return next;
+  hold(next);
+  if (next.state === 'done') void queryClient.invalidateQueries({ queryKey: subscriptionsQuery.queryKey });
+  return next;
+}
 
 export async function startConnect(kind: PlanKind): Promise<void> {
   hold({ kind, state: 'requested' });

@@ -1,6 +1,6 @@
 import { queryOptions } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
+import { QUIET_STALE_MS, quietRoot, write } from '@/data';
 import type {
   Delivery,
   DocFile,
@@ -297,13 +297,9 @@ export const payloadQuery = (hook: string, delivery: string) =>
     gcTime: 0,
   });
 
-/* The full address of a webhook, secret included, is given once: at creation and on a new secret. It is held in the
-   cache only while its panel shows it (gcTime 0), under a root no write reads again, and is never sent anywhere. */
-const shownKey = (id: string) => ['shown-once', id] as const;
-export const shownOnceQuery = (id: string) =>
-  queryOptions<string | null>({ queryKey: shownKey(id), queryFn: () => null, staleTime: Infinity, gcTime: 0 });
-
-export async function createHook(name: string) {
+/* The full address of a webhook, secret included, is given once: at creation and on a new secret. It goes back to
+   the caller only (the panel's state): never the cache, a toast, a log or the address bar. */
+export async function createHook(name: string): Promise<{ id: string; url: string }> {
   const id = tmpId();
   const shown: Hook = { id, name, url: '', received_24h: 0, automations: [] };
   const r = await write<{ trigger: ShownOnce }>({
@@ -313,13 +309,11 @@ export async function createHook(name: string) {
     settle: (list: Hook[] | undefined, made) => list?.map((h) => (h.id === id ? { ...h, id: made.trigger.id, url: stripSecret(made.trigger.url) } : h)),
     revert: (list: Hook[] | undefined) => list?.filter((h) => h.id !== id),
   });
-  if (r.trigger.url) setShown(r.trigger.id, r.trigger.url);
-  return r.trigger.id;
+  return { id: r.trigger.id, url: r.trigger.url };
 }
 
-export async function rotateHook(id: string) {
-  const r = await api.post<{ trigger: ShownOnce }>(`/api/v2/triggers/${enc(id)}/rotate`, {});
-  setShown(id, r.trigger.url);
+export async function rotateHook(id: string): Promise<string> {
+  return (await api.post<{ trigger: ShownOnce }>(`/api/v2/triggers/${enc(id)}/rotate`, {})).trigger.url;
 }
 
 export function removeHook(id: string) {
@@ -347,10 +341,6 @@ export function signHookOff(id: string) {
     optimistic: (list: Hook[] | undefined) => list?.map((h) => (h.id === id ? { ...h, signed: false, preset: 'none' } : h)),
     send: (idempotencyKey) => api.post(`/api/v2/triggers/${enc(id)}/signing`, { off: true }, { idempotencyKey }),
   });
-}
-
-function setShown(id: string, url: string) {
-  queryClient.setQueryData(shownKey(id), url);
 }
 
 /** The address without its secret: what a row may copy. The secret is the last path part (backend/triggers.py). */

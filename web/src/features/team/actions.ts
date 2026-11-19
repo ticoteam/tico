@@ -4,6 +4,7 @@ import { directoryQuery } from '@/data';
 import { toast } from '@/kit/Toast';
 import {
   addAgent,
+  agentsQuery,
   archiveAgent,
   cancelLogin,
   changeAgent,
@@ -245,6 +246,13 @@ export const worksFor = defineAction({
   title: 'Change who an agent works for',
   kind: 'change',
   input: s.object({ slug, people: s.array(person, { max: 100 }) }),
+  // Whom it works for joins its chat: adding someone widens who reads it, the person's own press. Taking someone off
+  // stays Tico's.
+  can: (ctx, { slug, people }) => {
+    if (ctx.via !== 'tico') return true;
+    const had = ctx.queryClient.getQueryData(agentsQuery.queryKey)?.find((r) => r.slug === slug)?.users?.map((u) => u.id) ?? [];
+    return people.every((p) => had.includes(p));
+  },
   run: (_ctx, { slug, people }) => said("Couldn't change it", () => setWorksFor(slug, people)),
   did: () => 'Changed who it works for',
   target: ({ slug }) => onPage(slug),
@@ -349,6 +357,8 @@ export const invite = defineAction({
     team: s.optional(team),
     role: s.optional(s.oneOf(['member', 'admin'] as const)),
   }),
+  // An admin's rights are the person's own to give; inviting a member stays Tico's.
+  can: (ctx, { role }) => !(role === 'admin' && ctx.via === 'tico'),
   run: ({ router }, input) =>
     said("Couldn't send the invite", async () => {
       const out = await invitePerson(input);
@@ -364,6 +374,8 @@ export const setPermissions = defineAction({
   title: "Change a person's permissions",
   kind: 'change',
   input: s.object({ person, role: s.oneOf(['member', 'admin'] as const) }),
+  // Making someone an admin is the person's own press; back to member stays Tico's.
+  can: (ctx, { role }) => !(role === 'admin' && ctx.via === 'tico'),
   run: (_ctx, { person, role }) => said("Couldn't change it", () => setPersonRole(person, role)),
   did: ({ role }) => (role === 'admin' ? 'Made them an admin' : 'Made them a member'),
   target: ({ person }) => onPage(person),
@@ -510,6 +522,8 @@ export const signOut = defineAction({
   id: 'computers.signOut',
   title: 'Sign out of an AI tool on a computer',
   kind: 'change',
+  // Only a person can sign in again, so signing out is the person's own press too.
+  tico: false,
   input: s.object({ computer, runtime }),
   run: (_ctx, { computer, runtime }) => said("Couldn't sign out", () => startLogout(computer, runtime)),
   did: () => 'Signing out. The agents that use it stop until someone signs in again.',

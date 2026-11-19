@@ -2,12 +2,13 @@
 import '@/actions';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { directoryQuery, queryClient, type Actor } from '@/data';
 import { BrowserDialog } from './BrowserView';
 import { agentsQuery, computersQuery, modelsQuery, type AgentRow, type Computer } from './queries';
+import { SignIns } from './SignIns';
 import { TeamWho } from './TeamWho';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -216,5 +217,26 @@ describe('Open browser', () => {
     expect(await screen.findByText('You have control')).toBeTruthy();
     cleanup();
     await waitFor(() => expect(sent.filter((s) => s.url.endsWith('/control')).map((s) => s.body)).toEqual([{ take: true }, { take: false }]));
+  });
+});
+
+describe('A sign-in on a computer', () => {
+  const CODE = 'WDJB-MJHT';
+  const PAGE = `https://auth.example/device?user_code=${CODE}`;
+
+  it('shows the provider’s code and page in its dialog only, never in the query cache', async () => {
+    serve((url, method) => {
+      if (method === 'POST' && url.endsWith('/api/v2/computers/r1/logins')) return json({ id: 'l1', runner_id: 'r1', state: 'starting' });
+      if (url.endsWith('/api/v2/computers/r1/logins/l1')) return json({ id: 'l1', runner_id: 'r1', state: 'waiting', url: PAGE, code: CODE, lines: [`Enter ${CODE}`] });
+      return undefined;
+    });
+    queryClient.setQueryData(modelsQuery.queryKey, { models: [], harnesses: [{ id: 'codex', name: 'Codex', capabilities: { browser_sign_in: true } }] });
+    const c = { ...studio, readiness: { runtimes: { codex: { installed: true, authenticated: 'missing' } } } } as Computer;
+    show(<SignIns c={c} />, '/team/computers/r1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in to Codex' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Sign in to Codex' });
+    expect(await within(dialog).findByText(CODE)).toBeTruthy();
+    expect(within(dialog).getByRole('link').getAttribute('href')).toBe(PAGE);
+    expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => [q.queryKey, q.state.data]))).not.toContain(CODE);
   });
 });

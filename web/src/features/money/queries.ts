@@ -358,10 +358,10 @@ export type Decided = FinanceAction & { approver?: string | null; impact?: Impac
 /** A decision, tried first: the rules say whether it goes through or whom it waits for. Nothing is written. */
 export const tryDecision = (kind: string, payload: object) => api.post<Decided>('/api/v2/finance/actions', { kind, payload, dry_run: true });
 
-/** A decision sent: done, or waiting for its approver (said by the caller). Anything else is refused and throws. */
-export async function decide(kind: string, payload: object): Promise<Decided> {
-  // One key for this press, so a request sent twice (a retry on a dropped answer) moves money once.
-  const out = await api.post<Decided>('/api/v2/finance/actions', { kind, payload }, { idempotencyKey: newId() });
+/** A decision sent: done, or waiting for its approver (said by the caller). Anything else is refused and throws.
+    `key` is the dialog's own (one per opening and field values), so pressing again after a lost answer moves money once. */
+export async function decide(kind: string, payload: object, key: string = newId()): Promise<Decided> {
+  const out = await api.post<Decided>('/api/v2/finance/actions', { kind, payload }, { idempotencyKey: key });
   void queryClient.invalidateQueries({ queryKey: ['finance'] });
   if (out.status === 'committed' || out.status === 'needs_approval') return out;
   throw Object.assign(new Error(out.reason || out.status), { code: out.code || out.status });

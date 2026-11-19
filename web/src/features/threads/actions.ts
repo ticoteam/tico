@@ -158,6 +158,8 @@ export const keepMessagesAction = defineAction({
   title: 'Choose how long a thread keeps its messages',
   kind: 'change',
   input: s.object({ thread, days: s.nullable(s.oneOf([30, 90, 365] as const)) }),
+  // A shorter keep deletes older messages for good: the person's own press. Keeping them always stays Tico's.
+  can: (ctx, { days }) => !(days !== null && ctx.via === 'tico'),
   run: (_ctx, { thread, days }) => changeThread(thread, { retention_days: days }),
   did: ({ days }) => (days ? `Keeps messages ${days} days` : 'Keeps messages always'),
   target: ({ thread }) => ({ kind: 'thread', id: thread }),
@@ -168,6 +170,8 @@ export const whoCanReadAction = defineAction({
   title: 'Choose who can read a thread',
   kind: 'change',
   input: s.object({ thread, audience: s.oneOf(['members', 'company'] as const) }),
+  // Opening a thread to the whole company is the person's own press; closing it to its members stays Tico's.
+  can: (ctx, { audience }) => !(audience === 'company' && ctx.via === 'tico'),
   run: (_ctx, { thread, audience }) => changeThread(thread, { audience, audience_group_id: null }),
   did: ({ audience }) => (audience === 'company' ? 'Everyone in the company can read it' : 'Only its members can read it'),
   target: ({ thread }) => ({ kind: 'thread', id: thread }),
@@ -194,6 +198,8 @@ export const openEarlierAction = defineAction({
   title: 'Open earlier messages to readers',
   kind: 'change',
   input: s.object({ thread }),
+  // Shows readers what was said before they joined: widening access, the person's own press.
+  tico: false,
   run: (_ctx, { thread }) => openEarlier(thread),
   did: (_input, out) => (out ? `Opened ${out.messages} earlier messages` : 'Opened earlier messages'),
   target: ({ thread }) => ({ kind: 'thread', id: thread }),

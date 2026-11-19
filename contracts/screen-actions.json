@@ -864,37 +864,6 @@
       }
     },
     {
-      "id": "budget.addRow",
-      "title": "Add a monthly budget for a P&L line",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 120
-          },
-          "line": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "amount": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1000000000
-          }
-        },
-        "required": [
-          "name",
-          "line",
-          "amount"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "budget.newRow",
       "title": "Start a new budget",
       "kind": "view",
@@ -919,50 +888,6 @@
         },
         "required": [
           "budget"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "budget.removeRow",
-      "title": "Stop a budget from this month on",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "budget": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "budget"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "budget.updateRow",
-      "title": "Change a budget from this month on",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "budget": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "amount": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1000000000
-          }
-        },
-        "required": [
-          "budget",
-          "amount"
         ],
         "additionalProperties": false
       }
@@ -1157,16 +1082,6 @@
         "required": [
           "id"
         ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "calls.disconnectGranola",
-      "title": "Remove Granola",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {},
         "additionalProperties": false
       }
     },
@@ -1704,33 +1619,6 @@
         },
         "required": [
           "id"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "computers.signOut",
-      "title": "Sign out of an AI tool on a computer",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "computer": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a computer's id"
-          },
-          "runtime": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 40,
-            "description": "an AI tool's runtime id, as the computer reports it"
-          }
-        },
-        "required": [
-          "computer",
-          "runtime"
         ],
         "additionalProperties": false
       }
@@ -2376,67 +2264,6 @@
       }
     },
     {
-      "id": "finance.disconnect",
-      "title": "Disconnect a Finance source",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "connection": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "books": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "connection"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "finance.importHistory",
-      "title": "Import a spreadsheet's monthly totals as history",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "csv": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 1000000
-          },
-          "basis": {
-            "enum": [
-              "accrual",
-              "cash"
-            ]
-          },
-          "mapping": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 200
-            }
-          },
-          "source": {
-            "type": "string",
-            "maxLength": 120
-          }
-        },
-        "required": [
-          "csv",
-          "basis",
-          "mapping"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "finance.openLine",
       "title": "Open a P&L line",
       "kind": "view",
@@ -2451,49 +2278,6 @@
         },
         "required": [
           "account"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "finance.postStatement",
-      "title": "Post the new rows of a bank or card statement",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "account": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "file": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 1400000
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 255
-          },
-          "token": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "signs": {
-            "enum": [
-              "as_shown",
-              "flipped"
-            ]
-          }
-        },
-        "required": [
-          "account",
-          "file",
-          "name",
-          "token"
         ],
         "additionalProperties": false
       }
@@ -2621,36 +2405,6 @@
       }
     },
     {
-      "id": "finance.setDefaults",
-      "title": "Set what managers and everyone else see in Finance",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "manager": {
-            "enum": [
-              "none",
-              "team_expenses",
-              "own_expenses"
-            ]
-          },
-          "manager_payroll": {
-            "enum": [
-              "totals",
-              "hidden"
-            ]
-          },
-          "member": {
-            "enum": [
-              "none",
-              "own_expenses"
-            ]
-          }
-        },
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "finance.setPeriod",
       "title": "Show the P&L by month, quarter or year",
       "kind": "view",
@@ -2717,35 +2471,6 @@
         "required": [
           "tab"
         ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "finance.startMirror",
-      "title": "Use QuickBooks or Xero as the books",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "connection": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "connection"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "finance.stopMirror",
-      "title": "Stop using QuickBooks or Xero as the books",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {},
         "additionalProperties": false
       }
     },
@@ -4175,38 +3900,6 @@
       }
     },
     {
-      "id": "routines.setLimit",
-      "title": "Set a routine's spend limit",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "routine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "per30m": {
-            "anyOf": [
-              {
-                "type": "number",
-                "minimum": 0,
-                "maximum": 100000
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "routine",
-          "per30m"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "routines.setMaintenance",
       "title": "Change Maintenance",
       "kind": "change",
@@ -5448,46 +5141,6 @@
       }
     },
     {
-      "id": "settings.removeComputer",
-      "title": "Remove a computer",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "computer": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a computer id"
-          }
-        },
-        "required": [
-          "computer"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.removeSubscription",
-      "title": "Remove a subscription",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "subscription": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a subscription id"
-          }
-        },
-        "required": [
-          "subscription"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "settings.rename",
       "title": "Rename a person",
       "kind": "change",
@@ -5566,26 +5219,6 @@
         },
         "required": [
           "agent"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.revokeToken",
-      "title": "Revoke an API token",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "token": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a token id"
-          }
-        },
-        "required": [
-          "token"
         ],
         "additionalProperties": false
       }
@@ -7828,26 +7461,6 @@
       }
     },
     {
-      "id": "threads.openEarlier",
-      "title": "Open earlier messages to readers",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "thread": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "a thread id"
-          }
-        },
-        "required": [
-          "thread"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "threads.pinForEveryone",
       "title": "Pin a thread for everyone in it",
       "kind": "change",
@@ -8313,31 +7926,6 @@
       }
     },
     {
-      "id": "tools.removeKey",
-      "title": "Remove a key",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "tool": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "key": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "tool",
-          "key"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "tools.removeSetting",
       "title": "Remove a run setting",
       "kind": "change",
@@ -8618,69 +8206,9 @@
       }
     },
     {
-      "id": "usage.setDefaultLimit",
-      "title": "Change the monthly limit for a new agent",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "monthly": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1000000
-          }
-        },
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "usage.setLimit",
-      "title": "Change an agent's monthly limit",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "agent": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "an agent slug"
-          },
-          "monthly": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1000000
-          }
-        },
-        "required": [
-          "agent"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "webhooks.open",
       "title": "Open a webhook",
       "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "hook": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "hook"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "webhooks.remove",
-      "title": "Remove a webhook",
-      "kind": "change",
       "input": {
         "type": "object",
         "properties": {

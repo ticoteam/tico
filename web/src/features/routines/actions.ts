@@ -262,6 +262,8 @@ export const setLimit = defineAction({
   title: "Set a routine's spend limit",
   kind: 'change',
   input: s.object({ routine: id, per30m: s.nullable(s.number({ min: 0, max: 100_000 })) }),
+  // A spending limit is budget: the person's own press.
+  tico: false,
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
   run: (_ctx, i) => said(setRoutineLimit(i.routine, i.per30m)),
   did: (i) => (i.per30m === null ? "Uses the agent's limit" : 'Limit set'),
@@ -356,13 +358,14 @@ export const addWebhook = defineAction({
   kind: 'change',
   tico: false,
   input: s.object({ name }),
+  // The full address (secret included) goes back to the page that added it, held in its state: never cached
   run: async ({ router }, i) => {
-    const hook = await said(createHook(i.name.trim()));
-    await go(router, ROUTINES, { tab: 'webhooks', panel: `hook:${hook}` });
-    return hook;
+    const made = await said(createHook(i.name.trim()));
+    await go(router, ROUTINES, { tab: 'webhooks', panel: `hook:${made.id}` });
+    return { hook: made.id, url: made.url };
   },
   did: (i) => `Added ${i.name}`,
-  target: (_i, hook) => (hook ? { kind: 'hook', id: hook } : null),
+  target: (_i, made) => (made ? { kind: 'hook', id: made.hook } : null),
 });
 
 export const rotateWebhook = defineAction({
@@ -372,8 +375,9 @@ export const rotateWebhook = defineAction({
   tico: false,
   input: s.object({ hook: id }),
   run: async ({ router }, i) => {
-    await said(rotateHook(i.hook));
+    const url = await said(rotateHook(i.hook));
     await go(router, ROUTINES, { tab: 'webhooks', panel: `hook:${i.hook}` });
+    return { url };
   },
   did: () => 'New secret made',
   target: (i) => ({ kind: 'hook', id: i.hook }),
@@ -412,6 +416,8 @@ export const removeWebhook = defineAction({
   title: 'Remove a webhook',
   kind: 'change',
   input: s.object({ hook: id }),
+  // Its address and secret are gone for good, and whoever calls it is refused: the person's own press.
+  tico: false,
   can: (ctx, i) => !ctx.queryClient.getQueryData<{ id: string; builtin?: boolean }[]>(hooksQuery.queryKey)?.find((h) => h.id === i.hook)?.builtin,
   run: async ({ router }, i) => {
     await said(removeHook(i.hook));

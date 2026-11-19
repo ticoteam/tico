@@ -2,7 +2,7 @@ import { useRouter } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import type { ToolIndex } from '@/api/schema';
 import { toast } from '@/kit/Toast';
-import { rereadTools } from './queries';
+import { readGithubApp, rereadTools } from './queries';
 import type { GithubReturn, ToolsSearch } from './search';
 
 /* Back from GitHub (backend/github_app.py): the server sends the browser to Tools › GitHub with `?github=<word>`. The
@@ -46,12 +46,12 @@ export function useGithubReturn(search: ToolsSearch): string | null {
       replace: true,
     });
     if (!known) return;
-    void rereadTools().then(
-      (index) => {
+    void Promise.all([rereadTools(), word === 'authorized' ? readGithubApp() : null]).then(
+      ([index, app]) => {
         const tone = githubTone(index);
         const done = DONE[word];
-        // Authorized needs the App kept; the others need it installed.
-        if (done && (word === 'authorized' ? tone === 'ok' || tone === 'wait' : tone === 'ok')) toast({ text: done, name: 'GitHub' });
+        // Authorized is the server's own `authorized` on the App; the others need it installed.
+        if (done && (word === 'authorized' ? app?.authorized === true : tone === 'ok')) toast({ text: done, name: 'GitHub' });
         else if (GITHUB_WHY[word]) setProblem(GITHUB_WHY[word]);
         else if (word !== 'authorized') setProblem(tone === 'wait' ? PENDING : 'GitHub is not connected yet.');
       },

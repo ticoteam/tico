@@ -204,6 +204,38 @@ describe('Finance dialogs @s449 @s461 @s453 @s454', () => {
     expect(posted[1]).toEqual({ kind: 'payment_create', payload: { method: 'internal', from_account: 'a1', to_account: 'a2', amount: 10000 } });
   });
 
+  it('a transfer pressed again after a lost answer sends the same key; a changed amount sends a new one', async () => {
+    const sent: (string | null)[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {};
+      const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (init?.method === 'POST' && body.dry_run) return json({ kind: 'payment_create', status: 'committed' });
+      if (init?.method === 'POST') {
+        sent.push(new Headers(init.headers).get('Idempotency-Key'));
+        throw new TypeError('connection reset'); // the server may have queued it; the answer is lost
+      }
+      if (String(url).endsWith('/finance/access')) return json(access);
+      if (String(url).endsWith('/finance/pay-from')) return json({ accounts: [{ id: 'a1', name: 'Checking' }, { id: 'a2', name: 'Reserve' }], currency: 'usd', view_version: 1 });
+      return json({ rows: [] });
+    });
+    show('finance', '/company/finance?tab=transactions');
+    fireEvent.click(await screen.findByRole('button', { name: 'New transfer' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Transfer' });
+    const amount = within(dialog).getByRole('textbox', { name: 'Amount' });
+    const press = async (n: number) => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Transfer' }));
+      await waitFor(() => expect(sent).toHaveLength(n));
+      await within(dialog).findByRole('alert');
+    };
+    fireEvent.change(amount, { target: { value: '100' } });
+    await press(1);
+    await press(2);
+    expect(sent[1]).toBe(sent[0]);
+    fireEvent.change(amount, { target: { value: '200' } });
+    await press(3);
+    expect(sent[2]).not.toBe(sent[0]);
+  });
+
   it("Stripe's webhook shows its address and secret once", async () => {
     serve((url, method) => {
       if (url.endsWith('/finance/access')) return ok(access);

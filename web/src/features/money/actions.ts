@@ -115,6 +115,8 @@ export const addSource = defineAction({
 const money = s.number({ min: 0.01, max: 1_000_000_000 });
 const cents = (dollars: number) => Math.round(dollars * 100);
 const day = s.string({ pattern: /^\d{4}-\d{2}-\d{2}$/, what: 'a day, 2026-01-01' });
+/** The dialog's Idempotency-Key: the same while its fields are unchanged, so a resend after a lost answer lands once. */
+const sendKey = s.string({ min: 1, max: 200 });
 
 /** A decision waiting for its approver says whom; the server names a teammate, an email or a role. */
 function waits(out: Decided | undefined, done: string) {
@@ -130,10 +132,10 @@ export const transfer = defineAction({
   kind: 'change',
   // Money leaves an account: the person's own press. An agent asks through Finance's own tools, where the rules see it as the agent.
   tico: false,
-  input: s.object({ from: id, to: id, amount: money, memo: s.optional(s.string({ max: 140 })) }),
+  input: s.object({ from: id, to: id, amount: money, memo: s.optional(s.string({ max: 140 })), key: s.optional(sendKey) }),
   can: (_ctx, { from, to }) => from !== to,
-  run: (_ctx, { from, to, amount, memo }) =>
-    decide('payment_create', { method: 'internal', from_account: from, to_account: to, amount: cents(amount), ...(memo?.trim() ? { memo: memo.trim() } : {}) }),
+  run: (_ctx, { from, to, amount, memo, key }) =>
+    decide('payment_create', { method: 'internal', from_account: from, to_account: to, amount: cents(amount), ...(memo?.trim() ? { memo: memo.trim() } : {}) }, key),
   did: (_i, out) => waits(out, 'Queued'),
 });
 
@@ -142,9 +144,9 @@ export const newCard = defineAction({
   title: 'Issue a card with a monthly limit from a budget',
   kind: 'change',
   tico: false,
-  input: s.object({ holder: id, budget: id, amount: money, user: id, name: s.optional(s.string({ max: 50 })) }),
-  run: (_ctx, { holder, budget, amount, user, name }) =>
-    decide('card_create', { holder, budget_id: budget, amount: cents(amount), provider_user_id: user, ...(name?.trim() ? { nickname: name.trim() } : {}) }),
+  input: s.object({ holder: id, budget: id, amount: money, user: id, name: s.optional(s.string({ max: 50 })), key: s.optional(sendKey) }),
+  run: (_ctx, { holder, budget, amount, user, name, key }) =>
+    decide('card_create', { holder, budget_id: budget, amount: cents(amount), provider_user_id: user, ...(name?.trim() ? { nickname: name.trim() } : {}) }, key),
   did: (_i, out) => waits(out, 'Card created'),
 });
 
@@ -194,6 +196,8 @@ export const startMirror = defineAction({
   id: 'finance.startMirror',
   title: 'Use QuickBooks or Xero as the books',
   kind: 'change',
+  // The books are the person's own press: what posts to them, and whether they are connected.
+  tico: false,
   input: s.object({ connection: id }),
   run: (_ctx, { connection }) => decide('mirror_start', { connection_id: connection }),
   did: (_i, out) => waits(out, 'Mirroring'),
@@ -204,6 +208,7 @@ export const stopMirror = defineAction({
   id: 'finance.stopMirror',
   title: 'Stop using QuickBooks or Xero as the books',
   kind: 'change',
+  tico: false,
   input: s.object({}),
   run: () => decide('mirror_stop', {}),
   did: (_i, out) => waits(out, 'Stopped'),
@@ -214,6 +219,7 @@ export const disconnect = defineAction({
   id: 'finance.disconnect',
   title: 'Disconnect a Finance source',
   kind: 'change',
+  tico: false,
   input: s.object({ connection: id, books: s.optional(s.boolean()) }),
   run: async (_ctx, { connection, books }): Promise<Decided | undefined> => {
     if (!books) return decide('connection_disconnect', { connection_id: connection });
@@ -238,6 +244,8 @@ export const setDefaults = defineAction({
   id: 'finance.setDefaults',
   title: 'Set what managers and everyone else see in Finance',
   kind: 'change',
+  // Who sees financial data is the person's own press.
+  tico: false,
   input: s.object({
     manager: s.optional(s.oneOf(['none', 'team_expenses', 'own_expenses'] as const)),
     manager_payroll: s.optional(s.oneOf(['totals', 'hidden'] as const)),
@@ -286,6 +294,7 @@ export const postStatement = defineAction({
   id: 'finance.postStatement',
   title: 'Post the new rows of a bank or card statement',
   kind: 'change',
+  tico: false,
   input: s.object({
     account: id,
     file: s.string({ min: 1, max: 1_400_000 }),
@@ -360,6 +369,7 @@ export const importHistory = defineAction({
   id: 'finance.importHistory',
   title: "Import a spreadsheet's monthly totals as history",
   kind: 'change',
+  tico: false,
   input: s.object({
     csv: s.string({ min: 1, max: 1_000_000 }),
     basis: s.oneOf(['accrual', 'cash'] as const),
@@ -397,6 +407,8 @@ export const addRow = defineAction({
   id: 'budget.addRow',
   title: 'Add a monthly budget for a P&L line',
   kind: 'change',
+  // A budget is money: the person's own press. Opening one (above) stays Tico's.
+  tico: false,
   input: s.object({ name: s.string({ min: 1, max: 120 }), line: id, amount: dollars }),
   run: async ({ router }, { name, line, amount }) => {
     const done = addBudget(budgetDay(), { name, line, cents: Math.round(amount * 100) });
@@ -411,6 +423,7 @@ export const updateRow = defineAction({
   id: 'budget.updateRow',
   title: 'Change a budget from this month on',
   kind: 'change',
+  tico: false,
   input: s.object({ budget: id, amount: dollars }),
   run: (_ctx, { budget, amount }) => setBudgetAmount(budgetDay(), budget, Math.round(amount * 100)),
   did: () => 'Changed the budget',
@@ -421,6 +434,7 @@ export const removeRow = defineAction({
   id: 'budget.removeRow',
   title: 'Stop a budget from this month on',
   kind: 'change',
+  tico: false,
   input: s.object({ budget: id }),
   run: async ({ router }, { budget }) => {
     const done = removeBudget(budgetDay(), budget);

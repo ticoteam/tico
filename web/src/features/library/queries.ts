@@ -7,6 +7,7 @@ import type {
   DocSourceResult,
   ExternalDocResult,
   FileLibrary,
+  GitHubApp,
   InboundInboxes,
   InboundMessages,
   InternalDoc,
@@ -448,14 +449,10 @@ export function installSkill(name: string, targets: InstallFor, version?: number
     .then(() => queryClient.invalidateQueries({ queryKey: ['skills'] }));
 }
 
-/** Connect Claude Code: the code the skills helper on a person's computer shows (backend/skill_devices.py). */
-export const deviceCodeQuery = (code: string) =>
-  queryOptions({
-    queryKey: ['skills', 'device', code],
-    queryFn: () => api.get<{ user_code: string; label: string | null; expires_at: string }>(`/api/v2/skills/devices/codes/${enc(code)}`),
-    retry: false,
-    staleTime: 0,
-  });
+/** Connect Claude Code: the computer waiting on the code its skills helper shows (backend/skill_devices.py). Not a
+    query: the code is a one-time approval, held in the dialog's state only, never a query key or the cache. */
+export const previewDevice = (code: string) =>
+  api.get<{ user_code: string; label: string | null; expires_at: string }>(`/api/v2/skills/devices/codes/${enc(code)}`);
 
 export const decideDevice = (code: string, approve: boolean, share: boolean) =>
   api.post(`/api/v2/skills/devices/codes/${enc(code)}/${approve ? 'approve' : 'deny'}`, { reporting_enabled: approve && share });
@@ -500,6 +497,9 @@ export async function rereadTools(): Promise<ToolIndex> {
   await queryClient.invalidateQueries({ queryKey: ['tools'] });
   return queryClient.fetchQuery(toolsQuery);
 }
+
+/** After GitHub's sign-in return: the App as the server reads it now, whose `authorized` says the sign-in held. */
+export const readGithubApp = () => api.get<GitHubApp>('/api/v2/github/app');
 
 export const apiToolQuery = (id: string) =>
   queryOptions({

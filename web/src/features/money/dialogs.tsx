@@ -11,6 +11,7 @@ import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
+import { newId } from '@/lib';
 import { budgetDay, cash, centsOf, dayOf } from './model';
 import { Prow, useViewAs } from './parts';
 import {
@@ -133,6 +134,19 @@ export function useAsk(onOpenChange: Open) {
   return { busy, error, setError, setBusy, go };
 }
 
+/**
+ * The Idempotency-Key for a dialog that moves money: one per opening and field values. Pressing again on an unchanged
+ * dialog after an answer that never came back sends the same key, so the server does it once; a changed field is a new
+ * request with its own key.
+ */
+function useSendKey(fields: string): string {
+  const [opened] = useState(newId);
+  // FNV-1a: a short, stable stand-in for the fields (the key holds at most 200 characters).
+  let h = 0x811c9dc5;
+  for (let i = 0; i < fields.length; i++) h = Math.imul(h ^ fields.charCodeAt(i), 0x01000193);
+  return `${opened}.${(h >>> 0).toString(36)}`;
+}
+
 // ---------------------------------------------------------------- the decision, tried first (s449)
 
 function Approver({ who }: { who: string }) {
@@ -153,6 +167,7 @@ function Decide({ title, submit, decision, onOpenChange, children }: { title: st
   const [asked, setAsked] = useState<{ sig: string; who: string; impact?: Impact } | null>(null);
   const now = decision();
   const sig = typeof now === 'string' ? '' : JSON.stringify([now.kind, now.payload]);
+  const key = useSendKey(sig);
   const waiting = asked && asked.sig === sig ? asked : null;
   const press = async () => {
     if (typeof now === 'string') return ask.setError(now);
@@ -169,7 +184,7 @@ function Decide({ title, submit, decision, onOpenChange, children }: { title: st
         ask.setBusy(false);
       }
     }
-    await ask.go(now.action, now.input);
+    await ask.go(now.action, { ...now.input, key });
   };
   const left = (waiting?.impact?.budgets ?? []).filter((b) => b.remaining != null);
   return (
@@ -234,13 +249,14 @@ export function CardDialog({ onOpenChange }: { onOpenChange: Open }) {
   const h = holder ?? holders[0]?.value ?? null;
   const b = budget ?? lines[0]?.value ?? null;
   const u = user ?? people[0]?.value ?? null;
+  const key = useSendKey(JSON.stringify([h, b, centsOf(amount), u, name.trim()]));
   const create = () => {
     const c = centsOf(amount);
     if (!c) return ask.setError('A dollar amount, like 500');
     if (!b) return ask.setError('Pick a budget');
     if (!u) return ask.setError('No Mercury users yet');
     if (!h) return ask.setError('Pick a holder');
-    void ask.go('finance.newCard', { holder: h, budget: b, amount: c / 100, user: u, ...(name.trim() ? { name: name.trim() } : {}) });
+    void ask.go('finance.newCard', { holder: h, budget: b, amount: c / 100, user: u, ...(name.trim() ? { name: name.trim() } : {}), key });
   };
   return (
     <Ask title="New card" submit="Create" onOpenChange={onOpenChange} onSubmit={create} busy={ask.busy} error={ask.error}>

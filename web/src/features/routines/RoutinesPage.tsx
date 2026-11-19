@@ -13,7 +13,7 @@ import { toast } from '@/kit/Toast';
 import { List, Section, type PageTab } from '@/pagekinds';
 import { BUILTINS, ROUTINES, type Builtin } from './actions';
 import { BuiltinPanel } from './BuiltinPanel';
-import { Face, press, Word } from './parts';
+import { Face, press, pressOut, Word } from './parts';
 import { heartbeatQuery, hooksQuery, maintenanceQuery, routinesQuery, systemJobsQuery } from './queries';
 import { RoutinePanel } from './RoutinePanel';
 import type { Hook, Routine } from './types';
@@ -184,6 +184,8 @@ function BuiltInSection({ selected }: { selected: Builtin | null }) {
 function WebhooksTab({ panel }: { panel?: string }) {
   const hooks = useQuery(hooksQuery);
   const [adding, setAdding] = useState(false);
+  // a new webhook's full address, secret included, shown once: this state only, never the cache or the address
+  const [made, setMade] = useState<{ hook: string; url: string } | null>(null);
   const list = hooks.data ?? [];
   const open = panel?.startsWith('hook:') ? panel.slice(5) : null;
   const add = (
@@ -200,7 +202,7 @@ function WebhooksTab({ panel }: { panel?: string }) {
       actions={
         <>
           {add}
-          <AddWebhook open={adding} onOpenChange={setAdding} />
+          <AddWebhook open={adding} onOpenChange={setAdding} onMade={setMade} />
         </>
       }
       sections={
@@ -210,7 +212,20 @@ function WebhooksTab({ panel }: { panel?: string }) {
           ))}
         </Section>
       }
-      panel={open && <WebhookPanel key={open} id={open} onClose={close} />}
+      panel={
+        open && (
+          <WebhookPanel
+            key={open}
+            id={open}
+            shown={made?.hook === open ? made.url : null}
+            onShown={(url) => setMade({ hook: open, url })}
+            onClose={() => {
+              setMade(null);
+              close();
+            }}
+          />
+        )
+      }
     />
   );
 }
@@ -235,15 +250,16 @@ function HookRow({ h, selected }: { h: Hook; selected: boolean }) {
   );
 }
 
-function AddWebhook({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+function AddWebhook({ open, onOpenChange, onMade }: { open: boolean; onOpenChange: (o: boolean) => void; onMade: (m: { hook: string; url: string }) => void }) {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const save = async () => {
     if (!name.trim()) return;
     setBusy(true);
-    const ok = await press('webhooks.add', { name: name.trim() });
+    const r = await pressOut<{ hook: string; url: string }>('webhooks.add', { name: name.trim() });
     setBusy(false);
-    if (ok) {
+    if (r) {
+      if (r.out?.url) onMade(r.out);
       setName('');
       onOpenChange(false);
     }
