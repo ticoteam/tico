@@ -1,6 +1,8 @@
 ---
 name: answer-a-can-i-question
 description: "Answer a question about whether we can do something, from the rules in force only: find the active rules that apply, cite each by its id and From, say plainly when no rule covers it, and end with the not-legal-advice line."
+metadata:
+  function: tico
 ---
 # Answer a "can I...?" question
 

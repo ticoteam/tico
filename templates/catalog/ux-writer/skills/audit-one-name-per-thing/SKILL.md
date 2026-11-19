@@ -1,6 +1,8 @@
 ---
 name: audit-one-name-per-thing
 description: Audit one flow for every word used for each object, match each object to one glossary name, list banned synonyms and capitalisation fixes, and list every place a rename would touch before proposing it.
+metadata:
+  function: product
 ---
 # Audit one name per thing
 

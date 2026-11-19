@@ -1,6 +1,8 @@
 ---
 name: read-a-sequence-by-step
 description: Read an outbound sequence by step and by messages sent, not in total or by clicks, with every sequence and channel on the same window and the guardrails beside each result, so that a change is judged on positive replies per send.
+metadata:
+  function: sales
 ---
 # Read a sequence by step
 

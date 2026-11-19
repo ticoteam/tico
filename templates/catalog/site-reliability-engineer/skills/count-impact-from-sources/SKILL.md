@@ -1,6 +1,8 @@
 ---
 name: count-impact-from-sources
 description: Count the users, requests, minutes or money an incident affected from its raw sources, reading full lists rather than the first page, keeping the app's own guards apart from backend errors, grouping by build version where cause matters, and recording the window, the source and any cap.
+metadata:
+  function: engineering
 ---
 # Count impact from sources
 

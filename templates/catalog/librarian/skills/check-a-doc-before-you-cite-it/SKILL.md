@@ -1,6 +1,8 @@
 ---
 name: check-a-doc-before-you-cite-it
 description: "Before a price, policy, limit, date or process from a doc goes into an answer or the map, check its date, its last change, who stands behind it and whether another source disagrees, then label it current, to confirm or out of date."
+metadata:
+  function: tico
 ---
 # Check a doc before you cite it
 

@@ -1,6 +1,8 @@
 ---
 name: verify-an-import-source
 description: Label imported records with a source or origin only from each record's own creation history, in batches with explicit date bounds, and stop before writing if the cohort does not match the request.
+metadata:
+  function: sales
 ---
 # Verify an import's source
 

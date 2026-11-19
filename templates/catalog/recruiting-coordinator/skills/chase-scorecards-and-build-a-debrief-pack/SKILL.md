@@ -1,6 +1,8 @@
 ---
 name: chase-scorecards-and-build-a-debrief-pack
 description: Chase each interviewer's written scorecard on a fixed schedule, and build the debrief pack only when every score is in, with each interviewer's scores and notes side by side and in the order they were submitted.
+metadata:
+  function: people
 ---
 # Chase scorecards and build a debrief pack
 

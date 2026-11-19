@@ -1,6 +1,8 @@
 ---
 name: check-a-training-record
 description: Decide whether a training record proves a completion for a named course, checking its source, date, reference, course name against the mandatory list and expiry rule, and report complete, due, overdue, no record, or unclear, never assuming completion from attendance or silence.
+metadata:
+  function: people
 ---
 # Check a training record
 

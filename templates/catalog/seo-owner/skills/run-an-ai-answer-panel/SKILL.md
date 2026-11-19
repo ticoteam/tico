@@ -1,6 +1,8 @@
 ---
 name: run-an-ai-answer-panel
 description: Ask the tracked buyer questions in the AI assistants the owner uses, record whether the team is named, cited and retrieved with dates, and compare with earlier weeks without changing the question set.
+metadata:
+  function: marketing
 ---
 # Run an AI answer panel
 

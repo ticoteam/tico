@@ -1,6 +1,8 @@
 ---
 name: check-a-person-before-outreach
 description: Check one person against the role's required criteria, the do-not-contact list, the contact log and the public-data rules before they go on a slate or receive any message.
+metadata:
+  function: people
 ---
 # Check a person before outreach
 

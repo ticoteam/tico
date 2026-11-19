@@ -1,6 +1,8 @@
 ---
 name: check-a-trademark-deadline
 description: Work out the next maintenance deadline for a registered mark from the registration date on the record, with its window, its grace period and the arithmetic, then check its status on the office's public record before stating it.
+metadata:
+  function: legal
 ---
 # Check a trademark deadline
 

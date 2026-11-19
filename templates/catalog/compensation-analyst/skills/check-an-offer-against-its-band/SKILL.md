@@ -1,6 +1,8 @@
 ---
 name: check-an-offer-against-its-band
 description: Place a proposed offer or pay change in its band (below minimum, in band or above maximum), compute its compa-ratio, and report the position by reference with its band's source and date, without a recommendation on the figure.
+metadata:
+  function: people
 ---
 # Check an offer against its band
 

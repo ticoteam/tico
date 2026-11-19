@@ -1,6 +1,8 @@
 ---
 name: build-a-sourcing-search
 description: Turn a role's required criteria into a short list of public places where people with that work show up, write the search strings for each, and record what each one yielded, so the search gets better each week.
+metadata:
+  function: people
 ---
 # Build a sourcing search
 

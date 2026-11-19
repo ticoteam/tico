@@ -1,6 +1,8 @@
 ---
 name: read-what-is-missing
 description: Read why a task stopped in its stage, from what tico task show lists as missing to leave it, whose turn it is and who tried, and say so when a requirement cannot be read instead of calling it met.
+metadata:
+  function: tico
 ---
 # Read what is missing
 

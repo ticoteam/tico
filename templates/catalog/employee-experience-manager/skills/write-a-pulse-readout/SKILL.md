@@ -1,6 +1,8 @@
 ---
 name: write-a-pulse-readout
 description: Write a pulse survey readout for the owner that opens with participation and the biggest changes, shows only identical questions over time, lists themes with counts, proposes two or three actions with owners and dates, and closes the loop on last quarter's actions.
+metadata:
+  function: people
 ---
 # Write a pulse readout
 

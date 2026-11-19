@@ -1,6 +1,8 @@
 ---
 name: answer-a-policy-question
 description: Answer a community question about refunds, prices, terms or what the team will do, quoting the current policy document with its version and never offering an exception.
+metadata:
+  function: marketing
 ---
 # Answer a policy question
 

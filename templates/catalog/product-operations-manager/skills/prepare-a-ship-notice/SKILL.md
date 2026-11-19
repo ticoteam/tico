@@ -1,6 +1,8 @@
 ---
 name: prepare-a-ship-notice
 description: Prepare one ship notice per account that asked for a request now released, each checked against the released behaviour and the account's current record, and account for every account on the list.
+metadata:
+  function: product
 ---
 # Prepare a ship notice
 

@@ -1,6 +1,8 @@
 ---
 name: "build-a-filing-pack"
 description: "Build a filing pack a human can file from in one sitting: the due date with its source, last year's answers, each item filled from a sourced record or marked as needed, the changes since last year, the fee and the official page, and the gaps."
+metadata:
+  function: legal
 ---
 # Build a filing pack
 

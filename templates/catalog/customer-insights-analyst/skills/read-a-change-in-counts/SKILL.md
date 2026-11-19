@@ -1,6 +1,8 @@
 ---
 name: read-a-change-in-counts
 description: Decide whether a week-on-week change in feedback counts is more than counting noise, and state that judgement beside the number before a theme is called new, rising, fading or a spike.
+metadata:
+  function: product
 ---
 # Read a change in counts
 

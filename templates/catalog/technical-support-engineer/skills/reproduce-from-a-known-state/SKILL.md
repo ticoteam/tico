@@ -1,6 +1,8 @@
 ---
 name: reproduce-from-a-known-state
 description: Reproduce a customer problem from a stated starting state, with every value written down, two tries, and the customer's environment compared where it differs, so that "reproduced" and "could not reproduce" both mean something a developer can check.
+metadata:
+  function: customers
 ---
 # Reproduce from a known state
 

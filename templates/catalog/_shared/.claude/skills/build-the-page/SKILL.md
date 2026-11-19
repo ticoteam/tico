@@ -1,6 +1,8 @@
 ---
 name: build-the-page
 description: Build any page a person reads to decide - a spec, a Review page, a QA page, a release report or a Checked in production page - as one HTML page from a ready template. It opens with what it is and what to decide in two or three lines, then real screenshots of the app at phone and desktop width with red numbered arrows, then the details. page.py embeds the screenshots, checks the page and renders the published copy before it is attached. Read before you write any of those pages.
+metadata:
+  function: tico
 ---
 
 # Build the page

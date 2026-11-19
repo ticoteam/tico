@@ -1,6 +1,8 @@
 ---
 name: read-cost-per-customer-for-a-segment
 description: Read one customer segment's new customers, direct and loaded cost per customer, retention and observed LTV for a month from Growth, which computes them by segment, and write the reading with its counts and health.
+metadata:
+  function: marketing
 ---
 # Read a segment's cost per customer
 

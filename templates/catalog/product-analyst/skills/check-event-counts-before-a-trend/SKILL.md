@@ -1,6 +1,8 @@
 ---
 name: check-event-counts-before-a-trend
 description: Check an event count or rate before calling a change a trend, drop or launch effect. Covers a broken event, duplicate sources, time zones, missing versus zero, denominators, the field the product shows, and repeated captures.
+metadata:
+  function: data
 ---
 # Check event counts before a trend
 

@@ -1,6 +1,8 @@
 ---
 name: find-a-route-to-a-partner-target
 description: Find the warmest honest introduction route to a partner or target firm from the record and a second hop, and write it as a one-page brief with dated sources.
+metadata:
+  function: sales
 ---
 # Find a route to a partner target
 

@@ -1,6 +1,8 @@
 ---
 name: build-one-bulk-card
 description: "Puts several changes a human must confirm onto one Confirm card, grouped by kind and age, with what happens on confirm. Use it when clearing a queue or proposing more than one change at once."
+metadata:
+  function: tico
 ---
 
 # Build one bulk card

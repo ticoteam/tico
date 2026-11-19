@@ -1,6 +1,8 @@
 ---
 name: judge-a-review-flag
 description: Decide whether a review or complaint is worth a platform flag, flag only on a named platform rule with the words that break it, otherwise reply, and log the outcome so the next batch uses only grounds the platform honours.
+metadata:
+  function: marketing
 ---
 # Judge a review flag
 

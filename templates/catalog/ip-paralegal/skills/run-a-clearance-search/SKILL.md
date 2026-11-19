@@ -1,6 +1,8 @@
 ---
 name: run-a-clearance-search
 description: Search the public trademark databases, the team's own register, the web and app listings, and domain availability for a proposed name, recording each source, term, class and date, then sort the results and say what was not searched.
+metadata:
+  function: legal
 ---
 # Run a clearance search
 

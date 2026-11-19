@@ -1,6 +1,8 @@
 ---
 name: design-a-growth-routine
 description: Turn a growth check someone keeps doing by hand (ad fatigue, search rankings, churn signals, mentions, stale numbers) into a routine with a cadence, a condition to act, a self-check, memory between runs and a stop. Use when an owner or person asks for a recurring check, or the same manual check shows up in three weekly pages.
+metadata:
+  function: growth
 ---
 # Design a growth routine
 

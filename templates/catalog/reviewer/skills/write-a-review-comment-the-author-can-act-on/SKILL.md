@@ -1,6 +1,8 @@
 ---
 name: "write-a-review-comment-the-author-can-act-on"
 description: "Write one review comment that an author can act on without a call: a label that says whether it blocks, the exact location and quoted code, what happens and why it matters, and what would resolve it."
+metadata:
+  function: engineering
 ---
 # Write a review comment the author can act on
 

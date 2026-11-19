@@ -1,6 +1,8 @@
 ---
 name: find-unbilled-work
 description: Find delivered work with no invoice by comparing this cycle's sources (usage above plan, approved hours, signed-off milestones, add-ons agreed in tasks) against the invoices issued, and record each finding with its source and value.
+metadata:
+  function: finance
 ---
 # Find unbilled work
 

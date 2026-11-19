@@ -1,6 +1,8 @@
 ---
 name: reconcile-a-cash-figure
 description: Before a cash, runway or balance figure reaches the owner as an alarm, trace a disagreement between two sources to the transaction, wait for pending items to settle, and state which source the verdict comes from.
+metadata:
+  function: finance
 ---
 # Reconcile a cash figure
 

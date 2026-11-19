@@ -1,6 +1,8 @@
 ---
 name: write-an-owner-review-note
 description: Write the note an expense owner reads about their own report or their own monthly lines. Give the verdict, each line to question with its rule, and one ask per line, in plain facts with no accusation.
+metadata:
+  function: finance
 ---
 # Write an owner review note
 

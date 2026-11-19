@@ -1,6 +1,8 @@
 ---
 name: build-a-round-scenario
 description: Draft ownership before and after a priced round, with the investor share, the pool top-up placed pre- or post-money, and each holder's new percentage, all summing to 100. Use when a person asks what a raise does to ownership.
+metadata:
+  function: finance
 ---
 
 # Build a round scenario

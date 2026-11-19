@@ -1,6 +1,8 @@
 ---
 name: rank-an-area-problem-list
 description: Rank one area's problems by the distinct accounts they touch and what they cost activation, from tickets, feedback, calls and usage, keeping the source and window for every rank and listing what was left out.
+metadata:
+  function: product
 ---
 # Rank an area's problem list
 

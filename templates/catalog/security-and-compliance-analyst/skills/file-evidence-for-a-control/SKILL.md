@@ -1,6 +1,8 @@
 ---
 name: file-evidence-for-a-control
 description: Check one control's evidence against the team's tests (dated inside the period, shows the thing, complete for the population, clean of credentials) and mark each period collected, claimed or missing, with every period in the window covered.
+metadata:
+  function: security
 ---
 # File evidence for a control
 

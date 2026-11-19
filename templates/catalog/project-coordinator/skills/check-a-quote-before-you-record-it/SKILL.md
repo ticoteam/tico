@@ -1,6 +1,8 @@
 ---
 name: check-a-quote-before-you-record-it
 description: Check that a quote used in a decision, action item, open question or summary is word for word from the transcript, carries a speaker name only where the transcript labels the speaker, has a timestamp, and is short. An unlabelled speaker is written as "unlabelled speaker", never as a name inferred from context.
+metadata:
+  function: operations
 ---
 # Check a quote before you record it
 

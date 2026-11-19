@@ -1,6 +1,8 @@
 ---
 name: read-search-terms-for-waste
 description: Read a search terms report for the last seven days, find the terms that spent without converting, class each one by what the searcher wanted, and propose the narrowest negative that blocks it, checked against the converting terms first.
+metadata:
+  function: marketing
 ---
 # Read search terms for waste
 

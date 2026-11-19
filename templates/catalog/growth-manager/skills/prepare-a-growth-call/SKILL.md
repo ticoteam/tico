@@ -1,6 +1,8 @@
 ---
 name: prepare-a-growth-call
 description: Before a call about growth, read what Growth already has and write a short brief - what is missing, the three questions to ask in order, and who else could answer. Use when a person calls you about growth or schedules a growth call.
+metadata:
+  function: growth
 ---
 # Prepare a growth call
 

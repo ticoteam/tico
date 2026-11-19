@@ -1,6 +1,8 @@
 ---
 name: "write-a-renewal-cover-note"
 description: "Write the short cover note that goes with a renewal or expansion option: the change, the date, the price from the rules or the request, and one next step, in the owner's voice and under 120 words."
+metadata:
+  function: sales
 ---
 # Write a renewal cover note
 

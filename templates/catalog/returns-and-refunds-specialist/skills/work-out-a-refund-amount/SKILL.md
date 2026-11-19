@@ -1,6 +1,8 @@
 ---
 name: work-out-a-refund-amount
 description: Work out the refund for one returned item from its pre-discount line amount, its share of any order discount and the shipping rule, and show each step so a human can check the figure.
+metadata:
+  function: customers
 ---
 # Work out a refund amount
 

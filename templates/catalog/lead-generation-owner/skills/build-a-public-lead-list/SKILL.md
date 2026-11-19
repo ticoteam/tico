@@ -1,6 +1,8 @@
 ---
 name: build-a-public-lead-list
 description: Build a list of companies that match the profile from public business sources only, with each company's source, date and matched rule, and no personal contact details.
+metadata:
+  function: sales
 ---
 # Build a public lead list
 

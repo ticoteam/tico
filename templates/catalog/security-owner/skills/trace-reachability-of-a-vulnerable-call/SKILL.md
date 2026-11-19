@@ -1,6 +1,8 @@
 ---
 name: trace-reachability-of-a-vulnerable-call
 description: Decide whether the team's code can reach a vulnerable function, configuration or input path, by tracing from the advisory's trigger to a call site and to untrusted input, and answer yes, no or unknown with what was searched.
+metadata:
+  function: security
 ---
 # Trace reachability of a vulnerable call
 

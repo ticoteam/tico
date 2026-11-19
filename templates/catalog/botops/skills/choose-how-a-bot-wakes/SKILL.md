@@ -1,6 +1,8 @@
 ---
 name: choose-how-a-bot-wakes
 description: "Choose what starts a bot's work (a schedule or event automation, a due-date automation, a webhook, a watcher, or no trigger) before you give it a routine, so each run earns its model cost."
+metadata:
+  function: tico
 ---
 # Choose how a bot wakes
 

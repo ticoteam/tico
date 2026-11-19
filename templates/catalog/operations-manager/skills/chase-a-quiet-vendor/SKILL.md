@@ -1,6 +1,8 @@
 ---
 name: chase-a-quiet-vendor
 description: Decide whether a vendor thread needs a follow-up, and draft one short message that asks one thing and names one date, ready for a person to send.
+metadata:
+  function: operations
 ---
 
 # Chase a quiet vendor

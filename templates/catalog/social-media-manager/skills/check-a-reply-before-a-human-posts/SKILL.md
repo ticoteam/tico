@@ -1,6 +1,8 @@
 ---
 name: check-a-reply-before-a-human-posts
 description: Before a thread is handed to a person who may reply in public, check the disclosure the reply needs, the endorsement and review rules, and any unsourced claim; flag the draft to that person instead of posting anything.
+metadata:
+  function: marketing
 ---
 # Check a reply before a human posts
 

@@ -1,6 +1,8 @@
 ---
 name: write-a-public-review-reply
 description: Write a short public reply to one review that thanks or answers the specific point, names the next step without any private detail, never argues, and is checked against the platform's rules before it is posted or drafted for posting.
+metadata:
+  function: marketing
 ---
 # Write a public review reply
 

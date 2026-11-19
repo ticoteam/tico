@@ -1,6 +1,8 @@
 ---
 name: write-a-matter-brief
 description: Write the brief an outside firm gets when a legal matter opens, in one consistent shape, with the scope, budget, staffing, reporting and billing asks, and the questions the firm must answer, so every firm is asked for the same things.
+metadata:
+  function: legal
 ---
 # Write a matter brief
 

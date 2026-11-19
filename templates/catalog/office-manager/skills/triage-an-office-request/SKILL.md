@@ -1,6 +1,8 @@
 ---
 name: triage-an-office-request
 description: Sort an office request by safety first, then route it to the right fixer, owner or team, set a promised date and a named fixer on every request, and log it so that nothing sits as "reported".
+metadata:
+  function: operations
 ---
 # Triage an office request
 

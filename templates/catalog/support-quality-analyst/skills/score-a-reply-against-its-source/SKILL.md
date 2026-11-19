@@ -1,6 +1,8 @@
 ---
 name: score-a-reply-against-its-source
 description: Score one sent support reply on accuracy, tone, completeness, policy and next step against the written source it should match, check the critical items first, and record the reason and a quoted sentence for each score.
+metadata:
+  function: customers
 ---
 # Score a reply against its source
 

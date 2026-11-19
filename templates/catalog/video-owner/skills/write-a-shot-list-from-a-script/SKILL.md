@@ -1,6 +1,8 @@
 ---
 name: write-a-shot-list-from-a-script
 description: Turn an approved script into a shot list with one line per shot, naming the length, what is shown, where each visual comes from and the caption, so every claim in the script maps to a shot with a known source before any image is made.
+metadata:
+  function: marketing
 ---
 # Write a shot list from a script
 

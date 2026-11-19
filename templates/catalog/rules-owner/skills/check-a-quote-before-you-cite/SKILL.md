@@ -1,6 +1,8 @@
 ---
 name: check-a-quote-before-you-cite
 description: "Before a suggestion cites a quote and its section, check that the quote is copied character for character from the named document and version, is a whole clause of at least 20 characters, and sits under that section."
+metadata:
+  function: tico
 ---
 # Check a quote before you cite it
 

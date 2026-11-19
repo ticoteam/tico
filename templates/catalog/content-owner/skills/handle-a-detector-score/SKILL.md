@@ -1,6 +1,8 @@
 ---
 name: handle-a-detector-score
 description: Use an AI-text detector's score on a finished draft as a noisy prompt to remove generic sentences and add missing facts, with a two-rewrite limit and a stop rule, and never as a target to tune.
+metadata:
+  function: marketing
 ---
 # Handle a detector score
 

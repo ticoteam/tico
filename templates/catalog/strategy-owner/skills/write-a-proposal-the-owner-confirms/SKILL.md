@@ -1,6 +1,8 @@
 ---
 name: write-a-proposal-the-owner-confirms
 description: "Files one proposal on a goal, KPI or strategy that the owner confirms, after checking what is already pending and rejected. Use it for any change to a goal, a measure, a target or a strategy draft."
+metadata:
+  function: operations
 ---
 
 # Write a proposal the owner confirms

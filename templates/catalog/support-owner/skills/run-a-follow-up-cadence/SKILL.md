@@ -1,6 +1,8 @@
 ---
 name: run-a-follow-up-cadence
 description: Chase a ticket that waits on a customer, a colleague or a fix, with one nudge that adds something new, a stop rule, and a closed-quiet record that says why.
+metadata:
+  function: customers
 ---
 # Run a follow-up cadence
 

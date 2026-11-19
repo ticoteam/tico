@@ -1,6 +1,8 @@
 ---
 name: plan-a-usability-round
 description: Plan a usability round with goal-based tasks, success written before the first session, five people per round or three to four per user group, and a report of task success and the first wrong turn.
+metadata:
+  function: product
 ---
 # Plan a usability round
 

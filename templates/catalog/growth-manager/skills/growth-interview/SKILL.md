@@ -1,6 +1,8 @@
 ---
 name: growth-interview
 description: Get Growth's numbers by asking people, not by forms. Use when someone asks you to set up Growth ("Help me set up Growth."), when `tico growth setup` says setup is not done, or on a call about growth. Works out what is missing, asks whoever knows, one question at a time, and saves each answer as it arrives.
+metadata:
+  function: growth
 ---
 # Growth interview
 

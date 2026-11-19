@@ -1,6 +1,8 @@
 ---
 name: name-the-checks-that-gate-merging
 description: Name which checks gate merging, hand each failing gate to the Infrastructure Owner and each flaky test to the QA Owner, and keep a check that is not required out of the gate list. Use it before the gate list is updated, or before a check is blamed for a stalled merge.
+metadata:
+  function: engineering
 ---
 # Name the checks that gate merging
 

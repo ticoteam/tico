@@ -1,6 +1,8 @@
 ---
 name: check-a-doc-against-the-code
 description: Check each checkable claim in a doc page (commands, paths, option names, defaults, UI labels, click paths, code samples and links) against the code or UI at the commit the page describes, and record each result.
+metadata:
+  function: engineering
 ---
 # Check a doc against the code
 

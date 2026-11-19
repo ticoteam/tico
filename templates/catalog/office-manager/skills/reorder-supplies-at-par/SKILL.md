@@ -1,6 +1,8 @@
 ---
 name: reorder-supplies-at-par
 description: Find every supply at or below its par level, work out the quantity to reach par plus two weeks of use, round to the pack size, group by supplier into one order each with the last seen price and its date, and place nothing unless the task asks and a granted Tool allows it.
+metadata:
+  function: operations
 ---
 # Reorder supplies at par
 

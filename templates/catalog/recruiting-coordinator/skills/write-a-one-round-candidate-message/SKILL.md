@@ -1,6 +1,8 @@
 ---
 name: write-a-one-round-candidate-message
 description: Write one candidate message that gives everything needed to attend or to ask for a change in a single pass, with no hint about the outcome, and that keeps the candidate's own details to a minimum.
+metadata:
+  function: people
 ---
 # Write a one-round candidate message
 

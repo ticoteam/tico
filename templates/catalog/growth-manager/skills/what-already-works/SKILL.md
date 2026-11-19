@@ -1,6 +1,8 @@
 ---
 name: what-already-works
 description: File each thing people say already works (a channel, a campaign, a referral deal, an email) as a Growth Monitoring task in Watching, with its number and normal range, so it is watched and does not get lost. Use when an interview or call names something that works.
+metadata:
+  function: growth
 ---
 # What already works
 

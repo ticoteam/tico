@@ -1,6 +1,8 @@
 ---
 name: check-a-review-request-for-compliance
 description: Check a batch of review invitations or requests against the milestone rule, the reward rule, the disclosure rule and the platform's current policy before anything is sent, and stop any invitation that depends on what the customer would say.
+metadata:
+  function: marketing
 ---
 # Check a review request for compliance
 

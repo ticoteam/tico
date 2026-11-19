@@ -1,6 +1,8 @@
 ---
 name: "check-a-testimonial-before-it-is-mailed"
 description: "Check a quote, review, customer result or guarantee before it goes into an email: the file behind it, the customer's permission, no reward tied to a positive review, disclosed insider ties, and guarantee terms beside the claim."
+metadata:
+  function: marketing
 ---
 # Check a testimonial before it is mailed
 

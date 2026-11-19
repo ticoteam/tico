@@ -1,6 +1,8 @@
 ---
 name: time-the-merge-to-release-path
 description: Measure how long a merged change waits for the merge queue and how long it takes to reach users, as medians over a stated window from the timestamps the records hold. Use it whenever a report or task asks for a delivery time.
+metadata:
+  function: engineering
 ---
 # Time the merge to release path
 

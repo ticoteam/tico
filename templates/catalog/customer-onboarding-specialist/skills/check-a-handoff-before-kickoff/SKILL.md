@@ -1,6 +1,8 @@
 ---
 name: check-a-handoff-before-kickoff
 description: Check a newly signed deal against six handoff items, including the operating fields that handoffs usually leave empty, and list every gap before the kickoff agenda is written.
+metadata:
+  function: customers
 ---
 # Check a handoff before kickoff
 

@@ -1,6 +1,8 @@
 ---
 name: write-how-we-will-know
 description: Write the how-we-will-know part of a spec, covering the measure, its baseline with a date, the target and its source, the read date after the window, and the guard measure that must not get worse, so a stranger can judge the result.
+metadata:
+  function: product
 ---
 # Write how we will know
 

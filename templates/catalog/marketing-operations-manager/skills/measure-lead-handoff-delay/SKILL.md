@@ -1,6 +1,8 @@
 ---
 name: measure-lead-handoff-delay
 description: Measure how long a ready lead waited for its first sales touch, report the median and the slowest with counts, and report the queue rather than any person.
+metadata:
+  function: marketing
 ---
 # Measure lead handoff delay
 

@@ -1,6 +1,8 @@
 ---
 name: sort-duplicate-tasks
 description: "Relate two open tasks with the same title, requester and owner as duplicates when their work is the same, keep anything the newer one holds on the older one, then close the newer one. Comment instead when they may hold different work."
+metadata:
+  function: operations
 ---
 # Sort duplicate tasks
 

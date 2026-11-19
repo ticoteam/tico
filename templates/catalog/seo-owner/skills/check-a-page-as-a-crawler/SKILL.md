@@ -1,6 +1,8 @@
 ---
 name: check-a-page-as-a-crawler
 description: Check one public page the way a search crawler sees it (status code, raw HTML, indexing signals, sitemap entry and claims) before judging its copy or its ranking.
+metadata:
+  function: marketing
 ---
 # Check a page as a crawler
 

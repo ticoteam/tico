@@ -1,6 +1,8 @@
 ---
 name: classify-a-test-failure
 description: Classify one failing test as a product bug, a flaky test, a test defect, an environment fault or a dependency change, with quoted evidence, before anyone blames a commit or a test.
+metadata:
+  function: engineering
 ---
 # Classify a test failure
 

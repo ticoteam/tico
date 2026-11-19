@@ -1,6 +1,8 @@
 ---
 name: write-a-conversation-note-sbi
 description: Write a guidance note for a manager preparing a hard performance conversation, in Situation, Behavior, Impact form with the expectation, the support offered, a follow-up date and the policy page to read first, and no recommended outcome.
+metadata:
+  function: people
 ---
 # Write a conversation note (SBI)
 

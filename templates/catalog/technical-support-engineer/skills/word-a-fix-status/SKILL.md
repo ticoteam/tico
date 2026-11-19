@@ -1,6 +1,8 @@
 ---
 name: word-a-fix-status
 description: Choose the right status words for a bug fix (reported, in review, shipped in a version, verified fixed, reopened), so that a customer or teammate is told only what the record shows, with its date and source.
+metadata:
+  function: customers
 ---
 # Word a fix status
 

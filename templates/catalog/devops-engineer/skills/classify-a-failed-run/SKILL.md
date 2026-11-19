@@ -1,6 +1,8 @@
 ---
 name: classify-a-failed-run
 description: Classify one failed CI run as a product bug, a flaky test, an infrastructure fault, a dependency change or a configuration change, with quoted evidence, before anyone blames a commit.
+metadata:
+  function: engineering
 ---
 # Classify a failed run
 

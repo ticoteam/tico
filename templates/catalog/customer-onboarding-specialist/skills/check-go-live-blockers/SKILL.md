@@ -1,6 +1,8 @@
 ---
 name: check-go-live-blockers
 description: Before a go-live date is set, check the regulated prerequisites, the single live copy of each item, the access confirmation and the named owners, and list each blocker with its owner and evidence.
+metadata:
+  function: customers
 ---
 # Check go-live blockers
 

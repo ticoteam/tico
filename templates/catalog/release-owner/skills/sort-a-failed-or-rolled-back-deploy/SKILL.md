@@ -1,6 +1,8 @@
 ---
 name: sort-a-failed-or-rolled-back-deploy
 description: Sort each deploy run into succeeded, failed, cancelled by a person, or rolled back, from the run conclusion and the release record, and count each rollback once. Use it before counting a deploy as a success, a failure or a rollback.
+metadata:
+  function: engineering
 ---
 # Sort a failed or rolled-back deploy
 

@@ -1,6 +1,8 @@
 ---
 name: write-a-no-show-follow-up
 description: Draft a short, kind follow-up to a customer who missed a booking or canceled late, stating any fee exactly as the rules say and offering one way to rebook.
+metadata:
+  function: operations
 ---
 # Write a no-show follow-up
 

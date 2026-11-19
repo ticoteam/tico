@@ -1,6 +1,8 @@
 ---
 name: "check-an-all-clear"
 description: "Before an incident is called over or resolved, confirm the impact has ended from fresh evidence: the source is online, the error rate is at baseline for a stated window, the queue is empty and the held work ran, and no open child task says otherwise. Record each check and any check you could not read."
+metadata:
+  function: engineering
 ---
 # Check an all-clear
 

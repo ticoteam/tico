@@ -1,6 +1,8 @@
 ---
 name: offer-reschedule-options
 description: Answer a customer's request to move or cancel a booking with two or three slots that fit the booking rules and the customer's limits, the exact effect on any deposit or fee, and a clear route for any exception.
+metadata:
+  function: operations
 ---
 # Offer reschedule options
 

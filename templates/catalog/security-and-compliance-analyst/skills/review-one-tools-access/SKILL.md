@@ -1,6 +1,8 @@
 ---
 name: review-one-tools-access
 description: Mark each account in one tool's export for a quarterly access review (admin, left, role changed, dormant, shared or service, looks right), give the reason for every mark, and propose keep or revoke for the owner to decide, without changing anything in the tool.
+metadata:
+  function: security
 ---
 # Review one tool's access
 

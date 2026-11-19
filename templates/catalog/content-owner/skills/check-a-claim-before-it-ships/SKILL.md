@@ -1,6 +1,8 @@
 ---
 name: check-a-claim-before-it-ships
 description: List every number, comparison, guarantee, date, price and product fact in a draft, check each against a dated source at its current version, and cut or flag any claim that fails.
+metadata:
+  function: marketing
 ---
 # Check a claim before it ships
 

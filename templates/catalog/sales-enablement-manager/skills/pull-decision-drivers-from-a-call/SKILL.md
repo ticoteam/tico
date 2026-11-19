@@ -1,6 +1,8 @@
 ---
 name: pull-decision-drivers-from-a-call
 description: Pull the decision drivers for a won or lost deal from the buyer's own words in the calls, and keep what the buyer said apart from what the seller or the CRM recorded.
+metadata:
+  function: sales
 ---
 # Pull decision drivers from a call
 

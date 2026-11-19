@@ -1,6 +1,8 @@
 ---
 name: bridge-recurring-revenue
 description: Build the recurring revenue bridge for a month (opening, new, expansion, contraction, churn, closing) with every movement tied to named contracts, using the team's own definition of recurring revenue.
+metadata:
+  function: finance
 ---
 # Bridge recurring revenue
 

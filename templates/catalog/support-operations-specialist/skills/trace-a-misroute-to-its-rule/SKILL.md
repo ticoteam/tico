@@ -1,6 +1,8 @@
 ---
 name: trace-a-misroute-to-its-rule
 description: Find which rule, trigger or automation sent a ticket to the wrong place, in the order the help desk runs them, and show the overlap so the fix names the right rule instead of the one that looks wrong.
+metadata:
+  function: customers
 ---
 # Trace a misroute to its rule
 

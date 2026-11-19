@@ -1,6 +1,8 @@
 ---
 name: run-a-launch-readiness-check
 description: Walk each launch checklist line for a release due within four weeks, mark it done with evidence, due with a date or missing with an owner, and bring every missing line to its owner.
+metadata:
+  function: product
 ---
 # Run a launch readiness check
 

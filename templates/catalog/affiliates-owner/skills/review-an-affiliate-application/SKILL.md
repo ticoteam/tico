@@ -1,6 +1,8 @@
 ---
 name: review-an-affiliate-application
 description: Check one affiliate application against the program rules and the declared traffic, then give it one proposed decision with its reason, for a person to decide and reply to.
+metadata:
+  function: marketing
 ---
 # Review an affiliate application
 

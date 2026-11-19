@@ -1,6 +1,8 @@
 ---
 name: file-a-signed-agreement-in-the-index
 description: File a fully signed agreement in the executed-agreement index only after every signature block and date is complete, recording its parties, kind, date signed, term, any confidentiality end date and where the file lives.
+metadata:
+  function: legal
 ---
 # File a signed agreement in the index
 

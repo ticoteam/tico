@@ -1,6 +1,8 @@
 ---
 name: where-we-stand
 description: "Shows one person where they stand on their goals and names up to three things only they can do today, each tied to the goal it moves. Use it when they ask where we stand, what to do next, or how their goals are doing, and for each person's morning message."
+metadata:
+  function: tico
 ---
 
 # Where we stand

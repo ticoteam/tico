@@ -1,6 +1,8 @@
 ---
 name: compare-prices-like-for-like
 description: Put two prices on the same unit, billing period and inclusions before saying one changed or is higher. Record each with its URL and the date read.
+metadata:
+  function: growth
 ---
 # Compare prices like for like
 

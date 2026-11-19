@@ -1,6 +1,8 @@
 ---
 name: write-the-stuck-task-question
 description: Write the one question a person must reply to to unblock a stopped task, naming the task, the stage, what is missing and the options, so they can answer in one line.
+metadata:
+  function: tico
 ---
 # Write the stuck task question
 

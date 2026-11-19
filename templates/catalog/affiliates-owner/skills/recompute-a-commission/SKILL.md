@@ -1,6 +1,8 @@
 ---
 name: recompute-a-commission
 description: Work out one affiliate's commission for a period again from the published terms, the referral dates, the window and the reversals, then compare it with the export and name every difference before any payout list is drafted.
+metadata:
+  function: marketing
 ---
 # Recompute a commission
 

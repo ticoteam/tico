@@ -1,6 +1,8 @@
 ---
 name: write-an-action-item
 description: Write an incident action item that someone can finish, with one specific system change, a proposed owner, a calendar due date, a done-when test and the evidence it comes from. Search existing tasks in every status before creating one, and prefer a fix to the system over a reminder to be careful.
+metadata:
+  function: engineering
 ---
 # Write an action item
 

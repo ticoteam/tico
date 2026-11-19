@@ -1,6 +1,8 @@
 ---
 name: read-usage-without-misreading
 description: Check what a usage, login or ticket count covers before you use it as health evidence, covering its source, window, lifecycle stage, and whether silence means absence or a missing feed.
+metadata:
+  function: customers
 ---
 # Read usage without misreading it
 

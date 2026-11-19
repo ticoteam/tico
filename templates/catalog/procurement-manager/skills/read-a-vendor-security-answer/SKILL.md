@@ -1,6 +1,8 @@
 ---
 name: read-a-vendor-security-answer
 description: Sort a vendor's security answers into evidenced, claimed and missing, and check that any report or certificate is current, belongs to the vendor and covers the product the team would buy.
+metadata:
+  function: operations
 ---
 # Read a vendor security answer
 

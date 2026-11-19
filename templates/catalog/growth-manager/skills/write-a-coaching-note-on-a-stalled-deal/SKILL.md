@@ -1,6 +1,8 @@
 ---
 name: "write-a-coaching-note-on-a-stalled-deal"
 description: "Write one coaching note for the owner of a stalled deal: the one question the deal cannot answer yet, the evidence that would answer it, and the next step the owner can take."
+metadata:
+  function: growth
 ---
 # Write a coaching note on a stalled deal
 

@@ -1,6 +1,8 @@
 ---
 name: write-a-task-the-owner-can-start
 description: "Files one task for a bot, BotOps or a person that its owner can start without asking anybody anything. Use it before creating any task from a human's request."
+metadata:
+  function: tico
 ---
 
 # Write a task the owner can start

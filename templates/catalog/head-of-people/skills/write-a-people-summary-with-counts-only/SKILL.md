@@ -1,6 +1,8 @@
 ---
 name: write-a-people-summary-with-counts-only
 description: Write the weekly people summary so every count carries its source and date, groups under five are never singled out, and nothing about a named person beyond a first name, role and dates appears.
+metadata:
+  function: people
 ---
 # Write a people summary with counts only
 

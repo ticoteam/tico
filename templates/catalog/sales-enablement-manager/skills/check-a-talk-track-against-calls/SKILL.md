@@ -1,6 +1,8 @@
 ---
 name: "check-a-talk-track-against-calls"
 description: "Test a talk track or objection answer against the calls where it was used before it becomes the team standard: count where it worked, where it failed, and what the buyer said next."
+metadata:
+  function: sales
 ---
 # Check a talk track against calls
 

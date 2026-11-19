@@ -1,6 +1,8 @@
 ---
 name: check-a-grant-before-it-is-recorded
 description: Check one option grant against its board approval, the 409A in force on the grant date, the strike price, the option pool and the signed grant letter, and report what the documents show. Use before any grant is recorded in the cap table or counted against the pool.
+metadata:
+  function: finance
 ---
 
 # Check a grant before it is recorded

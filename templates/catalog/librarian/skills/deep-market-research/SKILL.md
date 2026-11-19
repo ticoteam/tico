@@ -1,6 +1,8 @@
 ---
 name: deep-market-research
 description: "A task titled \"Deep research: <question>\", filed by a person with the research label: research a market question over several turns, with Haiku sub-agents reading sources and checking quotes, then write the graph, the market pages and one research report, every claim tied to a quote on a page you read."
+metadata:
+  function: tico
 ---
 # Deep market research
 

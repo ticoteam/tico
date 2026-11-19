@@ -1,6 +1,8 @@
 ---
 name: name-the-next-step-and-the-blocker
 description: Turn a bet's status into one next step with one owner and one date, and name each blocker with its age and the person who can move it. Use it when a check-in or a task asks what happens next on a bet.
+metadata:
+  function: operations
 ---
 # Name the next step and the blocker
 

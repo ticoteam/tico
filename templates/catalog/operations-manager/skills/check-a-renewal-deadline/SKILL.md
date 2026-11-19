@@ -1,6 +1,8 @@
 ---
 name: check-a-renewal-deadline
 description: Turn a contract, licence, policy or subscription renewal into a notice deadline read from its own terms, with one owner and a first check set before the notice window closes.
+metadata:
+  function: operations
 ---
 
 # Check a renewal deadline

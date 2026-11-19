@@ -1,6 +1,8 @@
 ---
 name: check-a-lead-before-it-is-contacted
 description: Before an event lead goes to sales or into an email, record the basis for contacting each person (a confirmed business contact, a sale or negotiation, or consent given at the stand), remove objectors, and attach the context and owner on the task.
+metadata:
+  function: marketing
 ---
 # Check a lead before it is contacted
 

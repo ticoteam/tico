@@ -1,6 +1,8 @@
 ---
 name: read-a-bet-and-its-wrong-if
 description: Read one strategy bet from the Strategy page and check its wrong-if against the record before saying anything about the bet's status. Use it at the start of every check-in and whenever a task asks how a bet is doing.
+metadata:
+  function: operations
 ---
 # Read a bet and its wrong-if
 

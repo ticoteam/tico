@@ -1,6 +1,8 @@
 ---
 name: triage-an-it-request-by-impact
 description: Sort an IT request into a category and a priority (P1, P2 or P3) by how many people it stops and how badly, write the reason on the task, and give the first action for anything that looks like a compromise.
+metadata:
+  function: operations
 ---
 # Triage an IT request by impact
 

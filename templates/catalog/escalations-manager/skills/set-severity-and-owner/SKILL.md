@@ -1,6 +1,8 @@
 ---
 name: set-severity-and-owner
 description: Give an escalated ticket one severity from impact and scope, one named human owner and a one-line reason, using the team's rules, before any customer update goes out.
+metadata:
+  function: customers
 ---
 # Set severity and owner
 

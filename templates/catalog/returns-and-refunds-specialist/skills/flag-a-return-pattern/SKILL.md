@@ -1,6 +1,8 @@
 ---
 name: flag-a-return-pattern
 description: Flag a return pattern (serial returns, item or weight mismatches, a product that keeps coming back) to the owner with the facts, the period and the count, never as an accusation.
+metadata:
+  function: customers
 ---
 # Flag a return pattern
 
