@@ -7169,10 +7169,13 @@ def _kept_task_rows(conn, found):
     """`found` (full task rows) as dicts, kept for this snapshot's one-task reads of them: a list page's turn and late
     columns read each listed task again (waiting_on.prime, one statement for the page), which on TIDY re-read the 500
     rows just read, 0.7-1.3 s of a busy server's /api/v2/tasks (Nov 19)."""
-    from .read_cache import prime
+    from .read_cache import cache, prime
 
-    for statement in _TASK_ROW_READS:
-        prime(conn, statement, {(row["id"],): row for row in found})
+    if cache(conn) is not None:
+        # A row with no id answers no one-task read (`id=?` never matches NULL).
+        kept = {(row["id"],): row for row in found if row["id"] is not None}
+        for statement in _TASK_ROW_READS:
+            prime(conn, statement, kept)
     return [dict(row) for row in found]
 
 
