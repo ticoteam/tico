@@ -17,16 +17,22 @@ from backend.tests.helpers.calls import (
     start_call,
     thread,
 )
+from backend.tests.helpers.credentials import setup as credential_setup
 from backend.tests.helpers.live_meetings import live  # noqa: F401 - the meet fixture needs the live API
+from backend.tests.helpers.model_subscriptions import add, company, give, machine, on
 from backend.tests.helpers.run_failures import at
 from backend.tests.threads_e2e import add_member, create_thread, ok, remove_member
 
 
 def _machine(api):
-    machine = runner(api)
-    assign(api, machine, "ops")
-    private_lanes_ready(api, machine, "ops")
-    return machine
+    """A runner for ops with a Claude subscription: voice call turns run only on a plan."""
+    credential_setup(api)
+    company(api)
+    default = get(api, "providers")["default"]
+    on(api, "ops", default["runtime"], default["model"])
+    worker = machine(api, signed_in=True, bot="ops", caps=("model_subscriptions_v1", "private_lanes_v1"))
+    give(api, worker, "claude", add(api)["id"])
+    return worker
 
 
 def _claim(api, machine):
