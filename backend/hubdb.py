@@ -7171,24 +7171,38 @@ def tasks(
         ]
         found = {}
         for part in chunks(ids):
-            found.update(
-                (row["id"], row)
-                for row in _rows(
-                    conn.execute(f"SELECT * FROM {TASKS} tasks WHERE id IN ({','.join('?' * len(part))})", part)
-                )
-            )
+            read = conn.execute(f"SELECT * FROM {TASKS} tasks WHERE id IN ({','.join('?' * len(part))})", part)
+            found.update((row["id"], row) for row in _kept_task_rows(conn, read.fetchall()))
         rows = [found[ident] for ident in ids if ident in found]
     else:
-        rows = _rows(
-            conn.execute(
-                f"SELECT * FROM {TASKS} tasks"
-                + sql[len("SELECT * FROM tasks") :]
-                + f" ORDER BY {ordering} LIMIT ? OFFSET ?",
-                page,
-            )
+        read = conn.execute(
+            f"SELECT * FROM {TASKS} tasks"
+            + sql[len("SELECT * FROM tasks") :]
+            + f" ORDER BY {ordering} LIMIT ? OFFSET ?",
+            page,
         )
+        rows = _kept_task_rows(conn, read.fetchall())
     hydrate_task_tags(conn, rows)
     return rows
+
+
+# The one-task reads a list page's rows answer: the engine's and privacy's (task_engine.task, waiting_on.prime) and
+# H.task's. The same columns of the same table.
+_TASK_ROW_READS = ("SELECT * FROM tasks WHERE id=?", TASK_SQL)
+
+
+def _kept_task_rows(conn, found):
+    """`found` (full task rows) as dicts, kept for this snapshot's one-task reads of them: a list page's turn and late
+    columns read each listed task again (waiting_on.prime, one statement for the page), which on TIDY re-read the 500
+    rows just read, 0.7-1.3 s of a busy server's /api/v2/tasks (Nov 19)."""
+    from .read_cache import cache, prime
+
+    if cache(conn) is not None:
+        # A row with no id answers no one-task read (`id=?` never matches NULL).
+        kept = {(row["id"],): row for row in found if row["id"] is not None}
+        for statement in _TASK_ROW_READS:
+            prime(conn, statement, kept)
+    return [dict(row) for row in found]
 
 
 def task_flow(
