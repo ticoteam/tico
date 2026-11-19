@@ -52,7 +52,7 @@ const grMonth = (m: unknown) => { const [y, n] = String(m || '').split('-').map(
 const grDay = (iso: string | null | undefined) => {
   if (!iso) return '';
   const d = new Date(String(iso).length <= 10 ? iso + 'T12:00:00' : iso);
-  if (isNaN(d.valueOf())) return String(iso);
+  if (Number.isNaN(d.valueOf())) return String(iso);
   return `${GR_MON[d.getMonth()]} ${d.getDate()}${d.getFullYear() === new Date().getFullYear() ? '' : `, ${d.getFullYear()}`}`;
 };
 const grKpiVal = (k: GrKpiVal | null | undefined) => k?.latest == null ? '—' : kpiNum(k.latest, k.unit);
@@ -71,7 +71,7 @@ const grField = (label: string, control: string, cls = '') => `<label class="gr-
 // A small dialog: a title, a form, Cancel and the primary button (with no `saveLabel`, no foot: ✕ dismisses it, style
 // guide "Overlays"). `onSave(form)` throws to show an error.
 function grDialog(title: string, body: string, saveLabel: string | null | undefined, onSave: ((form: HTMLFormElement) => unknown) | null) {
-  document.querySelectorAll<HTMLDialogElement>('dialog.gr-dlg').forEach(d => d.close());
+  document.querySelectorAll<HTMLDialogElement>('dialog.gr-dlg').forEach(d => { d.close(); });
   const dlg = document.createElement('dialog');
   dlg.className = 'tmodal gr-dlg';
   dlg.setAttribute('aria-label', title);
@@ -106,7 +106,7 @@ window.growthStop = function growthStop() {
   GR_LOAD++;
   if (offGrowth) GR = null;
   if (offBrand) BR = null;
-  if (offGrowth && offBrand) document.querySelectorAll<HTMLDialogElement>('dialog.gr-dlg').forEach(d => d.close());
+  if (offGrowth && offBrand) document.querySelectorAll<HTMLDialogElement>('dialog.gr-dlg').forEach(d => { d.close(); });
 };
 // Old addresses: who we sell to and how went to Strategy; every other old Growth address (Sources, a channel) is this page.
 function grMoved(parts: string[]) {
@@ -133,9 +133,10 @@ async function pageGrowth() {
   const [path = '', query] = (S.route || '').split('?');
   const moved = grMoved(path.slice(GR_ROUTE.length + 1).split('/'));
   if (moved) { location.replace(moved); return; }
-  document.querySelectorAll<HTMLDialogElement>('dialog.gr-dlg').forEach(d => d.close());
+  document.querySelectorAll<HTMLDialogElement>('dialog.gr-dlg').forEach(d => { d.close(); });
   const q = new URLSearchParams(query || ''), m = q.get('m') || '';
-  const state: GrState = GR = {load: ++GR_LOAD, scope: q.get('scope') || 'all', month: GR_MONTH_RE.test(m) ? m : '', read: null, segments: []};
+  const state: GrState = {load: ++GR_LOAD, scope: q.get('scope') || 'all', month: GR_MONTH_RE.test(m) ? m : '', read: null, segments: []};
+  GR = state;
   const main = $('#main');
   main.classList.add('strategy-layout', 'growth-layout');
   main.innerHTML = pageHead({title: 'Growth', hook: 'gr-head', more: PAGE_HEAD_COPY}) + `<div id="gr-body" class="gr-body">${skelRows(6, {dot: false})}</div>`;

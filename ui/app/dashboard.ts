@@ -242,7 +242,8 @@ function dashPrefetch() {
 async function pageDashboard(place: string) {
   const team = place.startsWith('team:');
   const state: DashState = {place, view: null, choices: null, root: null, menu: null, editing: false, readAt: Date.now(), feed: taskFeedNew()};
-  const key = state.key = place, kept = (S.lastRead.places ||= {})[key];
+  state.key = place;
+  const key = place, kept = (S.lastRead.places ||= {})[key];
   const main = $('#main'); main.classList.add('dash-layout');
   // Every place draws the shared header; its tools and ⋯ follow the reader's rights and edit mode (dashHeadDraw).
   const head = pageHead({title: team ? '' : 'Company', pad: true, hook: 'dash-head', more: (team ? '' : dashShareItem()) + PAGE_HEAD_COPY});
