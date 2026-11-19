@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseInfiniteQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
@@ -10,12 +10,13 @@ import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Link } from '@/kit/Link';
 import { Menu, MenuItem } from '@/kit/Menu';
+import { useCards } from '@/kit/Popover';
 import { Row } from '@/kit/Row';
-import { Document, FilterRow, List, Section, type PageState } from '@/pagekinds';
+import { Document, FilterRow, List, Section } from '@/pagekinds';
 import { SectionHead } from '@/kit/SectionHead';
 import { VirtualList } from '@/kit/VirtualList';
 import { FileGet, linkOf, Preview } from './FileViewer';
-import { Face, Find, KindGlyph, OwnerButton, press, refused, size, when, Who } from './parts';
+import { Face, Find, KindGlyph, OwnerButton, press, size, when, Who } from './parts';
 import { fileQuery, fileSearchQuery, filesQuery, fileUrl, fileVersionsQuery, type FileRow } from './queries';
 import type { FilesSearch } from './search';
 import './library.css';
@@ -57,12 +58,12 @@ export function FilesPage({ search }: { search: FilesSearch }) {
 
 function FilesList({ search }: { search: FilesSearch }) {
   const kind = search.kind ?? '';
-  const files = useInfiniteQuery(filesQuery(kind));
-  const found = useQuery(fileSearchQuery(search.q ?? ''));
+  const files = useSuspenseInfiniteQuery(filesQuery(kind));
+  const found = useQuery(fileSearchQuery(search.q ?? '', kind));
   const [chosen, setChosen] = useState<File[] | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
-  const rows = files.data?.pages.flatMap((p) => p.files) ?? [];
+  const rows = files.data.pages.flatMap((p) => p.files);
   const searching = !!search.q && search.q.trim().length > 1;
   // Grouped against when the page opened, so the groups do not shift while it is read.
   const [now] = useState(() => Date.now());
@@ -77,11 +78,6 @@ function FilesList({ search }: { search: FilesSearch }) {
     if (!next.delete(name)) next.add(name);
     setFolded(next);
   };
-
-  let state: PageState = 'ready';
-  if (files.isError) state = refused(files.error);
-  else if (!files.data) state = 'loading';
-  else if (!rows.length && !kind && !searching) state = 'empty';
 
   const take = (list: FileList | null | undefined) => {
     const picked = list ? Array.from(list) : [];
@@ -139,9 +135,8 @@ function FilesList({ search }: { search: FilesSearch }) {
           </>
         }
         filter={kindName && <FilterRow filters={[{ label: kindName, onClear: () => void press('files.list', { q: search.q }) }]} />}
-        state={state}
+        state={!rows.length && !kind && !searching ? 'empty' : 'ready'}
         empty={{ title: 'No files yet' }}
-        onRetry={() => void files.refetch()}
         sections={
           searching ? (
             <Section name="Found" count={found.data?.results.length}>
@@ -234,36 +229,56 @@ function UploadDialog({ files, onClose }: { files: File[]; onClose: () => void }
 /* ---------------------------------------------------------------- one file */
 
 function FilePage({ id, version }: { id: string; version?: number }) {
-  const f = useQuery(fileQuery(id));
+  const { data: file } = useSuspenseQuery(fileQuery(id));
   const versions = useQuery(fileVersionsQuery(id));
-  const file = f.data;
-  const current = versions.data?.find((v) => v.current);
-  const shown = (version && versions.data?.find((v) => v.version === version)) || current;
-  const n = shown?.version ?? file?.version;
-  const mime = shown?.mime ?? file?.mime ?? '';
+  const cards = useCards();
+  const older = version !== undefined && version !== file.version;
+  const shown = versions.data?.find((v) => (version === undefined ? v.current : v.version === version));
+  const unavailable = older && !shown;
+  const n = version ?? shown?.version ?? file.version;
+  const mime = shown?.mime ?? file.mime ?? '';
   const url = fileUrl(id, n);
-
-  let state: PageState = 'ready';
-  if (f.isError) state = refused(f.error);
-  else if (!file) state = 'loading';
 
   return (
     <Document
-      title={file?.title ?? 'File'}
+      title={file.title}
       path={`/library/files?file=${id}`}
       crumb={[{ label: 'Files', to: '/library/files' }]}
       className="lib"
+      state={unavailable ? (versions.isPending ? 'loading' : 'fault') : 'ready'}
+      onRetry={versions.isError ? () => void versions.refetch() : undefined}
+      after={
+        cards && (versions.data?.length ?? 0) > 1 && (
+          <Menu
+            align="start"
+            trigger={
+              <button type="button" className="btn btn-quiet ver-pick" title="Versions" aria-label="Versions">
+                v{n}
+                <Icon name="chevdown" />
+              </button>
+            }
+          >
+            {versions.data?.map((v) => (
+              <MenuItem
+                key={v.version}
+                label={`v${v.version}`}
+                meta={when(v.created_at)}
+                on={v.version === n}
+                onSelect={() => void press('files.open', { file: id, version: v.current ? undefined : v.version })}
+              />
+            ))}
+          </Menu>
+        )
+      }
       actions={
         <>
-          <FileGet url={url} link={linkOf(file)} />
+          {!unavailable && <FileGet url={url} link={linkOf(file)} />}
           <OwnerButton page="docs" />
         </>
       }
-      state={state}
-      onRetry={() => void f.refetch()}
       framed
       body={
-        file && <Preview id={id} version={n ?? 1} mime={mime} kind={file.library_kind} title={file.title} url={url} name={shown?.name ?? file.name} link={linkOf(file)} />
+        <Preview id={id} version={n ?? 1} mime={mime} kind={file.library_kind} title={file.title} url={url} name={shown?.name ?? file.name} link={linkOf(file)} />
       }
       side={
         file && (

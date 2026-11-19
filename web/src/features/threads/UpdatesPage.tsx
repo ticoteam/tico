@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useSuspenseInfiniteQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { stamp } from '@/conversation';
 import { useActor } from '@/data';
@@ -47,14 +47,23 @@ const tabInput = (tab: UpdateTab) => (tab === 'all' ? {} : { tab });
 type Item = { k: 'day'; day: string; n: number } | { k: 'up'; u: Update };
 
 function UpdatesList({ tab }: { tab: UpdateTab }) {
-  const list = useInfiniteQuery(updateListQuery(tab));
+  const list = useSuspenseInfiniteQuery(updateListQuery(tab));
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const [words, setWords] = useState('');
   const archive = tab === 'archive';
   const find = words.trim().toLowerCase();
   // An update archived or moved back stays in the cache flagged until the next read; each list shows its own side.
-  const loaded = (list.data?.pages.flatMap((p) => p.updates) ?? []).filter((u) => !!u.archived === archive);
+  const loaded = list.data.pages.flatMap((p) => p.updates).filter((u) => !!u.archived === archive);
   const all = find ? loaded.filter((u) => (u.body ?? '').toLowerCase().includes(find)) : loaded;
+  const noMatch = !!find && all.length === 0;
+  const nextBefore = list.data.pages.at(-1)?.next_before;
+  const { fetchNextPage, isFetching, isFetchNextPageError } = list;
+  useEffect(() => {
+    if (noMatch && nextBefore && !isFetching && !isFetchNextPageError) void fetchNextPage({ cancelRefetch: false });
+  }, [noMatch, nextBefore, isFetching, isFetchNextPageError, fetchNextPage]);
+  const searchingOlder = noMatch && !!nextBefore;
+  const searchState = isFetchNextPageError && !isFetching ? 'fault' : 'loading';
+  const listState = loaded.length || find ? 'ready' : 'empty';
   const unread = loaded.filter((u) => !u.read).length;
   // Weekly reads a section a week; the rest a section a day.
   const items: Item[] = byDay(all, tab === 'weekly').flatMap((g) => [
@@ -69,7 +78,6 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
   const more = () => {
     if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
   };
-  const state = list.isPending ? 'loading' : list.isError ? 'fault' : loaded.length === 0 ? 'empty' : 'ready';
   return (
     <List
       title={archive ? 'Archive' : 'Updates'}
@@ -91,11 +99,11 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
           </PageMore>
         )
       }
-      state={state}
+      state={searchingOlder ? searchState : listState}
       empty={{ title: archive ? 'Nothing archived' : 'No updates yet' }}
-      onRetry={() => void list.refetch()}
+      onRetry={searchingOlder ? () => void fetchNextPage({ cancelRefetch: false }) : undefined}
       sections={
-        find && all.length === 0 ? (
+        noMatch ? (
           <Empty icon="search" title="No matches" />
         ) : (
         <VirtualList
@@ -157,17 +165,17 @@ function Steps({ id, tab }: { id: string; tab: UpdateTab }) {
 }
 
 function UpdateOpen({ id, tab }: { id: string; tab: UpdateTab }) {
-  const { data: u, isPending, isError, refetch } = useQuery(updateQuery(id));
-  const who = useActor(u ? actorOf(u) : undefined);
+  const u = useSuspenseQuery(updateQuery(id)).data;
+  const who = useActor(actorOf(u));
   const marked = useRef<string | null>(null);
   useEffect(() => {
     // Opening an update reads it, as the old app does; once per update shown.
-    if (!u || u.read || marked.current === u.id) return;
+    if (u.read || marked.current === u.id) return;
     marked.current = u.id;
     void press('updates.markRead', { ids: [u.id] });
   }, [u]);
-  const title = u ? updateTitle(u) : 'Update';
-  const more = u && (
+  const title = updateTitle(u);
+  const more = (
     <PageMore>
       <MenuItem label="Mark unread" icon="updates" onSelect={() => void press('updates.markRead', { ids: [u.id], read: false })} />
       <MenuRule />
@@ -178,8 +186,8 @@ function UpdateOpen({ id, tab }: { id: string; tab: UpdateTab }) {
       )}
     </PageMore>
   );
-  const rest = u ? updateRest(u) : '';
-  const slides = u?.slides;
+  const rest = updateRest(u);
+  const slides = u.slides;
   return (
     <Document
       title={title}
@@ -187,37 +195,33 @@ function UpdateOpen({ id, tab }: { id: string; tab: UpdateTab }) {
       crumb={tab === 'archive' ? [...ARCHIVE_CRUMB, { label: 'Archive', to: pathOf(tab) }] : [{ label: 'Updates', to: pathOf(tab) }]}
       actions={
         <>
-          {u && <ChatWith actor={actorOf(u)} />}
+          <ChatWith actor={actorOf(u)} />
           <Steps id={id} tab={tab} />
         </>
       }
       more={more}
-      state={isPending ? 'loading' : isError ? 'fault' : 'ready'}
-      onRetry={() => void refetch()}
       body={
-        u && (
-          <>
-            <div className="read-by">
-              <Face actor={actorOf(u)} />
-              <b>{who?.name ?? ''}</b>
-              <span className="grow" />
-              <time className="row-age" dateTime={u.created_at}>
-                {stamp(u.created_at)}
-              </time>
-            </div>
-            {rest && <Markdown text={rest} />}
-            {slides &&
-              (['done', 'focus', 'blockers'] as const).map(
-                (k) =>
-                  slides[k] && (
-                    <section key={k}>
-                      <h2>{k === 'done' ? 'Done' : k === 'focus' ? 'Next' : 'Blocked'}</h2>
-                      <p>{slides[k]}</p>
-                    </section>
-                  ),
-              )}
-          </>
-        )
+        <>
+          <div className="read-by">
+            <Face actor={actorOf(u)} />
+            <b>{who?.name ?? ''}</b>
+            <span className="grow" />
+            <time className="row-age" dateTime={u.created_at}>
+              {stamp(u.created_at)}
+            </time>
+          </div>
+          {rest && <Markdown text={rest} />}
+          {slides &&
+            (['done', 'focus', 'blockers'] as const).map(
+              (k) =>
+                slides[k] && (
+                  <section key={k}>
+                    <h2>{k === 'done' ? 'Done' : k === 'focus' ? 'Next' : 'Blocked'}</h2>
+                    <p>{slides[k]}</p>
+                  </section>
+                ),
+            )}
+        </>
       }
     />
   );

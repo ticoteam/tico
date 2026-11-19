@@ -1,4 +1,4 @@
-import { QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider, QueryObserver } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
@@ -7,7 +7,7 @@ import { ActionsRoot } from '@/actions';
 import { keys, queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { FlowPage } from './FlowPage';
-import { listParams, pipelinesQuery, type Pipeline, type TaskItem } from './queries';
+import { flowQuery, listParams, pipelinesQuery, type Pipeline, type TaskItem } from './queries';
 import { PipelinePage } from './PipelinePage';
 import { TasksPage } from './TasksPage';
 
@@ -95,6 +95,26 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+it('finishes the route’s pipeline read when the shell unsubscribes', async () => {
+  let respond!: (reply: Reply) => void;
+  serve(() => new Promise((resolve) => { respond = resolve; }));
+  const loaded = queryClient.ensureQueryData(pipelinesQuery);
+  const stop = new QueryObserver(queryClient, pipelinesQuery).subscribe(() => {});
+  stop();
+  respond({ status: 200, body: { pipelines: [{ id: PIPE.id, name: PIPE.name, stages: PIPE.stages }] } });
+  await expect(loaded).resolves.toEqual([expect.objectContaining({ id: PIPE.id })]);
+});
+
+it('finishes the route’s Flow read when the shell unsubscribes', async () => {
+  let respond!: (reply: Reply) => void;
+  serve(() => new Promise((resolve) => { respond = resolve; }));
+  const loaded = queryClient.ensureQueryData(flowQuery);
+  const stop = new QueryObserver(queryClient, flowQuery).subscribe(() => {});
+  stop();
+  respond({ status: 200, body: { items: [] } });
+  await expect(loaded).resolves.toEqual({ count: 0, items: [] });
+});
+
 describe('Tasks board and list @s0 @s9 @s10', () => {
   it('a board card opens its task under the pipeline, with a count per stage and Late only when late @s8', async () => {
     serve(() => ({ status: 200, body: {} }));
@@ -181,14 +201,6 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     } finally {
       delete document.documentElement.dataset.layout;
     }
-  });
-
-  it('names the page and offers Try again when the read fails', async () => {
-    serve(() => ({ status: 500, body: { error: { code: 'down', detail: 'down' } } }));
-    queryClient.setQueryData(pipelinesQuery.queryKey, [PIPE]);
-    show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
-    expect(await screen.findByRole('heading', { name: 'Tasks did not load' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 
   it('shows the filters set in the address as chips', async () => {
@@ -318,6 +330,28 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     expect(within(screen.getByRole('region', { name: 'Doing' })).getByText('0')).toBeTruthy();
   });
 
+  it('opens the next server page when no stage has enough rows to virtualize', async () => {
+    serve((url) =>
+      url.includes('after=next')
+        ? { status: 200, body: { tasks: [task('a2', 8, 'Review the export', 's2')], cursor: 'c2' } }
+        : { status: 200, body: {} },
+    );
+    seed([]);
+    queryClient.setQueryData(listKey, {
+      tasks: [task('a1', 7, 'Fix the export', 's1')],
+      cursor: 'c1',
+      next_after: 'next',
+      counts: { total: 2, stage: { s1: 1, s2: 1 } },
+      counted: { s1: 1 },
+    });
+    show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
+    const more = await screen.findByRole('button', { name: 'More tasks' });
+    expect(within(screen.getByRole('heading', { name: /Doing/ })).getByText('1')).toBeTruthy();
+    fireEvent.click(more);
+    expect(await screen.findByRole('link', { name: /Review the export/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'More tasks' })).toBeNull();
+  });
+
   it("a move changes both stages' counts at once, and the next read sets them", async () => {
     let answer!: (r: Reply) => void;
     let counts = { s1: 40, s2: 7 };
@@ -439,12 +473,5 @@ describe('Flow @s5 @s112', () => {
     show(<FlowPage />, '/flow');
     expect(await screen.findByRole('heading', { name: 'Nothing waits on you' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Tasks' }).getAttribute('href')).toBe('/tasks');
-  });
-
-  it('names the page and offers Try again when the read fails', async () => {
-    serve(() => ({ status: 500, body: { error: { code: 'down', detail: 'down' } } }));
-    show(<FlowPage />, '/flow');
-    expect(await screen.findByRole('heading', { name: 'Tasks did not load' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 });

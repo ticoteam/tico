@@ -125,6 +125,7 @@ export function Menu(p: MenuProps) {
   const onMate = [p.me, ...p.teams.flatMap(t => t.members)].find(m => path.startsWith(m.to));
   const openTeam = p.openTeam ?? p.teams.find(t => path.startsWith(t.to) || t.members.some(m => m === onMate))?.id;
   const [shut, setShut] = useState<Record<string, boolean>>({});
+  const [closedPath, setClosedPath] = useState<string>();
   const isOpen = (t: MenuTeam) => (t.id in shut ? !shut[t.id] : t.id === openTeam);
   const rows = ROWS.filter(r => can(r.id));
   const c = p.counts ?? {};
@@ -200,7 +201,7 @@ export function Menu(p: MenuProps) {
     );
   }
 
-  const right = (id: MenuRowId) => {
+  const right = (id: MenuRowId, hasKids: boolean, expanded: boolean) => {
     if (id === 'tasks' && c.flow)
       return (
         <span className="nav-flow">
@@ -211,9 +212,9 @@ export function Menu(p: MenuProps) {
     if (id === 'calendar' && c.next) return <span className="nav-next">{c.next}</span>;
     if (id === 'threads' && c.threads) return <span className="count">{c.threads}</span>;
     if (id === 'updates' && c.updates) return <span className="count">{c.updates}</span>;
-    if (kidsOf(id).length)
+    if (hasKids)
       return (
-        <span className={`nav-chev${top === id ? ' is-open' : ''}`}>
+        <span className={`nav-chev${expanded ? ' is-open' : ''}`}>
           <Icon name="chevron" />
         </span>
       );
@@ -237,13 +238,34 @@ export function Menu(p: MenuProps) {
     <div className="nav-items">
       {rows.map(r => {
         const kids = kidsOf(r.id);
-        return [
-          <Link key={r.id} className="nav-item" to={to(`/${r.id}`)} activeProps={ACTIVE} activeOptions={{ exact: kids.length > 0 }}>
+        const hasKids = kids.length > 0;
+        const canToggle = hasKids && top === r.id && !!KIDS[r.id];
+        const expanded = hasKids && top === r.id && (!canToggle || closedPath !== path);
+        const content = (
+          <>
             <Icon name={r.icon} />
             <span className="nav-label">{r.label}</span>
-            {right(r.id)}
-          </Link>,
-          top === r.id && kids.length ? (
+            {right(r.id, hasKids, expanded)}
+          </>
+        );
+        return [
+          canToggle ? (
+            <button
+              key={r.id}
+              type="button"
+              className={path === `/${r.id}` ? 'nav-item is-active' : 'nav-item'}
+              aria-current={path === `/${r.id}` ? 'page' : undefined}
+              aria-expanded={expanded}
+              onClick={() => setClosedPath(expanded ? path : undefined)}
+            >
+              {content}
+            </button>
+          ) : (
+            <Link key={r.id} className="nav-item" to={to(`/${r.id}`)} activeProps={ACTIVE} activeOptions={{ exact: hasKids }}>
+              {content}
+            </Link>
+          ),
+          expanded ? (
             <div key={`${r.id}-kids`} className="nav-kids">
               {kids.map(k => (
                 <Link key={k.key} className="nav-kid" to={to(k.to)} activeProps={ACTIVE}>

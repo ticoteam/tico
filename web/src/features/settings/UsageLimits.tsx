@@ -3,7 +3,6 @@ import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { run } from '@/actions/run';
 import type { UsageLimitView, UsageLimits } from '@/api/schema';
-import { directoryQuery } from '@/data';
 import { agentsQuery } from '@/features/team/routing';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
@@ -17,7 +16,7 @@ import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { refusal } from '@/actions';
 import { Section, SidePanel } from '@/pagekinds';
-import { Foot, Meter, SwitchLine, Verb, Word, act, usd } from './parts';
+import { Foot, Meter, SwitchLine, Verb, Word, act, useEveryone, useFaces, usd } from './parts';
 import { agentUsageQuery, limitsQuery, poolsOf, taskCapsQuery, type UsagePool } from './queries';
 import type { UsageSearch } from './Usage';
 
@@ -190,7 +189,7 @@ function PoolRow({ id, name, pool, depth, search }: { id: string; name: string; 
 
 export function Limits({ search }: { search: UsageSearch }) {
   const limits = useQuery(limitsQuery);
-  const dir = useQuery(directoryQuery);
+  const faces = useFaces();
   const [editing, setEditing] = useState<Editing>(null);
   const v = limits.data;
   if (!v) return null;
@@ -234,7 +233,7 @@ export function Limits({ search }: { search: UsageSearch }) {
           <Empty title="No agents yet" />
         ) : (
           bots.map(([slug, l]) => {
-            const who = dir.data?.byId[slug] ?? dir.data?.byId[`bot:${slug}`];
+            const who = faces[slug] ?? faces[`bot:${slug}`];
             const name = who?.name ?? slug;
             return (
               <Link
@@ -268,12 +267,12 @@ export function Limits({ search }: { search: UsageSearch }) {
 /** Add limit (the mock's one filled button on Limits): pick the company, a team or an agent, then dollars a month. */
 export function AddLimit() {
   const limits = useQuery(limitsQuery);
-  const dir = useQuery(directoryQuery);
+  const faces = useFaces();
   const [open, setOpen] = useState(false);
   const [pick, setPick] = useState<string | null>(null);
   const [value, setValue] = useState('');
   const v = limits.data;
-  const options = addable(v, (slug) => (dir.data?.byId[slug] ?? dir.data?.byId[`bot:${slug}`])?.name ?? slug);
+  const options = addable(v, (slug) => (faces[slug] ?? faces[`bot:${slug}`])?.name ?? slug);
   if (options.length === 0) return null;
   const n = Number(value);
   const ok = !!pick && value.trim() !== '' && Number.isFinite(n) && n >= 0;
@@ -355,12 +354,12 @@ export function LimitPanel({ search }: { search: UsageSearch }) {
 
 function AgentPanel({ slug, onClose }: { slug: string; onClose: () => void }) {
   const limits = useQuery(limitsQuery);
-  const dir = useQuery(directoryQuery);
+  const faces = useFaces();
   const used = useQuery(agentUsageQuery('month', slug));
   const [editing, setEditing] = useState<Editing>(null);
   const l: UsageLimitView | undefined = limits.data?.bots?.[slug];
   if (!l) return null;
-  const who = dir.data?.byId[slug] ?? dir.data?.byId[`bot:${slug}`];
+  const who = faces[slug] ?? faces[`bot:${slug}`];
   const name = who?.name ?? slug;
   const u = used.data;
   const tasks = (u?.tasks ?? []).filter((t) => t.value);
@@ -432,7 +431,7 @@ function AgentPanel({ slug, onClose }: { slug: string; onClose: () => void }) {
 function PoolPanel({ scope, search, onClose }: { scope: string; search: UsageSearch; onClose: () => void }) {
   const limits = useQuery(limitsQuery);
   const roster = useQuery(agentsQuery);
-  const dir = useQuery(directoryQuery);
+  const faces = useFaces();
   const [editing, setEditing] = useState<Editing>(null);
   const v = limits.data;
   const pools = poolsOf(v);
@@ -476,7 +475,7 @@ function PoolPanel({ scope, search, onClose }: { scope: string; search: UsageSea
           <h3>Agents</h3>
           {agents.map((a) => {
             const l = v.bots?.[a.slug] ?? v.bots?.[a.id];
-            const who = dir.data?.byId[`bot:${a.id}`];
+            const who = faces[`bot:${a.id}`];
             const label = a.display_name || who?.name || a.slug;
             return (
               <Link key={a.id} className="rail-row u-line" to="/company/usage" search={{ ...search, open: v.bots?.[a.slug] ? a.slug : a.id }} title={label}>
@@ -498,7 +497,8 @@ const capRef = (actor: string) => actor.replace(/^human:/, 'person:');
 /** Caps on the tasks this agent sends a manager above it a day (the old Budget's task caps). */
 function TaskCaps({ slug, name }: { slug: string; name: string }) {
   const caps = useQuery(taskCapsQuery);
-  const dir = useQuery(directoryQuery);
+  const faces = useFaces();
+  const everyone = useEveryone();
   const roster = useQuery(agentsQuery);
   const [editing, setEditing] = useState<{ receiver?: string; now?: number } | null>(null);
   if (!caps.data) return null;
@@ -506,7 +506,7 @@ function TaskCaps({ slug, name }: { slug: string; name: string }) {
   const id = (Array.isArray(roster.data) ? roster.data : []).find((a) => a.slug === slug)?.id ?? slug;
   const sender = `bot:${id}`;
   const mine = (caps.data.caps ?? []).filter((c) => c.sender === sender || c.sender === `bot:${slug}`);
-  const nameOf = (ref: string) => dir.data?.byId[ref.replace(/^person:/, 'human:')]?.name ?? ref.replace(/^(bot|person):/, '');
+  const nameOf = (ref: string) => faces[ref.replace(/^person:/, 'human:')]?.name ?? ref.replace(/^(bot|person):/, '');
   return (
     <div className="rail-sec">
       <h3>Tasks a day</h3>
@@ -526,7 +526,7 @@ function TaskCaps({ slug, name }: { slug: string; name: string }) {
           name={name}
           receiver={editing.receiver}
           now={editing.now}
-          options={(dir.data?.actors ?? []).filter((a) => capRef(a.id) !== sender).map((a) => ({ value: capRef(a.id), label: a.name, meta: a.kind === 'agent' ? 'Agent' : undefined }))}
+          options={everyone.filter((a) => capRef(a.id) !== sender).map((a) => ({ value: capRef(a.id), label: a.name, meta: a.kind === 'agent' ? 'Agent' : undefined }))}
           onClose={() => setEditing(null)}
         />
       )}

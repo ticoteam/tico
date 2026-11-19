@@ -31,12 +31,13 @@ import { FINANCE_TAB_IDS, type FinanceSearch, type FinanceTab } from './search';
     the first page they have, as the old app's redirect did (finance.ts finShow). */
 export function FinancePage({ search }: { search: FinanceSearch }) {
   const [failure, dismiss] = useBooksReturn(search);
-  const { shown, pending } = useCaps();
+  const { shown, pending, caps } = useCaps();
   // The plain address waits for the access list, so a teammate who has only My budget lands there, not on the overview.
   if (!search.tab && pending) return <Waiting />;
   const tab: FinanceTab = search.tab ?? (shown('overview') ? 'overview' : (FINANCE_TAB_IDS.find(shown) ?? 'overview'));
-  if (!shown(tab)) return <Closed />;
-  if (tab === 'overview') return <Overview />;
+  // My budget is a tab only for a teammate who sees nothing else, but whoever reads every budget (the owner) may open it
+  if (!shown(tab) && !(tab === 'mine' && caps?.budgets)) return <Closed />;
+  if (tab === 'overview') return <Overview mayReadSources={shown('sources')} />;
   if (tab === 'pnl') return <PnlPage search={search} />;
   if (tab === 'budgets') return <BudgetsPage search={search} />;
   if (tab === 'mine') return <BudgetsPage search={search} mine />;
@@ -74,7 +75,7 @@ const KIND_TAB: Record<string, FinanceTab> = {
 /** The overview: four figures, then one column of sections as the mock stacks them (finance.js `overview`): revenue and
     spend by week, what waits on you, what changed. Each Section puts its name on the page edge itself, so none sits in
     the kind's padded chart slot or its two-column widget grid. */
-function Overview() {
+function Overview({ mayReadSources }: { mayReadSources: boolean }) {
   const press = usePress();
   const head = useFinanceHead();
   const as = useViewAs();
@@ -82,7 +83,7 @@ function Overview() {
   const ym = ymOf(now);
   const weeks = new Date(now);
   weeks.setDate(weeks.getDate() - ((weeks.getDay() + 6) % 7) - 77);
-  const sources = useQuery(sourcesQuery(as));
+  const sources = useQuery({ ...sourcesQuery(as), enabled: mayReadSources });
   const month = useQuery(pnlQuery({ ...monthSpan(ym), period: 'month', basis: 'accrual' }, as));
   const weekly = useQuery(pnlQuery({ start: dayOf(weeks), end: dayOf(now), period: 'week', basis: 'accrual' }, as));
   const cashNow = useQuery(metricQuery('cash', as));
@@ -92,7 +93,7 @@ function Overview() {
   const brief = useQuery(briefQuery(as));
 
   const live = connected(sources.data?.groups);
-  const state = readState(sources, !live);
+  const state = mayReadSources ? readState(sources, !live) : 'ready';
   const m = month.data;
   const net = m ? (m.net[nowCol(m.columns)] ?? null) : null;
   const cv = cashNow.data?.value;

@@ -1,6 +1,7 @@
 /* The menus the menu opens: the company pick under the company's name (system/shell.css .co-menu) and the account
    menu over your name at the foot (pages/8-settings/more.css .acct). Both are kit menus; only their rows are theirs. */
 button.me{border:0;padding:0;background:none;font:inherit;color:inherit;cursor:pointer}
+:where(button).nav-item{border:0;background:none;font:inherit;text-align:left;cursor:pointer}
 .co-pick[data-popup-open]{background:var(--hover)}
 
 .menu:has(a>.co-mark){width:228px}

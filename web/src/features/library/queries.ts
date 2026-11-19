@@ -269,10 +269,10 @@ export const filesQuery = (kind: string) =>
     getNextPageParam: (last) => (last.has_more && last.next_cursor ? last.next_cursor : undefined),
   });
 
-export const fileSearchQuery = (text: string) =>
+export const fileSearchQuery = (text: string, kind = '') =>
   queryOptions({
-    queryKey: ['files', 'search', text],
-    queryFn: ({ signal }) => api.get<{ results: Array<{ id: string; title: string }> }>(`/api/v2/files/search${q({ q: text, limit: 50 })}`, { signal }),
+    queryKey: ['files', 'search', text, kind],
+    queryFn: ({ signal }) => api.get<{ results: Array<{ id: string; title: string }> }>(`/api/v2/files/search${q({ q: text, limit: 50, kind })}`, { signal }),
     enabled: text.trim().length > 1,
   });
 
@@ -1696,5 +1696,24 @@ export const externalDocAtQuery = (id: string, revision: string) =>
     queryKey: ['docs', 'external', id, revision],
     queryFn: () => api.get<ExternalDocResult>(`/api/v2/docs/external/${enc(id)}${q({ revision })}`).then((r) => r.doc),
     // a commit's text never changes
+    staleTime: Infinity,
+  });
+
+/* ---------------------------------------------------------------- the file viewer: bytes sent only as a download */
+
+import { ApiError } from '@/api/client';
+
+/** Bytes the server sends only as a download (an email's frozen attachment), read once and held as `mime` so the
+    viewer can show them: an address for a picture, a video, a sound or a PDF, else the words. A frozen file never
+    changes, so what is held is kept for the visit. */
+export const heldFileQuery = (url: string, mime: string, asText: boolean) =>
+  queryOptions({
+    queryKey: ['files', 'held', url, mime, asText],
+    queryFn: async ({ signal }) => {
+      const res = await fetch(url, { credentials: 'same-origin', signal });
+      if (!res.ok) throw new ApiError(res.status, `http_${res.status}`, res.statusText, res.status >= 500);
+      const blob = new Blob([await res.arrayBuffer()], { type: mime });
+      return asText ? { src: '', text: await blob.text() } : { src: URL.createObjectURL(blob), text: '' };
+    },
     staleTime: Infinity,
   });

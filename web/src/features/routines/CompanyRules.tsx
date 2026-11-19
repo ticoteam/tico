@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Fragment, useState, type ReactNode } from 'react';
-import { directoryQuery, useActors } from '@/data';
+import { useActors, useDirectory, type Directory } from '@/data';
 import { Icon } from '@/kit/Icon';
 import { Row } from '@/kit/Row';
 import { Segmented } from '@/kit/Segmented';
@@ -31,15 +31,18 @@ export { partiesOf };
 
 const members = (g: Group) => [...g.bots.map((b) => `bot:${b}`), ...g.people.map((p) => `human:${p}`)];
 
+/** Every name the directory answers to, by any id form: it changes on a rename, not on an agent's status line. */
+const namesOf = (d: Directory) => Object.fromEntries(Object.entries(d.byId).map(([id, a]) => [id, a.name]));
+
 /** A party's name: Everyone, a team, or whoever the directory knows by that id or slug. */
 export function useNamer() {
-  const dir = useQuery(directoryQuery).data;
+  const names = useDirectory(namesOf);
   const teams = useQuery(teamsQuery).data ?? [];
   return (party: string): string => {
     if (party === '*') return 'Everyone';
     if (party.startsWith('group:')) return teams.find((g) => g.id === party.slice(6))?.name ?? 'A team';
     // Unknown only once the agent or person is gone from the company.
-    return dir?.byId[actorKey(party) ?? party]?.name ?? (party.startsWith('bot:') ? 'An agent' : 'A person');
+    return names?.[actorKey(party) ?? party] ?? (party.startsWith('bot:') ? 'An agent' : 'A person');
   };
 }
 
@@ -121,7 +124,7 @@ export function OrgRuleRow({
 
 export function CompanyRules({ who, panel, confirm, q }: { who: string; panel?: string; confirm: (what: string, go: () => void) => void; q?: string }) {
   const words = q?.toLowerCase().split(/\s+/) ?? [];
-  const rules = (useQuery(orgRulesQuery('active')).data ?? []).filter((r) => r.kind !== 'external' && words.every((w) => `${r.text} ${r.description ?? ''}`.toLowerCase().includes(w)));
+  const rules = useSuspenseQuery(orgRulesQuery('active')).data.filter((r) => r.kind !== 'external' && words.every((w) => `${r.text} ${r.description ?? ''}`.toLowerCase().includes(w)));
   const teams = useQuery(teamsQuery).data ?? [];
   const reach = useQuery(reachQuery).data;
   const holds = useQuery(holdsQuery).data;

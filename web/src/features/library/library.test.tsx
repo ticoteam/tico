@@ -12,6 +12,7 @@ import { replaceLogin } from './queries';
 import { skillsSearch } from './search';
 import { newAddressFor } from '@/oldAddress/map';
 import { forgetHelperCode, heldHelperCode, takeHelperCode } from './helperCode';
+import { loadDocs, loadTools } from './routing';
 
 // jsdom lays nothing out, so the virtual list would draw no rows: here it draws them all (its own tests cover the rest).
 vi.mock('@/kit/VirtualList', () => ({
@@ -158,12 +159,6 @@ describe('Contacts', () => {
     show(<ContactsPage search={{ q: 'zz' }} />, '/library/contacts?q=zz');
     expect(await screen.findByText('Nothing matches')).toBeTruthy();
   });
-
-  it('shows the fault with Try again when the list fails', async () => {
-    serve((url) => (url.includes('/entities/find') ? { status: 500, body: { detail: 'boom' } } : nothing()));
-    show(<ContactsPage search={{}} />, '/library/contacts');
-    expect(await screen.findByRole('button', { name: 'Try again' })).toBeTruthy();
-  });
 });
 
 describe('Skills', () => {
@@ -243,8 +238,9 @@ describe("Connect Claude Code from the helper's old link", () => {
     const sent: string[] = [];
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
       if ((init?.method ?? 'GET') !== 'GET') sent.push(String(url));
-      const body = String(url).endsWith(`/skills/devices/codes/${CODE}`) ? { user_code: CODE, label: 'Studio laptop', expires_at: '2026-11-19T08:00:00Z' } : {};
-      return new Response(JSON.stringify(body), { status: String(url).includes('/skills/devices/') ? 200 : 404, headers: { 'Content-Type': 'application/json' } });
+      // The page draws once its list is in: an empty one.
+      const body = String(url).endsWith(`/skills/devices/codes/${CODE}`) ? { user_code: CODE, label: 'Studio laptop', expires_at: '2026-11-19T08:00:00Z' } : { skills: [], proposals: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
     });
     const at = newAddressFor(`/#/skills/connect?code=${CODE}`) ?? '';
     const Skills = () => <SkillsPage search={skillsSearch(useSearch({ strict: false }))} />;
@@ -266,8 +262,9 @@ describe("Connect Claude Code from the helper's old link", () => {
   /** The Skills page alone, as the app opens it after sign-in: the code is not in the address. */
   function openSkills() {
     vi.stubGlobal('fetch', async (url: string) => {
-      const body = String(url).endsWith(`/skills/devices/codes/${CODE}`) ? { user_code: CODE, label: 'Studio laptop', expires_at: '2026-11-19T08:00:00Z' } : {};
-      return new Response(JSON.stringify(body), { status: String(url).includes('/skills/devices/') ? 200 : 404, headers: { 'Content-Type': 'application/json' } });
+      // The page draws once its list is in: an empty one.
+      const body = String(url).endsWith(`/skills/devices/codes/${CODE}`) ? { user_code: CODE, label: 'Studio laptop', expires_at: '2026-11-19T08:00:00Z' } : { skills: [], proposals: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
     });
     const Skills = () => <SkillsPage search={skillsSearch(useSearch({ strict: false }))} />;
     const root = createRootRoute({ component: Outlet });
@@ -307,5 +304,14 @@ describe("Connect Claude Code from the helper's old link", () => {
     expect(await screen.findByRole('heading', { name: 'Skills' })).toBeTruthy();
     expect(screen.queryByRole('dialog', { name: 'Connect Claude Code' })).toBeNull();
     expect(sessionStorage.getItem('tico.skillsHelper')).toBeNull();
+  });
+});
+
+describe('Loading a Library page', () => {
+  it('lets a failed main read through to the router, and leaves an open tool’s failure in its place', async () => {
+    queryClient.clear();
+    serve((url) => (url.startsWith('/api/v2/tool-index') ? { status: 200, body: { rows: [] } } : { status: 403, body: { detail: 'no' } }));
+    await expect(loadTools(queryClient, { tool: 'api:t1' })).resolves.toBeTruthy();
+    await expect(loadDocs(queryClient, {})).rejects.toMatchObject({ status: 403 });
   });
 });

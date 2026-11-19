@@ -1,10 +1,11 @@
-import { QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider, QueryObserver } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { directoryQuery, queryClient, type Actor } from '@/data';
 import { agentsQuery, changeAgent, groupsQuery, moveToTeam, type AgentRow, type Group } from './queries';
+import { loadWho } from './routing';
 import { TeamWho } from './TeamWho';
 import type { GoalTree } from '@/api/schema';
 import { goalsTreeQuery } from '@/features/company/exports';
@@ -166,13 +167,48 @@ describe('Team pages', () => {
     show(<TeamWho who="nobody" />, '/team/nobody');
     expect(await screen.findByRole('heading', { name: 'No such teammate' })).toBeTruthy();
   });
+});
 
-  it('offers Try again when the directory does not load', async () => {
-    queryClient.removeQueries({ queryKey: directoryQuery.queryKey });
-    queryClient.removeQueries({ queryKey: groupsQuery.queryKey });
+describe('Loading a teammate', () => {
+  const read = async (who: string, tab?: Parameters<typeof loadWho>[2]) => {
+    const urls: string[] = [];
+    serve((url) => (urls.push(url), undefined));
+    await loadWho(queryClient, who, tab);
+    return urls;
+  };
+
+  it('reads what the page it opens on draws first, before it draws', async () => {
+    queryClient.removeQueries({ queryKey: agentsQuery.queryKey });
+    expect(await read('ana')).toEqual([expect.stringContaining('/api/v2/tasks?owner=bot%3A0190-ana&status=open')]);
+    expect(await read('ana', 'settings')).toEqual(['/api/employees']);
+    expect(await read('p1', 'slack')).toEqual([expect.stringContaining('/humans/p1/slack')]);
+    expect(await read('design')).toEqual([]);
+  });
+
+  it('throws a failed read to the router, which draws the fault', async () => {
     serve(() => ({ status: 500, body: { detail: 'down' } }));
-    show(<TeamWho who="ana" />, '/team/ana');
-    expect(await screen.findByRole('heading', { name: 'Team did not load' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    await expect(loadWho(queryClient, 'ana', 'instructions')).rejects.toThrow();
+  });
+
+  it('opens a team when the shell detaches from the in-flight directory read', async () => {
+    queryClient.removeQueries({ queryKey: directoryQuery.queryKey });
+    const org = { status: 200, body: { org_groups: [], people: [], bots: [] } };
+    let finish: (reply: Reply) => void = () => {};
+    const first = new Promise<Reply>((resolve) => {
+      finish = resolve;
+    });
+    let reads = 0;
+    serve((url) => {
+      if (url !== '/api/v2/org') return undefined;
+      reads++;
+      return reads === 1 ? first : org;
+    });
+    const observer = new QueryObserver(queryClient, directoryQuery);
+    const unsubscribe = observer.subscribe(() => {});
+    const page = loadWho(queryClient, 'design', undefined);
+    unsubscribe();
+    finish(org);
+    await expect(page).resolves.toBeUndefined();
+    expect(reads).toBe(2);
   });
 });

@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { Avatar } from '@/kit/Avatar';
 import { useAction } from '@/actions';
@@ -7,11 +7,11 @@ import { useFollow } from '@/live/follow';
 import { IconButton } from '@/kit/IconButton';
 import { MenuItem } from '@/kit/Menu';
 import { fmtMoney } from '@/lib';
-import { FiguresStrip, List, PageMore, Section, type PageState } from '@/pagekinds';
+import { FiguresStrip, List, PageMore, Section } from '@/pagekinds';
 import type { AddStep } from './actions';
 import { AddTeammate } from './AddTeammate';
 import { AccessDialog } from './dialogs';
-import { managerOf, memberIds, membersUnder, startOfWeek, subTeams, teamSlug } from './model';
+import { managerOf, memberIds, membersUnder, startOfWeek, subTeams } from './model';
 import { MateRow, OwnerButton, waitsOn } from './parts';
 import {
   agentsQuery,
@@ -28,15 +28,17 @@ import {
 
 export interface TeamPageProps {
   group: Group;
+  path: string;
   add?: AddStep;
 }
 
 /** A team (mates.js teamPage): its manager, its teammates, the teams inside it. Its manager's chat opens beside it. */
-export function TeamPage({ group, add }: TeamPageProps) {
+export function TeamPage({ group, path, add }: TeamPageProps) {
   useFollow({ allTasks: true });
   const { data: me } = useQuery(meQuery);
-  const dir = useQuery(directoryQuery);
-  const groups = useQuery(groupsQuery);
+  // Every member's face and status line: the whole directory.
+  const { data: dir } = useSuspenseQuery(directoryQuery);
+  const { data: all } = useSuspenseQuery(groupsQuery);
   const roster = useQuery(agentsQuery);
   const people = useQuery(peopleQuery);
   const [since] = useState(() => startOfWeek(new Date()).toISOString());
@@ -46,8 +48,7 @@ export function TeamPage({ group, add }: TeamPageProps) {
   const reach = useQuery(teammateAccessQuery('team', group.id)).data;
   const [access, setAccess] = useState(false);
 
-  const all = groups.data ?? [];
-  const actorOf = (key: string) => dir.data?.byId[key];
+  const actorOf = (key: string) => dir.byId[key];
   const lead = managerOf(group, roster.data ?? [], people.data ?? []);
   const manager = lead ? actorOf(lead) : undefined;
   const under = membersUnder(all, group.id);
@@ -111,15 +112,14 @@ export function TeamPage({ group, add }: TeamPageProps) {
       ...(depth < 4 ? nested(s, depth + 1) : []),
     ]);
 
-  const state: PageState = groups.isError || dir.isError ? 'fault' : groups.isPending || dir.isPending ? 'loading' : everyone.size ? 'ready' : 'empty';
   return (
     <>
       <List
         title={group.name}
-        path={`/team/${teamSlug(group.name)}`}
+        path={path}
         className="rec"
         tabs={[
-          { label: 'Teammates', to: `/team/${teamSlug(group.name)}` },
+          { label: 'Teammates', to: path },
           { label: 'Rules', to: '/company/rules', search: { who: `group:${group.id}` } },
         ]}
         actions={
@@ -140,8 +140,7 @@ export function TeamPage({ group, add }: TeamPageProps) {
             </PageMore>
           ) : undefined
         }
-        state={state}
-        onRetry={() => void groups.refetch()}
+        state={everyone.size ? 'ready' : 'empty'}
         empty={{ title: 'No teammates yet' }}
         figures={
           <FiguresStrip

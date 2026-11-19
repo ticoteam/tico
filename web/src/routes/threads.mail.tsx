@@ -22,8 +22,7 @@ export const Route = createFileRoute('/threads/mail')({
     view: s.view === 'instructions' ? 'instructions' : undefined,
     q: text(s.q),
   }),
-  // A read that fails shows the page's own fault state, so the loader never throws.
-  loader: ({ context: { queryClient } }) => queryClient.ensureQueryData(mailboxesQuery).catch(() => undefined),
+  loader: ({ context: { queryClient } }) => queryClient.ensureQueryData(mailboxesQuery),
   component: MailRoute,
 });
 

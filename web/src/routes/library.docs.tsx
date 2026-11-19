@@ -4,7 +4,8 @@ import { docsSearch, loadDocs } from '@/features/library/routing';
 
 export const Route = createFileRoute('/library/docs')({
   validateSearch: docsSearch,
-  loader: ({ context: { queryClient } }) => loadDocs(queryClient),
+  loaderDeps: ({ search }) => ({ tab: search.tab, archived: search.archived }),
+  loader: ({ deps, context: { queryClient } }) => loadDocs(queryClient, deps),
   component: Docs,
 });
 

@@ -22,9 +22,12 @@
 .tico-head b{font-size:var(--t-md);font-weight:var(--w-title)}
 .tico .chat-body{padding:12px 16px}
 .tico .msg-meta time{display:none}
-.tico.is-fold{align-items:center;padding:12px 0}
+.tico.is-fold{align-items:center;padding:0}   /* fixed: the strip's button holds the padding, so all of it opens Tico */
+.tico-strip{flex:1;align-self:stretch;display:flex;flex-direction:column;align-items:center;padding:12px 0;border:0;background:none;color:inherit;font:inherit;cursor:pointer}
+.tico-strip:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
 .tico-orb{width:40px;height:40px;border:0;background:none;border-radius:var(--r-ctl);display:grid;place-items:center;position:relative;flex:none}
-.tico-orb:hover{background:var(--hover)}
+.tico-orb:hover,.tico-strip:hover .tico-orb{background:var(--hover)}
+.tico-strip:hover .ib{color:var(--ink)}
 .tico-orb .slot-n{position:absolute;left:24px;top:-2px}
 .tico.is-fold .grow{flex:1}
 

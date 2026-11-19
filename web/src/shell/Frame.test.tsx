@@ -35,7 +35,7 @@ describe('Frame', () => {
     expect(handle('Tico').getAttribute('aria-valuenow')).toBe('300');
     resize(860);
     expect(handle('Tico').getAttribute('aria-valuenow')).toBe('56');
-    expect(screen.getAllByRole('button', { name: 'Open Tico' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Open Tico' })).toHaveLength(1); // the whole strip is one button
 
     resize(1440);
     expect(handle('Tico').getAttribute('aria-valuenow')).toBe('300');

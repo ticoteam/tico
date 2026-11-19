@@ -30,7 +30,13 @@ describe('team model', () => {
   it('gives each teammate the address the menu uses', () => {
     expect(whoHref(ana)).toBe('/team/ana');
     expect(whoHref(pat)).toBe('/team/p1');
-    expect(teamSlug('Product & Design')).toBe('product-design');
+    expect(teamSlug('Product & Design')).toBe('team:Product & Design');
+  });
+
+  it('uses distinct addresses when an agent and a team share a slug', () => {
+    const sharedName = group('ana', 'Ana', '');
+    expect(resolveWho(teamSlug(sharedName.name), dir, [sharedName])).toEqual({ kind: 'team', group: sharedName });
+    expect(resolveWho('ana', dir, [sharedName])).toEqual({ kind: 'agent', actor: ana });
   });
 
   it('finds the manager: the lead, else the teammate most members report to', () => {

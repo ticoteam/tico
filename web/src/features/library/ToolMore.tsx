@@ -2,7 +2,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { refusal, run } from '@/actions';
 import type { Group, ToolIndexRow } from '@/api/schema';
-import { directoryQuery, type Directory } from '@/data';
+import { useDirectory } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
@@ -17,7 +17,7 @@ import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
 import { FilterRow, PageMore, type FilterChip } from '@/pagekinds';
 import { Foot, useGo } from './AddTool';
-import { Face, Held, More, press, when } from './parts';
+import { Face, Held, idsAndNames, More, press, when } from './parts';
 import {
   allMessagesQuery,
   envsOf,
@@ -58,17 +58,17 @@ async function check(id: string, input: unknown) {
 export const KEY_KIND: Record<string, string> = { api_key: 'API key', password: 'Password', token: 'Token', file: 'File', connection: 'Connection' };
 
 /** A grant's subject as a name: a person or an agent the vault or the directory knows, or every computer. */
-function subjectName(subject: string, vault: Vault | undefined, dir: Directory | undefined): string {
+function subjectName(subject: string, vault: Vault | undefined, known: ReturnType<typeof idsAndNames> | undefined): string {
   if (subject === 'computers') return 'Every computer';
   const [kind, id = ''] = subject.split(':');
   if (kind === 'computer') return 'A computer';
-  const known = kind === 'human' ? vault?.people.find((p) => p.id === id) : vault?.bots.find((b) => b.id === id || b.slug === id);
-  return known?.name || dir?.byId[subject]?.name || id;
+  const found = kind === 'human' ? vault?.people.find((p) => p.id === id) : vault?.bots.find((b) => b.id === id || b.slug === id);
+  return found?.name || known?.[subject]?.name || id;
 }
 
 export function KeyView({ cid }: { cid: string }) {
   const q = useQuery(vaultQuery);
-  const dir = useQuery(directoryQuery).data;
+  const known = useDirectory(idsAndNames);
   const vault = q.data;
   const k = vault?.credentials.find((c) => c.id === cid);
   const [dialog, setDialog] = useState<'rotate' | 'reveal' | 'delete' | null>(null);
@@ -142,7 +142,7 @@ export function KeyView({ cid }: { cid: string }) {
         )
       }
       who={k?.grants.map((g) => {
-        const name = subjectName(g.subject, vault, dir);
+        const name = subjectName(g.subject, vault, known);
         return (
           <WhoRow
             key={g.id}
@@ -204,7 +204,7 @@ export function ServiceView({ row }: { row: ToolIndexRow }) {
   const list = useQuery(servicesQuery);
   const page = useQuery(servicePageQuery(service));
   const vault = useQuery(vaultQuery).data;
-  const dir = useQuery(directoryQuery).data;
+  const known = useDirectory(idsAndNames);
   const [storing, setStoring] = useState<string | null>(null);
   const s = list.data?.find((x) => x.service === service);
   const live = s && s.status !== 'removed' ? s : undefined;
@@ -262,9 +262,9 @@ export function ServiceView({ row }: { row: ToolIndexRow }) {
       }
       who={[
         ...[...agents].map(([bot, a]) => (
-          <WhoRow key={bot} actor={`bot:${bot}`} name={dir?.byId[`bot:${bot}`]?.name ?? bot} right={a.problem && <Pill>{a.problem}</Pill>} level={WRITE[a.level] ?? a.level} />
+          <WhoRow key={bot} actor={`bot:${bot}`} name={known?.[`bot:${bot}`]?.name ?? bot} right={a.problem && <Pill>{a.problem}</Pill>} level={WRITE[a.level] ?? a.level} />
         )),
-        ...[...people].map((p) => <WhoRow key={p} actor={p} name={subjectName(p, vault, dir)} level={WRITE[s?.writes ?? 'never']} />),
+        ...[...people].map((p) => <WhoRow key={p} actor={p} name={subjectName(p, vault, known)} level={WRITE[s?.writes ?? 'never']} />),
       ]}
       whoCount={agents.size + people.size}
       can={body && <Markdown text={body} />}

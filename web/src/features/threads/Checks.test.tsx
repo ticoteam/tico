@@ -1,5 +1,5 @@
-import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
+import { InfiniteQueryObserver, QueryClientProvider } from '@tanstack/react-query';
+import { createMemoryHistory, createRootRoute, createRouter, defaultParseSearch, defaultStringifySearch, RouterProvider } from '@tanstack/react-router';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,7 +14,7 @@ import { ChatSheet } from './ChatSheet';
 import { LearnedPage } from './LearnedPage';
 import { MailPage, MessagingPage } from './MailPage';
 import type { Thread } from './model';
-import { learnedQuery, mailboxesQuery, threadKeys, viewersQuery } from './queries';
+import { learnedQuery, mailboxesQuery, threadKeys, updateListQuery, viewersQuery } from './queries';
 import { ThreadHead } from './ThreadHead';
 import { ThreadsPage } from './ThreadsPage';
 import { UpdatesPage } from './UpdatesPage';
@@ -311,6 +311,36 @@ describe('An open mail @s159', () => {
     expect(sent('POST', '/api/v2/mail/drafts')?.body).toEqual({ mailbox: 'help@example.test', body: 'Yes, done.', reply_to: 'th1' });
   });
 
+  it('names the sender the mail API replies to in a thread with multiple senders', async () => {
+    serve((url) =>
+      url.includes('/mail/threads/th1')
+        ? ok({
+            messages: [
+              letter(),
+              letter({ msg_id: 'l2', from_addr: 'mara@example.test', from_header: 'Mara <mara@example.test>' }),
+              letter({ msg_id: 'l3', from_addr: 'Help@example.test', from_header: 'Help <Help@example.test>' }),
+            ],
+          })
+        : undefined,
+    );
+    queryClient.setQueryData(mailboxesQuery.queryKey, [box]);
+    show(<MailPage box={box.address} open="th1" />, '/threads/mail?box=help%40example.test&open=th1');
+    expect(await screen.findByRole('textbox', { name: 'Reply to Mara' })).toBeTruthy();
+  });
+
+  it('returns to the selected mailbox and search when closing a letter from its back link', async () => {
+    openMail();
+    const selected = 'sales@example.test';
+    const words = '1203';
+    const reading = { box: selected, q: words, open: 'th1' };
+    queryClient.setQueryData(mailboxesQuery.queryKey, [box, { address: selected }]);
+    const router = show(<MailPage box={selected} open="th1" q={words} />, `/threads/mail${defaultStringifySearch(reading)}`);
+    const letterLink = (await screen.findByTitle('Sam Lee: Invoice question')).getAttribute('href')!;
+    expect(defaultParseSearch(new URL(letterLink, location.origin).search)).toEqual(reading);
+    fireEvent.click(await screen.findByRole('link', { name: 'Back to Mail' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ box: selected, q: words }));
+  });
+
   it('has no reply box or Archive where the person may only read', async () => {
     openMail();
     queryClient.setQueryData(mailboxesQuery.queryKey, [{ ...box, may: { send: false, organize: false } }]);
@@ -349,6 +379,25 @@ describe('Mail: search @s159', () => {
 });
 
 describe('Messaging @s160', () => {
+  it('finds a contact outside the loaded page', async () => {
+    const older = '+15550199';
+    const recent = Array.from({ length: 50 }, (_, i) => ({
+      message_id: `recent-${i}`,
+      from: `+155502${i.toString().padStart(2, '0')}`,
+      received_at: ago(i),
+    }));
+    serve((url) => {
+      if (!url.includes('/api/v2/inbound/messages?')) return;
+      return new URL(url, location.origin).searchParams.get('from') === '0199'
+        ? ok({ messages: [{ message_id: 'older', from: older, received_at: ago(60) }], next: null })
+        : ok({ messages: recent, next: 50 });
+    });
+    show(<MessagingPage />, '/threads/messaging');
+    expect(await screen.findByTitle(recent[0]!.from)).toBeTruthy();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Find a conversation' }), { target: { value: '0199' } });
+    expect(await screen.findByTitle(older)).toBeTruthy();
+  });
+
   it('lists one row per contact and reads their texts in full, a break at each day', async () => {
     const text = (id: string, from: string, min: number, preview: string) => ({ message_id: id, received_at: ago(min), from, preview });
     serve((url) =>
@@ -400,6 +449,19 @@ describe('Updates tabs @s984 @s985', () => {
 });
 
 describe('Updates, one feed @s986 @s987', () => {
+  it('finishes loading the page when the menu stops watching the same feed', async () => {
+    const page = { updates: [], unread: 0, next_before: null };
+    let answer!: (response: Response) => void;
+    vi.stubGlobal('fetch', () => new Promise<Response>((resolve) => (answer = resolve)));
+    const options = updateListQuery('all');
+    const menu = new InfiniteQueryObserver(queryClient, options);
+    const stop = menu.subscribe(() => {});
+    const loading = queryClient.ensureInfiniteQueryData(options);
+    stop();
+    answer(new Response(JSON.stringify(page), { headers: { 'Content-Type': 'application/json' } }));
+    await expect(loading).resolves.toMatchObject({ pages: [page] });
+  });
+
   it('puts every kind in one feed, a section a day, newest day first', async () => {
     serve((url) =>
       url.includes('/api/v2/updates')
@@ -533,6 +595,31 @@ describe('Browse threads @s176', () => {
 });
 
 describe('Updates: search, weeks and an opened update @s972 @s985 @s992', () => {
+  it('looks past pages without a match and reports no matches when the feed is exhausted', async () => {
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(35);
+    const recent = Array.from({ length: 50 }, (_, i) => update(`recent-${i}`, 'daily', '2026-01-07', `Recent note ${i}`));
+    serve((url) => {
+      if (!url.startsWith('/api/v2/updates?')) return;
+      const cursor = new URL(url, location.origin).searchParams.get('before');
+      if (cursor === 'second') return ok({ updates: [update('older', 'daily', '2026-01-05', 'Winter inventory')], unread: 0, next_before: null });
+      if (cursor === 'first') return ok({ updates: [update('middle', 'daily', '2026-01-06', 'A middle note')], unread: 0, next_before: 'second' });
+      return ok({ updates: recent, unread: 0, next_before: 'first' });
+    });
+    try {
+      show(<UpdatesPage />, '/updates');
+      expect(await screen.findByRole('feed', { name: 'Updates' })).toBeTruthy();
+      expect(all('GET', '/api/v2/updates')).toHaveLength(1);
+      const search = screen.getByRole('textbox', { name: 'Find an update' });
+      fireEvent.change(search, { target: { value: 'winter' } });
+      expect(screen.queryByRole('heading', { name: 'No matches' })).toBeNull();
+      expect(await screen.findByTitle('Winter inventory')).toBeTruthy();
+      fireEvent.change(search, { target: { value: 'spring' } });
+      expect(await screen.findByRole('heading', { name: 'No matches' })).toBeTruthy();
+    } finally {
+      height.mockRestore();
+    }
+  });
+
   it('finds updates by their words, and Weekly reads a section a week', async () => {
     serve((url) =>
       url.includes('/api/v2/updates')
@@ -550,10 +637,11 @@ describe('Updates: search, weeks and an opened update @s972 @s985 @s992', () => 
   });
 
   it('reads its body as written, headings kept, and dates it in full', async () => {
-    const u = update('u1', 'daily', '2026-01-02', 'Cash summary\n\n## What changed\n\nRefunds doubled.', { created_at: '2026-01-02T15:00:00.000Z' });
+    const u = update('u1', 'daily', '2026-01-02', 'Cash summary\nThe report is ready.\n\n## What changed\n\nRefunds doubled.', { created_at: '2026-01-02T15:00:00.000Z' });
     serve((url) => (url.includes('/api/v2/updates/u1') ? ok({ update: u }) : url.includes('/api/v2/updates?') ? ok({ updates: [u], unread: 0, next_before: null }) : undefined));
     show(<UpdatesPage open="u1" />, '/updates?open=u1');
     expect(await screen.findByRole('heading', { name: 'What changed' })).toBeTruthy();
+    expect(screen.getByText('The report is ready.')).toBeTruthy();
     expect(screen.getByText(/^Fri, Jan 2, \d+:00 [AP]M$/)).toBeTruthy();
   });
 });

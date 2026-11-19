@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useRouter } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { refusal, run } from '@/actions';
@@ -16,12 +16,12 @@ import { Link } from '@/kit/Link';
 import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
-import { Document, List, PageMore, Section, type PageState } from '@/pagekinds';
+import { Document, List, PageMore, Section } from '@/pagekinds';
 import { Markdown } from '@/kit/Markdown';
 import { Menu, MenuItem, MenuSub } from '@/kit/Menu';
 import { Foot, useGo } from './AddTool';
 import { forgetHelperCode, heldHelperCode } from './helperCode';
-import { Face, Find, OwnerButton, press, refused, when, Who } from './parts';
+import { Face, Find, OwnerButton, press, when, Who } from './parts';
 import {
   accessRoleQuery,
   installTargetsQuery,
@@ -89,21 +89,16 @@ export function SkillsPage({ search }: { search: SkillsSearch }) {
 }
 
 function SkillsList({ search }: { search: SkillsSearch }) {
-  const skills = useQuery(skillsQuery);
+  const { data: skills } = useSuspenseQuery(skillsQuery);
   const asks = useQuery(proposalsQuery);
   const usage = useQuery(skillUsageQuery);
   const words = search.q?.toLowerCase() ?? '';
   const match = (s: { name: string; description: string }) => !words || s.name.toLowerCase().includes(words) || s.description.toLowerCase().includes(words);
   const used = new Map((usage.data ?? []).map((u) => [u.name, u]));
-  const byName = new Map((skills.data ?? []).map((s) => [s.name, s]));
+  const byName = new Map(skills.map((s) => [s.name, s]));
   const pending = (asks.data ?? []).filter(match);
-  const rows = search.waiting ? [] : (skills.data ?? []).filter(match);
+  const rows = search.waiting ? [] : skills.filter(match);
   const [making, setMaking] = useState(false);
-
-  let state: PageState = 'ready';
-  if (skills.isError) state = refused(skills.error);
-  else if (!skills.data) state = 'loading';
-  else if (!skills.data.length && !asks.data?.length) state = 'empty';
 
   return (
     <List
@@ -129,9 +124,8 @@ function SkillsList({ search }: { search: SkillsSearch }) {
           <MenuItem label="Connect Claude Code" icon="computer" onSelect={() => void press('skills.connect', {})} />
         </PageMore>
       }
-      state={state}
+      state={!skills.length && !asks.data?.length ? 'empty' : 'ready'}
       empty={{ title: 'No skills yet' }}
-      onRetry={() => void skills.refetch()}
       sections={
         pending.length || rows.length ? (
           <>
@@ -272,11 +266,9 @@ export function mainText(files: SkillFile[]): string {
   return (main?.content ?? '').replace(/^---\n[\s\S]*?\n---\n?/, '');
 }
 
-const stateOf = (q: { isError: boolean; error: unknown; data: unknown }): PageState => (q.isError ? refused(q.error) : q.data ? 'ready' : 'loading');
-
 function SkillPage({ name }: { name: string }) {
-  const d = useQuery(skillQuery(name));
-  const latest = d.data?.skill.latest;
+  const d = useSuspenseQuery(skillQuery(name));
+  const latest = d.data.skill.latest;
   const text = useQuery(skillTextQuery(name, latest?.number ?? 0));
   const usage = useQuery(skillUsageQuery);
   const detail = useQuery(skillDetailUsageQuery(name));
@@ -318,8 +310,6 @@ function SkillPage({ name }: { name: string }) {
           )}
         </PageMore>
       }
-      state={stateOf(d)}
-      onRetry={() => void d.refetch()}
       body={
         d.data && (
           <>
@@ -455,7 +445,7 @@ function useDecider(): boolean {
 }
 
 function ProposalPage({ id }: { id: string }) {
-  const d = useQuery(proposalQuery(id));
+  const d = useSuspenseQuery(proposalQuery(id));
   const decider = useDecider();
   const skills = useQuery(skillsQuery);
   const [back, setBack] = useState(false);
@@ -502,9 +492,6 @@ function ProposalPage({ id }: { id: string }) {
           {open && mine && <MenuItem label="Withdraw" onSelect={() => void press('skills.withdraw', { proposal: id }, 'Not withdrawn')} />}
         </PageMore>
       }
-      state={stateOf(d)}
-      onRetry={() => void d.refetch()}
-      noAccess={{ text: 'Only an admin or the one who proposed it can read it.' }}
       body={
         d.data &&
         p && (

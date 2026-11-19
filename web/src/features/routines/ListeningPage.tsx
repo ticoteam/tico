@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
@@ -53,9 +53,8 @@ const sourceCount = (n: number) => `${n} ${n === 1 ? 'source' : 'sources'}`;
 const watchWords = (w: Routine) => [w.name, limitsWords(w.trigger.limits), ...(w.trigger.sources ?? []).flatMap((x) => [x.site, x.target])].join(' ').toLowerCase();
 
 function Watches({ q }: { q?: string }) {
-  const list = useQuery(watchesQuery);
+  const all = useSuspenseQuery(watchesQuery).data;
   const [adding, setAdding] = useState(false);
-  const all = list.data ?? [];
   const watches = q ? all.filter((w) => watchWords(w).includes(q.toLowerCase())) : all;
   const add = (
     <Button variant="primary" onClick={() => setAdding(true)}>
@@ -67,8 +66,7 @@ function Watches({ q }: { q?: string }) {
       title="Listening"
       path={LISTENING}
       className="rr"
-      state={list.isPending ? 'loading' : list.isError ? 'fault' : all.length ? 'ready' : 'empty'}
-      onRetry={() => void list.refetch()}
+      state={all.length ? 'ready' : 'empty'}
       empty={{ title: 'No watches yet', action: add }}
       search={<Find label="Search watches" value={q} onFind={(words) => void press('listening.list', { q: words })} />}
       actions={

@@ -6,7 +6,7 @@
 .q-try li::marker{color:var(--faint)}
 
 /* ---------- Welcome (9-first-run): a dialog of a few steps. Where you are, one title, one thing to do. ---------- */
-.modal.wl{width:440px;padding:var(--s-6);gap:var(--s-5)}
+.modal.wl{--pad-t:var(--s-6);--pad-x:var(--s-6);--pad-b:var(--s-6);width:440px;gap:var(--s-5)}
 .wl-head{display:flex;align-items:center;gap:var(--s-2);height:28px}
 .wl-head .ib{margin-left:calc(var(--s-1h) * -1)}
 .wl-head .grow{flex:1}
@@ -34,7 +34,7 @@
 .wl-row.radio.is-on b{color:var(--ink)}
 
 :where(html[data-layout="cards"]){
-  .modal.wl{width:auto;padding:var(--s-6) var(--s-4) var(--s-4)}
+  .modal.wl{--pad-x:var(--s-4);--pad-b:var(--s-4);width:auto}
   .wl-row{min-height:60px}
   .wl-row.radio{min-height:52px}
   .wl-foot .btn-quiet{margin-left:0}

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useSearch } from '@tanstack/react-router';
-import { directoryQuery, useActor } from '@/data';
+import { useActor, useDirectory } from '@/data';
 import { chatAddress, fmtDate, fmtMoney } from '@/lib';
 import { Button } from '@/kit/Button';
 import { Lines } from '@/kit/Chart';
@@ -18,9 +18,8 @@ import { growthChannelQuery, growthManager, pageOwnersQuery, type GrowthChannel,
 const usd = (v: number | null | undefined, cents = false) => (v == null ? '' : fmtMoney(v, { cents }));
 /** The Growth Manager's face in the head: it opens its chat beside the page. Nothing when the company has none. */
 export function ManagerFace() {
-  const owners = useQuery(pageOwnersQuery);
-  const dir = useQuery(directoryQuery);
-  const bot = growthManager(owners.data, dir.data);
+  const owners = useQuery(pageOwnersQuery).data;
+  const bot = useDirectory((dir) => growthManager(owners, dir)) ?? null;
   const who = useActor(bot);
   const press = usePress();
   const chat = (useSearch({ strict: false }) as { chat?: string }).chat;
@@ -55,17 +54,17 @@ function Failed({ what, retry }: { what: string; retry: () => unknown }) {
 const CAMPAIGN: Record<string, string> = { none: 'No campaign', other: 'Other' };
 
 /** One channel, opened (`?panel=channel:<slug>`): its budget and spend, its months and its campaigns by name, from its
-    own read. `row` is the channel as the board shows it, when the board has it. */
+    own read. The board's row supplies the title while the channel-wide read loads. */
 export function ChannelPanel({ slug, month, row }: { slug: string; month: string; row?: GrowthChannel }) {
   const press = usePress();
   const q = useQuery(growthChannelQuery(slug, month));
-  const c = row ?? q.data?.channels.find((x) => x.slug === slug);
+  const c = q.data?.channels.find((x) => x.slug === slug);
   const h = q.data?.headline;
   const cac = c?.cac ?? h?.cac.value ?? null;
   const months = [...(q.data?.series ?? [])].filter((p) => p.new_customers != null || p.cost != null).reverse();
   const camps = q.data?.campaigns?.[slug] ?? [];
   return (
-    <SidePanel title={c?.name ?? (slug === 'unknown' ? 'Unknown' : slug)} target={`channel:${slug}`} onClose={() => void press('growth.closePanel', {})}>
+    <SidePanel title={c?.name ?? row?.name ?? (slug === 'unknown' ? 'Unknown' : slug)} target={`channel:${slug}`} onClose={() => void press('growth.closePanel', {})}>
       <div className="money">
         {q.isPending ? (
           <SkeletonRows rows={4} />

@@ -1,4 +1,4 @@
-import { infiniteQueryOptions, keepPreviousData, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
+import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type { TagCreate, TagResult, TagUpdate } from '@/api/schema';
 import type {
@@ -86,8 +86,9 @@ function adaptPipeline(p: PipelineRecord): Pipeline {
 /** Every pipeline still in use, in the order they were made (GET /api/v2/pipelines). The menu lists these. */
 export const pipelinesQuery = queryOptions({
   queryKey: ['pipelines'] as const,
-  queryFn: async ({ signal }) => {
-    const r = await api.get<PipelineSettingsList>('/api/v2/pipelines', { signal });
+  // Route loaders share this request with the shell, even while its observers unmount.
+  queryFn: async () => {
+    const r = await api.get<PipelineSettingsList>('/api/v2/pipelines');
     return (r.pipelines as PipelineRecord[]).filter((p) => !p.retired_at).map(adaptPipeline);
   },
 });
@@ -178,8 +179,6 @@ export const pipelineTasksQuery = (pipeline: string, f: Filters) => {
       const page = await api.get<TaskPage>(`/api/v2/tasks?${query(params)}`, { signal });
       return page.counts ? { ...page, counted: perStage(page.tasks) } : page;
     },
-    // A new filter keeps the rows on screen until its answer lands, instead of flashing the loading bars.
-    placeholderData: keepPreviousData,
   });
 };
 
@@ -660,8 +659,9 @@ export interface Flow {
 /** Every task that waits on the person, across pipelines (GET /api/v2/needs-you). Asks without a task stay in chats. */
 export const flowQuery = queryOptions({
   queryKey: ['flow'] as const,
-  queryFn: async ({ signal }): Promise<Flow> => {
-    const r = await api.get<NeedsYou>('/api/v2/needs-you?limit=200', { signal });
+  // The Flow loader still needs this result if the shell unsubscribes.
+  queryFn: async (): Promise<Flow> => {
+    const r = await api.get<NeedsYou>('/api/v2/needs-you?limit=200');
     const seen = new Set<string>();
     const items: FlowItem[] = [];
     for (const it of 'items' in r ? r.items : []) {

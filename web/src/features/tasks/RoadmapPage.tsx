@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useAction } from '@/actions';
@@ -12,14 +12,14 @@ import { ContextMenu, Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { LatePill } from '@/kit/Pill';
 import { useCards } from '@/kit/Popover';
 import { Row } from '@/kit/Row';
-import { List, PageMore, Section, type PageState } from '@/pagekinds';
+import { List, PageMore, Section } from '@/pagekinds';
 import { usePref } from '@/prefs';
 import { fmtDate } from '@/lib';
 import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
 import { FilterItems, FilterMenu } from './FilterMenu';
 import { NewTask } from './NewTask';
 import { Face, isPending, OwnerButton, taskHref, waitsOnMe } from './parts';
-import { isFiltered, loadMore, pipelinesQuery, pipelineTasksQuery, shelfQuery, shelfTotal, tagsQuery, type Filters, type Pipeline, type TaskItem } from './queries';
+import { isFiltered, loadMore, loadMoreOf, pipelinesQuery, pipelineTasksQuery, shelfParams, shelfQuery, shelfTotal, tagsQuery, type Filters, type Pipeline, type TaskItem } from './queries';
 import { RequestersDialog } from './Requesters';
 import { byHorizon, HORIZONS, roadmapPipeline, stageName, trackOf, type Horizon } from './roadmap';
 import { filtersOf, type RoadmapSearch } from './search';
@@ -34,31 +34,37 @@ const FOLD_PREF = 'roadmap.fold.v1';
  */
 export function RoadmapPage({ search }: { search: RoadmapSearch }) {
   useFollow({ allTasks: true });
-  const pipes = useQuery(pipelinesQuery);
-  const p = pipes.data ? roadmapPipeline(pipes.data) : null;
+  const pipes = useSuspenseQuery(pipelinesQuery).data;
+  const p = roadmapPipeline(pipes);
+  if (!p)
+    return (
+      <List
+        title="Roadmap"
+        path="/roadmap"
+        className="tasks-page"
+        state="empty"
+        empty={{ title: 'No Features pipeline', action: <Link to="/tasks">Open Tasks</Link> }}
+        sections={null}
+      />
+    );
+  return <Roadmap p={p} pipes={pipes} search={search} />;
+}
+
+function Roadmap({ p, pipes, search }: { p: Pipeline; pipes: readonly Pipeline[]; search: RoadmapSearch }) {
   const filters = filtersOf(search);
-  // Without a Features pipeline there is nothing to read: the queries wait on an id that never comes.
-  const open = useQuery({ ...pipelineTasksQuery(p?.id ?? '', filters), enabled: !!p });
-  const shipped = useQuery({ ...shelfQuery(p?.id ?? '', 'done', filters), enabled: !!p });
+  const open = useSuspenseQuery(pipelineTasksQuery(p.id, filters)).data;
+  const shipped = useSuspenseQuery(shelfQuery(p.id, 'done', filters)).data;
   const me = useQuery(meQuery).data?.id;
   const [folds, setFolds] = usePref<Horizon[]>(FOLD_PREF, ['shipped']);
   const [adding, setAdding] = useState(false);
   const requesters = useAction('tasks.openRequesters');
 
-  // Another pipeline's rows, kept while this one's first read is out, are not the roadmap.
-  const rows = open.isPlaceholderData && open.data?.tasks.some((t) => t.pipeline_id !== p?.id) ? undefined : open.data?.tasks;
-  const done = shipped.data?.tasks;
-  const filtered = isFiltered(filters);
-
-  let state: PageState = 'ready';
-  if (pipes.isError || open.isError || shipped.isError) state = 'fault';
-  else if (!pipes.data) state = 'loading';
-  else if (!p) state = 'empty';
-  else if (!rows || !done) state = 'loading';
-  else if (!rows.length && !done.length && !filtered) state = 'empty';
+  const rows = open.tasks;
+  const done = shipped.tasks;
+  const none = !rows.length && !done.length && !isFiltered(filters);
 
   const fold = (h: Horizon, isOpen: boolean) => setFolds(isOpen ? folds.filter((x) => x !== h) : [...folds, h]);
-  const openTask = search.requesters ? [...(rows ?? []), ...(done ?? [])].find((t) => t.id === search.requesters) : undefined;
+  const openTask = search.requesters ? [...rows, ...done].find((t) => t.id === search.requesters) : undefined;
   const newFeature = () => setAdding(true);
 
   return (
@@ -67,32 +73,23 @@ export function RoadmapPage({ search }: { search: RoadmapSearch }) {
         title="Roadmap"
         path="/roadmap"
         className="tasks-page"
-        actions={p && <HeadActions p={p} search={search} onNew={newFeature} none={state === 'empty'} />}
-        more={p && <MoreMenu p={p} search={search} none={state === 'empty'} />}
-        state={state}
-        empty={
-          p
-            ? {
-                title: 'No features yet',
-                action: (
-                  <Button icon="plus" onClick={newFeature}>
-                    New feature
-                  </Button>
-                ),
-              }
-            : { title: 'No Features pipeline', action: <Link to="/tasks">Open Tasks</Link> }
-        }
-        onRetry={() => void (pipes.isError ? pipes.refetch() : open.isError ? open.refetch() : shipped.refetch())}
+        actions={<HeadActions p={p} search={search} onNew={newFeature} none={none} />}
+        more={<MoreMenu p={p} search={search} none={none} />}
+        state={none ? 'empty' : 'ready'}
+        empty={{
+          title: 'No features yet',
+          action: (
+            <Button icon="plus" onClick={newFeature}>
+              New feature
+            </Button>
+          ),
+        }}
         filter={<Chips search={search} />}
         sections={
-          p && rows && done ? (
-            <Horizons p={p} rows={rows} done={done} me={me} folds={folds} fold={fold} cut={!!open.data?.next_after} shippedCut={!!shipped.data?.next_after} shippedCount={shelfTotal(shipped.data)} filters={filters} />
-          ) : null
+          <Horizons p={p} rows={rows} done={done} me={me} folds={folds} fold={fold} cut={!!open.next_after} shippedCut={!!shipped.next_after} shippedCount={shelfTotal(shipped)} filters={filters} />
         }
       />
-      {p && pipes.data && adding && (
-        <NewTask open onOpenChange={(o) => !o && setAdding(false)} pipelines={pipes.data} pipeline={p.id} owner={filters.owner ?? null} />
-      )}
+      {adding && <NewTask open onOpenChange={(o) => !o && setAdding(false)} pipelines={pipes} pipeline={p.id} owner={filters.owner ?? null} />}
       {search.requesters && (
         <RequestersDialog
           task={search.requesters}
@@ -156,6 +153,7 @@ function Horizons({ p, rows, done, me, folds, fold, cut, shippedCut, shippedCoun
   const cards = useCards();
   const groups = { ...byHorizon(p, rows), shipped: [...done] };
   const more = cut ? () => void loadMore(p.id, filters) : undefined;
+  const moreShipped = shippedCut ? () => void loadMoreOf(shelfParams(p.id, 'done', filters)) : undefined;
   return (
     <>
       {HORIZONS.map(([h, name]) => {
@@ -181,7 +179,7 @@ function Horizons({ p, rows, done, me, folds, fold, cut, shippedCut, shippedCoun
               cap={LIST_CAP}
               show={LIST_SHOW}
               height={ROW_H}
-              more={h === 'shipped' ? undefined : more}
+              more={h === 'shipped' ? moreShipped : more}
               draw={(t) => <RoadmapRow key={t.id} t={t} p={p} me={me} />}
               moreRow={(n, open) => <RowMore key="more" n={n} cut={h === 'shipped' ? shippedCut : cut} onClick={open} />}
             />

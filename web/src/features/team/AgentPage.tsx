@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { useAction } from '@/actions';
 import { meQuery, useActors, type Actor } from '@/data';
@@ -12,7 +12,7 @@ import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { fmtDate, fmtMoney } from '@/lib';
-import { FiguresStrip, PageMore, Record as RecordPage, Section, type PageState } from '@/pagekinds';
+import { FiguresStrip, PageMore, Record as RecordPage, Section } from '@/pagekinds';
 import type { Tab } from './actions';
 import { ComputerPage } from './ComputerPage';
 import { bareId, historyOf, modelLine, runFigures, startOfWeek, teamOf, type HistLine } from './model';
@@ -178,7 +178,7 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
   const { data: me } = useQuery(meQuery);
   const actors = useActors();
   const [since] = useState(() => startOfWeek(new Date()).toISOString());
-  const open = useQuery(openTasksQuery(actor.id));
+  const { data: open } = useSuspenseQuery(openTasksQuery(actor.id));
   const done = useQuery(doneTasksQuery(actor.id, since));
   const runs = useQuery(runsQuery(slug));
   const update = useQuery(latestUpdateQuery(slug));
@@ -188,7 +188,7 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
   const files = useInfiniteQuery(agentFilesQuery(slug));
   const fileN = files.data?.pages[0]?.files?.length ?? 0;
 
-  const tasks = open.data?.tasks ?? [];
+  const tasks = open.tasks;
   const nowId = detail.data?.status?.task_id;
   const working = actor.working ? tasks.filter((t) => t.id === nowId) : [];
   const mine = tasks.filter((t) => !working.includes(t));
@@ -204,12 +204,11 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
     .filter(Boolean);
   const doneN = done.data?.tasks.length ?? 0;
 
-  const state: PageState = open.isError ? 'fault' : open.isPending ? 'loading' : !tasks.length && !lines.length && !doneN && !actor.working && !dream.data && !lists.length && !fileN ? 'empty' : 'ready';
+  const quiet = !tasks.length && !lines.length && !doneN && !actor.working && !dream.data && !lists.length && !fileN;
   return (
     <RecordPage
       {...head}
-      state={state}
-      onRetry={() => void open.refetch()}
+      state={quiet ? 'empty' : 'ready'}
       empty={{ title: 'Nothing yet' }}
       figures={
         <FiguresStrip
@@ -296,7 +295,6 @@ const HISTORY_ROWS = 40;
 function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; actor: Actor; row: AgentRow | undefined; path: string; head: Head; pick: boolean }) {
   const open = useAction('team.open');
   const actors = useActors();
-  const roster = useQuery(agentsQuery);
   const groups = useQuery(groupsQuery);
   const computers = useQuery(computersQuery);
   const detail = useQuery(agentQuery(slug));
@@ -325,12 +323,9 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
     .filter(Boolean)
     .slice(0, 2);
 
-  const state: PageState = roster.isError ? 'fault' : roster.isPending ? 'loading' : 'ready';
   return (
     <RecordPage
       {...head}
-      state={state}
-      onRetry={() => void roster.refetch()}
       sections={
         <>
           <Section name="Info">
@@ -525,14 +520,13 @@ function HistRow({ h }: { h: HistLine }) {
 
 /** The whole instructions, read at a measure (mates.js insPage). Headings, lists and paragraphs; nothing else. */
 function Instructions({ slug, path, head, manage }: { slug: string; path: string; head: Head; manage: boolean }) {
-  const q = useQuery(instructionsQuery(slug));
+  const { data } = useSuspenseQuery(instructionsQuery(slug));
   const [editing, setEditing] = useState(false);
-  const blocks = (q.data?.content ?? '').split(/\n\s*\n/).filter((b) => b.trim());
+  const blocks = data.content.split(/\n\s*\n/).filter((b) => b.trim());
   return (
     <RecordPage
       {...head}
-      state={q.isError ? 'fault' : q.isPending ? 'loading' : blocks.length ? 'ready' : 'empty'}
-      onRetry={() => void q.refetch()}
+      state={blocks.length ? 'ready' : 'empty'}
       empty={{ title: 'No instructions yet' }}
       sections={
         <>
@@ -544,7 +538,7 @@ function Instructions({ slug, path, head, manage }: { slug: string; path: string
             <span className="grow" />
             <IconButton icon="edit" size="sm" quiet label={manage ? 'Edit' : 'Request changes'} onClick={() => setEditing(true)} />
           </div>
-          <InstructionsDialog open={editing} onOpenChange={setEditing} slug={slug} manage={manage} content={q.data?.content ?? ''} />
+          <InstructionsDialog open={editing} onOpenChange={setEditing} slug={slug} manage={manage} content={data.content} />
           <article className="read">
             {blocks.map((b, i) => {
               const t = b.trim();

@@ -444,6 +444,7 @@ describe('Meeting details', () => {
 
 describe('Schedule or change a call', () => {
   it('New event books a voice call for later: Start now and Schedule @s1018', async () => {
+    queryClient.setQueryData(['config'], { features: { tico_meet: true } });
     answer = (url, init) =>
       url.includes('/api/v2/threads/dm?with=human%3Aana')
         ? json({ id: 'th1' })
@@ -465,6 +466,21 @@ describe('Schedule or change a call', () => {
     const body = sent.find((r) => r.url.endsWith('/threads/th1/calls'))?.body as Record<string, string>;
     expect(body).toMatchObject({ provider: 'tico', title: 'Price check' });
     expect(Date.parse(body.ends_at as string) - Date.parse(body.starts_at as string)).toBe(30 * 60_000);
+  });
+
+  it('keeps start and schedule off when the server has no Tico Meet', async () => {
+    queryClient.setQueryData(['config'], { features: { tico_meet: false } });
+    show(`/calendar?view=week&date=${DAY}`);
+    fireEvent.click(await screen.findByRole('button', { name: 'New event' }));
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'New event' })).getByRole('button', { name: 'Voice call' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'New call' }));
+    fireEvent.change(dialog.getByLabelText('Who'), { target: { value: 'Ana' } });
+    fireEvent.keyDown(dialog.getByLabelText('Who'), { key: 'Enter' });
+    expect(dialog.getByRole('button', { name: `Remove ${ANA.name}` })).toBeTruthy();
+    expect(dialog.getByText('Tico Meet is not set up on this server')).toBeTruthy();
+    for (const name of ['Start now', 'Schedule']) {
+      expect((dialog.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
+    }
   });
 
   it("moves a booked call's time from its panel; Tico may move it but not cancel it @s1018", async () => {

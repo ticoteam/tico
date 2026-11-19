@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useAction } from '@/actions';
 import { useActors } from '@/data';
@@ -61,8 +61,8 @@ function draftOf(rec: PipelineSettingsRecord): Draft {
  * `pipeline` is then only where Back goes.
  */
 export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boolean }) {
-  const pipes = useQuery(pipelinesQuery);
-  const p = fresh ? undefined : pipes.data?.find((x) => x.id === pipeline);
+  const pipes = useSuspenseQuery(pipelinesQuery).data;
+  const p = fresh ? undefined : pipes.find((x) => x.id === pipeline);
   const rec = useQuery({ ...pipelineSettingsQuery(p?.id ?? ''), enabled: !!p });
   const edit = useAction('tasks.editPipeline');
   const onClose = () => void edit.run({ pipeline, open: false });
@@ -181,8 +181,7 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
   let state: PageState = 'ready';
   // A read again that fails later keeps the edits on screen: only a first read that fails is the page's fault.
   if (!fresh) {
-    if (!pipes.data) state = pipes.isError ? 'fault' : 'loading';
-    else if (!p) state = 'empty';
+    if (!p) state = 'empty';
     else if (!p.mayChange) state = 'no-access';
     else if (!rec.data) state = rec.isError ? 'fault' : 'loading';
   }
@@ -197,7 +196,7 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
       state={state}
       empty={{ title: 'No such pipeline' }}
       noAccess={{ text: 'Only the pipeline’s owner can change it.' }}
-      onRetry={() => void (pipes.isError ? pipes.refetch() : rec.refetch())}
+      onRetry={() => void rec.refetch()}
       actions={
         <>
           {p?.owner && <OwnerButton actor={p.owner} />}

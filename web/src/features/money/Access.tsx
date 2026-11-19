@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { directoryQuery, meQuery, useActor } from '@/data';
+import { meQuery, useActor, useDirectory, type Directory } from '@/data';
 import { Button } from '@/kit/Button';
 import { Avatar } from '@/kit/Avatar';
 import { DatePick } from '@/kit/DatePick';
@@ -213,12 +213,15 @@ function MatePanel({ mate: t, acc, viewing, onGive }: { mate: Mate; acc: AccessL
   );
 }
 
+/** Every name the directory answers to, by any id form: it changes on a rename, not on an agent's status line. */
+const namesOf = (d: Directory) => Object.fromEntries(Object.entries(d.byId).map(([id, a]) => [id, a.name]));
+
 /** A view of Finance for a teammate: what, which line, whose, until when (finance-admin.ts:643-671). The owner may give
     any view; a manager their teams' expenses and expense lines. */
 function GiveDialog({ acc, teammate, onOpenChange }: { acc: AccessList; teammate: string; onOpenChange: (open: boolean) => void }) {
   const { busy, error, setError, go } = useAsk(onOpenChange);
   const me = useQuery(meQuery).data?.id;
-  const dir = useQuery(directoryQuery).data;
+  const names = useDirectory(namesOf);
   const owner = !!acc.can_view_as;
   const [who, setWho] = useState<string | null>(teammate || null);
   const [what, setWhat] = useState('expenses');
@@ -230,7 +233,7 @@ function GiveDialog({ acc, teammate, onOpenChange }: { acc: AccessList; teammate
   const sheet = useQuery({ ...balanceQuery(), enabled: what === 'bs_lines' });
   const people = acc.teammates
     .filter((t) => t.may_grant && t.teammate !== me)
-    .map((t) => ({ value: t.teammate, label: dir?.byId[t.teammate]?.name ?? t.teammate.slice(t.teammate.indexOf(':') + 1) }));
+    .map((t) => ({ value: t.teammate, label: names?.[t.teammate] ?? t.teammate.slice(t.teammate.indexOf(':') + 1) }));
   const whats = Object.entries(WHAT)
     .filter(([v]) => owner || MANAGER_WHAT.includes(v))
     .map(([value, label]) => ({ value, label }));
@@ -288,10 +291,10 @@ const OWNER = 'owner';
 /** The one person finance-admin approvals go to: the owner's to name, the owner by default (finance-admin.ts:551). */
 function ApproverDialog({ acc, onOpenChange }: { acc: AccessList; onOpenChange: (open: boolean) => void }) {
   const { busy, error, go } = useAsk(onOpenChange);
-  const dir = useQuery(directoryQuery).data;
+  const names = useDirectory(namesOf);
   const people = acc.teammates.filter((t) => t.kind !== 'bot');
   const owner = people.find((t) => t.default === 'everything');
-  const label = (id: string) => dir?.byId[id]?.name ?? id.slice(id.indexOf(':') + 1);
+  const label = (id: string) => names?.[id] ?? id.slice(id.indexOf(':') + 1);
   const options = [
     { value: OWNER, label: owner ? label(owner.teammate) : 'Owner' },
     ...people.filter((t) => t !== owner).map((t) => ({ value: t.teammate, label: label(t.teammate) })),

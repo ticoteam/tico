@@ -1,7 +1,7 @@
 // Reactions and replies on a message: the chips under it, the emoji to pick from, and the quote a reply carries.
 import { useQuery } from '@tanstack/react-query';
 import { refusal, run } from '@/actions';
-import { directoryQuery } from '@/data';
+import { directoryQuery, type Directory } from '@/data';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
@@ -27,9 +27,12 @@ export function reactControls(chat: string, m: ChatMessage, me: string | undefin
   return { mine, pick };
 }
 
-/** Names from the directory the app already holds; nothing is fetched for a chip's title. */
+const namesOf = (d: Directory) => Object.fromEntries(Object.entries(d.byId).map(([id, a]) => [id, { name: a.name }]));
+
+/** Names from the directory the app already holds; nothing is fetched for a chip's title. Redraws when a name
+    changes, not on an agent's status line. */
 function useNames(): Record<string, { name: string }> {
-  const { data } = useQuery({ ...directoryQuery, enabled: false, select: (d) => d.byId });
+  const { data } = useQuery({ ...directoryQuery, enabled: false, select: namesOf });
   return data ?? {};
 }
 

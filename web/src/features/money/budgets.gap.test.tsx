@@ -153,10 +153,54 @@ describe('Finance tabs @s398 @s402', () => {
     expect(await tabNames()).toEqual(['My budget']);
     expect(screen.queryByRole('button', { name: 'New budget' })).toBeNull();
   });
+
+  it('the owner opens My budget at its address: their own budgets under the Finance head, not a no-access page', async () => {
+    serve((url) => {
+      if (url.endsWith('/finance/access')) return ok(OWNER);
+      if (url.includes('/finance/budgets')) return ok({ budgets: [BUDGET('b1', 'Tools', { teammate: 'human:me' }), BUDGET('b2', 'Ads', { teammate: 'human:lee' })] });
+      return ok({});
+    });
+    show('/company/finance?tab=mine');
+    const table = await screen.findByRole('table', { name: 'My budget' });
+    expect(await within(table).findByText('Tools')).toBeTruthy();
+    expect(within(table).queryByText('Ads')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Finance' })).toBeTruthy();
+    expect(screen.queryByText("You don't have access to this page")).toBeNull();
+  });
+
+  it('on a phone the P&L head keeps the range; the period and the basis wait in More', async () => {
+    document.documentElement.dataset.layout = 'cards';
+    try {
+      serve((url) => (url.endsWith('/finance/access') ? ok(OWNER) : url.includes('/finance/pnl') ? ok(PNL([ROW('acc_ads', 'Ads')])) : ok({})));
+      const router = show('/company/finance?tab=pnl');
+      expect(await screen.findByRole('button', { name: 'Earlier' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Quarter' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'More' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Quarter' }));
+      await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: 'pnl', period: 'quarter' }));
+    } finally {
+      delete document.documentElement.dataset.layout;
+    }
+  });
 });
 
 describe('Budgets @s404 @s462 @s463', () => {
   const access = (url: string) => (url.endsWith('/finance/access') ? ok(OWNER) : null);
+
+  it('retries the failed budget list on the quarterly view', async () => {
+    let listReads = 0;
+    serve((url) => {
+      if (url.includes('/finance/budgets')) {
+        if (++listReads === 1) return { status: 500, body: {} };
+        return ok({ budgets: [BUDGET('b1', 'Tools')] });
+      }
+      if (url.includes('budget_vs_actual')) return ok({ columns: [], budgets: [] });
+      return access(url) ?? ok({});
+    });
+    show('/company/finance?tab=budgets&period=quarter');
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('link', { name: 'Tools' })).toBeTruthy();
+  });
 
   it('Month, Quarter and Year: a quarter reads each budget against the quarter that holds today @s404', async () => {
     serve(

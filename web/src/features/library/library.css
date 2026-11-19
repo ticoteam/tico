@@ -6,6 +6,7 @@
 .lib .sec{padding:var(--s-1) 0 var(--s-2)}
 .lib .sec+.sec{border-top:1px solid var(--line)}
 .lib .row-fig{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.lib .read{overflow-wrap:anywhere}
 .lib .read-by{display:flex;align-items:center;gap:var(--s-2);height:28px;margin-bottom:var(--s-3h);font-size:var(--t-sm);color:var(--muted)}
 .lib .read-by b{color:var(--ink);font-weight:var(--w-strong)}
 .lib .read-lead{font-family:var(--font-text);font-size:var(--t-md);font-weight:var(--w-text);line-height:1.6;color:var(--ink)}

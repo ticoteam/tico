@@ -1,4 +1,4 @@
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useSuspenseInfiniteQuery } from '@tanstack/react-query';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { IconButton } from '@/kit/IconButton';
@@ -34,8 +34,8 @@ type RunPick = { status?: RunStatus; range?: RunRange };
 
 export function RunsTab({ head, status, range, panel, href }: { head: Head; panel?: string; href: (panel: string) => string } & RunPick) {
   const r = range ?? RUNS_RANGE;
-  const q = useInfiniteQuery(allRunsQuery(r, status));
-  const runs = q.data?.pages.flatMap((p) => p.runs) ?? [];
+  const q = useSuspenseInfiniteQuery(allRunsQuery(r, status));
+  const runs = q.data.pages.flatMap((p) => p.runs);
   const open = panel?.startsWith('routine:') ? panel.slice(8) : null;
   const now = { status, range: r };
   const show = (next: RunPick) => void press('routines.showRuns', next);
@@ -46,8 +46,7 @@ export function RunsTab({ head, status, range, panel, href }: { head: Head; pane
   return (
     <List
       {...head}
-      state={q.isPending ? 'loading' : q.isError ? 'fault' : runs.length ? 'ready' : 'empty'}
-      onRetry={() => void q.refetch()}
+      state={runs.length ? 'ready' : 'empty'}
       // the filter row shows only with rows, so an empty filtered list clears from here
       empty={{ title: noRuns(r, status), action: filters.length ? <Button onClick={() => show({})}>Clear filters</Button> : undefined }}
       actions={

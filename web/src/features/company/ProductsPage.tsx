@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { useActors } from '@/data';
 import { Button } from '@/kit/Button';
@@ -11,7 +11,7 @@ import { Table, Th, Tr } from '@/kit/Table';
 import { List, RecordPanel, Section, SidePanel } from '@/pagekinds';
 import type { Product } from '@/api/schema';
 import type { PRODUCT_FIELDS } from './actions';
-import { Face, Go, PageOwner, PanelLink, readState, useDo } from './parts';
+import { Face, Go, PageOwner, PanelLink, useDo } from './parts';
 import { productsQuery, repositoriesQuery, type ProductListField } from './queries';
 import './company.css';
 
@@ -48,9 +48,8 @@ const OPTIONS: Record<Exclude<Field, 'owner_teammate'>, { value: string; label: 
 const word = (f: keyof typeof OPTIONS, v: string | null) => (v ? (OPTIONS[f].find((o) => o.value === v)?.label ?? v) : '');
 
 export function ProductsPage({ search }: { search: ProductsSearch }) {
-  const q = useQuery(productsQuery);
+  const { products } = useSuspenseQuery(productsQuery).data;
   const open = useDo('company.openPanel');
-  const products = q.data?.products ?? [];
   const panel = search.panel;
   const shown = panel && panel !== 'new' ? products.find((p) => p.key === panel) : undefined;
   const add = (
@@ -69,8 +68,7 @@ export function ProductsPage({ search }: { search: ProductsSearch }) {
           {add}
         </>
       }
-      state={readState(q, !products.length)}
-      onRetry={() => void q.refetch()}
+      state={products.length ? 'ready' : 'empty'}
       empty={{ title: 'No products yet', action: add }}
       sections={
         <Table label="Products">
@@ -174,8 +172,13 @@ function ProductRecord({ p }: { p: Product }) {
             <div className="chips">
               {p.agreements.map((a) => (
                 <span key={a.id} className="chip-file">
-                  {a.file ? (
-                    <a href={a.file.page ? `/library/${encodeURIComponent(a.file.id)}` : `/api/v2/files/${encodeURIComponent(a.file.id)}`} {...(!a.file.page && { target: '_blank', rel: 'noopener' })}>
+                  {a.file?.page ? (
+                    <Go to={`/library/${encodeURIComponent(a.file.id)}`}>
+                      <Icon name="file" />
+                      <span>{a.file.title || a.name}</span>
+                    </Go>
+                  ) : a.file ? (
+                    <a href={`/api/v2/files/${encodeURIComponent(a.file.id)}`} target="_blank" rel="noopener">
                       <Icon name="file" />
                       <span>{a.file.title || a.name}</span>
                     </a>

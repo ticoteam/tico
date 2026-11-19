@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { meQuery, useActor, useActors } from '@/data';
@@ -11,7 +11,7 @@ import { FoldButton } from '@/kit/SectionHead';
 import { Select } from '@/kit/Select';
 import { List, PageMore, Section, SidePanel, type PageTab } from '@/pagekinds';
 import { Dot } from '@/tico/dot';
-import { Face, Go, NameOf, PageOwner, PanelLink, readState, teamPath, useDo } from './parts';
+import { Face, Go, NameOf, PageOwner, PanelLink, teamPath, useDo } from './parts';
 import { accessQuery, factoriesQuery, groupsQuery, type Team } from './queries';
 
 /* Org (pages/3-company/company.js orgPage): who reports to whom, as a light chart. A teammate opens its sheet beside
@@ -30,8 +30,14 @@ const BUILT_IN = 'built-in';
 const leadOf = (g: Team) => (g.lead ? g.lead.replace(/^person:/, 'human:') : null);
 const members = (g: Team) => [...g.people.map((p) => (p.includes(':') ? p : `human:${p}`)), ...g.bot_slugs.map((b) => `bot:${b}`)];
 
+type Subgroups = ReadonlyMap<string, Team[]>;
+
+function memberCount(team: Team, byParent: Subgroups): number {
+  return team.people.length + team.bot_slugs.length + (byParent.get(team.id) ?? []).reduce((n, child) => n + memberCount(child, byParent), 0);
+}
+
 export function OrgTab({ head, search }: { head: Head; search: { panel?: string } }) {
-  const q = useQuery(groupsQuery);
+  const all = useSuspenseQuery(groupsQuery).data;
   const me = useQuery(meQuery).data;
   const access = useQuery(accessQuery).data;
   const actors = useActors();
@@ -42,8 +48,14 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
   const maker = me?.role === 'owner' || access?.you === 'owner' || access?.you === 'admin';
   // The root is the company's owner (Access names them to the owner and Admins; a member sees themself there).
   const root = access?.owner ? `human:${access.owner}` : me?.id;
-  const all = q.data ?? [];
-  const teams = all.filter((g) => !g.parent).sort((a, b) => a.order - b.order);
+  const byParent = new Map<string, Team[]>();
+  for (const group of [...all].sort((a, b) => a.order - b.order)) {
+    const parent = group.parent || '';
+    const kids = byParent.get(parent);
+    if (kids) kids.push(group);
+    else byParent.set(parent, [group]);
+  }
+  const teams = byParent.get('') ?? [];
   const mate = search.panel?.startsWith('mate:') ? search.panel.slice(5) : null;
   return (
     <List
@@ -56,7 +68,7 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
           <PageOwner page="strategy" />
         </>
       }
-      state={readState(q, !teams.length)}
+      state={teams.length ? 'ready' : 'empty'}
       more={
         maker && (
           <PageMore target="org:more">
@@ -64,7 +76,6 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
           </PageMore>
         )
       }
-      onRetry={() => void q.refetch()}
       empty={{ title: 'No teams yet' }}
       sections={
         <>
@@ -86,7 +97,7 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
               <span className="stage-n">{actors.length} teammates</span>
             </header>
             {teams.map((t) => (
-              <OrgTeam key={t.id} team={t} subs={all.filter((g) => g.parent === t.id).sort((a, b) => a.order - b.order)} open={mate} />
+              <OrgTeam key={t.id} team={t} byParent={byParent} open={mate} />
             ))}
           </div>
           <Factories />
@@ -96,19 +107,20 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
         search.panel === 'factory-new' && maker ? (
           <NewFactory onClose={() => void close.run({})} />
         ) : (
-          mate && q.data && <MateSheet who={mate} groups={q.data} onClose={() => void close.run({})} />
+          mate && <MateSheet key={mate} who={mate} groups={all} onClose={() => void close.run({})} />
         )
       }
     />
   );
 }
 
-function OrgTeam({ team, subs, open: picked }: { team: Team; subs: Team[]; open: string | null }) {
+function OrgTeam({ team, byParent, open: picked }: { team: Team; byParent: Subgroups; open: string | null }) {
   const lead = leadOf(team);
   const mates = members(team).filter((m) => m !== lead);
   // The built-in agents stay folded until someone opens them (redesign-org.ts), unless one of them is the open sheet.
   const [open, setOpen] = useState(team.id !== BUILT_IN || (!!picked && members(team).includes(picked)));
-  const n = mates.length + subs.reduce((a, s) => a + members(s).length, 0);
+  const subs = byParent.get(team.id) ?? [];
+  const n = mates.length + subs.reduce((a, s) => a + memberCount(s, byParent), 0);
   return (
     <section className="oc-team" aria-label={team.name}>
       <header className="oc-node">
@@ -134,7 +146,7 @@ function OrgTeam({ team, subs, open: picked }: { team: Team; subs: Team[]; open:
         <div className={subs.length ? 'oc-kids has-subs' : 'oc-kids'}>
           {mates.length > 0 && <Mates ids={mates} open={picked} />}
           {subs.map((s) => (
-            <OrgSub key={s.id} team={s} open={picked} />
+            <OrgSub key={s.id} team={s} byParent={byParent} open={picked} />
           ))}
         </div>
       )}
@@ -142,17 +154,18 @@ function OrgTeam({ team, subs, open: picked }: { team: Team; subs: Team[]; open:
   );
 }
 
-function OrgSub({ team, open: picked }: { team: Team; open: string | null }) {
+function OrgSub({ team, byParent, open: picked }: { team: Team; byParent: Subgroups; open: string | null }) {
   const [open, setOpen] = useState(true);
   const ids = members(team);
   return (
     <>
       <header className="oc-sub">
         <h3>
-          <FoldButton name={team.name} count={ids.length} open={open} onToggle={() => setOpen(!open)} />
+          <FoldButton name={team.name} count={memberCount(team, byParent)} open={open} onToggle={() => setOpen(!open)} />
         </h3>
       </header>
       {open && ids.length > 0 && <Mates ids={ids} open={picked} />}
+      {open && byParent.get(team.id)?.map((s) => <OrgSub key={s.id} team={s} byParent={byParent} open={picked} />)}
     </>
   );
 }

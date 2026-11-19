@@ -148,13 +148,6 @@ describe('Updates @s972', () => {
     expect(await screen.findByRole('heading', { name: 'No updates yet' })).toBeTruthy();
   });
 
-  it('names the page and offers Try again when the read fails', async () => {
-    serve(() => ({ status: 500, body: { detail: 'down' } }));
-    show(<UpdatesPage />, '/updates');
-    expect(await screen.findByRole('heading', { name: 'Updates did not load' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
-  });
-
   it('opens an update from its row', async () => {
     const u = { id: 'u1', bot: 'ops', kind: 'daily', day: '2026-01-02', body: 'Shipped the launch page\n\nMore words.', read: false, created_at: at(5) };
     serve(() => ({ status: 200, body: { updates: [u], unread: 1, next_before: null } }));

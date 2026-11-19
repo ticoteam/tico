@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useState, type HTMLAttributes } from 'react';
 import { refusal, run } from '@/actions';
-import { directoryQuery, meQuery, type Actor } from '@/data';
+import { meQuery, useDirectory, type Directory } from '@/data';
 import { ModelPicker } from '@/features/team/exports';
 import { agentsQuery, computersQuery, type AgentRow } from '@/features/team/routing';
 import { Avatar } from '@/kit/Avatar';
@@ -23,7 +23,7 @@ import { ValueButton } from '@/kit/ValueButton';
 import { Section } from '@/pagekinds';
 import { ComputerPanel } from './ComputerPanel';
 import { useRowDrag } from './drag';
-import { Foot, Line, SwitchLine, Verb, Word, act, usd } from './parts';
+import { Foot, Line, SwitchLine, Verb, Word, act, useAgentFaces, useFaces, usd, type Face } from './parts';
 import {
   SAFE_RETRY,
   accessQuery,
@@ -53,9 +53,11 @@ interface Person {
   name: string;
 }
 
+const peopleOf = (d: Directory): Person[] => d.actors.filter((a) => a.kind === 'person').map((a) => ({ id: bare(a.id), name: a.name }));
+const NO_PEOPLE: Person[] = [];
+
 function usePeople(): Person[] {
-  const dir = useQuery(directoryQuery);
-  return (dir.data?.actors ?? []).filter((a) => a.kind === 'person').map((a) => ({ id: bare(a.id), name: a.name }));
+  return useDirectory(peopleOf) ?? NO_PEOPLE;
 }
 
 /** Owners and admins, and an agent's own owners, may bring a retired agent back. */
@@ -576,13 +578,13 @@ function LimitDialog({ slug, name, now, onClose }: { slug: string; name: string;
 }
 
 interface LineProps {
-  a: Actor;
+  a: Face;
   slug: string;
   r?: Row;
   by: By;
   picked: boolean;
   open: boolean;
-  owner?: Actor;
+  owner?: Face;
   machines: Machine[];
   next: string;
   limit?: { monthly_usd?: number | null; blocked?: string | null; may_edit?: boolean };
@@ -668,7 +670,8 @@ interface Group {
 /** `section`: Agents (grouped as the person picks) or Computers (always by computer, one folding section each). */
 export function AgentList({ open, section = 'agents' }: { open?: string; section?: 'agents' | 'computers' }) {
   const navigate = useNavigate();
-  const dir = useQuery(directoryQuery);
+  const all = useAgentFaces();
+  const faces = useFaces();
   const subs = useQuery(subscriptionsQuery);
   const limits = useQuery(limitsQuery);
   const bots = useQuery({ ...botsQuery, retry: false });
@@ -679,11 +682,10 @@ export function AgentList({ open, section = 'agents' }: { open?: string; section
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const [changing, setChanging] = useState(false);
   const [editing, setEditing] = useState<Change | null>(null);
-  const all = (dir.data?.actors ?? []).filter((a) => a.kind === 'agent');
   const rows = (useRows() ?? []) as Row[];
   const live = useMachines() ?? [];
   const plans = (subs.data?.subscriptions ?? []) as Subscription[];
-  const slugOf = (a: Actor) => a.slug ?? bare(a.id);
+  const slugOf = (a: Face) => a.slug ?? bare(a.id);
   const rowOf = (slug: string) => rows.find((r) => r.slug === slug);
   const listedOf = (slug: string) => bots.data?.find((b) => b.slug === slug || b.id === rowOf(slug)?.id);
   const onPlan = (slug: string, fallback: boolean) => {
@@ -743,11 +745,11 @@ export function AgentList({ open, section = 'agents' }: { open?: string; section
   const opened = open?.startsWith('computer:') ? open.slice('computer:'.length) : '';
   const machineOf = (key: string) => (key.startsWith('computer:') ? live.find((m) => `computer:${m.id}` === key) : undefined);
 
-  const line = (a: Actor) => {
+  const line = (a: Face) => {
     const slug = slugOf(a);
     const r = rowOf(slug);
     const isOpen = open === slug;
-    const owner = r?.owner_id ? dir.data?.byId[`human:${bare(r.owner_id)}`] : undefined;
+    const owner = r?.owner_id ? faces[`human:${bare(r.owner_id)}`] : undefined;
     const el = (
       <FleetLine
         key={a.id}

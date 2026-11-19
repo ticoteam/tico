@@ -621,11 +621,14 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
 
 /* ---------- modals ---------- */
 .scrim{position:fixed;inset:0;z-index:var(--z-scrim);display:grid;place-items:center;background:var(--scrim)}
-.modal{--surface:var(--raised);width:400px;max-width:calc(100% - 32px);padding:var(--s-5);border-radius:var(--r-pane);background:var(--raised);box-shadow:var(--lift-3);display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s-4)}
+.modal{--surface:var(--raised);--pad-t:var(--s-5);--pad-x:var(--s-5);--pad-b:var(--s-5);width:400px;max-width:calc(100% - 32px);max-height:calc(100dvh - var(--s-5) * 2);overflow-y:auto;overscroll-behavior:contain;padding:var(--pad-t) var(--pad-x) var(--pad-b);border-radius:var(--r-pane);background:var(--raised);box-shadow:var(--lift-3);display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s-4)}
+/* a dialog taller than the window scrolls between its title and its buttons, which stay (the pads are the modal's own) */
+.modal>h2:first-child,.modal-row{position:sticky;z-index:1;margin-inline:calc(var(--pad-x) * -1);padding-inline:var(--pad-x);background:var(--raised)}
+.modal>h2:first-child{top:0;margin-top:calc(var(--pad-t) * -1);padding-top:var(--pad-t)}
 .modal h2{font-family:var(--font-text);font-size:var(--t-md);font-weight:var(--w-title);line-height:var(--lh-meta);text-wrap:balance}
 .modal h2+p{margin-top:calc(var(--s-2)*-1);color:var(--muted);overflow-wrap:anywhere}
 .modal .field{width:100%}
-.modal-row{display:flex;justify-content:flex-end;gap:var(--s-2);margin-top:var(--s-1)}
+.modal-row{display:flex;justify-content:flex-end;gap:var(--s-2);bottom:0;margin-bottom:calc(var(--pad-b) * -1);padding-top:var(--s-1);padding-bottom:var(--pad-b)}
 
 /* ---------- toasts: one line, at the foot of the page sheet ---------- */
 .toasts{position:fixed;z-index:var(--z-toast);left:50%;bottom:var(--s-6);transform:translateX(-50%);display:grid;justify-items:center;gap:var(--s-2)}
@@ -654,10 +657,10 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
   /* the bottom gap clears the home indicator (tokens-app.css --sheet-gap; 10px where there is none, as drawn) */
   .menu.is-sheet,.modal{position:relative;width:auto;max-width:none;margin:0 10px var(--sheet-gap);border-radius:24px}
   .menu.is-sheet{padding:var(--s-5) var(--s-2) var(--s-2);max-height:calc(100dvh - var(--s-10) - var(--sheet-gap));overflow-y:auto;overscroll-behavior:contain}
-  .menu.is-sheet::before,.modal::before{content:"";position:absolute;left:50%;top:var(--s-2);width:36px;height:4px;margin-left:-18px;border-radius:2px;background:var(--line-strong)}
+  .menu.is-sheet::before,.modal::before{content:"";position:absolute;z-index:2;left:50%;top:var(--s-2);width:36px;height:4px;margin-left:-18px;border-radius:2px;background:var(--line-strong)}
   .menu.is-sheet a{border-radius:14px;padding:0 var(--s-3);gap:var(--s-3)}
   .menu.is-sheet hr{margin:6px var(--s-3)}
-  .modal{padding:var(--s-6) var(--s-4) var(--s-4)}
+  .modal{--pad-t:var(--s-6);--pad-x:var(--s-4);--pad-b:var(--s-4);max-height:calc(100dvh - var(--s-10) - var(--sheet-gap))}
   .modal-row .btn{flex:1}
   .btn{border-radius:12px}
   .file{height:44px}

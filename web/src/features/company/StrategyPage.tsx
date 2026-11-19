@@ -1,4 +1,4 @@
-import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery, type UseQueryResult } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { Button } from '@/kit/Button';
 import { Field } from '@/kit/Field';
@@ -100,16 +100,14 @@ const paragraphs = (text: string) =>
     .filter(Boolean);
 
 function StrategyTabBody({ search }: { search: StrategySearch }) {
-  const q = useQuery(strategyQuery);
+  const s = useSuspenseQuery(strategyQuery).data;
   const versions = useQuery(strategyVersionsQuery);
-  const s = q.data;
-  const latest = s?.current?.n;
+  const latest = s.current?.n;
   const asked = search.v && search.v !== latest ? search.v : undefined;
   const past = useQuery({ ...strategyVersionQuery(asked ?? 0), enabled: !!asked });
   const shown = asked ?? latest;
-  const v = asked ? past.data : s?.current;
-  const read = asked && !past.isSuccess ? past : q;
-  const bets = (asked ? (past.data?.bets ?? []) : (s?.bets ?? [])).filter((b) => b.status !== 'retired');
+  const v = asked ? past.data : s.current;
+  const bets = (asked ? (past.data?.bets ?? []) : s.bets).filter((b) => b.status !== 'retired');
   const extra = Object.entries(v?.sections.extra ?? {});
   return (
     <Document
@@ -120,8 +118,9 @@ function StrategyTabBody({ search }: { search: StrategySearch }) {
           <PageOwner page="strategy" />
         </>
       }
-      state={readState(read, !v && !s?.bets.length)}
-      onRetry={() => void read.refetch()}
+      // a past version is its own read, with its own states
+      state={asked && !past.isSuccess ? readState(past) : !v && !s.bets.length ? 'empty' : 'ready'}
+      onRetry={() => void past.refetch()}
       empty={{ title: 'No strategy yet' }}
       body={
         <>
@@ -143,8 +142,8 @@ function StrategyTabBody({ search }: { search: StrategySearch }) {
               <ol className="bets">
                 {bets.map((b) => {
                   // The newest version's goals and health; a past version has none.
-                  const owner = asked ? undefined : s?.goals_by_bet?.[b.id]?.[0]?.owner_id;
-                  const health = asked ? undefined : s?.health_by_bet?.[b.id];
+                  const owner = asked ? undefined : s.goals_by_bet?.[b.id]?.[0]?.owner_id;
+                  const health = asked ? undefined : s.health_by_bet?.[b.id];
                   return (
                     <li key={b.id} className="bet">
                       <span>{b.statement}</span>
@@ -237,22 +236,19 @@ type BookKey = (typeof BOOK)[number];
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
 function BrandTab({ search }: { search: StrategySearch }) {
-  const q = useQuery(brandQuery);
-  const b = q.data;
-  if (search.edit && b?.may_edit) return <BrandEdit key={b.draft?.revision ?? 'new'} brand={b} />;
-  return <BrandBook q={q} search={search} />;
+  const b = useSuspenseQuery(brandQuery).data;
+  if (search.edit && b.may_edit) return <BrandEdit key={b.draft?.revision ?? 'new'} brand={b} />;
+  return <BrandBook b={b} search={search} />;
 }
 
-function BrandBook({ q, search }: { q: UseQueryResult<Brand>; search: StrategySearch }) {
+function BrandBook({ b, search }: { b: Brand; search: StrategySearch }) {
   const edit = useDo('brand.edit');
-  const b = q.data;
-  const latest = b?.published?.n;
+  const latest = b.published?.n;
   const asked = search.v && search.v !== latest ? search.v : undefined;
   const past = useQuery({ ...brandVersionQuery(asked ?? 0), enabled: !!asked });
   const shown = asked ?? latest;
-  const book = asked ? past.data : b?.published;
-  const read = asked && !past.isSuccess ? past : q;
-  const editButton = b?.may_edit && !asked && (
+  const book = asked ? past.data : b.published;
+  const editButton = b.may_edit && !asked && (
     <Button onClick={() => void edit.run({ on: true })} data-target="brand:edit">
       Edit
     </Button>
@@ -263,13 +259,14 @@ function BrandBook({ q, search }: { q: UseQueryResult<Brand>; search: StrategySe
       framed
       actions={
         <>
-          {shown && <VersionPick rows={b?.versions ?? []} shown={shown} action="brand.openVersion" />}
+          {shown && <VersionPick rows={b.versions ?? []} shown={shown} action="brand.openVersion" />}
           {editButton}
           <PageOwner page="strategy" />
         </>
       }
-      state={readState(read, !book)}
-      onRetry={() => void read.refetch()}
+      // a past version is its own read, with its own states
+      state={asked && !past.isSuccess ? readState(past) : book ? 'ready' : 'empty'}
+      onRetry={() => void past.refetch()}
       empty={{ title: 'No brand book yet', action: editButton }}
       body={
         book && (

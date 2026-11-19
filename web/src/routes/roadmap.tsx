@@ -6,14 +6,9 @@ import { filtersOf, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, shelfQu
 export const Route = createFileRoute('/roadmap')({
   validateSearch: validateRoadmapSearch,
   loaderDeps: ({ search }) => filtersOf(search),
-  // A failed read is the page's own fault state (Try again), not the router's error screen.
-  loader: async ({ context, deps }) => {
-    const p = roadmapPipeline(await context.queryClient.ensureQueryData(pipelinesQuery).catch(() => []));
-    if (!p) return;
-    await Promise.all([
-      context.queryClient.ensureQueryData(pipelineTasksQuery(p.id, deps)),
-      context.queryClient.ensureQueryData(shelfQuery(p.id, 'done', deps)),
-    ]).catch(() => undefined);
+  loader: async ({ context: { queryClient: qc }, deps }) => {
+    const p = roadmapPipeline(await qc.ensureQueryData(pipelinesQuery));
+    if (p) await Promise.all([qc.ensureQueryData(pipelineTasksQuery(p.id, deps)), qc.ensureQueryData(shelfQuery(p.id, 'done', deps))]);
   },
   component: Page,
 });

@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useState, type CSSProperties } from 'react';
 import { useAction } from '@/actions';
 import { useActors, type Actor } from '@/data';
@@ -9,7 +9,7 @@ import { Link } from '@/kit/Link';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Pill } from '@/kit/Pill';
 import { fmtDate } from '@/lib';
-import { Record as RecordPage, Section, type PageState } from '@/pagekinds';
+import { Record as RecordPage, Section } from '@/pagekinds';
 import { computerStatus, modelLine, whoHref } from './model';
 import { ModelPicker } from './ModelPicker';
 import { ConfirmDialog, Foot } from './parts';
@@ -31,14 +31,13 @@ export interface ComputerPageProps {
 
 /** The computer an agent runs on (mates.js compPage): Info and Screen, its agents, how it is doing, Restart. */
 export function ComputerPage({ agent, actor, base, tab }: ComputerPageProps) {
-  const computers = useQuery(computersQuery);
+  const { data: computers } = useSuspenseQuery(computersQuery);
   const botId = agent?.id ?? actor.id.slice(actor.id.indexOf(':') + 1);
-  const c = computers.data?.find((x) => x.id === agent?.machine?.runner_id) ?? computers.data?.find((x) => x.bots?.includes(botId));
+  const c = computers.find((x) => x.id === agent?.machine?.runner_id) ?? computers.find((x) => x.bots?.includes(botId));
   const restart = useAction('computers.restart');
   const [asking, setAsking] = useState(false);
   const [mode, setMode] = useState<ScreenMode>('view');
   const title = c?.label ?? agent?.machine?.label ?? (agent?.cloud_machine?.shared ? 'Shared computer' : 'Computer');
-  const state: PageState = computers.isError ? 'fault' : computers.isPending ? 'loading' : c ? 'ready' : 'empty';
   return (
     <RecordPage
       title={title}
@@ -65,8 +64,7 @@ export function ComputerPage({ agent, actor, base, tab }: ComputerPageProps) {
         { label: 'Screen', to: base, search: { tab: 'screen' } },
       ]}
       tabsAfter={tab === 'screen' && c && <ScreenTools c={c} mode={mode} onMode={setMode} />}
-      state={state}
-      onRetry={() => void computers.refetch()}
+      state={c ? 'ready' : 'empty'}
       empty={{ title: agent?.cloud_machine?.shared ? 'It runs on the shared computer' : 'Not on a computer yet' }}
       sections={
         c && (

@@ -4,6 +4,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
+// eslint-disable-next-line no-restricted-imports -- the router's error component, as the app wires it
+import { PageFault } from '@/shell/PageFault';
 import type { CompanyFloor, MatterRow, ProductList, RiskDetail, RiskList } from '@/api/schema';
 import { CompanyPage } from './CompanyPage';
 import { ProductsPage } from './ProductsPage';
@@ -69,7 +71,7 @@ function show(page: (search: Record<string, unknown>) => ReactNode, at: string) 
   }
   const root = createRootRoute({ component: Outlet });
   const route = createRoute({ getParentRoute: () => root, path: at.split('?')[0] ?? '/', component: Routed });
-  const router = createRouter({ routeTree: root.addChildren([route]), history: createMemoryHistory({ initialEntries: [at] }) });
+  const router = createRouter({ routeTree: root.addChildren([route]), history: createMemoryHistory({ initialEntries: [at] }), defaultErrorComponent: PageFault });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -256,6 +258,38 @@ describe('Org @s309', () => {
     serve((url) => (url.includes('/api/v2/groups') ? { status: 500, body: { detail: 'boom' } } : nothing()));
     show(strategy('org'), '/company/strategy/org');
     expect(await screen.findByRole('button', { name: 'Try again' })).toBeTruthy();
+  });
+
+  it('keeps teammates reachable in groups nested more than one level down', async () => {
+    serve(nothing);
+    directory(actor('human:lee', 'Lee Park'));
+    queryClient.setQueryData(groupsQuery.queryKey, [
+      g('sales', 'Sales'),
+      g('east', 'East', { parent: 'sales' }),
+      g('retail', 'Retail', { parent: 'east', people: ['lee'] }),
+    ]);
+    show(strategy('org'), '/company/strategy/org');
+    const sales = await screen.findByRole('region', { name: 'Sales' });
+    const lee = within(sales).getByRole('link', { name: /Lee Park/ });
+    expect(href(lee)).toBe('/company/strategy/org?panel=mate:human:lee');
+    fireEvent.click(within(sales).getByRole('button', { name: /^East/ }));
+    expect(within(sales).queryByRole('link', { name: /Lee Park/ })).toBeNull();
+  });
+
+  it('starts from the newly opened teammate’s own group when switching sheets', async () => {
+    serve(nothing);
+    queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'owner', slug: null });
+    directory(actor('human:lee', 'Lee Park'), actor('human:ana', 'Ana Ruiz'));
+    queryClient.setQueryData(groupsQuery.queryKey, [
+      g('sales', 'Sales', { people: ['lee'] }),
+      g('support', 'Support', { people: ['ana'] }),
+    ]);
+    const router = show(strategy('org'), '/company/strategy/org?panel=mate:human:lee');
+    expect(within(await screen.findByRole('complementary', { name: 'Lee Park' })).getByRole('combobox', { name: 'Move to' }).textContent).toBe('Sales');
+    await router.navigate({ to: '.', search: { panel: 'mate:human:ana' } as never });
+    const panel = await screen.findByRole('complementary', { name: 'Ana Ruiz' });
+    expect(within(panel).getByRole('combobox', { name: 'Move to' }).textContent).toBe('Support');
+    expect((within(panel).getByRole('button', { name: 'Move' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
 

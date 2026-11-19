@@ -1,5 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { floorQuery, goalsTreeQuery, mattersQuery, productsQuery, riskQuery, risksQuery, strategyQuery } from './queries';
+import { brandQuery, floorQuery, goalsTreeQuery, groupsQuery, marketBriefingQuery, marketSpendQuery, mattersQuery, productsQuery, riskQuery, risksQuery, strategyQuery } from './queries';
 import type { StrategySearch } from './StrategyPage';
 
 // What the routes use before a page's code loads: the address checks and the first reads. No components here: the
@@ -25,13 +25,17 @@ export const riskSearch = (s: Record<string, unknown>): { risk?: string; panel?:
 /** A Strategy tab from the address; anything else is the Strategy page itself. */
 export const strategyTab = (t: unknown): StrategyTab => (STRATEGY_TABS as readonly unknown[]).includes(t) ? (t as StrategyTab) : 'strategy';
 
-// What each page needs for its first paint. A read that fails shows the page's own fault state, so the loader never throws.
-const quietly = (read: Promise<unknown>) => read.then(
-  () => undefined,
-  () => undefined,
-);
-export const loadCompany = (qc: QueryClient) => quietly(qc.ensureQueryData(floorQuery));
-export const loadStrategy = (qc: QueryClient, tab: StrategyTab) => quietly(tab === 'goals' ? qc.ensureQueryData(goalsTreeQuery) : qc.ensureQueryData(strategyQuery));
-export const loadProducts = (qc: QueryClient) => quietly(qc.ensureQueryData(productsQuery));
-export const loadRisk = (qc: QueryClient, risk?: string) => quietly(risk ? qc.ensureQueryData(riskQuery(risk)) : qc.ensureQueryData(risksQuery));
-export const loadDisputes = (qc: QueryClient) => quietly(qc.ensureQueryData(mattersQuery('disputes')));
+// What each page needs for its first paint, awaited: a read that fails is the router's fault (PageFault), a refusal
+// its no-access state. Market reads its many parts itself, each with its own state.
+export const loadCompany = (qc: QueryClient) => qc.ensureQueryData(floorQuery);
+export function loadStrategy(qc: QueryClient, tab: StrategyTab): Promise<unknown> | undefined {
+  if (tab === 'goals') return qc.ensureQueryData(goalsTreeQuery);
+  if (tab === 'org') return qc.ensureQueryData(groupsQuery);
+  if (tab === 'brand') return qc.ensureQueryData(brandQuery);
+  if (tab === 'strategy') return qc.ensureQueryData(strategyQuery);
+  void qc.prefetchQuery(marketSpendQuery);
+  void qc.prefetchQuery(marketBriefingQuery);
+}
+export const loadProducts = (qc: QueryClient) => qc.ensureQueryData(productsQuery);
+export const loadRisk = (qc: QueryClient, risk?: string) => (risk ? qc.ensureQueryData(riskQuery(risk)) : qc.ensureQueryData(risksQuery));
+export const loadDisputes = (qc: QueryClient) => qc.ensureQueryData(mattersQuery('disputes'));

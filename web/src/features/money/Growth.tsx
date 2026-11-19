@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
-import { directoryQuery, useActor } from '@/data';
+import { useActor, useDirectory } from '@/data';
 import { fmtMoney } from '@/lib';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
@@ -15,7 +15,7 @@ import { Dashboard, FiguresStrip, Section, type Figure, type PageTab } from '@/p
 import { GROWTH } from './head';
 import { ChannelPanel, ManagerFace } from './GrowthPanels';
 import { axis, count, firstRead, growthMonths, isYm, lastFullMonth, loudHealth, monShort, monthName, pct, ratio, statusWord, valueKind, ymOf } from './model';
-import { ActLink, readState, usePhone, usePress } from './parts';
+import { ActLink, usePhone, usePress } from './parts';
 import {
   growthManager,
   growthReadQuery,
@@ -122,27 +122,25 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
   const press = usePress();
   const phone = usePhone();
   const segments = useQuery(segmentsQuery);
-  const read = useQuery(growthReadQuery(search.segment, search.month));
-  const owners = useQuery(pageOwnersQuery);
-  const dir = useQuery(directoryQuery);
-  const manager = growthManager(owners.data, dir.data);
+  const d = useSuspenseQuery(growthReadQuery(search.segment, search.month)).data;
+  const owners = useQuery(pageOwnersQuery).data;
+  const manager = useDirectory((dir) => growthManager(owners, dir)) ?? null;
   const segs = segments.data?.segments ?? [];
-  const d = read.data;
-  const series = d?.series ?? [];
+  const series = d.series ?? [];
   const months = growthMonths(search.month);
   const month = search.month ?? lastFullMonth();
   const thisMonth = ymOf(new Date());
   const open = panelOf(search.panel);
   const opened = open?.[0] === 'channel' ? open[1] : undefined;
 
-  const tiles = d ? tilesOf(d) : [];
+  const tiles = tilesOf(d);
   // Before revenue (every funnel tile 0 or left out), the company's own KPIs lead and the funnel folds below them.
   const funnelBlank = tiles.every((t) => !t.fig.value);
-  const metrics = d?.metrics ?? [];
+  const metrics = d.metrics ?? [];
   const kpisLead = funnelBlank && metrics.length > 0;
-  const anyone = (d?.channels ?? []).some((c) => c.signups > 0 || (c.new_customers ?? 0) > 0);
-  const blank = !!d && funnelBlank && !metrics.length && !anyone;
-  const loud = loudHealth(d?.health);
+  const anyone = d.channels.some((c) => c.signups > 0 || (c.new_customers ?? 0) > 0);
+  const blank = funnelBlank && !metrics.length && !anyone;
+  const loud = loudHealth(d.health);
 
   const spark = (pick?: (p: GrowthPoint) => number | null) => {
     if (!pick) return undefined;
@@ -183,13 +181,12 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
         ...segs.map((s) => ({ label: s.name, to: GROWTH, target: `tab:${s.slug}`, search: { segment: s.slug } })),
       ]
     : undefined;
-  const row = opened ? d?.channels.find((c) => c.slug === opened) : undefined;
+  const row = opened ? d.channels.find((c) => c.slug === opened) : undefined;
 
   return (
     <Dashboard
       {...head}
-      state={readState(read, blank)}
-      onRetry={() => void read.refetch()}
+      state={blank ? 'empty' : 'ready'}
       empty={{
         title: 'No numbers yet',
         // Sources are set up through the Growth Manager; with none, there is nothing to press here.
@@ -210,44 +207,40 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
               value={month}
               onValueChange={(m) => void press('growth.setMonth', { month: m })}
             />
-            {d?.partial && <span className="gr-partial">partial</span>}
+            {d.partial && <span className="gr-partial">partial</span>}
           </div>
         </>
       }
       tabs={tabs}
       figures={
-        d && (
-          <div className="gr-top">
-            {manager && <Ask />}
-            {loud.length > 0 && (
-              <div className="gr-loud" role="status">
-                {loud.map((line) => (
-                  <p key={line}>
-                    <Icon name="alert" />
-                    {line}
-                  </p>
-                ))}
-              </div>
-            )}
-            {kpisLead ? strip(kpiFigures, 'KPIs') : strip(figures, 'Headline')}
-          </div>
-        )
+        <div className="gr-top">
+          {manager && <Ask />}
+          {loud.length > 0 && (
+            <div className="gr-loud" role="status">
+              {loud.map((line) => (
+                <p key={line}>
+                  <Icon name="alert" />
+                  {line}
+                </p>
+              ))}
+            </div>
+          )}
+          {kpisLead ? strip(kpiFigures, 'KPIs') : strip(figures, 'Headline')}
+        </div>
       }
       widgets={
-        d && (
-          <div className="stack">
-            {kpisLead && figures.length > 0 && (
-              <Section name="Funnel" defaultOpen={false}>
-                {strip(figures, 'Funnel')}
-              </Section>
-            )}
-            <Channels read={d} selected={opened} phone={phone} cac={valueKind(d) !== 'retention'} />
-            <Trends read={d} />
-            <Retention rows={d.retention ?? []} phone={phone} />
-            {!kpisLead ? <Kpis metrics={metrics} /> : metrics.length > 6 && <Kpis metrics={metrics.slice(6)} />}
-            <HealthFoot health={d.health} quietOnly={loud.length > 0} />
-          </div>
-        )
+        <div className="stack">
+          {kpisLead && figures.length > 0 && (
+            <Section name="Funnel" defaultOpen={false}>
+              {strip(figures, 'Funnel')}
+            </Section>
+          )}
+          <Channels read={d} selected={opened} phone={phone} cac={valueKind(d) !== 'retention'} />
+          <Trends read={d} />
+          <Retention rows={d.retention ?? []} phone={phone} />
+          {!kpisLead ? <Kpis metrics={metrics} /> : metrics.length > 6 && <Kpis metrics={metrics.slice(6)} />}
+          <HealthFoot health={d.health} quietOnly={loud.length > 0} />
+        </div>
       }
       panel={opened && <ChannelPanel slug={opened} month={month} row={row} />}
     />

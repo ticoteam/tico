@@ -5,7 +5,8 @@ export { tabAddress as taskAddress } from './model';
 
 /**
  * What a task's address may carry: a file opened from Details (`full` shows a picture full size), in Flow the open
- * tab, and the version of the open page (`v`) with the one its changes are marked against (`vs`).
+ * tab, the version of the open page (`v`) with the one its changes are marked against (`vs`), and an email's file
+ * opened from its Email tab (`part`).
  */
 export interface TaskSearch {
   tab?: string;
@@ -13,10 +14,12 @@ export interface TaskSearch {
   full?: string;
   v?: number;
   vs?: number;
+  part?: number;
 }
 
+const whole = (x: unknown): number => (typeof x === 'number' ? x : typeof x === 'string' && /^\d+$/.test(x) ? Number(x) : NaN);
 const n = (x: unknown): number | undefined => {
-  const v = typeof x === 'number' ? x : typeof x === 'string' && /^\d+$/.test(x) ? Number(x) : NaN;
+  const v = whole(x);
   return Number.isInteger(v) && v > 0 ? v : undefined;
 };
 
@@ -30,5 +33,8 @@ export function taskSearch(raw: Record<string, unknown>): TaskSearch {
   const vs = n(raw.vs);
   if (v) out.v = v;
   if (vs) out.vs = vs;
+  // An email's files count from 0.
+  const part = whole(raw.part);
+  if (Number.isInteger(part) && part >= 0) out.part = part;
   return out;
 }

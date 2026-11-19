@@ -16,7 +16,7 @@ import { Select } from '@/kit/Select';
 import { PageMore } from '@/pagekinds';
 import { pipelinesQuery } from '@/features/tasks/routing';
 import { whoHref } from '@/features/team/routing';
-import { earlierStages, failedToast, reasonOf, refusalOf, tabAddress, type Refusal } from './model';
+import { DETAILS, earlierStages, failedToast, reasonOf, refusalOf, tabAddress, type Refusal } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face, Go, Mark } from './parts';
 import { pipelineStagesQuery, waitingQuery, type TaskData } from './queries';
@@ -42,6 +42,23 @@ export function WhereLine({ t }: { t: TaskData }) {
       {t.stage_since && <Ago at={t.stage_since} className="row-age" />}
       {t.late && <LatePill />}
     </>
+  );
+}
+
+/** An approval's one quiet line (plan/approvals.html): pipeline · stage · how long, and Late. The stage and owner
+    picks are in Details, under ⋯. */
+export function QuietLine({ t }: { t: TaskData }) {
+  return (
+    <span className="tv-quiet">
+      {[t.pipeline?.name, t.status === 'open' ? t.stage?.name : t.status === 'done' ? 'Done' : 'Closed'].filter(Boolean).join(' · ')}
+      {t.stage_since && (
+        <>
+          {' · '}
+          <Ago at={t.stage_since} />
+        </>
+      )}
+      {t.late && <LatePill />}
+    </span>
   );
 }
 
@@ -248,7 +265,7 @@ type Asking = 'move' | 'reopen' | 'delete' | null;
 /** "⋯": snooze, done (the due date and tags edit in Details); in Flow, Give to and Move back, after which Flow goes on to the next task. Then the old task
     window's rest (ui/app/task-props.ts): watch the agent's session, copy the link, move to another pipeline,
     reopen with a reason, delete. Reopen and Delete ask first. */
-export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
+export function MoreMenu({ t, flow = false, details = false }: { t: TaskData; flow?: boolean; details?: boolean }) {
   const [asking, setAsking] = useState<Asking>(null);
   const [why, setWhy] = useState('');
   const [to, setTo] = useState<{ pipeline: string; name: string; stage: string | null } | null>(null);
@@ -304,6 +321,19 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
   return (
     <>
       <PageMore>
+        {details && (
+          <>
+            <MenuItem
+              label="Details"
+              icon="list"
+              onSelect={() => {
+                const a = tabAddress(t, DETAILS, flow);
+                void navigate({ to: a.to as never, search: a.search as never });
+              }}
+            />
+            <MenuRule />
+          </>
+        )}
         {flow && t.status === 'open' && (
           <>
             <MenuSub label="Give to" icon="people">

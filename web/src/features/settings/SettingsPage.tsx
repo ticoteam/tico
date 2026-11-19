@@ -208,11 +208,9 @@ function useSettled(value: string, ms = 200): string {
 
 /** `list`: the plain /settings address. A phone shows the section list there; a wide screen shows the first section. */
 export function SettingsPage({ section, open, who, list = false }: { section: SectionId; open?: string; who?: HistoryWho; list?: boolean }) {
-  const me = useQuery(meQuery);
-  // The union of each section's options: one read, typed loosely here because only its state is used.
-  const main = useQuery(mainQuery(section) as UseQueryOptions<unknown, Error, unknown, readonly unknown[]>);
-  const forbidden = isForbidden(main.error);
-  const state = me.isPending || main.isPending ? 'loading' : main.isError && !forbidden ? 'fault' : undefined;
+  // The route loads the section's read (its loading and fault are the router's); only its 403 is said here, beside the
+  // section list. The union of each section's options, typed loosely because only its error is used.
+  const forbidden = isForbidden(useQuery(mainQuery(section) as UseQueryOptions<unknown, Error, unknown, readonly unknown[]>).error);
   const Body = BODY[section];
   const [q, setQ] = useState('');
   const asked = useSettled(q.trim());
@@ -237,7 +235,7 @@ export function SettingsPage({ section, open, who, list = false }: { section: Se
       results.current?.querySelector<HTMLElement>(`[data-hit="${Math.max(0, Math.min(at, hits.length - 1))}"]`)?.click();
     }
   };
-  useLanding(section, !searching && !state);
+  useLanding(section, !searching);
   return (
     <Settings
       title="Settings"
@@ -259,8 +257,6 @@ export function SettingsPage({ section, open, who, list = false }: { section: Se
           />
         </div>
       }
-      state={state}
-      onRetry={() => void main.refetch()}
       body={
         searching ? (
           asked && loaded ? (

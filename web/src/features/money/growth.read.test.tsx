@@ -137,7 +137,8 @@ describe('Growth on the one read @s400', () => {
     expect(within(tiles).getByText('LTV to CAC')).toBeTruthy();
     expect(within(tiles).getByText('payback 3.1 months')).toBeTruthy();
     expect(within(tiles).getByText('Jul cohort of 140')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Alpha' })).toBeTruthy();
+    // the scope tabs are not awaited with the read
+    expect(await screen.findByRole('link', { name: 'Alpha' })).toBeTruthy();
 
     // Where to bet: the read's ranking, Unknown last and not a link, no spend in a word, what is over budget.
     const table = screen.getByRole('table', { name: 'Channels' });

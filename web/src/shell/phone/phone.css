@@ -95,6 +95,10 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone>.ly-tico{z-index:4;background:var(--c-tico);--surface:var(--c-tico);--ty:calc(100% - var(--sab) - var(--lipT))}
 .phone:not(.has-chat)>.ly-chat{--ty:calc(100% + 48px)}
 .phone.is-handle>.ly{--ty:calc(100% + 48px)}
+/* a request that waits on the person holds the bottom with its decision (plan/approvals.html): nothing rests over it,
+   no lip, no handle, no second face. The task's chat is its Chat tab then. */
+.phone:has(>.pg [data-dock] .dcx){--cards-h:0px}
+.phone:has(>.pg [data-dock] .dcx)>.ly:not(.is-up){--ty:calc(100% + 48px)}
 .phone[data-card="menu"]>.ly-menu,.phone[data-card="chat"]>.ly-chat,.phone[data-card="tico"]>.ly-tico{--ty:0px}
 .phone[data-card="tico-half"]>.ly-tico{--ty:calc(100% - var(--half))}
 /* raised, a card stands a step higher */

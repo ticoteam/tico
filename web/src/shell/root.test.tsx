@@ -103,7 +103,8 @@ function show(at: string) {
   const page = createRoute({ getParentRoute: () => root, path: '/', component: () => <main className="pane page"><h1>Home</h1></main> });
   const call = createRoute({ getParentRoute: () => root, path: '/call/$room', component: () => <main className="pane cw">call page</main> });
   const task = createRoute({ getParentRoute: () => root, path: '/flow/$task', component: () => <main className="pane page"><h1>A task</h1></main> });
-  const router = createRouter({ routeTree: root.addChildren([page, call, task]), context: { queryClient }, history: createMemoryHistory({ initialEntries: [at] }) });
+  const editor = createRoute({ getParentRoute: () => root, path: '/tasks/$pipeline/edit', component: () => <main className="pane page"><h1>Edit pipeline</h1></main> });
+  const router = createRouter({ routeTree: root.addChildren([page, call, task, editor]), context: { queryClient }, history: createMemoryHistory({ initialEntries: [at] }) });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -258,6 +259,13 @@ describe('an open task', () => {
     // Close folds the list to the menu's icons
     fireEvent.click(within(list).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('navigation', { name: 'Flow' })).toBeNull());
+  });
+
+  it('the pipeline editor is a page, not a task: no task chat and no Flow list', async () => {
+    show('/tasks/eng/edit');
+    expect(await screen.findByRole('heading', { name: 'Edit pipeline' })).toBeTruthy();
+    expect(screen.queryByText('task chat')).toBeNull();
+    expect(screen.queryByRole('navigation', { name: 'Flow' })).toBeNull();
   });
 });
 

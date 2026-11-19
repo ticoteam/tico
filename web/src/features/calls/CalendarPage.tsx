@@ -53,7 +53,7 @@ import {
   type Placed,
 } from './model';
 import { PeoplePick } from './PeoplePick';
-import { joinNow, LiveMark, press, refsOf, useCards, useNow, Who } from './parts';
+import { joinNow, LiveMark, press, refsOf, useCards, useNow, useTicoMeet, Who } from './parts';
 import { eventsQuery, findEventsQuery, liveCallsQuery, meetingsQuery, type Meeting, type Review } from './queries';
 import './calls.css';
 
@@ -257,15 +257,23 @@ function FilterItems({ search, at }: { search: CalendarSearch; at: At }) {
     from the ⋯. Nobody picked is a call with Tico. */
 function StartCall({ open, onOpenChange, sheet }: { open: boolean; onOpenChange: (open: boolean) => void; sheet?: boolean }) {
   const [who, setWho] = useState<string[]>([]);
+  const meet = useTicoMeet();
   const set = (o: boolean) => {
     onOpenChange(o);
     if (!o) setWho([]);
   };
-  const pick = <PeoplePick value={who} onChange={setWho} tico autoFocus />;
+  const pick = (
+    <>
+      <PeoplePick value={who} onChange={setWho} tico autoFocus />
+      {meet.reason && <p role="status">{meet.reason}</p>}
+    </>
+  );
   const go = (
     <Button
       variant="primary"
       className={sheet ? undefined : 'pop-go'}
+      disabled={!meet.available}
+      busy={meet.isPending}
       onClick={() => {
         set(false);
         void press('calls.start', { with: who });

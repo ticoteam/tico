@@ -1,3 +1,4 @@
+import { ApiError } from '@/api/client';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { Outlet, createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider, useLocation } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -83,6 +84,37 @@ describe('a page that breaks while drawing', () => {
     fireEvent.click(within(main).getByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('heading', { name: 'Routines' })).toBeTruthy();
     expect(screen.queryByText('This page did not load')).toBeNull();
+    quiet.mockRestore();
+    quietWarn.mockRestore();
+  });
+});
+
+describe('a page the server refuses', () => {
+  it('shows no access, without Try again', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const quietWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const root = createRootRoute({ component: () => <Outlet /> });
+    const page = createRoute({
+      getParentRoute: () => root,
+      path: '/',
+      loader: () => {
+        throw new ApiError(403, 'forbidden', 'Not yours');
+      },
+      component: () => <h1>Finance</h1>,
+    });
+    const router = createRouter({
+      routeTree: root.addChildren([page]),
+      history: createMemoryHistory({ initialEntries: ['/'] }),
+      defaultErrorComponent: appRouter.options.defaultErrorComponent,
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    const main = await screen.findByRole('main', { name: 'This page' });
+    expect(within(main).queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(within(main).queryByText('This page did not load')).toBeNull();
     quiet.mockRestore();
     quietWarn.mockRestore();
   });
@@ -218,3 +250,4 @@ describe('the browser tab’s title', () => {
     expect(tabTitle('Tasks')).not.toContain('·');
   });
 });
+

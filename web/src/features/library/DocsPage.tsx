@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useRef, useState } from 'react';
 import { Ago } from '@/kit/Ago';
@@ -13,7 +13,7 @@ import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
 import { List, PageMore, Section, SidePanel, type PageState, type PageTab } from '@/pagekinds';
 import { Foot, trimmed, useGo } from './AddTool';
-import { Face, Find, KindGlyph, OwnerButton, press, refused, Who } from './parts';
+import { Face, Find, KindGlyph, OwnerButton, press, Who } from './parts';
 import { archivedDocsQuery, docsListQuery, docsSearchQuery, IMPORT_MAX, IMPORT_TYPES, sourceDocsQuery, sourcesQuery, type DocHit, type DocRow } from './queries';
 import type { DocSource } from '@/api/schema';
 import type { DocsSearch } from './search';
@@ -79,9 +79,8 @@ function DocsMore({ archived }: { archived: boolean }) {
 
 function OwnDocs({ search }: { search: DocsSearch }) {
   const archived = !!search.archived;
+  const { data: docs } = useSuspenseQuery(archived ? archivedDocsQuery : docsListQuery);
   const live = useQuery(docsListQuery);
-  const gone = useQuery({ ...archivedDocsQuery, enabled: archived });
-  const docs = archived ? gone : live;
   const sources = useQuery(sourcesQuery);
   const words = search.q?.toLowerCase() ?? '';
   // Words to search for go to the server's search of the docs' text (docs-search.ts); until it answers, and in
@@ -89,7 +88,7 @@ function OwnDocs({ search }: { search: DocsSearch }) {
   const full = !archived && /\w/.test(search.q ?? '');
   const found = useQuery({ ...docsSearchQuery(search.q?.trim() ?? ''), enabled: full });
   const hits = full ? found.data : undefined;
-  const rows = (docs.data?.docs ?? []).filter((d) => !words || d.title.toLowerCase().includes(words) || d.path.toLowerCase().includes(words));
+  const rows = docs.docs.filter((d) => !words || d.title.toLowerCase().includes(words) || d.path.toLowerCase().includes(words));
 
   const groups = new Map<string, DocRow[]>();
   for (const d of rows) {
@@ -97,10 +96,7 @@ function OwnDocs({ search }: { search: DocsSearch }) {
     groups.set(name, [...(groups.get(name) ?? []), d]);
   }
 
-  let state: PageState = 'ready';
-  if (docs.isError) state = refused(docs.error);
-  else if (!docs.data) state = 'loading';
-  else if (!docs.data.docs.length && !hits?.length) state = 'empty';
+  const state: PageState = !docs.docs.length && !hits?.length ? 'empty' : 'ready';
 
   return (
     <List
@@ -120,13 +116,12 @@ function OwnDocs({ search }: { search: DocsSearch }) {
       more={<DocsMore archived={archived} />}
       state={state}
       empty={{ title: archived ? 'Nothing archived' : 'No docs yet' }}
-      onRetry={() => void docs.refetch()}
       sections={
         hits ? (
           hits.length ? (
             <Section name="Found" count={hits.length}>
               {hits.map((h) => (
-                <HitLine key={`${h.type}:${h.id}`} hit={h} row={docs.data?.docs.find((d) => d.id === h.id)} />
+                <HitLine key={`${h.type}:${h.id}`} hit={h} row={docs.docs.find((d) => d.id === h.id)} />
               ))}
             </Section>
           ) : (
@@ -212,21 +207,16 @@ const BAD: Partial<Record<DocSource['status'], string>> = { failed: 'Failed', ac
 
 function SourcesPage({ panel }: { panel?: string }) {
   const docs = useQuery(docsListQuery);
-  const sources = useQuery(sourcesQuery);
-  const list = sources.data?.sources ?? [];
+  const { data: sources } = useSuspenseQuery(sourcesQuery);
+  const list = sources.sources;
   const [adding, setAdding] = useState(false);
-
-  let state: PageState = 'ready';
-  if (sources.isError) state = refused(sources.error);
-  else if (!sources.data) state = 'loading';
-  else if (!list.length) state = 'empty';
 
   return (
     <List
       title="Docs"
       path="/library/docs?tab=sources"
       className="lib"
-      tabs={tabs(docs.data?.docs.length, sources.data?.sources.length)}
+      tabs={tabs(docs.data?.docs.length, list.length)}
       actions={
         <>
           <OwnerButton page="docs" />
@@ -236,9 +226,8 @@ function SourcesPage({ panel }: { panel?: string }) {
           {adding && <SourceDialog source={null} onClose={() => setAdding(false)} />}
         </>
       }
-      state={state}
+      state={list.length ? 'ready' : 'empty'}
       empty={{ title: 'No outside sources yet' }}
-      onRetry={() => void sources.refetch()}
       sections={
         <section className="sec">
           {list.map((s) => (

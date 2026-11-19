@@ -1,13 +1,13 @@
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useQueries } from '@tanstack/react-query';
 import { useState } from 'react';
 import { run } from '@/actions/run';
-import { directoryQuery } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
 import { Empty } from '@/kit/Empty';
 import { Segmented } from '@/kit/Segmented';
 import { VirtualList } from '@/kit/VirtualList';
 import { fmtDate } from '@/lib';
+import { useFaces } from './parts';
 import { historyPage, type HistoryItem } from './queries';
 
 /* Settings › History (t-settings-history): one list, newest first, Everyone | People | Agents (in the address as
@@ -35,7 +35,7 @@ const WHO = [
 ] as const;
 
 export function History({ who }: { who?: HistoryWho }) {
-  const dir = useQuery(directoryQuery);
+  const faces = useFaces();
   // The cursors of the pages after the first, each its own read.
   const [cursors, setCursors] = useState<string[]>([]);
   const pages = useQueries({ queries: ['', ...cursors].map((before) => historyPage(before)) });
@@ -50,7 +50,7 @@ export function History({ who }: { who?: HistoryWho }) {
     else setCursors((c) => (c.includes(next) ? c : [...c, next]));
   };
   const row = (it: HistoryItem) => {
-    const actor = dir.data?.byId[it.actor];
+    const actor = faces[it.actor];
     const name = actor?.name ?? names[it.actor] ?? it.actor;
     const title = [it.subject, it.result].filter(Boolean).join(': ') || (KIND[it.kind] ?? it.kind);
     return (

@@ -162,7 +162,8 @@ function connect(): void {
       // A first stream starts from now. What was read before it opened may have missed a change in between: read
       // what is on screen once more (not the person: the gate would take a failed read for a fault).
       after = seqOf(parse(e));
-      void queryClient.invalidateQueries({ predicate: (q) => q.queryKey[0] !== keys.me()[0] });
+      // cancelRefetch false: a page's loader may be reading the same thing right now; cancelling it would fail the page.
+      void queryClient.invalidateQueries({ predicate: (q) => q.queryKey[0] !== keys.me()[0] }, { cancelRefetch: false });
       return isLive();
     }
     // A resumed stream keeps its own number, and the server replays from it. The cookie may be someone else's by
@@ -179,7 +180,7 @@ function connect(): void {
     // Further behind than the server keeps: what is queued is older than what a read in full will bring.
     after = seqOf(parse(e)) ?? after;
     dropFrame();
-    void queryClient.invalidateQueries();
+    void queryClient.invalidateQueries(undefined, { cancelRefetch: false });
     dispatch('reset', [{ seq: after }]);
   });
   source.addEventListener('expired', () => {

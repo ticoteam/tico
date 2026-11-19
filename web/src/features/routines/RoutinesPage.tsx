@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
@@ -81,9 +81,8 @@ const stateOf = (r: Routine): RoutineState => (r.last_run?.status === 'failed' ?
 const has = (words: string, q: string | undefined) => !q || words.toLowerCase().includes(q.toLowerCase());
 
 function RoutinesTab({ panel, q, state }: { panel?: string; q?: string; state?: RoutineState }) {
-  const list = useQuery(routinesQuery);
+  const all = useSuspenseQuery(routinesQuery).data;
   const hooks = useQuery(hooksQuery);
-  const all = list.data ?? [];
   const open = panel?.startsWith('routine:') ? panel.slice(8) : null;
   const built = panel?.startsWith('builtin:') ? (BUILTINS.find((b) => `builtin:${b}` === panel) ?? null) : null;
   const hookName = (id: string) => hooks.data?.find((h) => h.id === id)?.name;
@@ -101,13 +100,11 @@ function RoutinesTab({ panel, q, state }: { panel?: string; q?: string; state?: 
   );
   // The built-in section keeps the page ready while there are no routines, so the page kind cannot see it is empty:
   // with none, the head keeps only "⋯" and the empty state holds Add.
-  const none = list.isSuccess && !all.length;
+  const none = !all.length;
   const [inbox, setInbox] = useState(false);
   return (
     <List
       {...head}
-      state={list.isPending ? 'loading' : list.isError ? 'fault' : 'ready'}
-      onRetry={() => void list.refetch()}
       search={!none && <Find label="Search routines" value={q} onFind={(words) => listed({ q: words, state })} />}
       filter={state && <FilterRow filters={[{ label: STATE_WORDS[state], onClear: () => listed({ q }) }]} />}
       actions={
@@ -235,11 +232,10 @@ function BuiltInSection({ selected, q }: { selected: Builtin | null; q?: string 
 // ---------------------------------------------------------------- webhooks
 
 function WebhooksTab({ panel }: { panel?: string }) {
-  const hooks = useQuery(hooksQuery);
+  const list = useSuspenseQuery(hooksQuery).data;
   const [adding, setAdding] = useState(false);
   // a new webhook's full address, secret included, shown once: this state only, never the cache or the address
   const [made, setMade] = useState<{ hook: string; url: string; signing?: string } | null>(null);
-  const list = hooks.data ?? [];
   const open = panel?.startsWith('hook:') ? panel.slice(5) : null;
   const add = (
     <Button variant="primary" onClick={() => setAdding(true)}>
@@ -249,8 +245,7 @@ function WebhooksTab({ panel }: { panel?: string }) {
   return (
     <List
       {...head}
-      state={hooks.isPending ? 'loading' : hooks.isError ? 'fault' : list.length ? 'ready' : 'empty'}
-      onRetry={() => void hooks.refetch()}
+      state={list.length ? 'ready' : 'empty'}
       empty={{ title: 'No webhooks yet', action: add }}
       actions={
         <>

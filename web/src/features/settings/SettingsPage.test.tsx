@@ -22,6 +22,7 @@ import {
   usageQuery,
   type AccessView,
 } from './queries';
+import { loadSection } from './main';
 import { SettingsPage } from './SettingsPage';
 import { UsagePage } from './Usage';
 
@@ -52,8 +53,11 @@ function serve(reply: (url: string, method: string) => Reply | Promise<Reply>) {
   });
 }
 
-function show(node: ReactNode, at: string) {
+/** `load`: the route's loader; what it throws goes to the router's error component (the app's is the shell's PageFault). */
+function show(node: ReactNode, at: string, load?: () => Promise<unknown>) {
   const root = createRootRoute({
+    loader: load,
+    errorComponent: () => <p>The router’s fault page</p>,
     component: () => (
       <>
         <ActionsRoot dot={() => null} fold={() => {}} />
@@ -153,17 +157,16 @@ describe('Settings', () => {
 
   it('says when a section is for owners and admins only', async () => {
     serve(() => ({ status: 403, body: { error: { code: 'forbidden', detail: 'Owners and admins' } } }));
-    show(<SettingsPage section="billing" />, '/settings/billing');
+    show(<SettingsPage section="billing" />, '/settings/billing', () => loadSection(queryClient, 'billing'));
     expect(await screen.findByText('Owners and admins only.')).toBeTruthy();
     // The section list stays beside it.
     expect(screen.getByRole('link', { name: 'General' })).toBeTruthy();
   });
 
-  it('names the page and offers Try again when a section does not load', async () => {
+  it('a section that does not load goes to the router’s fault page', async () => {
     serve(() => ({ status: 500, body: { error: { code: 'down', detail: 'down' } } }));
-    show(<SettingsPage section="history" />, '/settings/history');
-    expect(await screen.findByRole('heading', { name: 'Settings did not load' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    show(<SettingsPage section="history" />, '/settings/history', () => loadSection(queryClient, 'history'));
+    expect(await screen.findByText('The router’s fault page')).toBeTruthy();
   });
 
   it('says so when there are no API tokens', async () => {

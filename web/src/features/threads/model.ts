@@ -166,18 +166,20 @@ export interface Update {
   updated_at?: string;
 }
 
+const updateLines = (u: Update) => (u.body ?? '').split(/\r?\n/);
+const titleText = (line: string) => line.replace(/^[#>*\-\s]+/, '').replace(/[*_`]/g, '').trim();
+
 /** An update has no title: its first line, without markdown marks. */
 export function updateTitle(u: Update): string {
-  const line = (u.body ?? '')
-    .split('\n')
-    .map((l) => l.replace(/^[#>*\-\s]+/, '').replace(/[*_`]/g, '').trim())
-    .find(Boolean);
+  const line = updateLines(u).map(titleText).find(Boolean);
   return line || u.slides?.goal || (u.kind === 'weekly' ? 'Weekly update' : 'Daily update');
 }
 
 /** What an update says after its title line, as written (markdown). */
 export function updateRest(u: Update): string {
-  return (u.body ?? '').split(/\n\s*\n/).slice(1).join('\n\n').trim();
+  const lines = updateLines(u);
+  const title = lines.findIndex(titleText);
+  return title < 0 ? '' : lines.slice(title + 1).join('\n').trim();
 }
 
 const dayKey = (u: Update) => u.day || u.created_at.slice(0, 10);

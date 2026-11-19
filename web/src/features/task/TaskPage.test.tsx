@@ -93,6 +93,8 @@ function base(url: string): Reply {
       body: { pipelines: [{ id: 'p1', name: 'Product', stages: [{ id: 's1', name: 'Build', side: false }, { id: 's2', name: 'Review', side: false }, { id: 's3', name: 'Ship', side: false }] }] },
     };
   if (url.includes('/needs-you')) return { status: 200, body: { items: [] } };
+  // A stage's own OK has no grant: Approve answers with the page version.
+  if (url.includes('/api/v2/oks/')) return { status: 404, body: { error: { code: 'not_found', detail: 'No such OK' } } };
   return ok;
 }
 
@@ -117,11 +119,13 @@ describe('one open task', () => {
     show(<TaskPage task="12" pipeline="p1" />);
     expect(await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' })).toBeTruthy();
     const tabs = screen.getByRole('navigation', { name: 'Fix the sign-in page pages' });
-    expect(within(tabs).getByRole('link', { name: /QA report/ }).getAttribute('aria-current')).toBe('page');
+    // the tab that opens is picked once the task's files are read (a file is a tab too)
+    await waitFor(() => expect(within(tabs).getByRole('link', { name: /QA report/ }).getAttribute('aria-current')).toBe('page'));
     expect(within(tabs).getByRole('link', { name: /Spec/ }).getAttribute('href')).toBe('/tasks/p1/12/spec');
-    expect(within(tabs).getByRole('link', { name: 'Details' }).getAttribute('href')).toBe('/tasks/p1/12/details');
+    // An approval's view keeps Details under ⋯, not in the tab row.
+    expect(within(tabs).queryByRole('link', { name: 'Details' })).toBeNull();
     expect(await screen.findByTitle('QA report')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Product' }).getAttribute('href')).toBe('/tasks/p1');
+    expect(screen.getByRole('link', { name: 'Back to Product' }).getAttribute('href')).toBe('/tasks/p1');
     expect(vi.mocked(useFollow)).toHaveBeenCalledWith({ task: 't1' });
   });
 
@@ -143,16 +147,15 @@ describe('one open task', () => {
 
   it('inside Flow, keeps the tab in the search @s126', async () => {
     serve(base);
-    show(<TaskPage task="12" tab="spec" flow />, '/flow/12?tab=spec');
+    show(<TaskPage task="12" tab="details" flow />, '/flow/12?tab=details');
     const tabs = await screen.findByRole('navigation', { name: 'Fix the sign-in page pages' });
-    expect(within(tabs).getByRole('link', { name: 'Details' }).getAttribute('href')).toBe('/flow/12?tab=details');
+    expect(within(tabs).getByRole('link', { name: /Spec/ }).getAttribute('href')).toBe('/flow/12?tab=spec');
     expect(screen.getByRole('link', { name: 'Flow' }).getAttribute('href')).toBe('/flow');
   });
 
   it('shows an approval at once and takes it back with the server’s reason when refused @s109', async () => {
     let refuse!: () => void;
     serve((url, method) => {
-      if (url.includes('/api/v2/oks/')) return { status: 404, body: { error: { code: 'not_found', detail: 'none' } } };
       if (method === 'POST' && url.includes('/asks/r1/answer'))
         return new Promise<Reply>(
           (r) => (refuse = () => r({ status: 409, body: { error: { code: 'task_stage_rule', detail: 'The QA report has no checks yet', missing: [] } } })),
@@ -160,8 +163,10 @@ describe('one open task', () => {
       return base(url);
     });
     show(<TaskPage task="12" pipeline="p1" />);
-    const card = await screen.findByRole('region', { name: 'Answer' });
-    fireEvent.click(within(card).getByRole('button', { name: 'Approve' }));
+    const card = await screen.findByRole('region', { name: 'The decision' });
+    const approve = within(card).getByRole('button', { name: 'Approve' });
+    await waitFor(() => expect(approve).toHaveProperty('disabled', false));
+    fireEvent.click(approve);
     await waitFor(() => {
       const held = queryClient.getQueryData<TaskData>(keys.tasks.detail('t1'));
       expect(held?.to_leave?.find((r) => r.requirement_id === 'r1')?.met).toBe(true);
@@ -175,7 +180,7 @@ describe('one open task', () => {
       const back = queryClient.getQueryData<TaskData>(keys.tasks.detail('t1'));
       expect(back?.to_leave?.find((r) => r.requirement_id === 'r1')?.met).toBe(false);
     });
-    expect(within(screen.getByRole('region', { name: 'Answer' })).getByRole('button', { name: 'Approve' })).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'The decision' })).getByRole('button', { name: 'Approve' })).toBeTruthy();
   });
 
   it('moves past what is missing only with a reason the person gives', async () => {

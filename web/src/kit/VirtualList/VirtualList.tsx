@@ -27,6 +27,8 @@ export type VirtualListProps<T> = {
   onReachStart?: () => void;
   /** The last row is drawn: load the next page. */
   onReachEnd?: () => void;
+  /** The scroll position changed, even if the same rows are still drawn. */
+  onScroll?: () => void;
   /** The scroll container's class from the page (`tl-list`, `tasks-body`); it owns overflow and padding. */
   className?: string;
   label?: string;
@@ -44,6 +46,7 @@ export function VirtualList<T>({
   anchor = 'start',
   onReachStart,
   onReachEnd,
+  onScroll,
   className,
   label,
   role = 'list',
@@ -102,7 +105,7 @@ export function VirtualList<T>({
 
   return (
     // A list read from the top keeps its place for Back (router.tsx); a timeline always opens at its end.
-    <div ref={scrollRef} className={className} role={role} aria-label={label} data-scroll-restoration-id={anchor === 'start' && label ? `vl:${label}` : undefined}>
+    <div ref={scrollRef} className={className} role={role} aria-label={label} onScroll={onScroll} data-scroll-restoration-id={anchor === 'start' && label ? `vl:${label}` : undefined}>
       <div className="vl-space" ref={v.containerRef}>
         {rows.map((r) => (
           <div key={r.key} className="vl-item" role={role === 'list' ? 'listitem' : undefined} data-index={r.index} ref={v.measureElement}>
