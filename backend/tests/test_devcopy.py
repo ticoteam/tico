@@ -381,3 +381,42 @@ def test_a_lease_less_run_is_kept_only_once_settled(tmp_path, booted):
     with closing(sqlite3.connect(dest)) as c:
         assert {row[0] for row in c.execute("SELECT id FROM attempts")} == {"done", "chat-done", "recorded"}
     assert removed["attempts"] == 3  # the running job, the old one and chat-open
+
+
+def test_a_settled_run_with_no_job_keeps_no_token(tmp_path, booted):
+    """A run with no job can hold a token: the copy revokes it too, so a real company's job-less runs do not stop the copy."""
+    source = source_db(tmp_path, booted)
+    now = H.now()
+    with closing(sqlite3.connect(source)) as c:
+        c.execute(
+            "INSERT INTO attempts(id,bot_id,token_hash,created_at,settled_at) VALUES('chat-token','sales','hash-chat',?,?)",
+            (now, now),
+        )
+        c.commit()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    devcopy.build(source, dest, days=30)
+    with closing(sqlite3.connect(dest)) as c:
+        assert c.execute(
+            "SELECT token_hash FROM attempts WHERE id IN ('chat-token','recorded') ORDER BY id"
+        ).fetchall() == [
+            ("devcopy-revoked:chat-token",),
+            (None,),
+        ]
+
+
+def test_litestreams_tables_are_classified_and_emptied(tmp_path, booted):
+    """A database restored from a Litestream replica carries Litestream's own tables: emptied, and not reported loose."""
+    source = source_db(tmp_path, booted)
+    with closing(sqlite3.connect(source)) as c:
+        c.execute("CREATE TABLE _litestream_seq (id INTEGER PRIMARY KEY, seq INTEGER)")
+        c.execute("CREATE TABLE _litestream_lock (id INTEGER)")
+        c.execute("INSERT INTO _litestream_seq VALUES(1, 42)")
+        c.execute("INSERT INTO _litestream_lock VALUES(1)")
+        c.commit()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    removed, loose = devcopy.build(source, dest, days=30)
+    assert loose == []
+    assert removed["_litestream_seq"] == 1 and removed["_litestream_lock"] == 1
+    with closing(sqlite3.connect(dest)) as c:
+        assert c.execute("SELECT count(*) FROM _litestream_seq").fetchone() == (0,)
+        assert c.execute("SELECT count(*) FROM _litestream_lock").fetchone() == (0,)
