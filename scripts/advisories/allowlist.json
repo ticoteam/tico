@@ -5,5 +5,12 @@
     "sources": ["app/Cargo.lock", "app/tests/glib-backport/Cargo.lock"],
     "reason": "Patched in-tree: both build glib 0.18.5 from app/vendor/glib with the upstream VariantStrIter fix (app/vendor/README.md); the version scanners read stays 0.18.5. app/tests/glib-backport is the regression test for that fix.",
     "expires": "2027-05-18"
+  },
+  {
+    "id": "GHSA-g3hv-75wg-m249",
+    "package": "minimatch",
+    "sources": ["desktop/package-lock.json"],
+    "reason": "Build tooling only: electron-builder's packaging steps pull minimatch 9 and 10 (npm ls --omit=dev shows none in the shipped app), and the glob patterns it matches are our own build config, not input from users. No patched release exists yet; bump when one does.",
+    "expires": "2027-02-19"
   }
 ]

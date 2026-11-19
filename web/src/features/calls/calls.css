@@ -1,0 +1,427 @@
+/* Calendar, meetings and calls, from pages/6-calendar/cal.css, pages/6-calendar/cal-merge.css and pages/11-calls/calls.css.
+   Class names are the mock's; spacing moved onto the scale, radii and layers onto their tokens, and the font shorthand
+   into longhands. Greys only: a voice is the Dot's call bars (dot.css owns .lvl), speaking is a still ring in ink. */
+
+/* ---------- small parts the mock shares between pages ---------- */
+.btn-sm{height:var(--ctl-sm);padding:0 var(--s-2h);font-size:var(--t-sm)}
+.btn-sm .ico{width:15px;height:15px}
+.btn-wide{width:100%;justify-content:center}
+.call-f2{display:grid;grid-template-columns:minmax(0,1fr) 124px;gap:var(--s-3)}
+.call-f2 .f{justify-items:stretch}
+.ev-form{display:grid;gap:var(--s-4)}
+.ev-form .f{justify-items:stretch}
+
+/* ---------- the picker: who to call or ask ---------- */
+.pop{--surface:var(--raised);padding:var(--s-3);border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-3)}
+.call-pick{width:304px;display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s-2h)}
+.call-to{align-self:stretch;justify-self:stretch;min-height:44px;display:flex;align-items:center;flex-wrap:wrap;gap:var(--s-1h);padding:var(--s-1h) var(--s-2);border-radius:var(--r-ctl);background:var(--surface);box-shadow:inset 0 0 0 1px var(--faint)}
+.call-to:focus-within{box-shadow:inset 0 0 0 1.5px var(--focus)}
+.call-to-chip{display:inline-flex;align-items:center;gap:var(--s-1h);height:28px;padding:0 var(--s-0) 0 var(--s-1h);border-radius:var(--r-chip);background:var(--well-2);white-space:nowrap;font-size:var(--t-sm)}
+.call-to-chip button{width:22px;height:22px;border:0;border-radius:var(--r-key);background:none;color:var(--muted);display:grid;place-items:center}
+.call-to-chip button .ico{width:12px;height:12px;stroke-width:2}
+.call-to-in{flex:1 1 auto;min-width:0;height:28px;border:0;padding:0;background:none;color:var(--ink);font-family:inherit;font-size:inherit;outline:0}
+.call-to-in::placeholder{color:var(--faint)}
+.pick{display:grid;grid-template-columns:minmax(0,1fr);gap:calc(var(--s-0) / 2);margin:0 calc(var(--s-1h) * -1);max-height:320px;overflow:auto;scrollbar-width:none}
+.pick-row{width:100%;min-height:var(--ctl);display:flex;align-items:center;padding:0 var(--s-2);border:0;border-radius:var(--r-row);gap:var(--s-2h);background:none;color:inherit;font-family:inherit;font-size:inherit;text-align:left;cursor:pointer}
+.pick-box{width:16px;height:16px;flex:none;display:grid;place-items:center;border-radius:var(--r-key);color:var(--on-fill);box-shadow:inset 0 0 0 1.5px var(--faint)}
+.pick-box .ico{width:12px;height:12px;stroke-width:3;opacity:0}
+.pick-row.is-on>.pick-box{background:var(--fill);box-shadow:none}
+.pick-row.is-on>.pick-box .ico{opacity:1}
+.pick-row:hover,.pick-row:focus-visible{background:var(--raised-hover)}
+.pick-name{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.pick-row small{font-size:var(--t-xs);color:var(--muted);font-variant-numeric:tabular-nums}
+.pick hr{border:0;border-top:1px solid var(--line);margin:calc(var(--s-1) + 1px) var(--s-1h)}
+.pick-ico{width:22px;height:22px;flex:none;border-radius:var(--r-chip);display:grid;place-items:center;background:var(--well-2);color:var(--ink-2)}
+.pick-ico .ico{width:14px;height:14px}
+.pop-go{width:100%}
+.ev-form .pick{max-height:200px}
+.pick-row.is-disabled{opacity:.42;pointer-events:none}
+
+/* ---------- a call from a thread: who to call (calls.css .call-pop), and the card the call posts ---------- */
+.call-pop{width:264px;display:grid;gap:var(--s-2h)}
+.call-pop .seg{display:flex}
+.call-pop .seg button{flex:1}
+.call-card{display:flex;align-items:center;flex-wrap:wrap;gap:var(--s-2h);padding:var(--s-1h) var(--s-2h);border-radius:var(--r-card);background:var(--well)}
+.call-card-ic{width:var(--ctl-sm);height:var(--ctl-sm);flex:none;display:grid;place-items:center;border-radius:50%;background:var(--well-2);color:var(--ink-2)}
+.call-card-ic .ico{width:14px;height:14px}
+.call-card-t{font-weight:var(--w-strong);color:inherit;text-decoration:none}
+a.call-card-t:hover{text-decoration:underline}
+.call-card-n{font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums}
+.call-card-go{margin-left:auto;display:flex;gap:var(--s-1h)}
+
+/* ---------- List's ⋯: Meeting sources, Connect Granola (MeetingMenu.tsx) ---------- */
+.call-src{list-style:none;margin:0;padding:0;display:grid;gap:var(--s-2h)}
+/* the head's ⋯ carries a dot while a meeting source needs a look (meetings-sources.ts meetSourcesDot) */
+.call-more{position:relative;display:inline-flex}
+.call-more.is-trouble::after{content:"";position:absolute;right:5px;top:5px;width:7px;height:7px;border-radius:50%;background:var(--ink);pointer-events:none}
+.call-src-row{display:flex;align-items:center;flex-wrap:wrap;gap:var(--s-1h) var(--s-2h)}
+.call-src-st,.call-src-facts{font-size:var(--t-sm);color:var(--muted)}
+.call-src-facts{display:flex;flex-wrap:wrap;gap:var(--s-2h);flex-basis:100%;order:3}
+.call-src-err{flex-basis:100%;order:4;margin:0;font-size:var(--t-sm);color:var(--ink)}
+.call-src-go{margin-left:auto;display:flex;align-items:center;gap:var(--s-1h)}
+.call-src-setup{flex-basis:100%;order:5;display:flex;flex-wrap:wrap;gap:var(--s-1h) var(--s-2h);font-family:var(--font-code);font-size:var(--t-xs);color:var(--muted);overflow-wrap:anywhere}
+.call-gr-steps{margin:0;padding-left:var(--s-4);display:grid;gap:var(--s-2h)}
+.call-gr-steps li>span:first-child{margin-right:var(--s-2h)}
+.call-gr-code{font-family:var(--font-code);font-weight:var(--w-strong);margin-right:var(--s-1h)}
+.call-gr-wait{margin:0;font-size:var(--t-sm);color:var(--muted)}
+
+/* ---------- the head: range and steps, Day | Week | Month | List, +, Start call ---------- */
+.cv-range{margin-left:var(--s-2h);position:relative;top:3px;font-family:var(--font-text);font-size:var(--t-md);font-weight:var(--w-strong);line-height:1;font-feature-settings:"ss09";color:var(--ink-2);white-space:nowrap}
+.cv-step{display:flex;margin-left:var(--s-1);position:relative;top:1px}
+.cv-step .ib{display:grid;place-items:center}
+.cal-seg{margin-right:var(--s-1)}
+.cal-page .page-head .btn-fill .ico{width:16px;height:16px;margin-left:calc(var(--s-0) * -1)}
+
+/* the mark of each kind, wherever a thing is one line: a meeting solid, a due date outlined, a routine a ring */
+.km{width:9px;height:9px;flex:none;display:inline-block;border-radius:var(--r-key)}
+.km-m{background:var(--ink-2)}
+.km-d{box-shadow:inset 0 0 0 1.5px var(--ink-2)}
+.km-r{border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--muted)}
+
+/* ---------- Week and Day: day heads, a row for what lasts the day, the hours ---------- */
+.cv{--gut:70px;--free:10px;flex:1;min-height:0;height:100%;display:flex;flex-direction:column;padding-right:var(--s-3)}
+.cv-heads,.cv-allday,.cv-grid{display:grid;grid-template-columns:var(--gut) repeat(var(--days),minmax(0,1fr))}
+.cv-heads{flex:none;height:44px}
+.cv-dh{display:flex;align-items:baseline;gap:var(--s-1h);padding:calc(var(--s-3h) + 1px) var(--s-2) 0;position:relative;font-size:var(--t-xs);color:var(--muted)}
+.cv-dh b{font-family:var(--font-display);font-size:var(--t-fig);font-weight:var(--w-text);line-height:1;font-feature-settings:"ss09";letter-spacing:var(--track-fig);font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.cv-dh.is-past b{color:var(--muted)}
+.cv-dh.is-today{color:var(--ink);font-weight:var(--w-strong)}
+.cv-dh.is-today b{font-weight:var(--w-title);color:var(--ink)}
+.cv-dh.is-today::before{content:"";position:absolute;left:1px;right:0;top:3px;height:2px;border-radius:var(--r-key);background:var(--ink)}
+.cv-allday{flex:none;min-height:24px}
+.cv.is-day .cv-allday{padding-top:var(--s-1)}
+.cv-ad{display:grid;gap:var(--s-0);align-content:start;min-width:0;padding:0 var(--s-0) var(--s-0) calc(var(--s-0) + 1px)}
+.cv.is-day .cv-ad{grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--s-0) var(--s-1)}
+.cv-scroll{flex:1;min-height:0;overflow:auto;scrollbar-width:none;padding-top:var(--s-2h);position:relative}
+/* a week with nothing in it says so once, in the middle of the grid */
+.cv-none{position:absolute;left:var(--gut);right:0;top:232px;text-align:center;font-family:var(--font-text);font-size:var(--t-md);font-weight:var(--w-strong);line-height:1.2;color:var(--ink);pointer-events:none}
+.cv-hours{position:relative}
+.cv-hours span,.cv-hours b{position:absolute;right:8px;transform:translateY(-50%);font-size:var(--t-xs);line-height:1;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.cv-hours b{color:var(--ink);font-weight:var(--w-strong)}
+.cv-col{position:relative;min-width:0;border-left:1px solid var(--line);background-image:linear-gradient(var(--line) 1px,transparent 1px);background-size:100% 56px}
+
+/* a thing at its hour */
+.ev{position:absolute;left:calc(var(--c) * (100% - var(--free)) / var(--n) + 2px);width:calc((100% - var(--free)) / var(--n) - 4px);z-index:var(--z-page);display:flex;flex-direction:column;overflow:hidden;
+  padding:calc(var(--s-0) + 1px) var(--s-1h);border-radius:var(--r-chip);font-size:var(--t-xs);line-height:15px;color:var(--ink);transition:background var(--dur-fast) var(--ease)}
+.ev-top{display:flex;align-items:flex-start;gap:calc(var(--s-1) + 1px);min-width:0}
+.ev-top b{flex:1;min-width:0;font-weight:var(--w-text);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:var(--l,2);overflow:hidden}
+.ev-top .km{margin-top:calc(var(--s-0) + 1px)}
+.ev time{font-size:var(--t-micro);line-height:14px;color:var(--muted)}
+.ev-m{--surface:var(--well-2);background:var(--well-2)}
+.ev-m b{font-weight:var(--w-strong)}
+.ev-m:hover{background:var(--selected)}
+.ev-d{background:var(--surface);box-shadow:inset 0 0 0 1px var(--line-strong)}
+.ev-r{background:var(--surface);border:1px dashed var(--line-strong);padding:var(--s-0) calc(var(--s-1) + 1px);color:var(--ink-2)}
+.ev-d:hover,.ev-r:hover{background:var(--hover)}
+.ev.is-short{flex-direction:row;align-items:center;gap:var(--s-1h);padding-top:0;padding-bottom:0}
+.ev.is-short .ev-top{flex:1;align-items:center}
+.ev.is-short .ev-top b{display:block;white-space:nowrap;text-overflow:ellipsis}
+.ev.is-short .km{margin-top:0}
+.ev.is-short time,.ev.no-time time{display:none}
+.ev.is-over{left:calc(var(--c) * 36% + 2px);width:calc(100% - var(--free) - var(--c) * 36% - 4px);box-shadow:0 0 0 1.5px var(--sheet)}
+.ev-d.is-over{box-shadow:inset 0 0 0 1px var(--line-strong),0 0 0 1.5px var(--sheet)}
+.ev.is-past{color:var(--muted)}
+.ev-m.is-past{background:var(--well)}
+.ev-more{align-items:flex-start;padding-top:calc(var(--s-1) + 1px);background:var(--surface);box-shadow:inset 0 0 0 1px var(--line);color:var(--muted)}
+.ev-more:hover{color:var(--ink)}
+.ev.is-on{box-shadow:inset 0 0 0 1.5px var(--ink)}
+.ev.is-over.is-on{box-shadow:inset 0 0 0 1.5px var(--ink),0 0 0 1.5px var(--sheet)}
+/* now: one ink line across today, and its time among the hours */
+.cv-now{position:absolute;left:-1px;right:0;height:0;border-top:1.5px solid var(--ink);pointer-events:none}
+.cv-now::before{content:"";position:absolute;z-index:var(--z-page);left:-4px;top:-4.75px;width:8px;height:8px;border-radius:50%;background:var(--ink)}
+
+/* Day: one wide column, so a thing reads on one line: what, when, who */
+.cv.is-day{--free:16px}
+.cv.is-day .ev{font-size:var(--t-sm);line-height:18px;padding:calc(var(--s-1) + 1px) var(--s-2h)}
+.cv.is-day .ev:not(.is-narrow){flex-direction:row;align-items:flex-start;gap:var(--s-3)}
+.cv.is-day .ev:not(.is-narrow) .ev-top{flex:0 1 auto;align-items:center}
+.cv.is-day .ev:not(.is-narrow) .ev-top b{display:block;white-space:nowrap;text-overflow:ellipsis}
+.cv.is-day .ev:not(.is-narrow) .km{margin-top:0}
+.cv.is-day .ev:not(.is-narrow) time{display:block;flex:none;font-size:var(--t-xs);line-height:18px}
+.cv.is-day .ev .faces{margin-left:auto;padding-top:calc(var(--s-0) / 2)}
+.cv.is-day .ev.is-short{align-items:center;padding-top:0;padding-bottom:0}
+.cv.is-day .ev.is-narrow{font-size:var(--t-xs);line-height:15px;padding:calc(var(--s-0) + 1px) var(--s-1h)}
+.cv.is-day .ev-r{padding-left:calc(var(--s-2) + 1px);padding-right:calc(var(--s-2) + 1px)}
+
+/* a meeting that is on, on its block: Join until you are in it */
+.ev .live-mark{margin-top:calc(var(--s-0) / 2);height:13px}
+.ev.is-due{--surface:var(--selected);background:var(--selected)}
+.ev-join,.cl-join{background:var(--sheet);color:var(--ink);box-shadow:inset 0 0 0 1px var(--line-strong);font-weight:var(--w-strong)}
+.ev-join:hover,.cl-join:hover{background:var(--hover)}
+.ev .ev-join{align-self:flex-start;height:22px;padding:0 calc(var(--s-2) + 1px);margin-top:auto;margin-bottom:var(--s-0);font-size:var(--t-xs);border-radius:var(--r-chip);box-shadow:inset 0 0 0 1px var(--line-strong)}
+.cv.is-day .ev:not(.is-narrow) .ev-join{align-self:center;margin:0 0 0 var(--s-3);height:24px}
+.cv.is-day .ev:not(.is-narrow) .live-mark{margin-top:0}
+.cv.is-day .ev.is-due:not(.is-narrow){align-items:center}
+.cv.is-day .ev.is-due .faces{padding-top:0}
+
+/* a thing on one line: in a month's cell, and in the row for what lasts the day */
+.mi{display:flex;align-items:center;gap:calc(var(--s-1) + 1px);height:20px;min-width:0;padding:0 var(--s-1h);border-radius:var(--r-chip);font-size:var(--t-xs);color:var(--ink);transition:background var(--dur-fast) var(--ease)}
+.mi>span:not(.live-mark){flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.mi>.live-mark{flex:none;height:11px;margin-right:calc(var(--s-0) / 2)}
+.mi-m{background:var(--well-2);font-weight:var(--w-strong)}
+.mi-d{box-shadow:inset 0 0 0 1px var(--line-strong)}
+.mi-r{border:1px dashed var(--line-strong);padding:0 calc(var(--s-1) + 1px);color:var(--ink-2)}
+.mi:hover{background:var(--hover)}
+.mi-m:hover{background:var(--selected)}
+.mi.is-past{color:var(--muted)}
+.mi-m.is-past{background:var(--well)}
+.mi-more{height:20px;line-height:20px;padding:0 var(--s-1h);font-size:var(--t-xs);color:var(--muted);white-space:nowrap}
+.mi-more:hover{color:var(--ink)}
+
+/* Month: a cell holds its date, up to three lines, then "4 more" */
+.cv-month{flex:1;min-height:0;height:100%;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));column-gap:var(--s-1h);padding:0 var(--s-3h) var(--s-3)}
+.mh{align-self:center;padding:0 var(--s-1h);font-size:var(--t-xs);color:var(--muted)}
+.mc{display:flex;flex-direction:column;gap:var(--s-0);min-width:0;padding:calc(var(--s-1) + 1px) 0 var(--s-1);border-top:1px solid var(--line);position:relative}
+.mc-n{align-self:flex-start;height:22px;line-height:22px;padding:0 var(--s-1h);border-radius:var(--r-chip);font-size:var(--t-sm);color:var(--ink-2);font-variant-numeric:tabular-nums}
+.mc-n:hover{background:var(--hover)}
+.mc.is-past .mc-n,.mc.is-out .mc-n{color:var(--muted)}
+.mc.is-today{border-top-color:transparent}
+.mc.is-today::before{content:"";position:absolute;left:0;right:0;top:-1px;height:2px;border-radius:var(--r-key);background:var(--ink)}
+.mc.is-today .mc-n{color:var(--ink);font-weight:var(--w-title)}
+
+/* ---------- List: what Meetings was ---------- */
+.cl-body{padding:var(--s-1h) var(--s-3) var(--s-8);font-feature-settings:"ss09"}
+.cl-body.is-empty{display:flex;flex-direction:column;height:100%}
+.cl-pin{padding:var(--s-0) 0 var(--s-2h)}
+.cl-sec{padding:var(--s-0) 0 var(--s-2h)}
+.cl-sec+.cl-sec{border-top:1px solid var(--line);padding-top:var(--s-2)}
+.cl-sec.is-folded{padding-bottom:var(--s-0)}
+.cl-sec-head{height:40px;display:flex;align-items:center;padding:0 var(--s-2)}
+.cl-day{height:32px;display:flex;align-items:center;gap:var(--s-2h);padding:0 var(--s-2);margin-top:var(--s-1h)}
+.cl-sec-head+div>.cl-day,.cl-sec>.cl-day:first-child{margin-top:0}
+.cl-day .stage-n{position:relative;top:1px}
+.cl-row{grid-template-columns:68px 16px minmax(0,1fr) auto 84px 52px 96px 44px;column-gap:var(--s-2h)}
+.cl-row.is-past .er-time{color:var(--muted)}
+.cl-row.is-unread .row-title{font-weight:var(--w-strong)}
+.cl-row .row-pills{padding:0}
+.cl-row .row-title:hover{color:var(--ink)}
+.er-time{font-size:var(--t-sm);color:var(--ink-2);font-variant-numeric:tabular-nums;white-space:nowrap}
+.er-who{display:flex;justify-content:flex-end}
+.cl-mark{display:grid;place-items:center}
+.cl-mark .ico{width:14px;height:14px;color:var(--muted)}
+.cl-kept{display:grid;grid-template-columns:18px 18px 32px;column-gap:var(--s-2);align-items:center;color:var(--muted)}
+.cl-kept>span{display:inline-flex;align-items:center;gap:calc(var(--s-0) + 1px);height:18px}
+.cl-kept .ico{width:15px;height:15px}
+.cl-kept i{font-style:normal;font-size:var(--t-xs);font-variant-numeric:tabular-nums}
+.cl-len{font-size:var(--t-xs)}
+.cl-act{display:flex;justify-content:flex-end;align-items:center}
+.cl-row.is-live{height:44px;--surface:var(--well-2);background:var(--well-2);grid-template-columns:68px 16px minmax(0,1fr) auto 84px 64px 96px 56px}
+.cl-row.is-live .row-title{font-weight:var(--w-strong)}
+.cl-row.is-live .cl-len{color:var(--ink);font-size:var(--t-sm)}
+.cl-row .cl-join{height:26px}
+
+/* ---------- an event's panel ---------- */
+.ev-now{display:grid;gap:var(--s-3)}
+.ev-live{display:flex;align-items:center;gap:var(--s-2h);height:20px}
+.ev-live b{font-weight:var(--w-strong)}
+.call-rail>span{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.call-rail em{flex:none;font-style:normal;font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums}
+.call-rail>.av,.call-rail>.face{flex:none}
+
+/* a meeting's summary, agenda and tasks */
+.mv-body{padding:calc(var(--s-4) + var(--s-0)) var(--pad-task) var(--s-10)}
+.mv-col{max-width:var(--measure);display:grid;justify-items:start;gap:var(--s-4)}
+.mv-sec{width:100%}
+.mv-sec+.mv-sec{margin-top:var(--s-2h)}
+.mv-sec-head{display:flex;align-items:center;height:28px;margin-bottom:var(--s-1)}
+.mv-list{padding-left:calc(var(--s-4) + var(--s-0));display:grid;gap:var(--s-1h);font-family:var(--font-text);font-size:var(--t-base);font-weight:var(--w-text);line-height:var(--lh-read);font-feature-settings:"ss09";color:var(--ink-2)}
+.mv-list li::marker{color:var(--faint)}
+.acts{list-style:none;padding:0;margin:0 calc(var(--s-2) * -1);display:grid;gap:calc(var(--s-0) / 2)}
+.act{display:grid;grid-template-columns:var(--av-sm) minmax(0,1fr) auto var(--ctl-sm);column-gap:var(--s-2h);align-items:center;min-height:40px;padding:calc(var(--s-1) + 1px) var(--s-1) calc(var(--s-1) + 1px) var(--s-2);border-radius:var(--r-row)}
+.act:hover{background:var(--hover)}
+.act-text{line-height:1.4;text-wrap:pretty}
+.act .btn-quiet{color:var(--muted)}
+.act .btn-quiet .ico{width:14px;height:14px}
+.mv-notes{display:grid;gap:var(--s-2);font-family:var(--font-text);font-size:var(--t-base);font-weight:var(--w-text);line-height:var(--lh-read);font-feature-settings:"ss09";color:var(--ink-2)}
+.mv-review{display:flex;justify-content:flex-end;gap:var(--s-2);margin-top:var(--s-2)}
+button.act-text{padding:0;border:0;background:none;color:inherit;font-family:inherit;font-size:inherit;line-height:inherit;text-align:left;cursor:text}
+.act-in{min-width:0;height:var(--ctl-sm);padding:0 var(--s-2);border:0;outline:0;border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);font-family:inherit;font-size:inherit;line-height:inherit;box-shadow:inset 0 0 0 1.5px var(--focus)}
+
+/* a meeting's recording */
+.call-rec{display:flex;align-items:center;gap:var(--s-3);height:48px;padding:0 var(--s-2);border-radius:var(--r-card);background:var(--well)}
+.call-rec-play{width:var(--ctl);height:var(--ctl);border:0;border-radius:50%;background:var(--raised);color:var(--ink);display:grid;place-items:center;flex:none;box-shadow:var(--lift-ctl)}
+.call-rec-play .ico{width:14px;height:14px}
+.call-rec-track{flex:1;height:4px;border-radius:var(--r-pill);background:var(--well-2);position:relative}
+.call-rec-track i{position:absolute;left:0;top:0;bottom:0;border-radius:var(--r-pill);background:var(--ink-2)}
+.call-rec time{font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* ---------- the call window: what it is, the stage, what is said, the controls ---------- */
+.pane.cw{--surface:var(--sheet);min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.cw-head{flex:none;display:flex;align-items:center;gap:var(--s-1h);padding:var(--s-3h) var(--s-2h) var(--s-1) calc(var(--s-4) + var(--s-0))}
+.cw-t{min-width:0;display:grid;gap:calc(var(--s-0) + 1px)}
+.cw-t h1{font-family:var(--font-text);font-size:var(--t-md);font-weight:var(--w-title);line-height:var(--lh-tight);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cw-live{display:flex;align-items:center;gap:calc(var(--s-1h) + 1px);font-size:var(--t-sm);color:var(--muted)}
+.cw-live i{width:7px;height:7px;border-radius:50%;background:var(--ink-2)}
+.cw-live time{font-variant-numeric:tabular-nums}
+
+/* a face in a call: speaking is a ring in ink that stands still */
+.face{position:relative;display:inline-grid;place-items:center;width:var(--f);height:var(--f);flex:none}
+.face>.av-x{width:var(--x);height:var(--x);font-size:var(--t-title)}
+.face.is-speaking>.av{box-shadow:0 0 0 2px var(--surface),0 0 0 3.5px var(--ink)}
+.face.is-speaking>.av-x{box-shadow:0 0 0 4px var(--surface),0 0 0 6.5px var(--ink)}
+.face-muted{position:absolute;right:-4px;bottom:-4px;width:14px;height:14px;border-radius:50%;display:grid;place-items:center;background:var(--surface);color:var(--ink-2);box-shadow:0 0 0 1px var(--line-strong)}
+.face-muted .ico{width:9px;height:9px;stroke-width:2.4}
+
+/* who is speaking and what they say, as it is said */
+.say{flex:none;min-height:62px;padding:var(--s-1h) calc(var(--s-4) + var(--s-0)) var(--s-3)}
+.say p{line-height:22px;color:var(--ink-2);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.say p b{margin-right:var(--s-2);font-weight:var(--w-strong);color:var(--ink)}
+
+/* Mute, the microphone, then Leave: the one filled button */
+.win-ctl{flex:none;display:flex;align-items:center;gap:var(--s-2);padding:var(--s-3);border-top:1px solid var(--line)}
+.cc{width:40px;height:40px;border:0;border-radius:var(--r-ctl);background:var(--well);color:var(--ink-2);display:grid;place-items:center;flex:none;box-shadow:inset 0 0 0 1px var(--line)}
+.cc:hover{background:var(--well-2);color:var(--ink)}
+.cc:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
+.cc .ico{width:18px;height:18px}
+.cc-l{display:none}
+.cc.is-talk{width:auto;display:inline-flex;align-items:center;gap:var(--s-2);padding:0 var(--s-3);color:var(--ink);background:var(--well-2)}
+.cc.is-talk .lvl{height:13px}
+.cc-leave{height:40px;padding:0 var(--s-5)}
+
+/* large: the faces or Tico are the stage; chat and transcript stand at the side */
+.is-full .cw-head{padding:var(--s-4) var(--s-3) var(--s-2) calc(var(--s-5) + var(--s-0))}
+.is-full .cw-t h1{font-family:var(--font-display);font-size:var(--t-title);font-weight:var(--w-title);line-height:var(--lh-title);letter-spacing:var(--track-title)}
+.win-stage{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:stretch;align-items:stretch;gap:var(--s-2h);padding:var(--s-1h) var(--s-3h) var(--s-1);overflow:auto}
+.is-full .say{min-height:70px;padding:var(--s-3) calc(var(--s-5) + var(--s-0))}
+.is-full .say p{font-size:var(--t-md);line-height:24px}
+.is-full .win-ctl{padding:var(--s-3) var(--s-3h)}
+.is-full .cc{width:auto;display:inline-flex;align-items:center;gap:var(--s-2);padding:0 var(--s-3h) 0 var(--s-3)}
+.is-full .cc-l{display:inline;font-size:var(--t-sm);font-weight:var(--w-strong);white-space:nowrap}
+.tiles{flex:1;min-height:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:var(--s-2h)}
+.tile{--surface:var(--well);position:relative;display:grid;place-items:center;min-width:0;min-height:0;border:0;border-radius:var(--r-card);background:var(--well)}
+.tile.is-speaking{box-shadow:inset 0 0 0 1.5px var(--ink)}
+.tile-foot{position:absolute;left:14px;right:14px;bottom:12px;display:flex;align-items:center;gap:var(--s-2);font-size:var(--t-sm);color:var(--ink-2)}
+.tile-name{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.tile.is-speaking .tile-name{color:var(--ink);font-weight:var(--w-strong)}
+.tile-foot .lvl{height:12px}
+.tile-off{width:14px;height:14px;color:var(--muted);flex:none}
+.tile-word{font-size:var(--t-xs);color:var(--muted)}
+/* Tico alone: the Dot is the stage */
+.win-stage.is-tico{align-items:center;justify-content:center}
+.tc-big{display:flex;flex-direction:column;align-items:center;gap:var(--s-5)}
+.tc-orb{position:relative;display:grid;place-items:center;width:136px;height:136px;border-radius:50%;flex:none}
+.tc-orb.is-big{width:268px;height:268px}
+.spk-lvl{display:flex;align-items:center;justify-content:center;height:22px}
+.spk-lvl .lvl{height:22px;gap:var(--s-1)}
+.spk-lvl .lvl i{width:3.5px}
+
+/* beside the call: Chat, Transcript, People */
+.win-side{--surface:var(--sheet-mid);min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--sheet-mid);overflow:hidden}
+.cw-tabs{flex:none;padding:var(--s-1h) var(--s-2h) 0;border-bottom:1px solid var(--line)}
+.win-side .chat-body{flex:1;min-height:0;overflow:auto;padding:var(--s-2) var(--s-4)}
+.cw-ts{display:flex;flex-direction:column}
+.cw-ts .ts:first-child{margin-top:auto}
+.ts .msg-meta time{font-size:var(--t-xs);color:var(--muted);font-variant-numeric:tabular-nums}
+.ts p{color:var(--ink-2)}
+
+/* ---------- the call bar: on every page while a call is on (calls.js callBar) ---------- */
+.cb{--surface:var(--raised);flex:none;height:44px;margin:var(--gap-pane) var(--gap-pane) 0;padding:0 var(--s-1h) 0 var(--s-3h);border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-2);
+  display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr) auto;align-items:center;column-gap:var(--s-5);position:relative;z-index:var(--z-stick)}
+.cb-what{display:flex;align-items:center;gap:var(--s-2h);min-width:0;height:32px;padding:0 var(--s-2) 0 var(--s-1h);margin-left:calc(var(--s-1h) * -1);border-radius:var(--r-ctl);color:inherit;text-decoration:none}
+.cb-what:hover{background:var(--hover)}
+.cb-what>.ico{width:16px;height:16px;color:var(--muted);flex:none}
+.cb-what b{font-weight:var(--w-strong);min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cb time{color:var(--muted);font-size:var(--t-sm);font-variant-numeric:tabular-nums}
+.cb-who{display:flex;align-items:center;gap:var(--s-3h);min-width:0}
+.cb-faces{display:flex;align-items:center;gap:var(--s-2);flex:none}
+.cb-say{display:inline-flex;align-items:center;gap:var(--s-2);flex:none;font-size:var(--t-sm);color:var(--ink-2)}
+.cb-say b{font-weight:var(--w-strong);color:var(--ink)}
+.cb-cap{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:var(--t-sm);color:var(--ink-2)}
+.cb-cap b{margin-right:var(--s-2);font-weight:var(--w-strong);color:var(--ink)}
+.cb-ctl{display:flex;align-items:center;gap:var(--s-0)}
+.cb-leave{margin-left:var(--s-2);background:var(--well-2)}
+.cb-leave .ico{color:var(--ink-2)}
+
+/* ---------- a call ringing (calls.js ring) ---------- */
+.ring{--surface:var(--raised);position:fixed;z-index:var(--z-toast);top:20px;right:20px;width:296px;padding:var(--s-3h);border-radius:var(--r-pane);background:var(--raised);box-shadow:var(--lift-3);display:grid;gap:var(--s-3h)}
+.ring-who{display:flex;align-items:center;gap:var(--s-3);padding:var(--s-0) var(--s-0) 0}
+.ring-t{display:grid;gap:calc(var(--s-0) / 2);min-width:0}
+.ring-t b{font-weight:var(--w-strong)}
+.ring-t span{font-size:var(--t-sm);color:var(--muted);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.ring-row{display:grid;grid-template-columns:1fr 1fr;gap:var(--s-2)}
+.ring-row .btn:not(.btn-fill){background:var(--btn-raised)}
+
+/* ---------- the call card's faces, and adding someone (calls.js pf, pfAdd, addTile) ---------- */
+.cw-faces{flex:none;display:flex;gap:var(--s-0);padding:var(--s-2h) var(--s-2h) var(--s-0);overflow:hidden}
+.pf{width:58px;display:flex;flex-direction:column;align-items:center;gap:calc(var(--s-1) + 1px);padding:var(--s-1) 0;border:0;border-radius:var(--r-ctl);background:none;color:inherit;font-family:inherit;font-size:inherit;line-height:inherit;flex:none}
+.pf-name{max-width:100%;min-height:30px;font-size:var(--t-xs);line-height:15px;color:var(--ink-2);text-align:center;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.pf-lvl{height:10px;display:flex;align-items:center}
+.pf-lvl .lvl{height:10px}
+.pf.is-speaking .pf-name{color:var(--ink);font-weight:var(--w-strong)}
+.pf .face.is-speaking>.av-x{box-shadow:0 0 0 2px var(--surface),0 0 0 3.5px var(--ink)}
+.pf .face-muted{width:16px;height:16px;right:-3px;bottom:-3px}
+.pf .face-muted .ico{width:10px;height:10px}
+.face-add{width:var(--f,36px);height:var(--f,36px);border-radius:50%;display:grid;place-items:center;color:var(--muted);border:1.5px dashed var(--line-strong)}
+.face-add .ico{width:16px;height:16px}
+.pf-add:hover .face-add,.tile-add:hover .face-add{color:var(--ink);border-color:var(--muted)}
+.tile-add{background:none;border:1.5px dashed var(--line-strong)}
+.cw-back{height:40px;background:none;color:var(--ink-2);box-shadow:inset 0 0 0 1px var(--line-strong)}
+.cw-back:hover{background:var(--hover);color:var(--ink)}
+.cw-back .ico{width:16px;height:16px}
+
+/* ---------- a phone ---------- */
+:where(html[data-layout="cards"]){
+  .cl-body{padding:var(--s-1h) var(--s-2) calc(var(--cards-h) + var(--s-5))}
+  /* the views, then the range, then the days as a strip with the chosen day under it (cal.css phone) */
+  .cv-views{display:flex}
+  .cv-views .seg{flex:1}
+  .cv-views .seg button{flex:1}
+  .cv-rangerow{display:flex;align-items:center;height:44px}
+  .cv-rangerow b{font-family:var(--font-text);font-size:var(--t-md);font-weight:var(--w-title);line-height:1;font-feature-settings:"ss09"}
+  .cv-strip{flex:none;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));padding:0 var(--s-2) var(--s-2);border-bottom:1px solid var(--line)}
+  .cv-sd{height:64px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s-1);margin:0 var(--s-0);padding-top:var(--s-1);position:relative;border-radius:var(--r-card);font-size:var(--t-xs);line-height:1;color:var(--muted)}
+  .cv-sd b{font-family:var(--font-display);font-size:var(--t-fig);font-weight:var(--w-text);line-height:1;font-feature-settings:"ss09";font-variant-numeric:tabular-nums;color:var(--ink-2)}
+  .cv-sd.is-on{background:var(--selected)}
+  .cv-sd.is-today{color:var(--ink);font-weight:var(--w-strong)}
+  .cv-sd.is-today b{color:var(--ink);font-weight:var(--w-title)}
+  .cv-sd.is-today::before{content:"";position:absolute;left:10px;right:10px;top:0;height:2px;border-radius:var(--r-key);background:var(--ink)}
+  .pips{display:flex;gap:var(--s-0);height:9px}
+  .cl-row,.cl-row.is-live{grid-template-columns:62px 16px minmax(0,1fr) auto;padding:0 var(--s-2)}
+  .cl-row .row-pills,.cl-kept,.cl-len,.er-who{display:none}
+  .cv{--gut:66px;padding-right:var(--s-2)}
+  .cv-scroll{padding-bottom:calc(var(--cards-h) + var(--s-5))}
+  .cv.is-day .cv-ad{grid-template-columns:repeat(2,minmax(0,1fr));padding-bottom:var(--s-1)}
+  .cv-allday .mi,.cv-allday .mi-more{height:28px;line-height:28px}
+
+  .cw-head,.is-full .cw-head{padding:var(--s-2h) var(--s-2) var(--s-0) var(--s-1h);gap:var(--s-0)}
+  .is-full .cw-t h1{font-family:var(--font-text);font-size:var(--t-md);line-height:var(--lh-tight);letter-spacing:0}
+  .tiles{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:none;grid-auto-rows:160px}
+  .tc-orb.is-big{width:200px;height:200px}
+  .say,.is-full .say{padding:var(--s-1h) var(--s-4) var(--s-3)}
+  .cw .cc{width:48px;height:48px;display:grid;padding:0}
+  .cw .cc .ico{width:20px;height:20px}
+  .cw .cc-l{display:none}
+  .cw .cc-leave{height:48px;padding:0 calc(var(--s-6) + var(--s-0))}
+  .cw .win-ctl{gap:var(--s-2h);padding:var(--s-3) var(--s-3h) calc(var(--s-4) + var(--s-0))}
+  .cw>.win-side{flex:1;min-height:240px}
+  .pc{--surface:var(--sheet);background:var(--sheet)}
+  .pc .cw-faces{padding:var(--s-2h) var(--s-2) var(--s-0);overflow-x:auto;scrollbar-width:none}
+  .cb{grid-template-columns:minmax(0,1fr) auto auto;column-gap:var(--s-1);height:52px;padding:0 var(--s-2) 0 var(--s-2h)}
+  .cb-t{display:grid;min-width:0}
+  .cb-t b{font-weight:var(--w-strong);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .cb-hang{color:var(--ink)}
+}
+
+/* ---------- the desktop app's small call window (platforms.md 4.6): one column, the controls always in reach ---------- */
+.cw.cw-small>.cw-faces,.cw.cw-small>.say{flex-shrink:1;min-height:0;overflow:hidden}
+.cw.cw-small>.win-side{flex:1;min-height:0}
+@media (max-height:420px){
+  .cw.cw-small>.win-side{display:none}
+}
+
+/* ---------- a meeting's transcript and chat (calls.js .ts-tools): search the words, step through the hits, copy ---------- */
+.ts-tools{display:flex;align-items:center;gap:var(--s-2);margin-bottom:var(--s-1)}
+.ts-tools .search{flex:1;min-width:0}
+.ts-hits{font-size:var(--t-xs);color:var(--muted);font-variant-numeric:tabular-nums}
+.ts mark{background:var(--well-2);color:var(--ink);border-radius:var(--r-key)}
+.ts mark.is-on{background:var(--ink);color:var(--surface)}
+
+/* ---------------------------------------------------------------- a screen or a file on the stage (calls.css .shared) */
+.tile-strip{flex:none;display:flex;justify-content:center;gap:var(--s-2)}
+.tile.is-sm{width:var(--s-18);height:60px;border-radius:var(--r-ctl)}
+.shared{flex:1;min-height:0;display:flex;flex-direction:column;gap:var(--s-2);margin:0}
+.shared figcaption{display:flex;align-items:center;gap:var(--s-2);height:var(--s-6);padding:0 var(--s-1);font-size:var(--t-sm);color:var(--muted)}
+.shared figcaption b{color:var(--ink);font-weight:var(--w-strong)}
+.shot{flex:1;min-height:0;display:flex;flex-direction:column;border-radius:var(--r-card);background:var(--well);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}
+.shot>video{flex:1;min-height:0;width:100%;object-fit:contain}
+.shot>.lib{flex:1;min-height:0;overflow:auto}

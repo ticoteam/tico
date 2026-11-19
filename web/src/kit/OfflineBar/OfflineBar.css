@@ -1,0 +1,6 @@
+/* The note at the foot of the menu while the app is offline (pages/15-start/start.css .nav-note). */
+.nav-note{flex:none;display:flex;align-items:flex-start;gap:var(--s-2h);margin:0 var(--s-2) var(--s-2);padding:calc(var(--s-2) + 1px) var(--s-2h);border-radius:var(--r-ctl);
+  background:var(--well);color:var(--ink);font-size:var(--t-sm);line-height:1.4}
+.nav-note>.ico{margin-top:calc(var(--s-0) / 2);stroke-width:2}
+.nav-note b{display:block;font-weight:var(--w-strong)}
+.nav-note span{color:var(--ink-2)}

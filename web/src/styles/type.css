@@ -1,0 +1,22 @@
+/* The only file allowed to use the font shorthand (design-fidelity.md R13). The shorthand resets
+   font-feature-settings, so every step sets the open zero again. Elsewhere use longhands, which keep it. */
+.t-title{font:var(--type-title);font-feature-settings:var(--feat-text);letter-spacing:var(--track-title)}
+.t-ask{font:var(--type-ask);font-feature-settings:var(--feat-text);letter-spacing:var(--track-title)}
+.t-hall{font:var(--type-hall);font-feature-settings:var(--feat-text);letter-spacing:var(--track-title)}
+.t-figure-lg{font:var(--type-figure-lg);font-feature-settings:var(--feat-text);letter-spacing:var(--track-fig);font-variant-numeric:tabular-nums}
+.t-figure{font:var(--type-figure);font-feature-settings:var(--feat-text);letter-spacing:var(--track-fig);font-variant-numeric:tabular-nums}
+.t-head{font:var(--type-head);font-feature-settings:var(--feat-text)}
+.t-lead{font:var(--type-lead);font-feature-settings:var(--feat-text)}
+.t-label{font:var(--type-label);font-feature-settings:var(--feat-text)}
+.t-label-2{font:var(--type-label-2);font-feature-settings:var(--feat-text)}
+.t-strong{font:var(--type-strong);font-feature-settings:var(--feat-text)}
+.t-body{font:var(--type-body);font-feature-settings:var(--feat-text)}
+.t-read{font:var(--type-read);font-feature-settings:var(--feat-text)}
+.t-small{font:var(--type-small);font-feature-settings:var(--feat-text)}
+.t-meta{font:var(--type-meta);font-feature-settings:var(--feat-text)}
+.t-micro{font:var(--type-micro);font-feature-settings:var(--feat-text)}
+.t-code{font:var(--type-code);font-feature-settings:normal}
+
+/* SVG text does not take the page's face or features on its own (aaa-audit-b, Top 1): charts and counts get them here.
+   Longhands only, so a <text> keeps its own font-size. */
+svg text{font-family:inherit;font-weight:inherit;font-feature-settings:var(--feat-text);font-variant-numeric:tabular-nums}

@@ -1,0 +1,39 @@
+import { type CSSProperties, useSyncExternalStore } from 'react';
+import { popLayer, popMotion } from './Popover';
+
+const root = () => document.documentElement;
+const read = () => root().dataset.layout === 'cards';
+function subscribe(changed: () => void) {
+  const watch = new MutationObserver(changed);
+  watch.observe(root(), { attributes: true, attributeFilter: ['data-layout'] });
+  return () => watch.disconnect();
+}
+
+/** True on the phone's cards (`html[data-layout="cards"]`, which the shell sets): a menu is then a sheet. */
+export function useCards() {
+  return useSyncExternalStore(subscribe, read, () => false);
+}
+
+/* Base UI writes the anchored position inline; on the cards a menu's positioner is pinned to the bottom edge instead. */
+const PINNED: CSSProperties = { position: 'fixed', top: 'auto', right: 0, bottom: 0, left: 0, transform: 'none' };
+
+export type Placement = {
+  /** On the cards: a sheet from the bottom edge over a scrim. */
+  sheet: boolean;
+  /** The positioner's class. */
+  layer: string;
+  /** The positioner's style: the pin on the cards, nothing otherwise. */
+  style: CSSProperties | undefined;
+  /** The popup's added classes: `is-sheet` and its rise, or the anchored pop. */
+  look: string;
+};
+
+/** Where a menu or a select's list opens: beside its button, or on a phone as a sheet rising from the bottom. */
+export function usePlacement(): Placement {
+  return useCards()
+    ? { sheet: true, layer: `${popLayer} kit-sheet`, style: PINNED, look: 'is-sheet kit-rise' }
+    : { sheet: false, layer: popLayer, style: undefined, look: popMotion };
+}
+
+/** The scrim behind a sheet; a tap on it is a tap outside, so it closes the sheet. */
+export const sheetScrim = 'scrim kit-dim';

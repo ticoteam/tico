@@ -1,0 +1,38 @@
+/* The few tokens the app adds to the mocks' tokens.css (design-fidelity.md 1.2, 8, 9). Loaded after it. Nothing here
+   renames or revalues a mock token. */
+:root{
+  --t-nav-name:15px;                        /* the company and pipeline names at the top of the menu, as in every picture */
+  --page-x:32px;                            /* one page margin, left and right; marks hang into it (aaa-audit-a, Top 1) */
+  --paper:#FFFFFF;                          /* an agent's page that keeps its own look */
+  --lift-tip:0 4px 12px -4px rgba(0,0,0,.35);   /* a tip, as the mock drew it */
+  --dot-shade-sm:rgba(0,0,0,.12);           /* the small Dot's inner shade, as the mock drew it */
+  --dot-drop:0 2px 8px rgba(0,0,0,.35);     /* a droplet in flight, as the mock drew it */
+  --faint-lit:color-mix(in srgb,var(--faint) 82%,#fff);    /* the gray Dot's light side ("cannot") */
+  --faint-shade:color-mix(in srgb,var(--faint) 86%,#000);  /* the gray Dot's shaded side */
+}
+/* The phone's cards. One switch decides the phone: html[data-layout="cards"], which the shell sets from the window's
+   width with layout.md 8's hysteresis. No width query, so a 780px window that is still cards stays phone-sized. */
+:root[data-layout="cards"]{--page-x:16px}
+
+/* A sheet over the cards (a menu, a select's list, a dialog): its gap to the bottom edge clears the home indicator,
+   and it rises on the phone cards' spring (motion.md F1, section 6; shell/phone/phone.css uses the same numbers). */
+:root{
+  --sheet-gap:max(10px,env(safe-area-inset-bottom,0px));
+  --card-dur:560ms;--card-ease:cubic-bezier(.3,1.2,.4,1);
+}
+@supports (transition-timing-function:linear(0,1)){
+  :root{--card-ease:linear(0,0.0175,0.0634,0.1291,0.2072,0.2922,0.3793,0.4652,0.5473,0.6238,0.6935,0.7559,0.8107,0.858,0.8981,0.9315,0.9587,0.9805,0.9974,1.0101,1.0193,1.0255,1.0293,1.0312,1.0315,1.0307,1.0291,1.0269,1.0244,1.0217,1.0189,1.0162,1.0137,1.0113,1.0092,1.0073,1.0056,1.0042,1.0029,1.0019,1.0011,1.0005,1,0.9996,1)}
+}
+:root[data-motion="off"]{--card-dur:1ms}
+
+/* The phone's cards (B/phone/phone.css): their tones, the shadow cast up from a card, and how far the page behind dims. */
+:root,[data-theme="light"]{
+  --phone-tico:#FFFFFF;--phone-menu:#F6F6F6;--phone-chat:#EFEFEF;
+  --phone-up:rgba(0,0,0,.16);--phone-dim:.21;
+}
+[data-theme="dark"]{
+  --phone-tico:var(--raised);
+  --phone-menu:color-mix(in srgb,var(--raised) 58%,var(--sheet));
+  --phone-chat:color-mix(in srgb,var(--raised) 26%,var(--sheet));
+  --phone-up:rgba(0,0,0,.6);--phone-dim:.64;
+}

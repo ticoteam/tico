@@ -1,0 +1,54 @@
+/* The dev gallery of the Dot's states. Sizes are the mock's stage, so a frame compares with tico/dot.html. */
+.dg{max-width:1160px;margin:0 auto;padding:24px 16px 96px;color:var(--ink);background:var(--ground)}
+.dg-top{display:flex;align-items:center;gap:16px;margin-bottom:16px}
+.dg-top h1{font-size:var(--t-title);font-weight:var(--w-title)}
+.dg-pick{margin-left:auto;display:inline-flex;padding:2px;border-radius:9px;background:var(--sheet-low);box-shadow:inset 0 0 0 1px var(--line)}
+.dg-pick button{height:26px;padding:0 11px;border:0;border-radius:7px;background:none;color:var(--muted);font:inherit;cursor:pointer}
+.dg-pick button[aria-pressed="true"]{background:var(--selected);color:var(--ink);font-weight:var(--w-strong)}
+.dg-grid{display:grid;gap:12px}
+.dg-st{display:grid;grid-template-columns:200px minmax(0,1fr);gap:24px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
+.dg-st h3{font-size:var(--t-md);font-weight:var(--w-strong)}
+.dg-box{position:relative;height:252px;padding:6px;border-radius:12px;background:var(--ground);box-shadow:inset 0 0 0 1px var(--line);display:flex;gap:6px;overflow:hidden;font-size:13px;line-height:18px}
+.dg-box>*{position:relative;border-radius:10px;min-width:0;overflow:hidden}
+.dg-zoom{width:124px;flex:none;background:var(--sheet-mid);box-shadow:var(--lift-1);display:grid;place-items:center;align-content:center;gap:16px}
+.dg-zoom small,.dg-call small{font-size:12px;line-height:15px;color:var(--muted);text-align:center;padding:0 8px}
+
+/* an acting state: Tico's head, a bit of the menu and a page */
+.dg-stage{flex:1;display:grid;grid-template-columns:216px auto minmax(0,1fr);gap:6px;overflow:visible;border-radius:0}
+.dg-stage:not(:has(>.dg-nav)){grid-template-columns:216px minmax(0,1fr)}
+.dg-stage>*{position:relative;border-radius:10px;min-width:0;overflow:hidden}
+.dg-head{background:var(--sheet-mid);box-shadow:var(--lift-1);padding:12px 10px 0 14px;display:grid;grid-template-columns:30px 1fr;align-content:start;align-items:center;gap:9px}
+.dg-head b{font-size:14px;font-weight:var(--w-strong)}
+.dg-line{grid-column:1/-1;color:var(--muted);opacity:0}
+.dg-line.in{opacity:1;transition:opacity .2s var(--ease)}
+.dg-nav{width:148px;background:var(--sheet-low);box-shadow:var(--lift-0);padding-top:8px}
+.dg-face,.dg-team{position:relative;display:flex;align-items:center;gap:7px;height:26px;margin:0 6px;padding:0 6px;border-radius:6px;color:var(--ink-2);white-space:nowrap}
+.dg-team>span{position:relative}
+.dg-team .stack{margin-left:auto;display:inline-flex}
+.dg .fa{position:relative;width:18px;height:18px;border-radius:30%;background:var(--well-2);color:var(--ink-2);font-size:8.5px;line-height:1;font-weight:var(--w-title);display:inline-grid;place-items:center;flex:none}
+.dg .fa::after{content:"";position:absolute;inset:-3px;border-radius:inherit;box-shadow:0 0 0 1.5px var(--ink-2);opacity:0;transition:opacity .2s var(--ease)}
+.dg .fa.live::after{opacity:1}
+.dg .fa.sm{width:14px;height:14px;font-size:0;margin-left:-3px;box-shadow:0 0 0 1.5px var(--sheet-low)}
+.dg-page{background:var(--sheet);box-shadow:var(--lift-2)}
+.dg-pg{position:absolute;inset:0;padding:14px 16px 0;opacity:0;transform:translateY(6px);pointer-events:none}
+.dg-pg.on{opacity:1;transform:none;transition:opacity .22s var(--ease),transform .32s var(--ease)}
+.dg-pg h4{position:relative;font-size:19px;line-height:24px;font-weight:var(--w-title);margin-bottom:10px;display:flex;align-items:baseline;gap:8px}
+.dg-pg h4 small{font-size:13px;font-weight:var(--w-text);color:var(--muted)}
+.dg-row{position:relative;display:flex;align-items:center;gap:8px;height:28px;margin:0 -8px;padding:0 8px;border-radius:6px}
+.dg-row>span{position:relative}
+.dg-row>span:first-of-type{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.dg-val{position:relative;display:inline-grid;justify-items:end;font-variant-numeric:tabular-nums;flex:none}
+.dg-val i{position:relative;grid-area:1/1;font-style:normal;transition:opacity .16s var(--ease)}
+.dg-val .v1{opacity:0}
+.dg-row.ch .v0{opacity:0}
+.dg-row.ch .v1{opacity:1}
+.dg-scroll{height:112px;overflow-y:auto;margin:0 -8px;padding:0 8px}
+[data-motion="off"] .dg-pg{transform:none}
+
+/* a call: the Dot, the bars under it, and the microphone's bars */
+.dg-calls{flex:1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;overflow:visible;border-radius:0}
+.dg-call{position:relative;background:var(--sheet-mid);box-shadow:var(--lift-1);border-radius:10px;display:grid;grid-template-rows:96px 26px 1fr 32px;justify-items:center;padding-top:24px}
+.dg-under,.dg-mic{display:grid;place-items:center;height:14px}
+.dg-mic .lvl{opacity:0}
+.dg-mic .lvl.in{opacity:1}
+

@@ -1,0 +1,2 @@
+/* A bar's width as a custom property: the mock set it inline, the app may only set custom properties (R14). */
+.sk[style*="--w"]{width:var(--w)}

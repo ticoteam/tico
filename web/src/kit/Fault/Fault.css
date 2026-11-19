@@ -1,0 +1,5 @@
+/* Copied from pages/14-acts/acts.css: parts.css has no fault mark. */
+.fmark{width:var(--f,14px);height:var(--f,14px);display:inline-block;flex:none;vertical-align:-2px}
+.fmark svg{display:block;width:100%;height:100%;overflow:visible}
+.fmark .fm-a{fill:var(--ink)}
+.fmark .fm-b{fill:none;stroke:var(--surface,var(--sheet));stroke-width:2.4;stroke-linecap:round}

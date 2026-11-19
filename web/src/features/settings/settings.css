@@ -1,0 +1,269 @@
+/* Settings and Usage: the page CSS from pages/8-settings/settings.css and more.css, class names unchanged, sizes on the
+   token scale. The split, the section list and .facts come from pagekinds.css and kit/LabelValue. Greys only. */
+
+/* a section's name on the rows' edge (settings.css .sec-head, padding 0 8px): parts.css .stage-head keeps 32px for the
+   task lists' hanging marks, which settings rows do not have */
+.set-body .stage-head{padding-left:var(--s-2)}
+
+/* the thin line between groups of sections */
+.set-gap{height:1px;margin:calc(var(--s-2) - 1px) var(--s-2);background:var(--line)}
+
+/* a switch on a facts line: the label left, the switch at the line's right edge */
+.facts .fact.set-sw{grid-template-columns:minmax(0,1fr)}
+.set-sw .opt{min-height:30px;color:var(--muted)}
+
+/* a mark and a word. Something is wrong, said in ink and weight: no red, no amber. Fine is the same shape, quiet. */
+.word{display:inline-flex;align-items:center;gap:var(--s-1h);font-size:var(--t-sm);font-weight:var(--w-strong);color:var(--ink);white-space:nowrap}
+.word .ico{width:14px;height:14px;stroke-width:2;flex:none}
+.word.is-fine{font-weight:var(--w-text);color:var(--muted)}
+.word.is-fine .ico{stroke-width:1.8}
+
+/* a quiet verb: an action that is not a button until you point at it */
+.verb{height:var(--ctl-sm);padding:0 var(--s-2);margin:0 calc(var(--s-2) * -1);flex:none;border:0;border-radius:var(--r-chip);background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:var(--w-strong);white-space:nowrap;cursor:pointer;transition:background var(--dur-fast) var(--ease)}
+.verb:hover{background:var(--well-2)}
+.verb.is-quiet{font-weight:var(--w-text);color:var(--ink-2)}
+.fact-v .verb{margin-left:var(--s-1h)}
+.fact-v .word{margin-right:var(--s-1)}
+.fact-dim{color:var(--muted);white-space:nowrap}
+
+/* dense rows: one line each, cells on the section's grid (--g) */
+.pk-settings .row[class*="g-"],.pk-dashboard .row[class*="g-"]{column-gap:var(--s-3);grid-template-columns:var(--g)}
+.row-sub{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted);font-size:var(--t-sm)}
+.row-cell{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--ink-2);font-size:var(--t-sm)}
+.row-fig{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:var(--t-sm);color:var(--ink-2)}
+.row-fig.is-strong{color:var(--ink);font-weight:var(--w-strong)}
+.row-state{display:flex;align-items:center}
+.row.is-off .row-title{color:var(--muted)}
+.row.is-bad .row-title{font-weight:var(--w-strong)}
+.row.is-total{margin-top:var(--s-1);border-top:1px solid var(--line);border-radius:0;font-weight:var(--w-strong)}
+.row.is-total:hover{background:none}
+.row-title .pill{margin-left:var(--s-2)}
+button.row{width:100%;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+button.row:hover{background:var(--hover)}
+div.row{cursor:default}
+.l-of{color:var(--muted)}
+.hl-act{display:flex;justify-content:flex-end}
+
+/* a table's head: one quiet line of column words on the rows' own grid */
+.tbl-head{height:var(--ctl);display:grid;grid-template-columns:var(--g);column-gap:var(--s-3);align-items:center;padding:0 var(--s-2);box-shadow:inset 0 -1px 0 var(--line);font-size:var(--t-xs);color:var(--muted);white-space:nowrap}
+.tbl-head .is-num{text-align:right}
+
+.g-person{--g:var(--av-sm) minmax(0,1fr) minmax(0,1.1fr) 62px 86px}
+.g-tok{--g:minmax(0,1fr) 96px 120px 68px}
+.g-chg{--g:var(--av-sm) minmax(0,1fr) 160px}
+.g-hl{--g:120px minmax(0,1fr) auto 92px}
+.g-door{--g:minmax(0,1fr) 120px}
+.g-cred{--g:minmax(0,1fr) 96px 96px 96px}
+.g-bots{--g:16px var(--av-sm) minmax(96px,1fr) 176px 124px 44px 140px 48px}
+.g-ret{--g:minmax(0,1fr) auto}
+.g-host{--g:minmax(0,1fr) 118px 72px}
+.g-fsub{--g:minmax(0,1fr) 128px 74px 172px 28px}
+.g-use{--g:var(--av-sm) minmax(0,1fr) 112px 44px 44px 76px 52px}
+.g-mod{--g:minmax(0,1fr) 136px 44px 44px 76px 52px}
+.g-lim{--g:var(--av-sm) minmax(0,1fr) 150px 60px 60px 48px}
+.g-lim .row-title{padding-inline-start:calc(var(--depth, 0) * var(--s-3h))}
+.g-utask{--g:minmax(0,1fr) 40px 56px 44px 56px 44px}
+.g-road{--g:minmax(0,1fr) minmax(0,1.6fr) 28px}
+.g-ctype{--g:minmax(0,1fr) 96px}
+.g-cfield{--g:minmax(0,1fr) 120px 150px}
+.g-line{--g:minmax(0,1fr) var(--ctl-sm)}
+.row.g-ctype[aria-current="true"]{background:var(--selected)}
+.g-cfield .row-cell .icon{margin-left:var(--s-1)}
+
+/* an opened row: it stays where it is, on a grey wash; its lines, then its verbs */
+.open{--surface:var(--selected);margin:var(--s-0) 0 var(--s-2);padding-bottom:var(--s-1);border-radius:var(--r-row);background:var(--selected)}
+.open>.row:hover{background:none}
+.open>.row .row-title{font-weight:var(--w-strong)}
+.open-group{margin-top:var(--s-1);padding-top:var(--s-0);box-shadow:inset 0 1px 0 var(--line)}
+.open-foot{display:flex;gap:calc(var(--s-6) + var(--s-0));margin-top:var(--s-1h);padding:var(--s-1h) var(--s-2) var(--s-0);box-shadow:inset 0 1px 0 var(--line)}
+.open-foot .verb,.foot .verb{font-weight:var(--w-text);color:var(--ink-2)}
+.open-foot .verb:hover,.foot .verb:hover{color:var(--ink)}
+/* the foot of a section: what cannot be taken back is a quiet verb here, never red */
+.foot{display:flex;flex-wrap:wrap;gap:calc(var(--s-6) + var(--s-0));padding:var(--s-2h) var(--s-2) 0}
+.open .field{max-width:320px}
+.set-add{display:grid;gap:var(--s-3)}
+.set-dir{max-width:320px;padding:var(--s-1h) var(--s-2)}
+
+/* a thin bar */
+.meter{display:block;height:4px;border-radius:var(--r-chip);background:var(--line-strong);position:relative;overflow:hidden}
+.meter i{display:block;height:100%;background:var(--ink-2)}
+.meter.is-over i{background:var(--ink)}
+
+/* Agents: what pays for them. Name and account, where it is signed in, the agents on it, how much is used */
+.fs-name{display:flex;align-items:baseline;gap:var(--s-2h);min-width:0}
+.fs-name>span{flex:none}
+.fs-name>em{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-style:normal;font-weight:var(--w-text);font-size:var(--t-sm);color:var(--muted)}
+.fs-on{display:inline-flex;align-items:center;gap:var(--s-1h);min-width:0;font-size:var(--t-sm);color:var(--ink-2);white-space:nowrap}
+.fs-on.is-none{color:var(--muted)}
+.fs-n{font-size:var(--t-sm);color:var(--ink-2);white-space:nowrap}
+.fs-use{display:inline-flex;align-items:center;gap:var(--s-2);min-width:0;font-size:var(--t-sm);color:var(--ink-2);white-space:nowrap;font-variant-numeric:tabular-nums}
+.fs-use .meter{width:44px;flex:none}
+.fs-use.is-none{color:var(--muted)}
+.fs-use.is-out{color:var(--ink);font-weight:var(--w-strong)}
+.g-fsub .ib{justify-self:end}
+.fs-code{display:block;font-family:var(--font-code);font-size:var(--t-sm);line-height:var(--lh-code);color:var(--ink);overflow-wrap:anywhere;user-select:all}
+/* Add computer: a command, its note above, its copy button at the right */
+.set-cmd{display:grid;gap:var(--s-1)}
+.set-cmd-note{font-size:var(--t-sm);color:var(--ink-2)}
+.set-cmd-row{display:flex;align-items:flex-start;gap:var(--s-2)}
+.set-cmd-row .fs-code{flex:1;min-width:0}
+.set-more{display:grid;gap:var(--s-3)}
+.set-more summary{cursor:pointer;font-size:var(--t-sm);color:var(--ink-2)}
+
+/* Usage (more.css): the range, the sum of an opened row, its token bar and key */
+.chart-sec{padding:var(--s-0) var(--s-2) var(--s-2h)}
+.u-tools{flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-2);padding:var(--s-1) 0 var(--s-2)}
+/* History: one list that scrolls inside the section, its page read as it nears the end */
+.u-since{margin-left:auto;font-size:var(--t-sm);color:var(--muted)}
+.set-body:has(>.set-vl){display:flex;flex-direction:column;overflow:hidden}
+.set-vl{flex:1;min-height:0;overflow:auto;scrollbar-width:thin}
+.set-vl .row-title b{font-weight:var(--w-strong)}
+.u-sum{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--s-1) var(--s-4);padding:var(--s-0) var(--s-2) var(--s-2);font-size:var(--t-sm);color:var(--ink-2);font-variant-numeric:tabular-nums}
+.u-sum b{color:var(--ink);font-weight:var(--w-strong)}
+.tokbar{display:flex;gap:var(--s-0);height:var(--s-2);margin:var(--s-0) var(--s-2) var(--s-2h)}
+.tokbar i{display:block;height:100%;min-width:var(--s-0);border-radius:var(--r-chip)}
+.tok-key{display:flex;flex-wrap:wrap;gap:var(--s-1) var(--s-5);padding:0 var(--s-2) var(--s-2);font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums}
+.tok-key span{display:inline-flex;align-items:center;gap:var(--s-1h);white-space:nowrap}
+.tok-key i{width:8px;height:8px;border-radius:var(--r-chip);flex:none}
+.tok-key b{color:var(--ink);font-weight:var(--w-strong)}
+.tok-0{background:var(--faint)}
+.tok-1{background:var(--muted)}
+.tok-2{background:var(--ink-2)}
+.tok-3{background:var(--ink)}
+.u-cols{height:26px;font-size:var(--t-xs);color:var(--muted)}
+.u-cols:hover{background:none}
+.u-cols span:not(:first-child){text-align:right}
+
+/* Changelog: a section a version, a line a change */
+.cl-list{list-style:none;margin:0;padding:0 var(--s-2) var(--s-1h);display:grid;gap:var(--s-1h)}
+.cl-list li{display:grid;grid-template-columns:var(--s-12) minmax(0,1fr);align-items:baseline;line-height:1.4;color:var(--ink-2)}
+.cl-kind{font-size:var(--t-xs);color:var(--muted)}
+
+/* ---- agents, computers and models (anchor) ---- */
+
+/* Agents: search the list, and once agents are checked, what to do with them (settings.css list-tools) */
+.list-tools{display:flex;align-items:center;gap:var(--s-3);padding:var(--s-1h) var(--s-2) var(--s-2)}
+.list-tools .search{flex:1;width:auto;max-width:300px}
+.tools-n{margin-left:auto;font-size:var(--t-sm);color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.bulk{margin-left:auto;display:flex;align-items:center;gap:var(--s-3);white-space:nowrap}
+.bulk b{font-weight:var(--w-strong);font-size:var(--t-sm);font-variant-numeric:tabular-nums}
+.bulk .verb{margin:0 calc(var(--s-2) * -1) 0 0;font-weight:var(--w-text);color:var(--ink-2)}
+.row .check{min-height:0;gap:0}
+/* a row's box is named for the screen reader only */
+.set-hide{position:absolute;clip-path:inset(50%);overflow:hidden;white-space:nowrap}
+.g-ret .verb,.g-host .verb{justify-self:end;margin:0}
+/* a dialog's list of people to check, and a stopped run's words and verbs */
+.set-picks,.set-level,.set-stop{display:grid;gap:var(--s-1)}
+.set-stop .open-foot{margin-top:0;padding:var(--s-1) 0 0;box-shadow:none}
+
+/* Agents as one screen (a trial, Nov 19). */
+.row-own{display:grid}
+/* over the table: search (or what to do with the checked rows) at the left, how it is grouped at the right. Narrow, the
+   grouping wraps under them, still at the right, instead of running past the page's edge (it does not shrink). */
+.fl-tools{flex-wrap:wrap;row-gap:var(--s-2)}
+.fl-tools .bulk{margin-left:0}
+.fl-tools .tools-n{margin-left:0}
+.fl-tools .search{flex:0 1 300px;max-width:none}
+.fl-by{margin-left:auto;display:flex;align-items:center;gap:var(--s-2);flex:none;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
+.g-fleet .row-cell{color:var(--ink-2)}
+/* a limit you change where it stands: a figure that is a button */
+.fl-lim{justify-self:end;height:var(--ctl-sm);margin:0 calc(var(--s-1h) * -1);padding:0 var(--s-1h);border:0;border-radius:var(--r-chip);background:none;color:var(--ink-2);font:inherit;font-size:var(--t-sm);font-variant-numeric:tabular-nums;white-space:nowrap;cursor:text;transition:background var(--dur-fast) var(--ease)}
+.fl-lim:hover{background:var(--well-2);color:var(--ink)}
+.fl-lim:disabled{cursor:default;background:none}
+.fl-none{height:var(--row);display:flex;align-items:center;gap:var(--s-4);padding:0 var(--s-2) 0 calc(var(--s-8) + var(--s-1));color:var(--muted);font-size:var(--t-sm)}
+/* folded, Subscriptions and keys is one line: a fault first, a quiet chip for each kind, Add at the right */
+.fs-kinds,.fs-bad{display:inline-flex;align-items:center;gap:var(--s-1h);flex:none;margin-left:var(--s-1)}
+.fs-chip{display:inline-flex;align-items:center;gap:var(--s-1);margin:0}
+.fs-chip b{font-weight:var(--w-text);color:var(--faint);font-variant-numeric:tabular-nums}
+.fs-chip .ico{width:12px;height:12px;stroke-width:2.2}
+.tbl-head.g-fsub{column-gap:var(--s-3);box-shadow:none;height:24px}
+.pk-sec+.list-tools,.pk-sec+.fl{border-top:1px solid var(--line)}
+/* the table measures its own width (the page's includes the section list): narrow, the model for tasks and the owner give way */
+.fl{container:fleet / inline-size}
+/* The third column (Computer, Team or Next) takes its full 140 before the name grows, and shares the squeeze with the
+   model (down to 112), so "No computer" is not cut at 1100; only when there is no room left does it give way, to 72,
+   rather than push the row past the edge. */
+@container fleet (max-width:840px){
+  .g-bots.g-fleet{--g:16px var(--av-sm) minmax(96px,1fr) minmax(112px,176px) minmax(72px,140px) 34px}
+  .g-fleet .c-tasks,.g-fleet .c-own{display:none}
+}
+/* a row's ⋯: only on a phone, where the model, tasks and limit cells give way */
+.g-fleet>.fl-more{display:none}
+/* inline-grid as every .ib: as a flex box its icon sat at the press's left, 24 in from its right edge, off the gutter */
+html[data-layout="cards"] .g-fleet>.fl-more{display:inline-grid;justify-self:end}
+/* Grouped by computer: the group's state opens its panel; a row drags onto another group. */
+.fl-sum{flex:none;height:var(--ctl-sm);display:inline-flex;align-items:center;gap:var(--s-2);padding:0 var(--s-1) 0 var(--s-2);border-radius:var(--r-chip);color:var(--muted);font-size:var(--t-sm);white-space:nowrap;text-decoration:none}
+.fl-sum:hover,.fl-sum.is-on{background:var(--well-2);color:var(--ink)}
+.fl-sum .word{margin:0}
+.fl-sum>.ico{width:14px;height:14px;color:var(--faint)}
+.fl .pk-sec[data-drop]{background:var(--well);border-radius:var(--r-row)}
+.g-fleet.is-drag{position:relative;z-index:var(--z-stick);background:var(--surface-card);box-shadow:var(--lift-card);cursor:grabbing}
+/* The computer panel. */
+.cp-n{margin-left:var(--s-1h);color:var(--muted);font-weight:var(--w-text)}
+.cp .rail-sec h3{justify-content:flex-start}
+.cp-agent{display:grid;grid-template-columns:var(--av-sm) minmax(0,1fr) auto;align-items:center;gap:var(--s-2);text-decoration:none;color:var(--ink)}
+.cp-agent .row-cell{color:var(--muted);font-size:var(--t-sm)}
+
+/* ---- usage (anchor) ---- */
+
+/* ---------------- phone: rows put the name on the first line, the rest under it ---------------- */
+html[data-layout="cards"] .pk-settings .row[class*="g-"],html[data-layout="cards"] .pk-dashboard .row[class*="g-"]{height:auto;min-height:var(--row);padding:var(--s-2) var(--s-2);row-gap:var(--s-0);column-gap:var(--s-2h)}
+html[data-layout="cards"] .tbl-head{display:none}
+html[data-layout="cards"] .facts .fact.set-sw{grid-template-columns:minmax(0,1fr)}
+html[data-layout="cards"] .verb{min-height:var(--ctl);display:inline-flex;align-items:center}
+html[data-layout="cards"] .open-foot{flex-wrap:wrap;gap:0 calc(var(--s-6) + var(--s-0))}
+html[data-layout="cards"] .g-person{--g:var(--av-sm) minmax(0,1fr) auto;grid-template-areas:"av name role" ". sub seen"}
+html[data-layout="cards"] .g-person>:first-child{grid-area:av}
+html[data-layout="cards"] .g-person .row-title{grid-area:name}
+html[data-layout="cards"] .g-person .row-sub{grid-area:sub}
+html[data-layout="cards"] .g-person .row-cell{grid-area:role;text-align:right}
+html[data-layout="cards"] .g-person .row-age{grid-area:seen;text-align:right}
+html[data-layout="cards"] .g-chg{--g:var(--av-sm) minmax(0,1fr);grid-template-areas:"av title" ". date"}
+html[data-layout="cards"] .g-chg>:first-child{grid-area:av;align-self:start}
+html[data-layout="cards"] .g-chg .row-title{grid-area:title;white-space:normal;line-height:1.35}
+html[data-layout="cards"] .g-chg .row-age{grid-area:date;text-align:left}
+html[data-layout="cards"] .g-hl{--g:minmax(0,1fr) auto;grid-template-areas:"name word" "sub sub"}
+html[data-layout="cards"] .g-hl .row-title{grid-area:name}
+html[data-layout="cards"] .g-hl .row-sub{grid-area:sub;white-space:normal;line-height:1.35}
+html[data-layout="cards"] .g-hl .row-state{grid-area:word}
+html[data-layout="cards"] .g-hl .hl-act{display:none}
+html[data-layout="cards"] .g-host{--g:minmax(0,1fr) auto auto}
+html[data-layout="cards"] .list-tools .search{max-width:none}
+html[data-layout="cards"] .g-tok,html[data-layout="cards"] .g-cred{--g:minmax(0,1fr) auto}
+html[data-layout="cards"] .g-tok>:nth-child(n+3)>:nth-child(n+3),html[data-layout="cards"] .g-cred>:nth-child(n+3)>:nth-child(n+3){display:none}
+html[data-layout="cards"] .g-fsub{--g:minmax(0,1fr) 116px 28px}
+html[data-layout="cards"] .g-fsub>:nth-child(2),html[data-layout="cards"] .g-fsub>:nth-child(3){display:none}
+html[data-layout="cards"] .g-use{--g:var(--av-sm) minmax(0,1fr) auto}
+html[data-layout="cards"] .g-use>:nth-child(n+3):not(.is-strong){display:none}
+html[data-layout="cards"] .g-bots{--g:16px var(--av-sm) minmax(0,1fr) auto}
+html[data-layout="cards"] .g-bots>:nth-child(n+4):not(:last-child){display:none}
+html[data-layout="cards"] .g-mod{--g:minmax(0,1fr) auto}
+html[data-layout="cards"] .g-mod>:nth-child(n+2):not(.is-strong){display:none}
+html[data-layout="cards"] .g-lim{--g:var(--av-sm) minmax(0,1fr) auto auto;grid-template-areas:"av name used of" "bar bar bar per"}
+html[data-layout="cards"] .g-lim>:first-child{grid-area:av}
+html[data-layout="cards"] .g-lim .row-title{grid-area:name}
+html[data-layout="cards"] .g-lim .u-bar{grid-area:bar;padding:var(--s-1) 0}
+html[data-layout="cards"] .g-lim .u-used{grid-area:used}
+html[data-layout="cards"] .g-lim .l-of{grid-area:of}
+html[data-layout="cards"] .g-lim .u-per{grid-area:per;text-align:right}
+html[data-layout="cards"] .g-utask{--g:minmax(0,1fr) 56px 44px}
+html[data-layout="cards"] .g-utask>:nth-child(2),html[data-layout="cards"] .g-utask>:nth-child(4),html[data-layout="cards"] .g-utask>:nth-child(5){display:none}
+html[data-layout="cards"] .cl-list li{grid-template-columns:48px minmax(0,1fr)}
+/* phone: the search has its own line, edge to edge; the count and the grouping go under it */
+html[data-layout="cards"] .fl-tools .search{flex:1 1 100%}
+/* the row's ⋯ on the 16 gutter, as a head's: its 20px icon sits 12 in from the 44px press, so the press reaches into the
+   gutter by that much (the row and the section body put its edge on 16) */
+html[data-layout="cards"] .g-fleet>.fl-more{margin-right:calc(var(--s-3) * -1)}
+.set-leaves{margin:0;white-space:normal;overflow-wrap:anywhere;font-size:var(--t-sm)}
+.row.set-link.is-selected{background:var(--selected)}
+.set-link .set-out{display:grid;margin-left:auto;color:var(--faint)}
+.set-link .set-out .ico{width:13px;height:13px;stroke-width:2}
+/* gap wave (Usage, History, Billing): runs, changes, billing days, the limit panel's figure and lines, the filter */
+.u-fig p{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--s-2);margin:0}
+.u-fig b{font-size:var(--t-lg);font-weight:var(--w-strong)}
+.u-fig span{color:var(--muted)}
+.u-line{justify-content:space-between;min-width:0}
+.u-line .row-title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.u-more{margin:0;padding:var(--s-1) 0;color:var(--muted);font-size:var(--t-sm)}
+.u-filter{display:grid;gap:var(--s-2);min-width:220px;max-width:calc(100vw - 32px)}
+html[data-layout="cards"] .g-line .row-title{white-space:normal;line-height:1.35}

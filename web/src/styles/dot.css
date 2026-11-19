@@ -1,0 +1,22 @@
+/* The Dot, its small mark on a row that waits on you, the Dot holding a count, and the Flow mark: the only jade.
+   Moved here from the mocks' system/parts.css on 2026-11-19 (design-fidelity.md R2). check-jade.ts allows --dot only in
+   this file. Literal shadows became the Dot's own tokens. */
+.dot{width:var(--d);height:var(--d);display:inline-block;position:relative;flex:none}
+.dot i{position:absolute;inset:0;border-radius:var(--r-blob);background:radial-gradient(120% 120% at 30% 20%,var(--dot-hi),var(--dot) 52%,var(--dot-lo));
+  box-shadow:inset 0 -1px 2px var(--dot-shade),0 1px 2px var(--dot-shadow)}
+.dot b{position:absolute;left:22%;top:15%;width:32%;height:20%;border-radius:50%;background:var(--dot-glint);filter:blur(calc(var(--d)*.07));transform:rotate(-22deg)}
+.dot.is-breathing i,.flow i{animation:blob var(--breathe-dot) cubic-bezier(.45,0,.55,1) calc(var(--breathe)*-1.04) infinite}
+.dot.is-breathing b{animation:glint var(--breathe-dot) cubic-bezier(.45,0,.55,1) calc(var(--breathe)*-1.04) infinite}
+/* waiting on you: the Dot itself, small. It only breathes. */
+.flow i{box-shadow:inset 0 -1px 1px var(--dot-shade-sm)}
+@keyframes blob{0%,100%{border-radius:var(--r-blob);transform:scale(1) rotate(0)}34%{border-radius:var(--r-blob-2);transform:scale(var(--breath)) rotate(var(--breath-turn))}68%{border-radius:var(--r-blob-3);transform:scale(var(--breath-back)) rotate(var(--breath-turn-back))}}
+@keyframes glint{0%,100%{transform:rotate(-22deg) translate(0,0)}34%{transform:rotate(-14deg) translate(10%,6%)}68%{transform:rotate(-28deg) translate(-8%,2%)}}
+.av-dot{width:var(--a);height:var(--a);display:inline-grid;place-items:center;flex:none}
+.flow-mark{display:inline-block;width:20px;aspect-ratio:1;flex:none;vertical-align:middle;pointer-events:none}
+.li-play .flow-mark{width:22px}
+.flow-mark svg{display:block;width:100%;height:100%;fill:var(--dot);overflow:visible}
+.flow-mark .f1{fill:color-mix(in srgb,var(--dot) 58%,var(--ground))}
+.flow-mark.live g{animation:fl-ride 3.6s ease-in-out infinite}
+.flow-mark.live .f1{animation-delay:-.5s}
+@keyframes fl-ride{0%,100%{transform:translateY(-1.5px)}50%{transform:translateY(1.5px)}}
+[data-motion="off"] .flow-mark g{animation:none}

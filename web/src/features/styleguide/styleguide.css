@@ -1,0 +1,295 @@
+/* The Style guide (pages/13-style-guide/guide.css): the frame around the specimens. The specimens are the app's own
+   parts with the app's own CSS; nothing here restyles them. */
+
+.sg-page {
+  & .sg-sec {
+    padding: var(--s-5) 0 var(--s-6);
+    border-bottom: 1px solid var(--line);
+  }
+
+  & .sg-sec:last-child {
+    border-bottom: 0;
+    min-height: calc(100vh - 150px);
+  }
+
+  & .sg-h {
+    display: grid;
+    gap: var(--s-1h);
+    margin-bottom: var(--s-4);
+    padding-left: var(--s-8);
+  }
+
+  & .sg-h p {
+    margin: 0;
+    max-width: 60ch;
+    color: var(--muted);
+    font-size: var(--t-sm);
+  }
+
+  & .sg-in {
+    padding-left: var(--s-8);
+  }
+
+  & .sg-note {
+    margin: 0 0 var(--s-3);
+    max-width: 60ch;
+    color: var(--muted);
+    font-size: var(--t-sm);
+  }
+
+  /* A section head drawn as a specimen does not stick to the top of the page. */
+  & .sg-demo .stage-head {
+    position: static;
+    background: none;
+  }
+
+  & .sg-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: var(--s-5) var(--s-6);
+    padding: var(--s-2) 0 var(--s-4) var(--s-8);
+  }
+
+  & .sg-row.is-top {
+    align-items: flex-start;
+  }
+
+  & .sg-sp {
+    display: grid;
+    justify-items: start;
+    gap: var(--s-2);
+    margin: 0;
+    min-width: 0;
+  }
+
+  & .sg-sp figcaption,
+  & .sg-cap {
+    color: var(--muted);
+    font-size: var(--t-xs);
+    line-height: var(--lh-tight);
+    white-space: nowrap;
+  }
+
+  & .sg-pair {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-2);
+  }
+
+  & .sg-w {
+    display: block;
+    width: 200px;
+    max-width: 100%;
+  }
+
+  /* Color: both themes side by side, each a sheet in its own theme. */
+  & .sg-themes {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+    gap: var(--s-3);
+    padding-left: var(--s-8);
+  }
+
+  /* One grid for the whole column: every group's tokens and uses line up (the groups are its subgrids). */
+  & .sg-theme {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    gap: var(--s-4) var(--s-3);
+    padding: var(--s-4);
+    border-radius: var(--r-card);
+    background: var(--sheet);
+    color: var(--ink);
+    box-shadow:
+      var(--lift-0),
+      inset 0 0 0 1px var(--line);
+  }
+
+  & .sg-theme-name {
+    grid-column: 1 / -1;
+  }
+
+  & .sw-group {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    align-items: center;
+    row-gap: var(--s-2);
+  }
+
+  & .sw-group h3 {
+    grid-column: 1 / -1;
+    margin: 0;
+  }
+
+  & .sw {
+    display: contents;
+  }
+
+  & .sw-mark {
+    display: inline-flex;
+    align-items: center;
+    min-width: 20px;
+  }
+
+  & .sw-mark i {
+    width: 20px;
+    height: 20px;
+    border-radius: var(--r-chip);
+    background: var(--sw);
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+  }
+
+  & .sw-use {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--muted);
+    font-size: var(--t-sm);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  & .sw code,
+  & .ty code {
+    color: var(--muted);
+  }
+
+  /* Type: each step in its own words, its token, then what it measures. */
+  & .ty-list {
+    padding-left: var(--s-8);
+  }
+
+  & .ty {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 148px 96px;
+    align-items: baseline;
+    gap: var(--s-3);
+    padding: var(--s-2) 0;
+    border-top: 1px solid var(--line);
+  }
+
+  & .ty-s {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  & .ty-v {
+    color: var(--muted);
+    font-size: var(--t-xs);
+    white-space: nowrap;
+  }
+
+  /* A list of named states: the name, then the part at a row's width. */
+  & .sg-list {
+    display: grid;
+    grid-template-columns: 104px minmax(0, 1fr);
+    align-items: center;
+    gap: var(--s-2) var(--s-3);
+    padding-left: var(--s-8);
+  }
+
+  & .sg-list.is-rule .sg-cap {
+    white-space: normal;
+  }
+
+  & .sg-cell {
+    min-width: 0;
+  }
+
+  & .sg-chat {
+    flex: none;
+    width: 440px;
+    max-width: 100%;
+    padding: 0;
+    overflow: visible;
+  }
+
+  & .sg-chat.is-did {
+    width: 320px;
+  }
+
+  & .sg-foot {
+    width: 320px;
+    max-width: 100%;
+  }
+
+  & .sg-card {
+    max-width: calc(440px + var(--s-8));
+  }
+
+  /* Sheets: the ground with its three sheets, each at its own lift. */
+  & .sg-ground {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+    gap: var(--gap-pane);
+    margin: 0 0 var(--s-4) var(--s-8);
+    padding: var(--gap-pane);
+    border-radius: var(--r-card);
+    background: var(--ground);
+  }
+
+  & .sg-sheet {
+    display: grid;
+    align-content: start;
+    gap: var(--s-1);
+    min-height: 132px;
+    padding: var(--s-3);
+    border-radius: var(--r-pane);
+    background: var(--sg-bg);
+    box-shadow: var(--sg-lift);
+  }
+
+  & .sg-sheet code {
+    color: var(--muted);
+  }
+
+  & .sg-from {
+    display: inline-flex;
+  }
+
+  & .sg-states {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+    gap: var(--s-4);
+    padding-left: var(--s-8);
+  }
+
+  & .sg-states .sg-sp {
+    justify-items: stretch;
+  }
+
+  & .sg-state {
+    min-width: 0;
+  }
+}
+
+/* Phone: the page's own gutter; the type list drops its token column, named lists stack. */
+:where(html[data-layout="cards"]) .sg-page {
+  & .sg-h,
+  & .sg-in,
+  & .sg-row,
+  & .sg-themes,
+  & .ty-list,
+  & .sg-list,
+  & .sg-states {
+    padding-left: var(--page-x);
+  }
+
+  & .sg-ground {
+    margin-left: var(--page-x);
+  }
+
+  & .ty {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  & .ty code {
+    display: none;
+  }
+
+  & .sg-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

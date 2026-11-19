@@ -1,0 +1,15 @@
+/* From pages/14-acts/acts.css ("belongs in the kit: Tico asks first"). The head's type is the t-label-2 class, so
+   type.css keeps the one font shorthand. */
+.ask{--surface:var(--raised);align-self:stretch;margin-top:var(--s-3);padding:var(--s-3);border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-2);display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s-3)}
+.ask-head{display:flex;align-items:center;gap:var(--s-2);color:var(--ink)}
+.ask-steps{list-style:none;padding:0;display:grid;gap:var(--s-2h)}
+.ask-steps li{display:grid;grid-template-columns:16px minmax(0,1fr);column-gap:var(--s-2h)}
+.ask-steps li>div{min-width:0}
+.ask-steps .ico{width:16px;height:16px;margin-top:var(--s-0);color:var(--muted)}
+.ask-steps b{display:block;font-weight:var(--w-strong);line-height:1.4}
+.ask-steps span{display:block;font-size:var(--t-sm);line-height:1.4;color:var(--ink-2);overflow-wrap:anywhere}
+.ask-note{font-size:var(--t-xs);color:var(--muted);padding-top:var(--s-2h);box-shadow:inset 0 1px 0 var(--line-strong)}
+.ask-row{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s-1h)}
+.ask-row .btn{width:100%;height:36px;min-width:0}
+.ask-row .btn:not(.btn-fill){background:var(--btn-raised)}
+.ask-row .btn:not(.btn-fill):hover{background:var(--raised-hover)}

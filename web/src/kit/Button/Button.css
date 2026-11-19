@@ -1,0 +1,3 @@
+/* Busy: the button keeps its size and place and its label breathes (motion.md R10). Not parts.css's turning ring:
+   the README rules out spinners. */
+.btn[aria-busy="true"]{pointer-events:none;animation:rest var(--breathe) ease-in-out infinite;animation-play-state:var(--loop,running)}

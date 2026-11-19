@@ -1,0 +1,165 @@
+/* Threads, Mail, Messaging and Updates, from pages/2-threads/threads.css, pages/7-mail/mail.css and
+   pages/12-updates/updates.css. Class names are the mock's; spacing moved onto the scale and the font shorthand into
+   longhands. The list column, tabs, head and states are the ListAndItem and List kinds'; this is what the pages add. */
+
+/* ---------- the reading column of a conversation ---------- */
+.conv-col{max-width:var(--bare-w);margin:0 auto}
+.conv-foot>.conv-col{flex:1;min-width:0;display:flex;flex-direction:column;gap:var(--s-2)}
+.conv-head .av{margin-right:var(--s-2)}
+.conv-head .btn-fill{margin:0 var(--s-1) 0 var(--s-2)}
+.conv-n{margin-left:var(--s-2);position:relative;top:1px}
+/* what sits right after an item's title (a count, an address): the head's grow moves after it */
+.conv-head:has(>.conv-n,>.lt-addr)>.grow{display:none}
+.conv-head>.conv-n,.conv-head>.lt-addr{margin-right:auto}
+.conv.is-empty{-webkit-mask-image:none;mask-image:none}
+.conv.is-empty .conv-body{display:flex;-webkit-mask-image:none;mask-image:none}
+.conv.is-empty .conv-col{flex:1;display:flex}
+
+/* ---------- what a conversation is about: who is in it, the task it belongs to ---------- */
+.conv-about{flex:none;margin-top:calc(var(--s-2) * -1);padding:0 0 0 var(--s-6);border-bottom:1px solid var(--line)}
+.ab-row{height:calc(var(--ctl-lg) + var(--s-0));display:flex;align-items:center;gap:calc(var(--s-1) + var(--s-0));padding-right:calc(var(--s-8) + var(--s-1));overflow-x:auto;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 44px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 44px),transparent)} /* stylelint-disable-line color-no-hex -- mask */
+.ab-people{flex:none;gap:calc(var(--s-1) + 1px);padding-left:0;margin-right:calc(var(--s-1) + var(--s-0))}
+.ab-people .av{flex:none;margin-left:0;box-shadow:none}
+.ab-chip{flex:none;display:inline-flex;align-items:center;gap:calc(var(--s-1) + var(--s-0));height:calc(var(--ctl-sm) - var(--s-0));padding:0 calc(var(--s-2) + 1px) 0 calc(var(--s-1) + 3px);border-radius:var(--r-chip);background:var(--well);color:var(--ink-2);font-size:var(--t-sm);white-space:nowrap}
+.ab-chip:hover{background:var(--well-2);color:var(--ink)}
+.ab-chip .ico{width:13px;height:13px;color:var(--muted)}
+.ab-chip em{font-style:normal;color:var(--muted)}
+.ab-n{flex:none;margin:0 calc(var(--s-1) + var(--s-0)) 0 calc((var(--s-1) + var(--s-0)) * -1)}
+.app-tico .conv-head:has(+.conv-about){border-bottom:0}
+
+/* ---------- the list of threads ---------- */
+.tl-row{grid-template-columns:var(--av-sm) minmax(0,1fr) auto minmax(24px,auto)}      /* room for "99+" */
+.tl-row.is-selected .count-pill{background:var(--sheet)}
+.tl-catch{margin-bottom:calc(var(--s-1) + 1px);position:relative}
+.tl-catch::after{content:"";position:absolute;left:12px;right:6px;bottom:-3px;height:1px;background:var(--line)}
+.tl-more{height:var(--row);display:flex;align-items:center;padding:0 var(--s-3) 0 calc(var(--s-10) + var(--s-1));color:var(--muted);font-size:var(--t-sm);border-radius:var(--r-row)}
+.tl-more:hover{color:var(--ink)}
+/* the rows are a virtual list: it is the scroller inside the column, under the Catch up row */
+.tl-list:has(>.tl-vl){overflow:hidden;display:flex;flex-direction:column;gap:0}
+.tl-vl{flex:1;min-height:0;overflow:auto;scrollbar-width:none}
+
+/* ---------- Catch up: what is new, thread by thread ---------- */
+.conv:has(.cu-list) .conv-col{max-width:none;padding-top:calc(var(--s-2) + var(--s-0))}
+.cu-msgs{max-width:704px}
+.cu{padding:var(--s-2) 0 var(--s-5);border-bottom:1px solid var(--line)}
+.cu:last-child{border-bottom:0}
+.cu-head{margin:0 calc(var(--s-3) * -1);color:var(--ink);height:auto;align-items:start;padding-top:calc(var(--s-1) + var(--s-0));padding-bottom:calc(var(--s-1) + var(--s-0))}
+.cu-head .row-title{font-weight:var(--w-title);font-size:var(--t-md);line-height:22px;white-space:normal;overflow:visible;text-wrap:balance}
+.cu-head .row-age,.cu-head .tl-slot{height:22px;line-height:22px}
+.cu-msgs>.msg:first-child{padding-top:var(--s-2)}
+
+/* ---------- New message: a line of people, then what is being typed ---------- */
+.conv:has(.to) .conv-col{max-width:none;padding-top:var(--s-5)}
+.to{min-height:44px;display:flex;align-items:center;flex-wrap:wrap;gap:calc(var(--s-1) + var(--s-0));padding:calc(var(--s-1) + var(--s-0)) var(--s-2) calc(var(--s-1) + var(--s-0)) calc(var(--s-3) + var(--s-0));border-radius:var(--r-card);background:var(--well);box-shadow:inset 0 0 0 1px var(--line)}
+.to:focus-within{background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--focus)}
+.to+.to{margin-top:var(--s-2)}
+.to-label{width:calc(var(--s-10) + var(--s-1));flex:none;color:var(--muted)}
+.to-chip{display:inline-flex;align-items:center;gap:calc(var(--s-1) + var(--s-0));height:28px;padding:0 var(--s-0) 0 calc(var(--s-1) + var(--s-0));border-radius:var(--r-chip);background:var(--well-2);white-space:nowrap}
+.to-chip button{width:22px;height:22px;border:0;border-radius:var(--r-chip);background:none;color:var(--muted);display:grid;place-items:center;position:relative}
+.to-chip button:hover{color:var(--ink)}
+.to-chip button .ico{width:12px;height:12px;stroke-width:2}
+.to-text{flex:1;min-width:120px;height:28px;padding:0;border:0;background:none;color:var(--ink);font-family:inherit;font-size:inherit;outline:0}
+.to-text::placeholder{color:var(--muted)}
+.to-list{margin-top:calc(var(--s-2) + var(--s-0));display:grid;gap:calc(var(--s-0) / 2)}
+.to-list .sr{padding:0 var(--s-3) 0 calc(var(--s-3) + var(--s-0));width:100%;border:0;background:none;font-family:inherit;font-size:inherit;text-align:left}
+.to-list .sr:hover,.to-list .sr.is-on{background:var(--hover)}
+.to-list .sr.is-on{color:var(--ink)}
+.to-list .sr em{font-style:normal;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
+
+/* ---------- a mail row: a face, who it is from, what it is about, the age ---------- */
+.ml-row{grid-template-columns:var(--av-sm) minmax(0,1fr) auto 12px;column-gap:var(--s-2);color:var(--ink-2)}
+.ml-main{min-width:0;display:flex;align-items:baseline;gap:var(--s-2);white-space:nowrap;margin-left:var(--s-0)}
+.ml-from{flex:0 1 auto;min-width:0;max-width:58%;overflow:hidden;text-overflow:ellipsis}
+.ml-sub{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
+.ml-row.is-unread{color:var(--ink)}
+.ml-row.is-unread .ml-from{font-weight:var(--w-strong)}
+.ml-row .row-age{font-size:var(--t-xs)}
+.ml-main .count{flex:none;align-self:center}
+.av.is-out{border-radius:50%}
+.ml-box{margin:0 var(--s-3) var(--s-2);flex:none}
+
+/* ---------- an open mail: the subject in full, then each letter in full ---------- */
+.lt-top{flex:none;padding:calc(var(--s-4) + var(--s-0)) var(--s-6) var(--s-0)}
+.lt-subject{font-weight:var(--w-title);font-size:var(--t-fig);line-height:1.25;font-family:var(--font-display);letter-spacing:var(--track-title);text-wrap:balance;overflow-wrap:anywhere}
+.lt-subject .count{margin-left:calc(var(--s-2) + var(--s-0));font-weight:var(--w-text);font-size:var(--t-xs);font-family:var(--font-text);letter-spacing:0;vertical-align:2px}
+.lt{padding:var(--s-4) 0 calc(var(--s-4) + var(--s-0));border-bottom:1px solid var(--line)}
+.lt:last-child{border-bottom:0}
+.lt .msg-meta{margin-bottom:calc(var(--s-1) + var(--s-0));display:flex;align-items:baseline;gap:var(--s-2)}
+.lt .msg-meta time,.lt .msg-meta .pill{margin-left:auto}
+.lt .file{margin-top:var(--s-3)}
+.lt .file+.file{margin-left:calc(var(--s-1) + var(--s-0))}
+/* a reply waiting in Gmail as a draft: the same letter, inside a line */
+.lt.is-draft{margin-top:var(--s-4);padding:calc(var(--s-3) + var(--s-0)) calc(var(--s-3) + var(--s-0)) var(--s-4) var(--s-3);border-bottom:0;border-radius:var(--r-card);box-shadow:inset 0 0 0 1px var(--line-strong)}
+.conv-head .lt-addr{flex:0 1000 auto;margin-left:var(--s-2);color:var(--muted);font-size:var(--t-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.lt-to{flex:0 1000 auto;color:var(--muted);font-size:var(--t-sm);min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.lt-body{white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* ---------- an update: who, what they report, their name, how old ---------- */
+.up-row{grid-template-columns:var(--av-sm) minmax(0,1fr) auto 132px 36px 20px;column-gap:calc(var(--s-2) + var(--s-0));color:var(--ink-2)}
+.up-row.is-unread{color:var(--ink)}
+.up-row.is-unread .row-title{font-weight:var(--w-strong)}
+.up-row .row-pills{padding:0}
+.up-who{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:var(--t-sm);color:var(--muted)}
+.pk-body:has(>.up-vl){overflow:hidden;display:flex;flex-direction:column}
+.up-vl{flex:1;min-height:0;overflow:auto;scrollbar-width:none}
+
+/* ---------- one update, opened ---------- */
+.read-by{display:flex;align-items:center;gap:var(--s-2);height:28px;margin-bottom:calc(var(--s-3) + var(--s-0));font-size:var(--t-sm);color:var(--muted)}
+.read-by b{color:var(--ink);font-weight:var(--w-strong)}
+.read-lead{font-weight:var(--w-text);font-size:var(--t-md);line-height:1.6;color:var(--ink);text-wrap:pretty}
+.read p{color:var(--ink-2)}
+.read p+p{margin-top:calc(var(--s-2) + var(--s-0))}
+.read-lead+p{margin-top:var(--s-4)}
+
+:where(html[data-layout="cards"]){
+  .conv-about{display:none}
+  .tl-row{padding:0 var(--s-2) 0 var(--s-3)}
+  .conv-head .av{margin:0 var(--s-2) 0 var(--s-1)}
+  .cu-head{margin:0 calc(var(--s-2) * -1);min-height:44px;padding:calc(var(--s-3) - 1px) var(--s-2) calc(var(--s-3) - 1px) var(--s-3)}
+  .to{min-height:48px}
+  .to-chip{height:32px}
+  .to-chip button::before{content:"";position:absolute;inset:-11px}
+  .to-list .sr{padding:0 var(--s-2)}
+  .ml-row{padding:0 var(--s-2) 0 var(--s-3)}
+  .lt-top{padding:calc(var(--s-2) + var(--s-0)) var(--s-4) 0}
+  .lt .msg-meta{flex-wrap:wrap}
+  .lt-to{flex:1 1 100%;order:3}
+  .conv-head .lt-addr{display:none}
+}
+
+/* ---------- People, Settings, Browse: dialogs the mocks do not draw, built from the kit's ---------- */
+button.ab-people{display:flex;align-items:center;border:0;background:none;padding:0;cursor:pointer;font-family:inherit}
+.mb-list{max-height:50dvh;overflow:auto;margin:0 calc(var(--s-2) * -1)}
+.mb-row{grid-template-columns:var(--av-sm) minmax(0,1fr) auto auto;column-gap:var(--s-2)}
+.mb-note{color:var(--muted)}
+.ts-acts{display:flex;flex-wrap:wrap;gap:var(--s-2)}
+.br-list{max-height:50dvh;overflow:auto;margin:0 calc(var(--s-2) * -1)}
+.br-row{grid-template-columns:var(--av-sm) minmax(0,1fr) auto auto;column-gap:var(--s-2)}
+
+/* ---------- Learned: a list of sentences (pages/2-threads/threads.css lr-*). A line may wrap; it is never cut. ---------- */
+.lr-body{padding-top:var(--s-1)}
+.lr-sec+.lr-sec{margin-top:var(--s-4)}
+.lr-sec .stage-head{padding-left:var(--s-2)}
+.lr-row{display:grid;grid-template-columns:minmax(0,1fr) var(--av-sm) 64px 28px;column-gap:var(--s-3);align-items:start;min-height:var(--row);padding:var(--s-1h) var(--s-1) var(--s-1h) var(--s-2);border-radius:var(--r-row)}
+.lr-row:hover{background:var(--hover)}
+.lr-row.is-on{background:var(--selected)}
+.lr-text{line-height:22px;max-width:68ch;text-wrap:pretty}
+.lr-row .row-age{line-height:22px}
+.lr-row .tl-kind{height:22px}
+.lr-more{width:var(--ctl-sm);height:var(--av-sm);display:grid;place-items:center;color:var(--muted);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
+.lr-row:hover .lr-more,.lr-more:focus-within,.lr-more:has([aria-expanded="true"]){opacity:1}
+.lr-row.is-who{grid-template-columns:var(--av-sm) minmax(0,1fr) 64px 28px}
+a.lr-row{color:inherit}
+:where(html[data-layout="cards"]){
+  .lr-row{grid-template-columns:minmax(0,1fr) var(--av-sm) 52px var(--ctl-sm);padding:calc(var(--s-2) + 3px) var(--s-2)}
+  .lr-row.is-who{grid-template-columns:var(--av-sm) minmax(0,1fr) 52px var(--ctl-sm)}
+  .lr-more{height:var(--ctl-sm);margin:calc((var(--ctl-sm) - var(--av-sm)) / -2) 0}
+  .lr-more{opacity:1}
+}
+
+/* ---------- a mail row's attachment: a quiet paperclip after the subject ---------- */
+.ml-main>.ico{flex:none;align-self:center;color:var(--muted)}
+
+/* Messaging: one contact's texts, a break at each day (the chat's own .day) */
+.mg-list{padding-bottom:var(--s-4)}
+.mg-list>.btn{margin:var(--s-3) auto 0;display:flex}

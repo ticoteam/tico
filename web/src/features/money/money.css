@@ -1,0 +1,192 @@
+/* Finance and Growth: what pages/3-company/finance.css has that the kit and parts.css do not yet. Scoped to .money, the
+   class on the page sheet and on its panel. The font shorthand became longhands (R13). */
+
+/* the date range after the title, with its steps */
+.money .range{display:inline-flex;align-items:center;gap:var(--s-1);color:var(--ink-2);font-size:var(--t-sm);white-space:nowrap;font-variant-numeric:tabular-nums}
+
+/* meter, with a tick for where today is in the period */
+.money .meter{display:block;height:var(--s-1);border-radius:var(--r-pill);background:var(--line-strong);position:relative}
+.money .meter i{display:block;height:100%;border-radius:var(--r-pill);background:var(--ink-2);max-width:100%}
+.money .meter.is-over i{background:var(--ink)}
+.money .meter u{position:absolute;top:-3px;width:1.5px;height:10px;border-radius:var(--r-pill);background:var(--muted);text-decoration:none}
+
+/* table extras */
+.money .table{table-layout:fixed}
+.money .table td.t-name{overflow:hidden;text-overflow:ellipsis}
+.money .table td.t-words{color:var(--ink-2);overflow:hidden;text-overflow:ellipsis}
+.money .table td .who-cell{display:flex;align-items:center;gap:var(--s-2);min-width:0}
+.money .table td .who-cell span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.money .table td .who-cell .av{margin:0}
+.money .table td.t-bar{padding-right:var(--s-1)}
+.money .table tr.is-sub td:first-child{padding-left:calc(var(--s-6) + var(--s-1));color:var(--ink-2)}
+/* On the page the body has no left padding (marks hang in the margin), so what stands under a name starts on --page-x
+   too. The page kinds already do this for a table in a Section or right in the body, and for charts and bars; here are
+   the rest: a table in a scroller or two columns outside a Section, a sub row, the control row, rules, folds and
+   definitions. The panel keeps its own 12. */
+:where(html:not([data-layout="cards"])) .money .pk-body :is(.t-scroll,.two-col) .table :is(th,td):first-child{padding-left:var(--page-x)}
+:where(html:not([data-layout="cards"])) .money .pk-body .table tr.is-sub td:first-child{padding-left:calc(var(--page-x) + var(--s-4))}
+:where(html:not([data-layout="cards"])) .money .pk-body :is(.ctl-row,.rule,.fold){padding-left:var(--page-x)}
+.money .table tr.is-pct td{color:var(--muted);font-size:var(--t-sm)}
+.money .table tr.is-net td{height:var(--s-10);font-family:var(--font-display);font-size:var(--t-base);font-weight:var(--w-title);line-height:1;border-top:1.5px solid var(--ink-2);border-bottom:0}
+.money .table tr.is-net:hover td,.money .table tr.is-pct:hover td{background:none}
+.money .table .proj{color:var(--muted)}
+.money .table th.is-now{color:var(--ink);font-weight:var(--w-strong)}
+.money .table td .pill{margin-left:var(--s-2);vertical-align:1px}
+.money .table td.t-fig{font-weight:var(--w-strong)}
+.money .table tr.is-quiet td.t-fig{font-weight:var(--w-text)}
+.money .table tr.is-selected td{background:var(--selected)}
+.money .table .t-link{color:inherit}
+.money .table .t-link:hover{text-decoration:underline}
+.money .table td .row-check{margin-right:var(--s-2);vertical-align:-2px}
+.money .row-check{display:inline-grid;place-items:center;color:var(--muted)}
+.money .row-check .ico{width:14px;height:14px;stroke-width:2.2}
+.money .word-late{font-weight:var(--w-strong);color:var(--ink)}
+.money col.t-col{width:100px}
+.money col.t-n{width:76px}
+.money col.t-meter{width:200px}
+.money col.t-date{width:116px}
+.money col.t-line{width:184px}
+.money col.t-src{width:130px}
+.money col.t-no{width:88px}
+.money col.t-who{width:196px}
+.money col.t-act{width:var(--s-10)}
+.money .table td.t-act{padding:0;text-align:right}
+
+/* the row of controls over a table: a search, a count */
+.money .ctl-row{display:flex;align-items:center;gap:var(--s-2);padding:var(--s-2h) var(--s-3);position:sticky;top:0;z-index:var(--z-stick);background:var(--surface)}
+.money .ctl-row+.t-scroll .table.is-stick thead th{top:52px}
+.money .ctl-row .count{font-size:var(--t-sm)}
+
+/* the overview's sections in one column, as the mock stacks them */
+.money .pk-widgets>.stack{grid-column:1/-1}
+.money .stack>.two-col+.stage,.money .stack>.stage+.two-col{margin-top:var(--s-2h);padding-top:var(--s-2h);border-top:1px solid var(--line)}
+
+/* a chart under its section name */
+.money .chart-sec{padding:0 var(--s-3) var(--s-3h)}
+
+/* two statements side by side (the balance sheet, a funnel per segment) */
+.money .two-col{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:var(--s-2);align-items:start}
+.money .two-col>*+*{box-shadow:-1px 0 0 var(--line)}
+.money .two-col>.stage+.stage{margin-top:0;padding-top:0;border-top:0}
+
+/* a rule on one line: what it matches, where it sends it */
+.money .rule{grid-template-columns:minmax(0,1fr) var(--s-4) minmax(0,1fr) var(--s-18);column-gap:var(--s-2h);padding:0 var(--s-3)}
+.money .rule .ico{width:14px;height:14px;color:var(--faint)}
+.money .rule.is-quiet{color:var(--muted)}
+.money .rule.has-act{grid-template-columns:minmax(0,1fr) var(--s-4) minmax(0,1fr) var(--s-18) var(--s-10)}
+.money .rule-to{display:flex;align-items:center;gap:var(--s-2);min-width:0;color:var(--ink-2)}
+.money .rule-to span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* a fold: the many rows that say nothing, as one line; pressed, it opens them */
+.money .fold{height:var(--row);display:flex;align-items:center;gap:var(--s-2h);padding:0 var(--s-3);color:var(--muted);border-radius:var(--r-row)}
+.money button.fold{width:100%;border:0;background:none;font:inherit;text-align:left;cursor:pointer}
+.money button.fold:hover{background:var(--hover)}
+
+/* the mark of what waits on you, before a row's name (finance.js ttl) */
+.money .t-mark{margin-right:var(--s-2);vertical-align:-1px}
+/* a bank row opened in place to be put on a line (the mock's Transactions) */
+.money .tx-edit{display:grid;grid-template-columns:minmax(0,1fr);max-width:calc(var(--s-18) * 4);padding:var(--s-1) 0 var(--s-2h)}
+/* a phone's long Transactions: only the rows in view are drawn */
+.money .tx-long{max-height:70dvh;overflow:auto;scrollbar-width:thin}
+.money .fr .row-fig .ib{margin-left:var(--s-1);vertical-align:middle}
+
+/* a definition: a word and what it means here, one line */
+
+/* the panel: one big figure, rows of name, word and figure, where a number comes from */
+.money .pfig{display:grid;gap:var(--s-1);padding:var(--s-2h) var(--s-2) var(--s-4)}
+.money .pfig b{font-family:var(--font-display);font-size:var(--t-lg);font-weight:var(--w-title);line-height:1.1;font-variant-numeric:tabular-nums}
+.money .pfig span{font-size:var(--t-sm);color:var(--muted)}
+.money .pfig .meter{margin-top:var(--s-2h)}
+.money .row-sub{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.money .prow{grid-template-columns:minmax(0,1fr) auto 76px;column-gap:var(--s-3)}
+.money .prow.is-plan .row-title,.money .prow.is-plan .row-fig{color:var(--muted)}
+.money .ptrace{height:auto;min-height:50px;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-3);padding:var(--s-2) var(--s-2);align-items:start}
+.money .ptrace-main{display:grid;gap:var(--s-0);min-width:0}
+.money .ptrace .row-sub{white-space:normal;line-height:1.35}
+.money .facts .field{width:84px;height:var(--ctl-sm);padding:0 var(--s-2);font-size:var(--t-sm)}
+.money .facts .field input{text-align:right;font-variant-numeric:tabular-nums}
+
+/* a dialog's fields, the approver a decision waits for, values shown once */
+.money .dlg-form{display:grid;gap:var(--s-4)}
+.money .dlg-form .prow{padding:0}
+.money .dlg-ask{font-weight:var(--w-strong)}
+.money .dlg-error{color:var(--ink);font-size:var(--t-sm)}
+/* The bill, invoice and journal dialogs (BillForms.tsx): a name beside its Add, and a line beside its amounts. */
+.money .dlg-pair{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--s-2);align-items:end}
+.money .dlg-line{display:grid;grid-template-columns:minmax(0,2fr) repeat(auto-fit,minmax(0,1fr));gap:var(--s-2);align-items:end}
+.money .t-was{color:var(--ink-2)}
+.money .once{display:grid;gap:var(--s-1)}
+.money .once p span{color:var(--muted);font-size:var(--t-sm)}
+.money .once-row{display:flex;align-items:center;gap:var(--s-2)}
+.money .shares{display:grid;gap:var(--s-2)}
+.money .share-row{display:grid;grid-template-columns:minmax(0,1fr) 84px auto;column-gap:var(--s-2);align-items:center}
+.money .share-foot{display:flex;align-items:center;gap:var(--s-2)}
+.money .file-pick{display:flex;align-items:center;gap:var(--s-2);min-width:0}
+.money .file-pick .row-sub{overflow:hidden;text-overflow:ellipsis}
+.money .stmt{display:grid;gap:var(--s-2);min-width:0}
+.money .stmt-tie{font-size:var(--t-sm);color:var(--ink-2);font-variant-numeric:tabular-nums}
+
+/* whose view the owner reads Finance as, in the where line over the title */
+.money .view-as{display:inline-flex;align-items:center;gap:var(--s-2)}
+
+.money .once-row code{flex:1;min-width:0;font-family:var(--font-code);font-size:var(--t-sm);line-height:var(--lh-code);color:var(--ink);overflow-wrap:anywhere;user-select:all}
+
+/* on a phone a table becomes rows: the name and its words, one figure, a meter under them (finance.css .fr) */
+.money .fr{grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h);height:auto;min-height:var(--tap);padding:calc(var(--s-2) - 1px) var(--s-2);color:inherit}
+.money .fr+.fr{box-shadow:0 -1px 0 var(--line)}
+.money .fr-bar{grid-column:1/-1;padding:calc(var(--s-2) - 1px) 0 calc(var(--s-1) - 1px)}
+.money .fr-main{display:grid;gap:calc(var(--s-0) / 2);min-width:0}
+.money .fr-main .row-title{white-space:normal;line-height:20px}
+.money .fr-sub{display:flex;flex-wrap:wrap;gap:0 var(--s-2h);font-size:var(--t-sm);color:var(--muted);line-height:18px;font-variant-numeric:tabular-nums}
+.money .fr-sub:empty{display:none}
+.money .fr .row-title .pill{margin-left:var(--s-2);vertical-align:1px}
+.money .fr .row-fig{align-self:start;line-height:20px}
+.money .fr.is-total .row-title,.money .fr.is-total .row-fig{font-weight:var(--w-strong)}
+.money .fr.is-net{border-top:1.5px solid var(--ink-2);border-radius:0;margin-top:var(--s-1)}
+.money .fr.is-net .row-title,.money .fr.is-net .row-fig{font-family:var(--font-display);font-size:var(--t-base);font-weight:var(--w-title);line-height:20px}
+.money .fr.is-sub{padding-left:var(--s-6)}
+.money .fr.is-pct .row-title,.money .fr.is-pct .row-fig{color:var(--muted);font-size:var(--t-sm)}
+.money .fr.is-quiet .row-title,.money .fr.is-quiet .row-fig{color:var(--muted)}
+.money .fr-group{height:var(--s-10);display:flex;align-items:flex-end;gap:var(--s-2);padding:0 var(--s-2) var(--s-1h);font-family:var(--font-text);font-size:var(--t-sec);font-weight:var(--w-title);line-height:var(--lh-tight);color:var(--ink);border-bottom:1px solid var(--line)}
+.money .fr-group .count{font-size:var(--t-sm)}
+
+/* Growth: the Growth Manager's face kept in a phone's head (GrowthPanels.tsx ManagerFace) */
+.money .gm-ask{display:contents}
+/* Growth's top (Growth.tsx): the ask line, loud trust lines (greys: weight and a mark carry them), five or six tiles */
+.money .gr-top{display:grid;gap:var(--s-3);padding-top:var(--s-2)}
+.money .gr-ask{display:flex;align-items:center;gap:var(--s-2);padding:0 var(--page-x)}
+.money .gr-ask .f{flex:1;min-width:0}
+.money .gr-loud{display:grid;gap:var(--s-1);padding:0 var(--page-x)}
+.money .gr-loud p{display:flex;align-items:center;gap:var(--s-2);margin:0;font-weight:var(--w-strong);color:var(--ink)}
+.money .gr-verdict{margin-left:var(--s-1);font-size:var(--t-sm);color:var(--muted)}
+.money .gr-why{color:var(--faint);font-weight:var(--w-text)}
+.money .gr-partial{margin-left:var(--s-2);font-size:var(--t-xs);color:var(--muted)}
+.money .month-pick{display:inline-flex;align-items:center}
+.money .gr-chan{display:flex;align-items:center;gap:var(--s-2);min-width:0}
+.money .gr-chan .t-link{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.money .gr-over{display:block;font-size:var(--t-xs);color:var(--ink);font-weight:var(--w-strong)}
+.money .gr-n,.money .gr-est{margin-left:var(--s-1h);font-size:var(--t-xs);color:var(--faint);font-weight:var(--w-text)}
+.money .gr-health{display:grid;gap:var(--s-1);padding:var(--s-3) var(--page-x);font-size:var(--t-sm);color:var(--muted)}
+.money .gr-health p{margin:0}
+.money .gr-health .gr-match{display:inline-flex;align-items:center;gap:var(--s-1h)}
+/* The sparkline yields to the figure in a narrow tile. */
+.money .gr-tiles .widget-main{flex-shrink:0;max-width:100%}
+.money .gr-tiles .spark{flex-shrink:1;min-width:0}
+/* Retention: the month column shares the room with the day columns (fixed day widths left it 0 wide on a phone); a
+   cohort not old enough yet says so on two lines inside its cell */
+.money .gr-ret col.t-col{width:auto}
+.money .gr-ret td .zero{white-space:normal}
+@container page (min-width:481px){
+  .money .gr-tiles .widgets{grid-template-columns:repeat(var(--gr-n,4),minmax(0,1fr))}
+}
+
+:where(html[data-layout="cards"]){
+  .money .chart-sec{padding:0 var(--s-2) var(--s-3)}
+  .money .ctl-row{padding:var(--s-3) var(--s-2) var(--s-2h)}
+  .money .two-col{grid-template-columns:minmax(0,1fr)}
+  .money .two-col>*+*{box-shadow:none;border-top:1px solid var(--line);margin-top:var(--s-2)}
+  .money .rule{grid-template-columns:minmax(0,1fr) auto;height:auto;min-height:52px;padding:var(--s-2) var(--s-2)}
+  .money .rule>.ico{display:none}
+  .money .rule.has-act{grid-template-columns:minmax(0,1fr) auto auto}
+  .money .fold{height:var(--tap);padding:0 var(--s-2)}
+}

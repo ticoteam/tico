@@ -1,0 +1,3 @@
+/* The list is as wide as the field it opens from, and no narrower than a select's list. */
+.menu.kit-pick{width:max(var(--anchor-width),208px);max-height:var(--available-height);overflow-y:auto}
+.menu.kit-pick .sr-none:empty{display:none}

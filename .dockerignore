@@ -1,6 +1,7 @@
 .git
 .github
 node_modules
+web/node_modules
 build
 .venv
 __pycache__

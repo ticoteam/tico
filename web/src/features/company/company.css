@@ -1,0 +1,398 @@
+/* Company, Strategy, Products and Risk: the mock's rules (pages/3-company/company.css, pages/10-records/records.css)
+   on the token scale. Page rules sit under `.co`; a panel is drawn in the shell's place, so its rules sit under `.pnl`. */
+
+/* ---------- the Floor: halls with their pipelines ---------- */
+.co .floor{display:grid}
+.co .hall{display:grid;grid-template-columns:168px minmax(0,1fr);column-gap:var(--s-3);padding:var(--s-2h) 0;border-top:1px solid var(--line)}
+.co .hall-head{display:flex;flex-direction:column;align-items:flex-start;gap:var(--s-2h);padding-top:var(--s-2)}
+.co .hall h2{font-family:var(--font-display);font-size:var(--t-hall);font-weight:var(--w-title);line-height:var(--lh-display);font-feature-settings:"ss09";letter-spacing:var(--track-title)}
+.co .crew{display:flex;gap:var(--s-1)}
+.co .crew>:first-child{margin-right:var(--s-1)}
+.co .pipes{display:flex;flex-direction:column}
+.co .pipe{height:88px;display:grid;grid-template-columns:80px 44px minmax(0,1fr) 44px;column-gap:var(--s-2h);align-items:end}
+.co .pipe-name,.co .rate{height:20px;line-height:20px;margin-bottom:var(--s-3h);font-size:var(--t-sm);white-space:nowrap}
+/* a name longer than its column (the mock's names all fit one line) wraps to a second line, then ends in an ellipsis;
+   it never runs into the rate. The full name is the title. */
+.co .pipe-name{color:var(--ink);font-weight:var(--w-strong);min-width:0;height:auto;white-space:normal;overflow-wrap:anywhere;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}
+/* display and opacity undo conversation.css's message `.rate` (Good / Not good), which is global and hides it until hover */
+.co .rate{display:block;opacity:1;color:var(--ink-2);font-variant-numeric:tabular-nums;text-align:right}
+.co .rate-out{text-align:left}
+.co .line{position:relative;align-self:stretch;display:flex;align-items:stretch}
+.co .line::before{content:"";position:absolute;left:0;right:5px;bottom:23px;height:2px;border-radius:var(--r-pill);background:var(--line-strong)}
+.co .line::after{content:"";position:absolute;right:2px;bottom:20.5px;width:7px;height:7px;border-top:2px solid var(--line-strong);border-right:2px solid var(--line-strong);border-radius:0;transform:rotate(45deg)}
+.co .st{flex:1 1 0;min-width:0;position:relative;display:flex;flex-direction:column;align-items:center;justify-content:flex-end}
+.co .st-flow{margin-bottom:var(--s-1)}
+.co .decks{display:flex;align-items:flex-end;gap:var(--s-0);max-width:100%;overflow:hidden;margin-bottom:calc(var(--s-1) + 1px)}
+.co .deck{display:flex;flex-direction:column-reverse;gap:var(--s-0);width:14px}
+.co .deck i{height:4px;border-radius:var(--r-pill);background:var(--stack);transition:background var(--dur-fast) var(--ease)}
+.co .deck.is-capped i:nth-last-child(1){opacity:.3}
+.co .deck.is-capped i:nth-last-child(2){opacity:.6}
+.co .deck-none{width:14px;height:4px;border-radius:var(--r-pill);box-shadow:inset 0 0 0 1px var(--line-strong)}
+.co .node{width:6px;height:6px;border-radius:50%;background:var(--surface);box-shadow:0 0 0 2px var(--line-strong);position:relative;z-index:auto;flex:none}
+.co .st-name{height:16px;line-height:16px;margin-top:calc(var(--s-1) + 1px);font-size:var(--t-xs);color:var(--muted);white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis;flex:none;transition:color var(--dur-fast) var(--ease)}
+.co .st.needs .node{background:var(--ink);box-shadow:0 0 0 2px var(--ink)}
+.co .st:hover .deck i,.co .st.is-open .deck i{background:var(--stack-top)}
+.co .st:hover .node,.co .st.is-open .node{box-shadow:0 0 0 2px var(--ink-2)}
+.co .st.needs:hover .node,.co .st.needs.is-open .node{box-shadow:0 0 0 2px var(--ink)}
+.co .st:hover .st-name,.co .st.is-open .st-name{color:var(--ink)}
+.co .widget b a{color:inherit}
+
+/* ---------- a panel: a stage, a goal, a KPI, a product, a matter ---------- */
+.pnl .rail-sec h3{display:flex;align-items:center;justify-content:space-between}
+.pnl .rail-sec h3>span{font-size:var(--t-sm);font-weight:var(--w-text);color:var(--muted);font-variant-numeric:tabular-nums}
+.pnl .rail-sec h3 .ib{margin:calc(-1 * var(--s-2)) calc(-1 * var(--s-1h)) calc(-1 * var(--s-2)) 0}
+.pnl .pt-title .pill{display:inline-block;margin-left:var(--s-2);vertical-align:1px;font-weight:var(--w-text)}
+.pnl .fact-clip{display:inline-flex;align-items:center;gap:calc(var(--s-1h) + 1px);min-width:0;white-space:nowrap}
+.pnl .pt{display:grid;grid-template-columns:12px minmax(0,1fr) auto;column-gap:var(--s-2);align-items:start;margin:0 calc(-1 * var(--s-2));padding:calc(var(--s-1h) + 1px) var(--s-2);border-radius:var(--r-row);line-height:20px;transition:background var(--dur-fast) var(--ease)}
+.pnl .pt:hover{background:var(--hover)}
+.pnl .pt-mark{height:20px;display:flex;align-items:center}
+.pnl .pt .row-age{line-height:20px}
+.pnl .pt-none{color:var(--muted)}
+.pnl .went{min-height:30px;display:flex;align-items:center;justify-content:space-between;gap:var(--s-3)}
+.pnl .went>span:first-child{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--ink-2)}
+.pnl .row-fig{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.pnl .pnl-chart{padding:var(--s-1h) 0 var(--s-2h)}
+.pnl .checkin{padding:var(--s-1h) 0}
+.pnl .checkin .row-age{display:block;text-align:left}
+.pnl .checkin p{margin-top:var(--s-0);color:var(--ink-2);line-height:20px}
+.pnl .pnl-fig{display:flex;align-items:baseline;gap:var(--s-2);margin:var(--s-0) 0 var(--s-3)}
+.pnl .pnl-fig b{font-family:var(--font-display);font-size:var(--t-fig);font-weight:var(--w-title);line-height:var(--lh-display);font-feature-settings:"ss09";letter-spacing:var(--track-fig);font-variant-numeric:tabular-nums}
+.pnl .pnl-fig>span:not(.pill){color:var(--muted)}
+.pnl .pnl-fig .pill{margin-left:auto;align-self:center}
+.pnl .fact{min-height:30px;height:auto;padding:var(--s-0) 0}
+.pnl .side-head .pnl-back{margin:0 calc(-1 * var(--s-1)) 0 calc(-1 * var(--s-2));transform:scaleX(-1)}
+
+/* a goal's KPIs: the reading of the target; under it who reads it and when it last did, and by when */
+.pnl .kr{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-3);row-gap:calc(var(--s-0) / 2);align-items:start;margin:0 calc(-1 * var(--s-2));padding:calc(var(--s-1h) + 1px) var(--s-2);border-radius:var(--r-row);line-height:20px;transition:background var(--dur-fast) var(--ease)}
+.pnl .kr:hover{background:var(--hover)}
+.pnl .kr-name{min-width:0;text-wrap:pretty}
+.pnl .kr-name .pill{display:inline-block;margin-left:var(--s-2);vertical-align:1px}
+.pnl .gt-fig{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.pnl .gt-fig b{color:var(--ink);font-weight:var(--w-strong)}
+.pnl .kr-src,.pnl .kr-by{font-size:var(--t-sm);line-height:18px;color:var(--muted);white-space:nowrap}
+.pnl .kr-src{display:flex;align-items:center;gap:var(--s-1h);min-width:0}
+.pnl .kr-src>span:not(.src-tool){min-width:0;overflow:hidden;text-overflow:ellipsis}
+.pnl .src-tool{width:16px;height:16px;flex:none;display:inline-grid;place-items:center;border-radius:var(--r-key);background:var(--well-2);color:var(--ink-2)}
+.pnl .src-tool .ico{width:11px;height:11px;stroke-width:2}
+.pnl .went .kr-src{flex:1}
+.pnl .kr-src i{font-style:normal;font-variant-numeric:tabular-nums}
+.pnl .kr-src i::before{content:"\00B7";margin-right:var(--s-1h);color:var(--faint)}
+.pnl .kr-by{text-align:right;font-variant-numeric:tabular-nums}
+.pnl .kr-add{display:inline-flex;align-items:center;gap:var(--s-1h);height:30px;margin:var(--s-1) calc(-1 * var(--s-2)) 0;padding:0 var(--s-2h) 0 var(--s-2);border-radius:var(--r-row);color:var(--ink-2);font-weight:var(--w-strong);transition:background var(--dur-fast) var(--ease)}
+.pnl .kr-add .ico{width:14px;height:14px}
+.pnl .kr-add:hover{background:var(--hover);color:var(--ink)}
+
+/* the KPI and goal forms: label, control */
+.pnl .kf{display:grid;grid-template-columns:auto minmax(0,1fr);gap:var(--s-2) var(--s-3h);align-items:center}
+.pnl .kf-l{color:var(--muted)}
+.pnl .kf-c{display:flex;gap:var(--s-2);min-width:0}
+.pnl .kf-c>*{min-width:0;flex:1}
+.pnl .kf-c>.kf-num{width:92px;flex:none}
+.pnl .kf-c .kf-num input{text-align:right;font-variant-numeric:tabular-nums}
+.pnl .kf-rename{margin-bottom:var(--s-2)}
+/* a panel form of stacked fields: the forms' field gap (calls.css .ev-form, task.css .tv-new) */
+.pnl .fac-form{display:grid;gap:var(--s-4)}
+
+/* a record in the panel: fields that save at once, sections with a count */
+.pnl .rec-flds{padding:var(--s-2) 0 var(--s-2h);border-bottom:1px solid var(--line)}
+.pnl .fld{height:32px}
+.pnl .fld>span:first-child{flex:none}
+.pnl .fld .fact-v{min-width:0}
+.pnl .fld .fact-v>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.pnl .rec-head{height:32px;display:flex;align-items:center;gap:var(--s-2)}
+.pnl .rec-head h3{margin:0}
+.pnl .rail-sec.is-shut{padding-bottom:var(--s-2)}
+.pnl .lk{display:flex;align-items:center;gap:var(--s-2)}
+.pnl .lk .row-title{flex:1}
+.pnl .lk>.ico{flex:none;color:var(--muted)}
+.pnl .chips{display:flex;flex-wrap:wrap;gap:var(--s-1h);padding:var(--s-1) 0 var(--s-0)}
+.pnl .chip-file{display:inline-flex;align-items:center;gap:var(--s-1h);height:24px;max-width:100%;min-width:0;padding:0 var(--s-2) 0 var(--s-1h);border-radius:var(--r-chip);background:var(--well);color:var(--ink-2);font-size:var(--t-sm)}
+.pnl .chip-file .ico{width:13px;height:13px;color:var(--muted);flex:none}
+.pnl .chip-file span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.pnl .org-mark,.co .org-mark{width:var(--av-sm);height:var(--av-sm);border-radius:var(--r-chip);display:inline-grid;place-items:center;flex:none;background:var(--well-2);color:var(--ink-2);font-size:var(--t-xs);font-weight:var(--w-strong);box-shadow:inset 0 0 0 1px var(--line-strong)}
+
+/* ---------- Strategy: a page the Strategy owner keeps ---------- */
+.co .read-by{display:flex;align-items:center;gap:var(--s-2);height:28px;margin-bottom:var(--s-3h);font-size:var(--t-sm);color:var(--muted)}
+.co .read-by b{color:var(--ink);font-weight:var(--w-strong)}
+.co .read-lead{font-size:var(--t-md);font-weight:var(--w-text);line-height:1.6;color:var(--ink)}
+.co .bets{list-style:none;margin:0;padding:0;counter-reset:bet}
+.co .bet{display:grid;grid-template-columns:20px minmax(0,1fr) auto var(--av-sm);column-gap:var(--s-2h);align-items:start;padding:var(--s-2) 0;border-top:1px solid var(--line);font-size:var(--t-base);line-height:var(--lh-read)}
+.co .bet:first-child{border-top:0}
+.co .bet::before{counter-increment:bet;content:counter(bet);color:var(--muted);font-variant-numeric:tabular-nums}
+.co .bet .pill{margin-top:calc(var(--s-0) / 2)}
+.co .brand-frame{margin-top:0}
+/* Where we play: the market's segments as plain lines, each opening Market (mock .play, without its share column: the
+   server has no number for it) */
+.co .play{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-3h);align-items:center;min-height:var(--row);border-top:1px solid var(--line);color:var(--ink);text-decoration:none}
+.co .play:first-of-type{border-top:0}
+.co .play .row-title{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.co .play.is-us .row-title{font-weight:var(--w-strong)}
+.co a.play:hover .row-title{text-decoration:underline}
+.co .play-fault{display:flex;align-items:center;gap:var(--s-2);min-height:var(--row)}
+
+/* ---------- versions: the pick in the head; who wrote a suggestion and when ---------- */
+.co .ver-pick{gap:var(--s-1);font-variant-numeric:tabular-nums}
+.co .ver-pick .ico{width:14px;height:14px;color:var(--muted)}
+.co .chg-by{display:flex;align-items:center;gap:var(--s-1h);margin-top:var(--s-1h);color:var(--muted);font-size:var(--t-xs);line-height:var(--lh-meta)}
+.co .chg-by time{font-variant-numeric:tabular-nums}
+
+/* ---------- Brand: the draft as fields ---------- */
+.co .brand-edit{display:flex;flex-direction:column;gap:var(--s-2)}
+.co .be-rows{display:flex;flex-direction:column;align-items:flex-start;gap:var(--s-2)}
+.co .be-row{display:grid;column-gap:var(--s-2);align-items:end;width:100%}
+.co .be-row.c2{grid-template-columns:minmax(0,1fr) minmax(0,2fr) auto}
+.co .be-row.c3{grid-template-columns:minmax(0,1fr) minmax(0,2fr) minmax(0,2fr) auto}
+
+/* ---------- Market ---------- */
+/* the frame the bar chart measures; the svg inside keeps no padding */
+.co div.chart{padding:0 var(--s-2) var(--s-1h)}
+.co .chg2{grid-template-columns:minmax(0,1fr) 44px;column-gap:var(--s-2h)}
+.co .sec-note{font-size:var(--t-xs);color:var(--muted)}
+.co .legend{display:flex;align-items:center;gap:var(--s-3h);font-size:var(--t-xs);color:var(--muted)}
+.co .legend i{display:inline-block;width:8px;height:8px;border-radius:var(--r-key);margin-right:var(--s-1h)}
+.co .legend .c1{background:var(--ink-2)}
+.co .legend .c2{background:var(--muted)}
+.co .legend .c3{background:var(--line-strong)}
+/* a block the server has nothing for yet: its quiet line, so the page keeps its shape */
+.co .none{color:var(--muted)}
+.co .table .dim,.co .table td.dim{color:var(--muted)}
+.co .table tr.is-us td:first-child{font-weight:var(--w-strong)}
+/* how it reaches buyers: each layer's name, then its organizations as rows, in order */
+/* Org's factories take the same shape: each factory's name, then its pipelines as rows */
+.co .mkt-chain,.co .fac-list{list-style:none;margin:0;padding:0}
+.co .mkt-layer,.co .fac-name{margin:var(--s-2h) 0 var(--s-0);padding:0 var(--s-2);font-size:var(--t-sm);font-weight:var(--w-text);color:var(--muted)}
+.co .mkt-chain>li:first-child .mkt-layer,.co .fac-list>li:first-child .fac-name{margin-top:0}
+.co .mkt-node,.co .fac-pipe{grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h)}
+.co .mkt-node.is-us .row-title{font-weight:var(--w-strong)}
+/* these rows hang no mark, so on the sheets their words start on the section name's edge (8 + 24, parts.css
+   .stage-head); a phone's name and rows already share one edge */
+:where(html:not([data-layout="cards"])) .co :is(.mkt-layer,.mkt-node,.chg2,.fac-name,.fac-pipe){padding-left:var(--s-8)}
+.co .row-fig{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--ink-2)}
+/* the four set-up questions, one at a time */
+.co .mkt-setup{grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h)}
+.co .mkt-ask{display:flex;flex-direction:column;gap:var(--s-2);max-width:var(--measure);padding:var(--s-1) var(--s-2) var(--s-2)}
+.co .mkt-hint{font-size:var(--t-sm);color:var(--muted)}
+.co .mkt-acts{display:flex;gap:var(--s-2)}
+/* Market's panels: a segment, the definition, the briefing, an organization's note */
+.pnl .mkt-pills{display:flex;flex-wrap:wrap;gap:var(--s-1h);margin-bottom:var(--s-2)}
+.pnl .mkt-p{margin:0 0 var(--s-2);color:var(--ink-2);line-height:var(--lh-meta);text-wrap:pretty}
+.pnl .mkt-kick{margin-bottom:var(--s-1);font-size:var(--t-sm);color:var(--muted)}
+.pnl .mkt-list{margin:0;padding-left:var(--s-3h);color:var(--ink-2);line-height:var(--lh-meta)}
+.pnl .mkt-est{padding:var(--s-1h) 0;border-top:1px solid var(--line)}
+.pnl .mkt-est:first-of-type{border-top:0}
+.pnl .mkt-est-h{display:flex;align-items:center;gap:var(--s-2);min-height:30px}
+.pnl .mkt-est-h .row-fig{margin-left:auto}
+.pnl .mkt-arith,.pnl .mkt-ev{margin-top:var(--s-0);font-size:var(--t-sm);color:var(--ink-2);line-height:var(--lh-meta);overflow-wrap:anywhere}
+.pnl .mkt-ev q{display:block;color:var(--muted)}
+.pnl .mkt-param{display:flex;align-items:center;flex-wrap:wrap;gap:var(--s-2);min-height:30px;font-size:var(--t-sm)}
+.pnl .mkt-param-f{display:flex;align-items:center;gap:var(--s-1h)}
+.pnl .mkt-param-f input{width:96px;text-align:right;font-variant-numeric:tabular-nums}
+.pnl .mkt-src{color:var(--muted)}
+.pnl .mkt-who{display:flex;flex-direction:column;padding:var(--s-1) 0;line-height:20px}
+.pnl .mkt-fig{font-size:var(--t-sm);color:var(--muted)}
+.pnl .mkt-quote{margin:0 0 var(--s-2);padding-left:var(--s-2h);border-left:2px solid var(--line-strong);color:var(--ink-2);line-height:var(--lh-meta)}
+.pnl .mkt-quote p+p{margin-top:var(--s-1);color:var(--muted)}
+.pnl .mkt-read{line-height:var(--lh-read);color:var(--ink-2)}
+
+/* ---------- Org: a light org chart. A spine runs down the left to each team's lead; a team's teammates hang from it
+   on a comb, row after row. ---------- */
+.co .oc{--ol:var(--line-strong);--og:8px;padding:var(--s-3h) var(--page-x) var(--s-6)}
+.co .oc-root{position:relative;display:flex;align-items:center;gap:calc(var(--s-6) + var(--s-1));height:48px;padding-bottom:var(--s-3)}
+.co .oc-root::after,.co .oc-team::before,.co .oc-team::after,.co .oc-kids::before,.co .oc-row::before,.co .oc-sub::before{content:"";position:absolute;background:var(--ol);pointer-events:none}
+.co .oc-root::after{left:18px;top:42px;bottom:0;width:1px}
+.co .oc-me{display:flex;align-items:center;gap:var(--s-3);min-width:0;font-weight:var(--w-strong)}
+.co .oc-tico{display:flex;align-items:center;gap:var(--s-2h);min-width:0}
+.co .oc-team{position:relative;padding:var(--s-2) 0}
+.co .oc-team::before{left:18px;top:0;bottom:0;width:1px}
+.co .oc-team:last-child::before{bottom:auto;height:29px}
+.co .oc-team::after{left:18px;top:28px;width:18px;height:1px}
+.co .oc-node{display:flex;align-items:center;gap:var(--s-3);height:40px;padding-left:calc(var(--s-10) + var(--s-1))}
+.co .oc-face{display:grid;flex:none;width:var(--av-lg);height:var(--av-lg);border-radius:var(--r-ctl)}
+.co .oc-id{min-width:0;display:flex;flex-direction:column;align-items:flex-start}
+.co .oc-id h2{font-size:var(--t-sec);font-weight:var(--w-title);line-height:var(--lh-tight);color:var(--ink)}
+.co .oc-sub h3{font-size:var(--t-base);font-weight:var(--w-title);line-height:var(--lh-tight);color:var(--ink)}
+.co .oc-who{display:flex;align-items:center;gap:var(--s-2);font-size:var(--t-sm);line-height:18px;color:var(--ink-2)}
+.co .oc-who:hover{color:var(--ink)}
+.co .oc-kids{position:relative;margin-left:calc(var(--s-18) + var(--s-1));padding-top:var(--s-3h)}
+.co .oc-kids::before{left:-14px;top:6px;width:1px;height:8px}
+.co .oc-kids.has-subs{padding-top:var(--s-1h)}
+.co .oc-kids.has-subs::before{display:none}
+.co .oc-sub{position:relative;height:36px;display:flex;align-items:center}
+.co .oc-sub::before{left:-14px;top:0;bottom:0;width:1px}
+.co .oc-sub:last-child::before{display:none}
+.co .oc-row{position:relative;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));column-gap:var(--s-2)}
+.co .oc-row::before{left:-14px;top:0;bottom:45px;width:1px}
+.co .oc-row:not(:last-child)::before{bottom:0}
+.co .oc-mate{position:relative;height:46px;padding-top:var(--s-2h);min-width:0}
+.co .oc-mate::before{content:"";position:absolute;top:0;height:5px;left:calc(14px - 100% - var(--og));width:calc(100% + var(--og) + 1px);border:solid var(--ol);border-width:1px 1px 0 0;pointer-events:none}
+.co .oc-mate:nth-child(3n+1)::before{left:-14px;width:29px}
+.co .oc-in{display:flex;align-items:center;gap:var(--s-2h);width:fit-content;max-width:calc(100% + 6px);height:32px;margin-left:calc(-1 * var(--s-1h));padding:0 var(--s-2) 0 var(--s-1h);border-radius:var(--r-row);transition:background var(--dur-fast) var(--ease)}
+.co .oc-mate:hover .oc-in{background:var(--hover)}
+.co .oc-mate.is-open .oc-in{background:var(--selected)}
+.co .oc-name{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+@container pg (min-width:800px){
+  .co .oc-row{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .co .oc-mate:nth-child(n)::before{left:calc(14px - 100% - var(--og));width:calc(100% + var(--og) + 1px)}
+  .co .oc-mate:nth-child(4n+1)::before{left:-14px;width:29px}
+}
+
+/* ---------- Goals: a goal sits under the goal it feeds; under its title each KPI is one quiet line ---------- */
+.co .gt{padding:var(--s-1) calc(var(--page-x) - var(--s-2)) 0;border-top:1px solid var(--line)}
+.co .gt-row{display:grid;grid-template-columns:auto var(--av-sm) minmax(0,1fr);column-gap:var(--s-2h);align-items:start;padding:var(--s-1h) var(--s-2);border-radius:var(--r-row);line-height:20px;transition:background var(--dur-fast) var(--ease)}
+.co .gt-row:hover{background:var(--hover)}
+.co .gt-row.is-selected{background:var(--selected)}
+.co .gt-row:not(:first-child):has(>.gt-g:empty){margin-top:var(--s-1)}
+.co .gt-main{display:grid;grid-template-columns:minmax(0,1fr);min-width:0}
+.co .gt-title{display:block;min-width:0;text-wrap:pretty}
+.co .gt-title .pill{display:inline-block;margin-left:var(--s-2);vertical-align:1px;font-weight:var(--w-text)}
+.co .gt-g:empty+*+.gt-main>.gt-title{font-weight:var(--w-strong)}
+.co .gt-g:not(:empty){width:22px;align-self:stretch;position:relative}
+.co .gt-g i{position:absolute;left:10px;top:-6px;bottom:-6px;width:12px;border-left:1.5px solid var(--line-strong)}
+.co .gt-g i::after{content:"";position:absolute;left:0;top:15px;width:10px;border-top:1.5px solid var(--line-strong)}
+.co .gt-g i.e{bottom:auto;height:17px;border-bottom:1.5px solid var(--line-strong);border-bottom-left-radius:var(--r-row)}
+.co .gt-g i.e::after{display:none}
+.co .av-none{width:var(--av-sm);height:var(--av-sm)}
+.co .gk{display:grid;grid-template-columns:minmax(0,1fr) auto 56px;column-gap:var(--s-3);align-items:center;height:22px;font-size:var(--t-sm);line-height:22px;color:var(--muted)}
+.co .gk-name{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;transition:color var(--dur-fast) var(--ease)}
+.co .gk:hover .gk-name{color:var(--ink)}
+.co .gk-fig{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.co .gk-fig b{color:var(--ink);font-weight:var(--w-strong)}
+.co .gk-more{display:inline-flex;align-items:center;gap:var(--s-1h);justify-self:start}
+.co .gk-more:hover{color:var(--ink)}
+/* the company's top goal over the tree, with its reading on a thin meter (company.css goal-lead, meter) */
+.co .goal-lead{display:grid;grid-template-columns:minmax(0,1fr) 200px;column-gap:var(--s-6);align-items:end;padding:var(--s-1) var(--page-x) var(--s-3h);color:var(--ink)}
+.co .goal-name{display:flex;flex-direction:column;min-width:0}
+.co .goal-co{font-size:var(--t-sm);color:var(--muted)}
+.co .goal-title{margin-top:var(--s-1);font-family:var(--font-display);font-size:var(--t-lg);font-weight:var(--w-title);line-height:var(--lh-display);font-feature-settings:"ss09";letter-spacing:var(--track-title)}
+.co .goal-fig{display:grid;gap:var(--s-2)}
+.co .goal-fig>span:first-child{display:flex;align-items:baseline;justify-content:space-between;font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums}
+.co .goal-fig b{font-family:var(--font-display);font-size:var(--t-fig);font-weight:var(--w-title);line-height:var(--lh-display);font-feature-settings:"ss09";letter-spacing:var(--track-fig);color:var(--ink)}
+.co .meter{display:block;height:var(--s-1);border-radius:var(--r-pill);background:var(--line-strong);overflow:hidden}
+.co .meter i{display:block;width:var(--pct);height:100%;border-radius:var(--r-pill);background:var(--ink-2)}
+.pnl .pnl-title{font-size:var(--t-md);font-weight:var(--w-title);line-height:var(--lh-tight);margin:var(--s-0) 0 var(--s-2h);text-wrap:balance}
+.pnl .pnl-title .pill{display:inline-block;margin-left:var(--s-2);vertical-align:1px;font-weight:var(--w-text)}
+.co .trend{display:block;width:56px;height:16px}
+.co .trend path{fill:none;stroke:var(--muted);stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}
+.co .trend circle{fill:var(--ink-2)}
+
+/* ---------- the records table: a mark column on the left ---------- */
+.co .table td a{color:inherit}
+.co .table th.num,.co .table td.num{text-align:right}
+.co .table th.t-mark,.co .table td.t-mark{width:28px;padding:0 0 0 var(--s-3)}
+/* the name column (records.css .t-title, renamed: .t-title is the page title's type step in styles/type.css) */
+.co .table th.t-name,.co .table td.t-name{padding-left:var(--s-2)}
+.co .table td.t-words{color:var(--ink-2)}
+.co .table td.is-none{color:var(--muted)}
+.co .table td.t-who{width:44px;padding-right:var(--s-1)}
+.co .table td.num .av{margin:0}
+.co .table tr.is-quiet td{color:var(--muted)}
+
+/* ---------- Risk: a risk is a row; a live risk shows its matters under it ---------- */
+.co .rk-r,.co .rk-m,.co .rk-d,.co .rk-l{column-gap:var(--s-3)}
+.co .rk-r{grid-template-columns:12px minmax(0,208px) minmax(0,1fr) 64px 128px 16px}
+.co .rk-r.is-live{grid-template-columns:12px minmax(0,1fr) 64px 128px 16px;height:36px}
+.co .rk-name{font-weight:var(--w-strong)}
+.co .rk-r.is-live .rk-name{font-size:var(--t-base);font-weight:var(--w-title);line-height:var(--lh-tight);font-feature-settings:"ss09";color:var(--ink)}
+.co .rk-r.is-live .rk-name:hover{text-decoration:underline;text-underline-offset:3px}
+.co .rk-r.is-quiet .rk-name{font-weight:var(--w-text)}
+.co .rk-fold{width:20px;height:20px;margin:0 calc(-1 * var(--s-1));padding:0;border:0;border-radius:var(--r-chip);background:none;display:grid;place-items:center;color:var(--faint)}
+.co .rk-fold:hover{background:var(--well);color:var(--ink)}
+.co .rk-fold .ico{width:12px;height:12px;transition:transform var(--dur)}
+.co .rk-fold[aria-expanded="false"] .ico{transform:rotate(-90deg)}
+.co .rk-what{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted)}
+.co .rk-n{text-align:right;font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.co .rk-fig{text-align:right;font-size:var(--t-sm);color:var(--ink-2);font-variant-numeric:tabular-nums;white-space:nowrap}
+.co .rk-rules{display:grid;place-items:center;color:var(--faint)}
+.co .rk-rules .ico{width:14px;height:14px}
+.co .rk-live+.rk-live{margin-top:var(--s-1h)}
+.co .rk-m{grid-template-columns:12px minmax(0,1fr) auto 128px var(--av-sm) 34px}
+.co .rk-m.is-in .row-title{padding-left:var(--s-5)}
+.co .rk-m.is-one{grid-template-columns:12px minmax(0,1fr) auto 84px 104px 128px var(--av-sm) 34px}
+.co .rk-m .row-pills,.co .rk-d .row-pills{padding:0}
+.co .rk-m .row-mark,.co .rk-d .row-mark{justify-content:center;color:var(--muted)}
+.co .rk-stage,.co .rk-forum,.co .rk-basis{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:var(--t-sm);color:var(--muted)}
+.co .rk-amt{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.co .rk-m.is-quiet .row-title,.co .rk-m.is-quiet .rk-amt{color:var(--muted)}
+.co .rk-sub{height:30px;display:flex;align-items:flex-end;gap:var(--s-2);padding:0 0 var(--s-1h) calc(var(--s-12) + var(--s-1));font-size:var(--t-sm);color:var(--muted)}
+.co a.rk-sub:hover{color:var(--ink)}
+.co .two-col{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:var(--s-2);align-items:start;margin-top:var(--s-1h);padding-top:var(--s-1h);border-top:1px solid var(--line)}
+.co .two-col>.stage+.stage{margin-top:0;padding-top:0;border-top:0;box-shadow:-1px 0 0 var(--line)}
+.co .rk-l{grid-template-columns:12px minmax(0,1fr)}
+.co .rk-l .row-title{display:flex;align-items:center;gap:var(--s-2)}
+.co .rk-l .row-title .ico{flex:none;color:var(--muted)}
+.co .rk-l .row-title span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.co .rk-d{grid-template-columns:12px minmax(0,1fr) 104px minmax(0,216px) var(--av-sm) 78px}
+.co .rk-d.is-done .row-title{color:var(--ink-2)}
+.co .rk-proof{min-width:0;display:flex}
+.co .rk-text{margin-top:var(--s-1h);padding:var(--s-4) var(--s-2) 0 var(--s-8);border-top:1px solid var(--line)}
+.co .rk-text p{max-width:var(--measure);font-size:var(--t-base);line-height:var(--lh-read);font-feature-settings:"ss09";color:var(--ink-2);text-wrap:pretty}
+
+/* ---------- a narrower sheet: a chat or a panel open beside it ---------- */
+@container pg (max-width:760px){
+  .co .hall{grid-template-columns:minmax(0,1fr);padding:var(--s-3) 0 var(--s-2)}
+  .co .hall-head{flex-direction:row;justify-content:space-between;align-items:center;padding:0;margin-bottom:calc(-1 * var(--s-3h))}
+}
+
+:where(html[data-layout="cards"]){
+  .co .goal-lead{grid-template-columns:minmax(0,1fr);row-gap:var(--s-3h)}
+  .co .hall{grid-template-columns:minmax(0,1fr);padding:var(--s-3) 0 var(--s-1h)}
+  .co .hall-head{flex-direction:row;justify-content:space-between;align-items:center;padding:0 0 var(--s-0)}
+  /* The name takes its own line over the row, so the stage line gets the width between the two rates. The line is a
+     size container: the first and last stage names each keep to half of it and end in an ellipsis; a stage's stacks
+     keep to that stage. */
+  .co .pipe{height:auto;grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:auto 72px;column-gap:var(--s-1h);padding-top:var(--s-1h)}
+  .co .pipe-name{grid-column:1/-1;margin-bottom:0;-webkit-line-clamp:1;line-clamp:1}
+  .co .line{container-type:inline-size}
+  /* placed, not auto-placed: a size container has no width of its own, so in an `auto` column it shrinks to 0 */
+  .co .pipe>.rate{grid-row:2;grid-column:1}
+  .co .pipe>.line{grid-row:2;grid-column:2}
+  .co .pipe>.rate-out{grid-row:2;grid-column:3}
+  .co .deck,.co .deck-none{width:10px;flex:none}
+  .co .st:not(:first-child):not(:last-child) .st-name{visibility:hidden}
+  .co .st:first-child .st-name,.co .st:last-child .st-name{max-width:calc(50cqi - var(--s-1h));pointer-events:none}
+  .co .st:first-child .st-name{align-self:flex-start}
+  .co .st:last-child .st-name{align-self:flex-end;margin-right:var(--s-1h)}
+  .co .oc-row{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .co .oc-mate:nth-child(n)::before{left:calc(14px - 100% - var(--og));width:calc(100% + var(--og) + 1px)}
+  .co .oc-mate:nth-child(2n+1)::before{left:-14px;width:29px}
+  .co .rk-r,.co .rk-r.is-live{grid-template-columns:12px minmax(0,1fr) auto}
+  .co .rk-what,.co .rk-fig,.co .rk-rules,.co .rk-stage,.co .rk-forum,.co .rk-basis,.co .rk-amt,.co .rk-proof{display:none}
+  .co .rk-m,.co .rk-m.is-one{grid-template-columns:12px minmax(0,1fr) auto var(--av-sm) 34px}
+  .co .rk-d{grid-template-columns:12px minmax(0,1fr) var(--av-sm) 78px}
+  .co .two-col{grid-template-columns:minmax(0,1fr)}
+  .co .two-col>.stage+.stage{box-shadow:none;margin-top:var(--s-1h);padding-top:var(--s-1h);border-top:1px solid var(--line)}
+  .pnl .fld{height:44px}
+}
+
+/* ---------- Goals: a proposal that waits on you, an answer card under its row (company.css kp-ask) ---------- */
+.pnl .kp-ask{margin:var(--s-1) 0 var(--s-2)}
+.pnl .kp-why{display:flex;align-items:flex-start;gap:var(--s-1h);margin:var(--s-2) var(--s-0) 0;font-size:var(--t-sm);line-height:var(--lh-meta);color:var(--ink-2)}
+.pnl .kp-why b{font-weight:var(--w-strong);color:var(--ink)}
+.pnl .kr-name .dot{margin-right:var(--s-1h);vertical-align:-1px}
+.co .gt-title .dot{margin-left:var(--s-1h);vertical-align:-1px}
+
+/* ---------- tier 2: Needs you over the goal tree, a record's dates and files, the brand rail, a segment's asks ---------- */
+.co .gt-needs{height:var(--row);display:flex;align-items:center;gap:var(--s-2);padding:0 var(--s-2);border-radius:var(--r-row);font-size:var(--t-sm);color:var(--ink-2)}
+.co .gt-needs:hover,.co .gt-needs.is-selected{background:var(--hover)}
+.pnl .need-row{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);column-gap:var(--s-2)}
+.pnl .need-row .row-age{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:right}
+.pnl .rec-opt{margin-top:var(--s-2);font-size:var(--t-sm);color:var(--ink-2)}
+.pnl .rec-opt ul{margin:var(--s-1) 0 var(--s-2);padding-left:var(--s-4)}
+.pnl .dt{display:grid;grid-template-columns:14px minmax(0,1fr) auto;align-items:center;column-gap:var(--s-2h);min-height:var(--row)}
+.pnl .dt-mark,.co .rk-d .row-mark{display:flex;align-items:center;justify-content:center}
+.pnl .dt.is-done .row-title{color:var(--ink-2)}
+.pnl .dt-proof{grid-column:2/-1;display:flex;align-items:center;gap:var(--s-2);min-width:0;margin:0 0 var(--s-2)}
+.pnl .chip-file a{display:inline-flex;align-items:center;gap:var(--s-1h);min-width:0;color:inherit}
+.pnl .chip-file .ib{margin-right:calc(-1 * var(--s-1h))}
+.pnl .lk-meta{flex:none;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
+.pnl .lk.is-quiet .row-title{color:var(--muted)}
+.co .row-check,.pnl .row-check{display:inline-grid;place-items:center;color:var(--muted)}
+.co .is-due-soon,.pnl .is-due-soon{color:var(--ink);font-weight:var(--w-strong)}
+.co .br-prop{padding:var(--s-2) 0;border-top:1px solid var(--line);font-size:var(--t-sm);color:var(--ink-2)}
+.co .br-prop:first-of-type{border-top:0}
+.pnl .mkt-ask{display:flex;flex-direction:column;gap:var(--s-2);width:100%}
+.pnl .fld-v{height:var(--ctl-sm);margin-right:calc(-1 * var(--s-2));padding:0 var(--s-1h) 0 var(--s-2);border:0;border-radius:var(--r-chip);background:none;color:var(--ink);font:inherit;display:inline-flex;align-items:center;gap:var(--s-1h);min-width:0;transition:background var(--dur-fast) var(--ease)}
+.pnl .fld-v:hover{background:var(--hover)}
+.pnl .fld-v>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.pnl .fld-link{color:var(--ink)}
+.pnl .fld-link:hover{text-decoration:underline;text-underline-offset:3px}

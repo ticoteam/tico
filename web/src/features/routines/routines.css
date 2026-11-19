@@ -1,0 +1,178 @@
+/* Copied from pages/3-company/rules.css (parts 2 to 4): only the rules these pages use, class names unchanged, sizes on
+   the scale. Everything sits under .rr: the page sheet and each of its panels (drawn in the shell's place) carry it. Type comes from type.css classes (t-read) in the markup. Rows here hang no mark in the
+   margin, so their padding puts the title on the section name's edge (--s-8). */
+
+/* ---------- shared: a word, a quiet verb, a muted line, the setting line ---------- */
+.rr .word{display:inline-flex;align-items:center;gap:calc(var(--s-1) + 1px);font-size:var(--t-sm);font-weight:var(--w-strong);color:var(--ink);white-space:nowrap}
+.rr .word .ico{width:var(--ico-sm);height:var(--ico-sm);stroke-width:2;flex:none}
+.rr .verb{height:var(--ctl-sm);display:inline-flex;align-items:center;padding:0 var(--s-2);margin:0 calc(-1 * var(--s-1));border:0;border-radius:var(--r-chip);background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:var(--w-strong);white-space:nowrap;text-decoration:none}
+.rr .verb:hover{background:var(--well-2)}
+.rr .row-sub{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted);font-size:var(--t-sm)}
+.rr .row-state{display:flex;justify-content:flex-end;align-items:center;color:var(--muted)}
+.rr .row-state .ico{width:var(--ico-sm);height:var(--ico-sm)}
+.rr .row-fig{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:var(--t-sm);color:var(--ink-2)}
+.rr .is-off .row-title{color:var(--muted)}
+.rr .set-name{width:var(--set-w,calc(var(--s-18) + var(--s-5)));flex:none;color:var(--muted);font-size:var(--t-sm)}
+.rr .rr-none{padding:var(--s-1h) 0 var(--s-2) var(--s-8)}
+
+/* ---------- the rule row (pages/1-tasks/more.css) ---------- */
+.rr .rule{height:calc(var(--row) - var(--s-1));grid-template-columns:var(--ico) minmax(0,1fr) auto var(--ctl-sm);column-gap:var(--s-2h);margin:0;padding:0 var(--s-0) 0 var(--s-1h)}
+.rr .rule-how{display:grid;place-items:center;color:var(--muted)}
+.rr .rule-how .ico{width:15px;height:15px;stroke-width:1.8}
+.rr .rule-marks{display:flex;align-items:center;gap:var(--s-2h);padding-left:var(--s-3);color:var(--muted)}
+.rr .rule-marks .ico{width:var(--ico-sm);height:var(--ico-sm);stroke-width:1.8}
+.rr .rule-marks>span{display:grid}
+.rr .rule .ib{color:var(--faint)}
+.rr .rule:hover .ib{color:var(--muted)}
+.rr .rule.is-off .row-title{color:var(--muted)}
+/* the sentence is the link; it covers the row, the marks and "⋯" stay pressable over it */
+.rr .rule.is-link .row-title::before{content:"";position:absolute;inset:0;border-radius:inherit}
+.rr .rule.is-link .rule-marks>*,.rr .rule.is-link>.ib,.rr .rule.is-link>[aria-haspopup]{position:relative;z-index:var(--z-page)}
+.rr .rule-sep{display:inline-grid;vertical-align:-2px;margin:0 calc(var(--s-1) + 1px);color:var(--faint)}
+.rr .rule-sep .ico{width:var(--ico-xs);height:var(--ico-xs);stroke-width:2.2}
+.rr .rule-nb{white-space:nowrap}
+.rr .rule-marks>.rule-src{display:block;width:calc(var(--s-18) + var(--s-8));overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:right;font-size:var(--t-sm)}
+.rr .rule-marks>.rule-at{display:block;width:var(--tap)}
+.rr .rule-marks>.rule-gap{width:var(--av-sm)}
+.rr .rule-marks>.rule-hold{display:grid;place-items:center}
+.rr .rule.is-fixed{grid-template-columns:var(--ico) minmax(0,1fr) auto 0}
+
+/* ---------- Company: who on the left, what applies to them on the right ---------- */
+.rr .split{flex:none;min-height:auto;grid-template-columns:calc(var(--s-18) * 3 + var(--s-3)) minmax(0,1fr);box-shadow:none}
+.rr .split>*{overflow:visible}
+.rr .scope-col{position:sticky;top:0;align-self:start;padding:var(--s-2h) var(--s-2) calc(var(--s-6) + var(--s-1)) var(--s-3);border-right:1px solid var(--line)}
+.rr .scope-main{min-width:0;padding-top:var(--s-1h)}
+.rr .scope-row{grid-template-columns:var(--av-sm) minmax(0,1fr) auto;column-gap:var(--s-2);padding:0 var(--s-2h) 0 var(--s-1h)}
+.rr .scope-row.is-kid{padding-left:var(--s-6)}
+.rr .scope-row.is-selected .row-title{font-weight:var(--w-strong)}
+.rr .scope-ico{display:grid;place-items:center;color:var(--muted)}
+.rr .scope-ico .ico{width:var(--ico);height:var(--ico)}
+.rr .scope-ico.is-chev{color:var(--faint)}
+.rr .scope-ico.is-chev .ico{width:var(--ico-sm);height:var(--ico-sm);stroke-width:2.2}
+.rr .scope-ico.is-open .ico{transform:rotate(90deg)}
+.rr .scope-select{display:none}
+.rr .sets{--set-w:calc(var(--s-18) + var(--s-10) + var(--s-1));padding-bottom:var(--s-1h)}
+.rr .set{min-height:var(--s-10);display:flex;align-items:center;gap:var(--s-2h);padding:0 var(--s-2) 0 var(--s-8)}
+.rr .set-from{margin-left:auto;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
+.rr .field.is-num{width:calc(var(--s-8) * 2);height:var(--ctl-sm)}
+.rr .field.is-num input{font-variant-numeric:tabular-nums}
+
+/* ---------- routine, webhook, watch and match rows ---------- */
+.rr .auto{grid-template-columns:minmax(0,1.05fr) minmax(0,1fr) calc(var(--s-18) - var(--s-0)) var(--av-sm) var(--av-lg);column-gap:var(--s-3);padding-left:var(--s-8)}
+.rr .auto-lock{justify-content:center;color:var(--faint)}
+.rr .hook{grid-template-columns:minmax(0,.9fr) minmax(0,1fr) calc(var(--s-18) + var(--s-3)) var(--s-18) var(--tap) var(--ctl-sm);column-gap:var(--s-3);padding:0 var(--s-0) 0 var(--s-8)}
+.rr .hook .row-title{color:inherit;text-decoration:none}
+.rr .hook .row-title::before{content:"";position:absolute;inset:0;border-radius:inherit}
+.rr .hook .ib{position:relative;z-index:var(--z-page)}
+.rr .watch{grid-template-columns:minmax(0,1fr) calc(var(--s-18) + var(--s-1h)) calc(var(--s-18) - var(--s-0)) var(--av-sm) var(--av-lg);column-gap:var(--s-3);padding-left:var(--s-8)}
+.rr .watch .ib{margin:0 calc(-1 * var(--s-1h))}
+.rr .match{height:calc(var(--row) - var(--s-1));grid-template-columns:calc(var(--s-18) * 2 - var(--s-1)) minmax(0,1fr) auto var(--av-lg);column-gap:var(--s-3);padding-left:var(--s-8)}
+.rr .match .pill{margin-left:var(--s-1)}
+.rr .match-open{display:grid;grid-template-columns:calc(var(--s-18) * 2 - var(--s-1)) minmax(0,1fr) var(--av-lg);column-gap:var(--s-3);align-items:start;margin:var(--s-0) 0 var(--s-1h);padding:calc(var(--s-2) + 1px) var(--s-2) var(--s-1h) var(--s-8);border-radius:var(--r-row);background:var(--selected)}
+.rr .match-open .row-sub,.rr .match-open .row-age{line-height:var(--av-sm)}
+.rr .match-text{max-width:var(--measure);color:var(--ink)}
+.rr .match-foot{grid-column:2/-1;display:flex;align-items:center;gap:var(--s-3h);min-height:var(--s-8);margin-top:var(--s-1);color:var(--muted);font-size:var(--t-sm)}
+.rr .match-foot .pill{color:var(--ink-2)}
+
+/* ---------- a panel: facts, then short lists ---------- */
+.rr .inst{max-width:var(--measure);margin-bottom:var(--s-2);color:var(--ink-2);white-space:pre-wrap}
+.rr :is(.prun,.pjob,.hold){margin:0 calc(-1 * var(--s-2))}
+.rr .prun{grid-template-columns:calc(var(--s-18) + var(--s-3)) minmax(0,1fr) auto;column-gap:var(--s-2h)}
+.rr .run-at{white-space:nowrap;font-variant-numeric:tabular-nums}
+.rr .pjob{height:var(--s-12);grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h)}
+.rr .pjob-main{min-width:0;display:grid;row-gap:calc(var(--s-0) / 2)}
+.rr .hold{grid-template-columns:var(--ico) minmax(0,1fr) var(--av-sm) var(--tap);column-gap:var(--s-2h)}
+.rr .hold-mark{display:grid;place-items:center;color:var(--muted)}
+.rr .hold-mark .ico{width:var(--ico-sm);height:var(--ico-sm)}
+.rr .rr-addr{font-family:var(--font-code);font-size:var(--t-sm);overflow-wrap:anywhere;color:var(--ink)}
+.rr .rr-once{display:grid;gap:var(--s-2);justify-items:start}
+.rr-form{display:grid;gap:var(--s-3)}
+.rr-chips{display:flex;flex-wrap:wrap;gap:var(--s-1)}
+.rr .rr-quote{margin:0;padding-left:var(--s-3);border-left:2px solid var(--line-strong);color:var(--ink-2)}
+.rr-diff{margin:var(--s-1) 0 0;font-family:var(--font-code);font-size:var(--t-sm);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted)}
+.rr-diff ins{text-decoration:none;color:var(--ink)}
+.rr-diff del{color:var(--muted)}
+.rr-field{display:flex;align-items:center;gap:var(--s-2h)}
+/* a kept call's headers and body, as sent (Payload) */
+.rr-pre{margin:var(--s-1) 0 0;font-family:var(--font-code);font-size:var(--t-sm);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)}
+
+/* a row whose title opens an editor in place: the title is a button that covers the row */
+.rr .row-open{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.rr .row-open::before{content:"";position:absolute;inset:0;border-radius:inherit}
+/* the inbox board: one line per rule, question, the LLM and each destination */
+.rr .brow{grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);column-gap:var(--s-3);margin:0 calc(-1 * var(--s-2))}
+.rr .rr-head{display:flex;align-items:center;justify-content:space-between;gap:var(--s-2)}
+.rr .rr-more{display:flex;justify-content:center;padding:var(--s-2) 0 var(--s-3)}
+/* a section past 100 rows scrolls on its own and draws only what shows */
+.rr .rr-long{max-height:calc(var(--row) * 12);overflow:auto;scrollbar-width:thin}
+/* a head control kept on a phone */
+.rr .rr-phone{display:contents}
+/* dialogs sit outside .rr: these are unscoped */
+.rr-note{margin:0;color:var(--muted);font-size:var(--t-sm)}
+.rr-list{display:grid;gap:var(--s-2);min-width:0;margin:0;padding:0;border:0}
+.rr-list>legend{display:flex;align-items:center;justify-content:space-between;width:100%;padding:0;margin-bottom:var(--s-1h);color:var(--ink-2);font-size:var(--t-sm);font-weight:var(--w-strong)}
+.rr-line{display:flex;align-items:center;gap:var(--s-2)}
+.rr-line>*{flex:1 1 0;min-width:0}
+.rr-line>.ib,.rr-line>.check{flex:none}
+.rr-secret{display:block;padding:var(--s-2h);border-radius:var(--r-chip);background:var(--well-2);font-family:var(--font-code);font-size:var(--t-sm);overflow-wrap:anywhere;color:var(--ink);user-select:all}
+.rr-dests{display:grid;gap:var(--s-1h);margin:0;padding:0;list-style:none}
+.rr-dests>li{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:var(--s-2)}
+.rr-dest{color:var(--ink)}
+
+/* ---------- a stage's rules in the pipeline editor: a moment, its rules, a rule being written (pages/1-tasks/more.css) ---------- */
+.ps-moments .ph{margin-top:var(--s-2h)}
+.ps-moments .ph-head{height:var(--ctl-sm);display:flex;align-items:center;gap:var(--s-2);margin:0 calc(var(--s-1h) * -1) 0 calc(var(--s-2) * -1);padding:0 0 0 var(--s-2);color:var(--muted)}
+.ps-moments .ph-head>.ico{width:var(--ico-sm);height:var(--ico-sm);stroke-width:1.8}
+.ps-moments .ph-head h3{flex:1;font-weight:var(--w-strong);font-size:var(--t-sm);line-height:1;color:var(--ink-2)}
+.ps-moments .ph-head .ib{color:var(--faint)}
+.ps-moments .ph-head .ib:hover{color:var(--ink)}
+.ps-moments .rule{margin:0 calc(var(--s-1h) * -1) 0 calc(var(--s-2) * -1);padding:0 0 0 var(--s-2)}
+.ps-moments .rule-new{margin:var(--s-1) calc(var(--s-5) + var(--s-0)) var(--s-2) calc(var(--s-4) + var(--s-0))}
+.ps-moments .rule-new-foot{display:flex;gap:var(--s-2)}
+
+:where(html[data-layout="cards"]){
+  .rr .set{min-height:var(--s-12)}
+
+  /* the rule row on a phone: the sentence wraps, because a rule cut off is not a rule */
+  .rr .rule{height:auto;min-height:var(--row);grid-template-columns:var(--ico) minmax(0,1fr) auto var(--ctl)}
+  .rr .rule .row-title{white-space:normal;line-height:1.35;padding:calc(var(--s-2h) + 1px) 0}
+  .rr .rule>.rule-how{align-self:start;margin-top:calc(var(--s-3) + 1px)}
+  .rr .rule.is-fixed{grid-template-columns:var(--ico) minmax(0,1fr) auto 0}
+  .rr .rule-marks{padding-left:var(--s-1);gap:var(--s-2)}
+  /* a rule that carries cells puts them on a line of their own under the sentence, so the sentence keeps the width */
+  .rr .rule.has-cells{grid-template-columns:var(--ico) minmax(0,1fr) var(--ctl);grid-template-areas:"how title more" ". marks more"}
+  .rr .rule.has-cells.is-fixed{grid-template-columns:var(--ico) minmax(0,1fr) 0}
+  .rr .rule.has-cells>.rule-how{grid-area:how}
+  .rr .rule.has-cells>.row-title{grid-area:title;padding-bottom:calc(var(--s-1) + 1px)}
+  .rr .rule.has-cells>.rule-marks{grid-area:marks;padding:0 0 calc(var(--s-2h) + 1px);justify-content:flex-start;min-height:var(--av-sm)}
+  .rr .rule.has-cells>:last-child{grid-area:more}
+  .rr .rule-marks>.rule-src,.rr .rule-marks>.rule-at{width:auto;text-align:left}
+  .rr .rule-marks>.rule-gap,.rr .rule-marks>.rule-src:empty,.rr .rule-marks>.rule-at:empty{display:none}
+  .rr .rule-marks>.verb{margin-left:auto;position:relative}
+  .rr .verb::before{content:"";position:absolute;inset:calc(-1 * var(--s-2)) calc(-1 * var(--s-1))}
+
+  .rr .split{display:block}
+  .rr .scope-col{display:none}
+  .rr .scope-select{display:block;padding:var(--s-2h) var(--s-2) var(--s-1h) var(--s-8)}
+  .rr .set-from{display:none}
+  .rr .sets{--set-w:calc(var(--s-18) + var(--s-8))}
+
+  .rr .auto{grid-template-columns:minmax(0,1fr) auto var(--av-sm) var(--s-8);column-gap:var(--s-2h)}
+  .rr :is(.auto,.watch,.hook) .row-sub{display:none}
+  .rr .brow{grid-template-columns:minmax(0,1fr)}
+  .rr .brow .row-sub{display:none}
+  .rr-line{flex-wrap:wrap}
+  .rr .watch{grid-template-columns:minmax(0,1fr) calc(var(--s-8) * 2) var(--av-sm) var(--s-8);column-gap:var(--s-2h)}
+  .rr .hook{grid-template-columns:minmax(0,1fr) auto calc(var(--s-8) * 2) var(--s-10);column-gap:var(--s-2h);padding-right:var(--s-2)}
+  .rr .hook .ib{display:none}
+
+  .rr .match{height:auto;min-height:var(--row);grid-template-columns:minmax(0,1fr) auto var(--s-8);grid-template-areas:"src pill age" "text text text";row-gap:var(--s-0);padding:var(--s-2) var(--s-2) var(--s-2) var(--s-8)}
+  .rr .match .row-sub{grid-area:src}
+  .rr .match .row-title{grid-area:text;white-space:normal;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .rr .match .pill{grid-area:pill}
+  .rr .match .row-age{grid-area:age}
+  .rr .match-open{grid-template-columns:minmax(0,1fr) var(--s-8);padding:var(--s-2) var(--s-2) var(--s-1) var(--s-8)}
+  .rr .match-open .match-text{grid-column:1/-1;grid-row:2}
+  .rr .match-foot{grid-column:1/-1;min-height:var(--tap);gap:var(--s-2h)}
+  .rr .match-foot .verb{position:relative}
+}

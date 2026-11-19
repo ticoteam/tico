@@ -1,0 +1,76 @@
+/* The Dot and what it does: every state in tico/dot.html. Copied from tico/dot-states.css L225-275, L289-303 and the
+   level bars from L132-138, with the mock's numbers unchanged. The Dot's base (.dot, .dot i, .dot b, blob, glint) is in
+   styles/dot.css. Jade lives only here, in styles/dot.css and in motion/. */
+
+.dw{position:relative;display:inline-grid;place-items:center;width:var(--d);height:var(--d);flex:none;isolation:isolate}
+.dw .dot i{overflow:hidden;animation:blob var(--breathe-dot) cubic-bezier(.45,0,.55,1) infinite;transition:opacity .16s var(--ease)}
+.dw .dot b{animation:glint var(--breathe-dot) cubic-bezier(.45,0,.55,1) infinite}
+/* gray, for "cannot": a layer over the jade that fades in */
+.dw .dot i::before{content:"";position:absolute;inset:0;background:radial-gradient(120% 120% at 30% 20%,var(--faint-lit),var(--faint) 52%,var(--faint-shade));opacity:0;transition:opacity .22s var(--ease)}
+/* it writes back: the quick breath. Live, the app changes the playback rate instead, which keeps the phase (motion.md A8). */
+.is-frozen .dw.s-busy .dot i,.is-frozen .dw.s-busy .dot b{animation-duration:1.5s}
+/* thinking: the outline turns, very slowly. The light stays where it is; nothing spins inside. */
+.dw.s-think .dot i{animation:think 10s linear infinite}
+@keyframes think{0%,100%{border-radius:38% 62% 57% 43%/35% 45% 55% 65%;transform:scale(1.02)}25%{border-radius:65% 35% 45% 55%/43% 38% 62% 57%;transform:scale(1.045)}50%{border-radius:57% 43% 38% 62%/55% 65% 35% 45%;transform:scale(1.02)}75%{border-radius:45% 55% 65% 35%/62% 57% 43% 38%;transform:scale(1.045)}}
+/* a change of shape between the breath and the turn: the new loop starts once the 400ms blend has reached its first frame */
+.dw.is-blend .dot i,.dw.is-blend.s-think .dot i{animation-delay:.4s}
+/* working out of sight: one tiny droplet for each thing in progress (.n1 to .n5), each at its own slow, uneven pace */
+.motes{position:absolute;inset:0;pointer-events:none;transition:opacity .5s var(--ease)}
+.motes em{position:absolute;inset:0;opacity:0;transform:rotate(var(--a0));transition:opacity .5s var(--ease);animation:drift-a 23s cubic-bezier(.37,.15,.63,.85) infinite}
+.motes em::after{content:"";position:absolute;left:50%;top:calc(var(--d)*-.135);width:max(2px,calc(var(--d)*.09));height:max(2px,calc(var(--d)*.09));margin:calc(max(2px,var(--d)*.09)/-2) 0 0 calc(max(2px,var(--d)*.09)/-2);border-radius:50%;background:var(--dot)}
+.motes em:nth-child(2){animation-name:drift-b;animation-duration:29s}
+.motes em:nth-child(3){animation-name:drift-c;animation-duration:19s}
+.motes em:nth-child(4){animation-name:drift-b;animation-duration:25s}
+.motes em:nth-child(5){animation-name:drift-c;animation-duration:31s}
+.motes em:nth-child(2)::after,.motes em:nth-child(5)::after{transform:scale(.82)}
+@keyframes drift-a{0%{transform:rotate(var(--a0))}22%{transform:rotate(calc(var(--a0) + 55deg))}47%{transform:rotate(calc(var(--a0) + 170deg))}71%{transform:rotate(calc(var(--a0) + 228deg))}100%{transform:rotate(calc(var(--a0) + 360deg))}}
+@keyframes drift-b{0%{transform:rotate(var(--a0))}31%{transform:rotate(calc(var(--a0) + 140deg))}52%{transform:rotate(calc(var(--a0) + 176deg))}80%{transform:rotate(calc(var(--a0) + 292deg))}100%{transform:rotate(calc(var(--a0) + 360deg))}}
+@keyframes drift-c{0%{transform:rotate(var(--a0))}18%{transform:rotate(calc(var(--a0) + 72deg))}44%{transform:rotate(calc(var(--a0) + 118deg))}69%{transform:rotate(calc(var(--a0) + 251deg))}100%{transform:rotate(calc(var(--a0) + 360deg))}}
+.dw.n1 .motes em:nth-child(-n+1),.dw.n2 .motes em:nth-child(-n+2),.dw.n3 .motes em:nth-child(-n+3),.dw.n4 .motes em:nth-child(-n+4),.dw.n5 .motes em{opacity:.62}
+/* the droplets are hidden while the Dot is the Flow mark or asleep (motion.md 4) */
+.dw.s-flow .motes,.dw.s-off .motes{opacity:0}
+/* a new message while folded: one droplet of the Dot's own, resting on its upper right edge */
+.bud{position:absolute;right:calc(var(--d)*-.05);top:calc(var(--d)*-.05);width:calc(var(--d)*.26);height:calc(var(--d)*.26);border-radius:var(--r-blob-2);background:radial-gradient(120% 120% at 30% 20%,var(--dot-hi),var(--dot) 52%,var(--dot-lo));box-shadow:0 0 0 max(1px,calc(var(--d)*.022)) var(--sheet-mid);opacity:0;transform:translate(-70%,70%) scale(.2);transition:transform .3s var(--ease),opacity .2s var(--ease) .1s;pointer-events:none}
+.dw.has-bud .bud{opacity:1;transform:none;transition:transform .36s var(--spring),opacity .12s var(--ease)}
+/* waiting on you: the Dot itself in the Flow mark's shape, drawn under the Dot, taking over as the round one fades */
+.fshape{position:absolute;left:50%;top:50%;width:calc(var(--d)*1.25);height:calc(var(--d)*1.25);margin:calc(var(--d)*-.625) 0 0 calc(var(--d)*-.625);z-index:-1;overflow:visible;opacity:0;transition:opacity .01s linear .16s;pointer-events:none}
+.fshape .fb{fill:color-mix(in srgb,var(--dot) 58%,var(--sheet-mid))}
+.dw.s-flow .fshape{opacity:1;transition:none}
+.dw.s-flow .dot i{opacity:0;animation:none}
+.dw .dot b{transition:opacity .16s var(--ease)}
+.dw.s-flow .dot b{opacity:0}
+/* on a call the shape is driven by the voice, not by the breath */
+.dw.s-voice .dot i{animation:none}
+/* cannot do it, and not there at all */
+.dw.s-grey .dot i::before{opacity:1}
+.dw.s-grey .dot b{opacity:.45}
+/* turning off, the hollow ring fades in over the jade's place (motion.md A11); motion off: at once */
+.dw.s-off .dot i{animation:dot-off var(--dur) var(--ease);background:none;box-shadow:inset 0 0 0 max(1.5px,calc(var(--d)*.07)) var(--faint)}
+@keyframes dot-off{from{opacity:0}}
+.is-frozen .dw.s-off .dot i{animation:none}
+.dw.s-off .dot i::before,.dw.s-off .dot b{display:none}
+/* a Dot off screen stands still (motion.md 7) */
+.dw.is-idle *,.dw.is-idle *::before,.dw.is-idle *::after{animation-play-state:paused}
+/* a face in an avatar is drawn still */
+.dw.is-still *,.dw.is-still *::before,.dw.is-still *::after{animation:none}
+
+/* flights and the landing ring (the film's), drawn on motion's layer */
+.fly{position:absolute;left:0;top:0;opacity:0;will-change:transform}
+.fly i{box-shadow:var(--dot-drop)}
+.rip{position:absolute;left:0;top:0;width:40px;height:40px;margin:-20px 0 0 -20px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--dot);opacity:0}
+
+/* the level bars on a call: a tiny meter, alive only with sound (C2, C3) */
+.lvl{display:inline-flex;align-items:center;gap:2px;height:14px;flex:none;color:var(--ink);transition:opacity .2s var(--ease),color .2s var(--ease)}
+.lvl i{width:2.5px;height:100%;border-radius:2px;background:currentColor;transform-origin:center;transform:scaleY(.22)}
+.lvl.is-on i:nth-child(1){transform:scaleY(.45)}.lvl.is-on i:nth-child(2){transform:scaleY(1)}.lvl.is-on i:nth-child(3){transform:scaleY(.6)}.lvl.is-on i:nth-child(4){transform:scaleY(.8)}
+.lvl.dim{color:var(--muted)}
+.lvl.gone{opacity:0}
+
+/* Motion: less. The smaller breath, and the droplets sit still at their start angles. */
+[data-motion="less"]{--breath:1.045;--breath-back:.992;--breath-turn:5deg;--breath-turn-back:-3deg;--breathe-dot:5.2s}
+[data-motion="less"] .motes em{animation:none}
+/* Motion: off. Nothing travels, grows or loops; things fade. */
+[data-motion="off"] .dw *,[data-motion="off"] .dw *::before,[data-motion="off"] .dw *::after{animation:none!important}
+[data-motion="off"] .motes{display:none}
+[data-motion="off"] .bud{transition:opacity .2s var(--ease)}
+[data-motion="off"] .dw .dot b{transition:none}

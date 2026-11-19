@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Tico</title>
+    <!-- No font preload: WebKit fetches a same-origin @font-face without CORS and Chromium with it, so one preload is
+         always the wrong mode for one of them (a second download and a "preloaded but not used" warning). -->
+    <script src="/boot.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

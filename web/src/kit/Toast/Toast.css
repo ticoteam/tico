@@ -1,0 +1,9 @@
+/* Motion G8: in from below (--move-lg) over --dur-enter, out a short way down (--move) over --dur-leave --ease-in.
+   With Motion off the tokens leave only the fades. */
+.kit-toast{transition:opacity var(--dur-enter) var(--ease),transform var(--dur-enter) var(--ease-arrive)}
+.kit-toast[data-starting-style]{opacity:0;transform:translateY(var(--move-lg))}
+.kit-toast[data-ending-style]{opacity:0;transform:translateY(var(--move));transition:opacity var(--dur-leave) var(--ease-in),transform var(--dur-leave) var(--ease-in)}
+/* A toast that names the thing it was done to (pages/14-acts/acts.css). */
+.toast.is-named{max-width:calc(100% - 48px)}
+.toast.is-named span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.toast.is-named span b{font-weight:var(--w-strong)}

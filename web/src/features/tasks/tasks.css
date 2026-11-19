@@ -1,0 +1,131 @@
+/* Tasks and Flow: what pages/1-tasks/list.css has that styles/ and pagekinds.css do not. Class names are the mock's. */
+
+/* pipeline, then stage: a list that crosses pipelines */
+.sec-sep{width:12px;height:12px;stroke-width:2;margin:calc(var(--s-0) / 2) var(--s-1h) 0;color:var(--faint)}
+
+/* stages with nothing in them: folded names on one line under the list */
+.stage-line{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-1) calc(var(--s-6) + var(--s-1));min-height:var(--row);margin-top:var(--s-2h);padding:var(--s-2h) 0 0 var(--s-8);border-top:1px solid var(--line)}
+
+/* a stage past twelve rows shows ten and says how many more */
+.row-more{color:var(--muted);font-size:var(--t-sm)}
+.row-more:hover{color:var(--ink)}
+button.row-more{width:100%;border:0;background:none;font:inherit;font-size:var(--t-sm);text-align:left;grid-template-columns:24px minmax(0,1fr)}
+
+/* a stage opened past its cap: its rows scroll inside it */
+.tk-long{max-height:calc(var(--row) * 12);overflow:auto;scrollbar-width:thin}
+
+/* a row's or a card's "⋯": shown under a pointer and on focus, over the row's right end */
+.tk-item{position:relative}
+.tk-item>.tk-more{position:absolute;top:50%;right:0;margin-top:calc(var(--ctl-sm)/-2);opacity:0}
+.tk-item>.card~.tk-more{top:6px;right:6px;margin-top:0}
+.tk-item:hover>.tk-more,.tk-item>.tk-more:focus-visible,.tk-item>.tk-more[aria-expanded="true"]{opacity:1}
+.tk-item:hover>.row{--surface:var(--hover);background:var(--hover)}
+.tk-item>.tk-more:not(:hover){background:var(--surface)}
+.tk-item.is-drag{z-index:var(--z-stick)}
+.col[data-drop]{border-radius:var(--r-ctl);background:var(--well)}
+/* over another card: a subtask or a merge (the drop dialog) */
+.tk-item[data-drop]>.card{--surface:var(--selected);background:var(--selected)}
+.tb-drop{display:grid;gap:var(--s-4)}
+.tb-drop-titles{display:grid;gap:var(--s-1);margin:0}
+.tb-drop-titles>span+span{color:var(--muted)}
+.tb-drop-line{margin:0;font-size:var(--t-sm);color:var(--muted);text-wrap:pretty}
+.tb-drop-moves{margin:0;padding-left:var(--s-5);display:grid;gap:var(--s-1);font-size:var(--t-sm);color:var(--ink-2)}
+
+.card-foot .row-age{width:32px;flex:none;line-height:var(--av-sm)}
+
+/* the board: whole columns only; past an edge, an arrow, how many stages lie that way, and how many wait on you */
+.board-wrap.has-more .board{margin-right:var(--s-12)}
+.board-more{position:absolute;top:6px;width:32px;display:grid;justify-items:center;gap:var(--s-2);color:var(--muted);font-size:var(--t-xs);font-variant-numeric:tabular-nums}
+.board-more.is-next{right:8px}
+.board-more.is-prev{left:0}
+.board-more .ib{--surface:var(--raised);border-radius:50%;background:var(--raised);box-shadow:var(--lift-ctl);color:var(--ink)}
+.board-more .ib:hover{background:var(--raised-hover)}
+.board-more .col-flow{flex-direction:column;gap:var(--s-1)}
+
+html[data-layout="cards"] .tk-item>.tk-more{display:none}
+
+/* a row that crosses stages names its stage (more.css) */
+.row-stage{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Select: a picked card, and the box that stands in a row's or a card's mark */
+.card.is-selected{--surface:var(--selected);background:var(--selected)}
+.row-mark>.check,.card-marks>.check{min-height:0}
+
+/* a stage head's "+" and "⋯" show under a pointer (parts.css .ib-ghost), and stay while their menu is open */
+.stage-head .ib-ghost[aria-expanded="true"]{opacity:1}
+
+/* the head's Flow button (parts-kit.js playBtn: playDot(22)) */
+
+/* nothing in the pipeline: the stages stay, then one line and one button under them (list.js listBody, boardBody) */
+.pk-body:has(>.empty){display:flex;flex-direction:column;-webkit-mask-image:none;mask-image:none}
+.board:has(.empty){overflow:visible;-webkit-mask-image:none;mask-image:none}
+.board-in:has(>.empty){width:auto;flex-direction:column}
+.tk-heads{display:flex;gap:calc(var(--s-2) + var(--s-0))}
+.tk-heads>.col{flex:1 1 0;width:auto;min-width:0}
+.tk-heads .col-head{position:static;padding:0 0 0 var(--s-3);box-shadow:0 1px 0 var(--line)}
+
+/* Archived: a row names its stage (list.css) */
+.is-arch .row-title{color:var(--ink-2)}
+:where(html:not([data-layout="cards"])) .task.is-arch{grid-template-columns:24px minmax(0,1fr) 104px var(--av-sm) 38px}
+:where(html[data-layout="cards"]) .task.is-arch .row-stage{grid-area:pills;padding:0}
+
+/* Edit pipeline: the stages in order down one line; a side stage hangs off it (more.css) */
+.pe-held{margin-bottom:var(--s-2);color:var(--ink-2)}
+.pe-stages{display:grid;grid-template-columns:minmax(0,1fr)}
+.ps{position:relative;padding-left:calc(var(--s-6) + var(--s-1))}
+.ps::before{content:"";position:absolute;left:13.25px;top:0;bottom:0;width:1.5px;background:var(--line-strong)}
+.ps:first-child::before{top:calc(var(--ctl-lg)/2)}
+.ps.is-add::before{bottom:calc(100% - var(--ctl-lg)/2)}
+.ps-node{position:absolute;left:9.5px;top:calc(var(--ctl-lg)/2 - 4.5px);width:9px;height:9px;border-radius:50%;background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--muted)}
+.ps-row{height:var(--ctl-lg);display:flex;align-items:center;gap:var(--s-2);padding:0 var(--s-0) 0 var(--s-2);border-radius:var(--r-row)}
+.ps-row .field{width:176px;margin-left:calc(var(--s-2h) * -1);font-weight:var(--w-strong)}
+.ps-row .ib{color:var(--muted)}
+.ps-name{font-weight:var(--w-strong);white-space:nowrap}
+.ps.is-side{padding-left:calc(var(--s-12) + var(--s-1))}
+.ps.is-side>.ps-node{left:33.5px;background:none;box-shadow:none;border:1.5px dashed var(--muted)}
+.ps.is-side .field{font-weight:var(--w-text)}
+.ps.is-add>.ps-node{left:6px;top:calc(var(--ctl-lg)/2 - 8px);width:16px;height:16px;display:grid;place-items:center;box-shadow:none;color:var(--muted)}
+.ps.is-add .ps-node .ico{width:14px;height:14px;stroke-width:2}
+.ps.is-add .ps-row{width:100%;border:0;background:none;font:inherit;cursor:pointer}
+.ps.is-add .ps-row:hover{--surface:var(--hover);background:var(--hover)}
+.ps.is-add .ps-name{font-weight:var(--w-text);color:var(--muted)}
+.ps.is-add .ps-row:hover .ps-name{color:var(--ink)}
+/* an open stage: its node fills, its rules sit between two lines under its row (more.css) */
+.ps.is-open>.ps-node{background:var(--ink);box-shadow:0 0 0 3px var(--surface)}
+.ps-chev{width:var(--ctl-sm);height:var(--ctl-sm);display:grid;place-items:center;flex:none;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--faint);cursor:pointer}
+.ps-chev:hover{background:var(--hover);color:var(--ink)}
+.ps-chev:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
+.ps-chev .ico{width:14px;height:14px;transition:transform var(--dur) var(--spring)}
+.ps.is-open .ps-chev .ico{transform:rotate(90deg)}
+.ps.is-open>.ps-in{margin:var(--s-1) 0 var(--s-2);padding:var(--s-0) 0 var(--s-4);border-block:1px solid var(--line)}
+.ps-body{padding:var(--s-1h) var(--s-2) 0}
+/* the pipeline's facts in a row under the head (more.css): goal, manager, factory, prefix; New pipeline puts its name
+   first, the goal beside it, the rest under them. A phone stacks them. */
+.pe-facts{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr) minmax(0,1.4fr) 88px;gap:var(--s-3);margin-bottom:var(--s-4)}
+.pe-facts .w-pname+.w-pgoal{grid-column:span 3}
+html[data-layout="cards"] .pe-facts{grid-template-columns:minmax(0,1fr) 88px}
+html[data-layout="cards"] .pe-facts :is(.w-pgoal,.w-manager,.w-pname){grid-column:1/-1}
+.pe-facts .f,.ps-facts .f{justify-items:stretch}
+.ps-facts{display:grid;grid-template-columns:64px;gap:var(--s-3);align-items:end;margin-bottom:var(--s-2)}
+.ps-facts .w-goal,.ps-facts .w-owner{grid-column:1/-1}
+
+/* Roadmap (more.css): the track is how far a task is through its pipeline; the last column is its date */
+.row-sub{display:contents}
+.task.rm{grid-template-columns:24px minmax(0,1fr) auto 86px var(--av-sm) 52px}
+.rm .track{width:72px;margin:0}
+.rm .row-pills{align-items:center}
+.rm-lock{display:grid;color:var(--muted)}
+.rm-lock .ico{width:14px;height:14px;stroke-width:1.8}
+/* Shipped: a section drawn shut; a phone draws one line in its place (RoadmapPage) */
+html[data-layout="cards"] .task .row-sub{grid-area:pills;display:flex;align-items:center;gap:var(--s-2)}
+html[data-layout="cards"] .task .row-sub .row-pills:empty{display:none}
+html[data-layout="cards"] .task.rm{grid-template-columns:20px minmax(0,1fr) var(--av-sm) 46px}
+html[data-layout="cards"] .task.rm .track{order:-1}
+html[data-layout="cards"] .stage-fold a{min-height:var(--ctl);display:inline-flex;align-items:center}
+
+/* Requesters: who asked for a roadmap task */
+.rq{grid-template-columns:var(--av-sm) minmax(0,1fr) auto var(--ctl-sm);column-gap:var(--s-2h)}
+.rq-list{display:grid;max-height:calc(var(--row) * 8);overflow:auto;scrollbar-width:thin}
+.rq-line{margin:0;font-size:var(--t-sm);color:var(--muted)}
+.rq-form{display:grid;gap:var(--s-3)}
+

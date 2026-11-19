@@ -1,0 +1,52 @@
+# Packaging (electron-builder). macOS first, unsigned for now: set `identity` and notarize before shipping updates,
+# since an unsigned Mac app cannot install its own updates.
+appId: team.tico.desktop
+productName: Tico
+copyright: Tico
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**
+  - package.json
+asar: true
+protocols:
+  - name: Tico
+    schemes: [tico]
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+mac:
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  category: public.app-category.productivity
+  minimumSystemVersion: "14.0"
+  icon: ../app/icons/icon.icns
+  identity: null
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    NSMicrophoneUsageDescription: Tico uses the microphone for calls.
+    NSCameraUsageDescription: Tico uses the camera for calls when you turn it on.
+    NSAppTransportSecurity:
+      NSAllowsLocalNetworking: true
+win:
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+  icon: ../app/icons/icon.ico
+linux:
+  target: [AppImage, deb]
+  category: Office
+publish:
+  provider: github
+  owner: ticoteam
+  repo: tico

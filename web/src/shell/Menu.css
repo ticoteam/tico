@@ -1,0 +1,18 @@
+/* The menus the menu opens: the company pick under the company's name (system/shell.css .co-menu) and the account
+   menu over your name at the foot (pages/8-settings/more.css .acct). Both are kit menus; only their rows are theirs. */
+button.me{border:0;padding:0;background:none;font:inherit;color:inherit;cursor:pointer}
+:where(button).nav-item{border:0;background:none;font:inherit;text-align:left;cursor:pointer}
+.co-pick[data-popup-open]{background:var(--hover)}
+
+.menu:has(a>.co-mark){width:228px}
+.menu a>.co-mark{width:22px;height:22px;font-size:var(--t-xs);border-radius:var(--r-chip);background:var(--well-2);color:var(--ink);flex:none}
+.menu a.is-on>.co-mark{background:var(--ink);color:var(--raised)}
+
+.menu:has(>.acct-me){width:264px}
+.acct-me{display:flex;align-items:center;gap:var(--s-2h);padding:var(--s-1h) var(--s-2) var(--s-2)}
+.acct-me>span{display:grid;gap:var(--s-0);min-width:0;line-height:1.15}
+.acct-me b,.acct-me em{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.acct-me b{font-weight:var(--w-strong)}
+.acct-me em{font-style:normal;font-size:var(--t-sm);color:var(--muted)}
+.acct-line{height:var(--ctl);display:flex;align-items:center;justify-content:space-between;padding:0 var(--s-1) 0 var(--s-2)}
+.help-slot>.slot-n{left:18px;top:-6px;pointer-events:none}

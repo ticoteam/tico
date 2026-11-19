@@ -1,0 +1,129 @@
+/* The chat parts the mocks keep in page files, copied as they are: pages/2-threads/threads.css (paragraphs, links,
+   the steps fold, the "New" break, a message being written), pages/14-acts/acts.css (a fault line, an answered
+   card) and pages/4-teammates/mates.css (an agent's page chat), spacing on the scale (1px and 3px became 0 and 2px).
+   Plus the message box as a real field. */
+
+.msg p+p,.msg ul+p{margin-top:var(--s-2)}
+.msg p+ul{margin-top:var(--s-1h)}
+.msg p b,.msg li b{font-weight:var(--w-strong)}
+.lnk{text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:3px;transition:text-decoration-color var(--dur-fast) var(--ease)}
+.lnk:hover{text-decoration-color:var(--ink)}
+.fold{display:flex;align-items:center;gap:var(--s-1h);height:22px;margin:0 0 var(--s-0);padding:0;border:0;background:none;color:var(--muted);font-size:var(--t-sm);position:relative}
+.fold .ico{width:12px;height:12px}
+.fold time{color:var(--faint);font-variant-numeric:tabular-nums}
+.day.is-new{color:var(--ink);font-weight:var(--w-strong)}
+.day.is-new::before,.day.is-new::after{background:var(--line-strong)}
+
+/* a chat's bones while it loads (pages/2-threads/threads.css skConv) */
+.msg.is-skeleton{padding-top:calc(var(--s-5) + var(--s-0))}
+.msg.is-skeleton .msg-main{display:grid;gap:calc(var(--s-2) + var(--s-0));padding-top:var(--s-1);justify-items:start}
+.sk-28{width:var(--av-md);height:var(--av-md)}
+
+.ask-said{margin-top:var(--s-1h);font-size:var(--t-xs);color:var(--muted)}
+.msg p .fmark{margin-right:var(--s-0)}
+
+.chat-page .chat-body{padding:var(--s-3) var(--s-6)}
+.chat-page .chat-foot{padding:var(--s-1) var(--s-5) var(--s-5)}
+.chat-page .day:first-child{margin-top:auto}
+.chat-page .mine-col{max-width:72%}
+:where(html[data-layout="cards"]){
+  .chat-page .chat-body{padding:var(--s-2) var(--s-4)}
+  .chat-page .mine-col{max-width:86%}
+}
+
+/* each row sits in the virtual list's placed box: its margins stay inside the box that is measured, and the shell's
+   gap between a did line and a message is kept across the boxes */
+.chat-body .vl-item{display:flow-root}
+.chat-body .vl-item:has(>.did)+.vl-item>.msg,.chat-body .vl-item:has(>.msg)+.vl-item>.did{margin-top:var(--s-3)}
+
+/* a message being written wraps in its box; it is never cut */
+.composer.is-typing{align-items:flex-end;padding-bottom:var(--s-1h);padding-top:var(--s-1h)}
+.composer.is-typing .composer-text{white-space:normal;overflow:visible;line-height:1.4;padding:var(--s-1h) 0;align-self:center}
+
+/* the message box is a textarea that grows with what is typed (the mock draws it as text) */
+textarea.composer-text{border:0;outline:0;background:none;padding:0;font-family:inherit;font-size:inherit;font-weight:inherit;font-feature-settings:inherit;line-height:inherit;color:var(--ink);resize:none;field-sizing:content;max-height:40dvh;overflow-y:auto;scrollbar-width:none}
+textarea.composer-text::placeholder{color:var(--muted)}
+.composer.is-typing textarea.composer-text{overflow-y:auto}
+/* iPhone Safari zooms into a field under 16px (platforms.md 2) */
+@media (pointer:coarse){textarea.composer-text{font-size:var(--t-md)}}
+.composer input[type=file]{display:none}
+
+/* a picture in a message opens full size over the page (kit/PictureViewer) */
+.msg .md-img{cursor:zoom-in}
+
+/* Good and Not good under what others said: quiet fold-style words, shown on hover; a chosen one stays. The mocks draw
+   no rating, so these are the steps fold's look. */
+.rate{display:flex;gap:var(--s-3);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
+.rate .fold{cursor:pointer;font-family:inherit}
+.rate .fold:hover,.rate .fold[aria-pressed="true"]{color:var(--ink)}
+.msg:hover .rate,.rate:focus-within,.rate.is-rated{opacity:1}
+.rate.is-rated .fold[aria-pressed="false"]{visibility:hidden}
+.msg:hover .rate.is-rated .fold,.rate.is-rated:focus-within .fold{visibility:visible}
+@media (hover:none){.rate{opacity:1}}
+/* on a phone a long press on a message opens its actions as a sheet (platforms.md 2.8): the row under it keeps only a
+   chosen rating, and the pressed text is not selected instead */
+:where(html[data-layout="cards"]){
+  @media (hover:none){
+    .rate:not(.is-rated){display:none}
+    .msg:not(.st-list .msg){-webkit-user-select:none;user-select:none}
+  }
+}
+.rate-chips{display:flex;flex-wrap:wrap;gap:var(--s-1h)}
+.rate-chip{height:28px;padding:0 var(--s-2);border:0;border-radius:var(--r-chip);background:var(--well-2);color:var(--ink-2);font-family:inherit;font-size:var(--t-sm);cursor:pointer}
+.rate-chip:hover{color:var(--ink)}
+.rate-chip[aria-pressed="true"]{color:var(--ink);box-shadow:inset 0 0 0 1px var(--line-strong)}
+.rate-note{color:var(--muted);font-size:var(--t-sm)}
+.msg-from{text-decoration:none;cursor:pointer;font-family:inherit}
+.msg-from:hover{color:var(--ink)}
+
+/* the Slack thread a message came from, every message in full, in a dialog-high scroller */
+.st-list{max-height:60dvh;overflow:auto}
+.st-list .msg:first-child{padding-top:0}
+.st-text{white-space:pre-wrap}
+
+/* the Outline: one row per prompt, in a dialog-high scroller */
+.co-list{max-height:60dvh;overflow:auto;margin:0 calc(var(--s-2) * -1)}
+.co-row{width:100%;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-3);border:0;background:none;color:var(--ink-2);font-family:inherit;font-size:inherit;text-align:left;cursor:pointer}
+.co-row:hover{background:var(--hover);color:var(--ink)}
+
+/* A reply's quote above it (pages/2-threads/threads.css .quote, spacing on the scale), drawn as a button that goes to
+   the message answered; and the same line above the box while a reply is written, with its close. */
+.quote{display:flex;align-items:center;gap:var(--s-1h);max-width:100%;height:22px;margin:0 0 var(--s-0);padding:0;border:0;background:none;color:var(--muted);font-family:inherit;font-size:var(--t-sm);text-align:left;position:relative}
+.quote .ico{width:12px;height:12px;flex:none}
+.quote b{flex:none;font-weight:var(--w-strong);color:var(--ink-2)}
+.quote span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+button.quote{cursor:pointer}
+button.quote:hover span{color:var(--ink)}
+.quote.is-replying{width:100%;height:auto}
+.quote.is-replying .ib{margin-left:auto}
+:where(html[data-layout="cards"]){
+  button.quote::before{content:"";position:absolute;inset:-11px 0}
+}
+
+/* Reaction chips (parts.css .reacts/.react) as buttons: mine is marked by weight and a ring, never a color. */
+button.react{border:0;color:var(--ink);font-family:inherit;cursor:pointer}
+button.react:hover{background:var(--well-2)}
+button.react[aria-pressed="true"]{box-shadow:inset 0 0 0 1px var(--line-strong)}
+button.react[aria-pressed="true"] b{font-weight:var(--w-strong);color:var(--ink-2)}
+
+/* Long words, links and inline code wrap inside the message wherever they must; a code block keeps its lines and
+   scrolls inside itself. A bubble and its column never grow past the row. */
+.msg-main,.bubble{overflow-wrap:anywhere}
+.msg code{overflow-wrap:anywhere}
+.msg pre{max-width:100%}
+.msg ul,.msg ol{grid-template-columns:minmax(0,1fr)}
+.msg li{min-width:0}
+.mine-col{min-width:0}
+.bubble{min-width:0;max-width:100%}
+
+/* a chat's head: its face and name go to the teammate's page */
+.head-face{display:inline-flex;flex:none}
+a.head-name{color:inherit;text-decoration:underline;text-decoration-color:transparent;text-underline-offset:3px;transition:text-decoration-color var(--dur-fast) var(--ease)}
+a.head-name:hover{text-decoration-color:var(--line-strong)}
+
+/* Reply and React on the message under the pointer, at its top corner; a phone has the long press instead. */
+.chat-body .msg{position:relative}
+.msg-acts{position:absolute;top:var(--s-2);right:0;display:flex;gap:var(--s-0);border-radius:var(--r-ctl);background:var(--surface-chat);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
+.msg.is-mine .msg-acts{right:auto;left:0}
+.msg:hover .msg-acts,.msg-acts:focus-within,.msg-acts:has([aria-expanded="true"]){opacity:1}
+@media (hover:none){.msg-acts{display:none}}

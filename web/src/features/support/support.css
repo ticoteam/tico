@@ -1,0 +1,20 @@
+/* Tico support (pages/8-settings/more.css "Tico support"): the second chat, with the few facts support needs over the
+   conversation. Spacing on the scale. The note lines and the diagnostics line are this feature's own. */
+.av.sup-av{background:var(--well-2);color:var(--ink-2)}
+.sup-av .ico{width:60%;height:60%;stroke-width:1.8}
+.sup-facts{flex:none;padding:var(--s-1h) var(--s-2);border-bottom:1px solid var(--line)}
+.sup-facts .fact{grid-template-columns:128px minmax(0,1fr);min-height:28px;font-size:var(--t-sm)}
+.sup-facts .fact>span:first-child{color:var(--muted)}
+
+.sup-note{display:block;color:var(--muted);font-size:var(--t-sm)}
+.sup-note.sup-sent{text-align:right;margin:0 0 var(--s-2)}
+.sup-note.sup-err{color:var(--ink)}
+.sup-attached{display:flex;align-items:center;gap:var(--s-2);color:var(--muted);font-size:var(--t-sm)}
+.sup-attached .ico{width:14px;height:14px}
+.sup-attached .lnk{border:0;padding:0;background:none;color:inherit;font:inherit}
+.sup-diag textarea{min-height:240px;font-family:var(--font-code);font-size:var(--t-sm)}
+
+:where(html[data-layout="cards"]){
+  .sup-facts{padding:var(--s-0) var(--s-2) var(--s-1h)}
+  .sup-facts .fact{min-height:36px}
+}

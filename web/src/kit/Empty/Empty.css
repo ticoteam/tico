@@ -1,0 +1,4 @@
+/* The sentence and the buttons under an empty or failed state's line (pages/15-start/start.css). parts.css has the
+   rest of .empty. */
+.empty p{margin-top:calc(var(--s-2) * -1);max-width:340px;text-align:center;color:var(--muted);line-height:var(--lh-read)}
+.empty .q-row{display:flex;justify-content:center;gap:var(--s-2);margin-top:var(--s-1)}
