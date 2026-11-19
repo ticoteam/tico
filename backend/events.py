@@ -3619,9 +3619,10 @@ class SignIn:
     next poll, and at the next keepalive at the latest (a quiet stream's check is never skipped that long). A refused
     check raises Problem and is never remembered."""
 
-    def __init__(self, auth, headers, who, clock=time.monotonic):
+    def __init__(self, auth, headers, who, clock=time.monotonic, checked=False):
         self.auth, self.headers, self.who, self.clock = auth, headers, who, clock
-        self.checked_at = None
+        # `checked`: these headers were just authenticated (the request's own sign-in), which answers like any check.
+        self.checked_at = clock() if checked else None
         self.lock = threading.Lock()
 
     def __call__(self):
@@ -3671,9 +3672,11 @@ class Watch:
             now = self.clock()
             if self.checked_at is not None and now - self.checked_at < 60:
                 return
-            with self.store.read() as c:
-                for place in self.followed - self.gone:
-                    self.authorized(c, place)
+            following = self.followed - self.gone
+            if following:  # nothing to check needs no connection: most streams follow no meeting or task
+                with self.store.read() as c:
+                    for place in following:
+                        self.authorized(c, place)
             self.checked_at = now
 
     def drain(self):
@@ -3812,7 +3815,7 @@ def install(app, store, auth, task_views, task_view):
         if output not in (None, "", "full", "compact"):
             raise Problem("validation", "output is full or compact", 422)
 
-        sign_in = SignIn(auth, request.headers, who)
+        sign_in = SignIn(auth, request.headers, who, checked=True)  # the request's sign-in, just now
         watch = Watch(store, auth, who, meetings, tasks)
 
         def check():
