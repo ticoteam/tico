@@ -2411,7 +2411,7 @@ class Manager:
         elif refused.status == 404 and action != "create":
             # Keep the old id so its runner and codes cannot become the next attempt's initial enrollment.
             with self.store.transaction() as c:
-                deleted(c, row(c, key), H.TICO_ACTOR)
+                deleted(c, row(c, key), H.TICO_ACTOR, replacing=True)  # HQ lost it: the next one takes its place
             return
         else:
             fields = retry_backoff(current, at)
@@ -3043,14 +3043,20 @@ def present(current):
     return bool(current["machine_id"]) and current["state"] != "deleted"
 
 
-def deleted(c, current, actor, changed_by=None, details=None):
-    """Finish a deletion under the write lock, revoking the old computer and its codes while keeping fresh attempts."""
+def deleted(c, current, actor, changed_by=None, details=None, replacing=False):
+    """Finish a deletion under the write lock, revoking the old computer and its codes while keeping fresh attempts.
+    `replacing`: the next machine takes this one's place (a Replace, the shared machine, or one HQ lost), so its
+    computer is kept for the next to carry its plans over (`left`). Any other deletion forgets the computers kept: a
+    machine deleted for good gives a later one no plan, a person's included, without a new grant."""
     key = current["bot"]
     fails = row(c, key)["enroll_fails"]
     fresh_runner = replacement_runner(c, key, current["machine_id"]) if current["machine_id"] else None
+    if not replacing:
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (REPLACES_KEY + key,))
     if current["runner_id"] and current["runner_id"] != fresh_runner:
         c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), current["runner_id"]))
-        left(c, key)
+        if replacing:
+            left(c, key)
     c.execute(
         "DELETE FROM enrollments WHERE code_hash IN (SELECT code_hash FROM cloud_machine_codes "
         "WHERE bot=? AND (replacement_for IS NOT ? OR ? IS NULL))",
@@ -3153,7 +3159,11 @@ def _remove(service, who, auth, key, request, mutate, replace):
         # Enrollment can finish during HQ's call. Revoke the runner found here, under the same lock enrollment takes.
         # A manager's repair preserves an admin's placement for the new computer's first-enrollment plan rule.
         deleted(
-            c, live, who.actor, live["changed_by"] if replace and not MS.may_grant(c, auth, who.actor) else who.actor
+            c,
+            live,
+            who.actor,
+            live["changed_by"] if replace and not MS.may_grant(c, auth, who.actor) else who.actor,
+            replacing=explicit,
         )
         return {"ok": True}
 

@@ -4142,3 +4142,40 @@ def test_a_replaced_machine_keeps_a_persons_plans_when_its_bot_left_the_old_comp
         c.execute("DELETE FROM assignments WHERE bot='ops'")
     new = enroll_made(cloud, "ops")
     assert people(cloud, new["runner_id"])["claude"] == "human:ana"
+
+
+def test_a_machine_deleted_for_good_gives_a_later_machine_none_of_its_plans(cloud):
+    # Review of #2178: only a machine that takes another's place carries its plans over. A bot that moved away, had
+    # its machine deleted and later came back gets a new machine with no person's plan unless someone gives it again.
+    from backend.tests.helpers.api import put
+
+    setup(cloud.api)
+    company(cloud.api)
+    on(cloud.api, "ops", "codex", "gpt-6.2-sol")
+    add(cloud.api)
+    csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    old = own_computer(cloud)
+    put(cloud.api, "computer-subscriptions", {"runner_id": old["runner_id"], "runtime": "claude", "person": "ana"})
+    first = cloud.row()["machine_id"]
+    laptop = runner(cloud.api, label="Office Mac")
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
+        moved = c.execute("SELECT generation FROM assignments WHERE bot='ops'").fetchone()["generation"]
+    assign(cloud.api, laptop, "ops", moved)
+    assert cloud.api.delete("/api/v2/bots/ops/cloud-machine", headers=headers()).status_code == 200
+    cloud.hq.machines[first]["state"] = "deleted"
+    with cloud.store.read() as c:
+        assert not CM.were(c, "ops")
+    change_as(cloud, "ops", mode="cloud", placement="own")
+    work(cloud, "ops")
+    cloud.manager.synced = None
+    for _ in range(4):
+        cloud.tick(CM.BACKOFF)
+        if cloud.row()["machine_id"] != first:
+            break
+    assert cloud.hq.calls[-1][0] == "create" and cloud.row()["machine_id"] != first
+    new = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    assert new["runner_id"] != old["runner_id"]
+    assert "claude" not in people(cloud, new["runner_id"])
+    assert not [e for e in events(cloud, "subscription.carried_over") if old["runner_id"] in e["detail"]]
+    assert given(cloud, new["runner_id"]).get("codex") in (csid, None)
