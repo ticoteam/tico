@@ -1,6 +1,7 @@
 import type { Query } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
 import { ApiError } from '@/api/client';
+import type { Problem } from '@/api/schema';
 import { queryClient } from '@/data';
 
 /* A locked Tico Cloud company (backend/cloud_access.py): the trial ended without a card, or the month is unpaid. The
@@ -25,7 +26,8 @@ export interface PlanLockState {
 /** The lock a refusal carries, or null for any other error. */
 export function lockOf(error: unknown): PlanLockState | null {
   if (!(error instanceof ApiError) || error.status !== 402 || error.code !== 'locked') return null;
-  const cloud = (error.extra.cloud ?? null) as { reason?: unknown; billing_url?: unknown } | null;
+  // Checked field by field all the same: nothing odd from HQ should decide where a person is sent to pay.
+  const cloud = error.extra.cloud as Problem['error']['cloud'] | null;
   const url = typeof cloud?.billing_url === 'string' && /^https:\/\/\S+$/.test(cloud.billing_url) ? cloud.billing_url : BILLING_URL;
   return { reason: typeof cloud?.reason === 'string' && cloud.reason ? cloud.reason : null, billingUrl: url };
 }

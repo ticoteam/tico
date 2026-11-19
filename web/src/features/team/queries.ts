@@ -1,6 +1,21 @@
 import { queryOptions } from '@tanstack/react-query';
 import { api, ApiError } from '@/api/client';
-import type { BotDreamView, BrowserControl, BrowserControlState, BrowserInput, BrowserInputDone, BrowserOpen, BrowserOpened, Problem, Task, TeammateAccessView } from '@/api/schema';
+import type {
+  BotDreamView,
+  BrowserControl,
+  BrowserControlState,
+  BrowserInput,
+  BrowserInputDone,
+  BrowserOpen,
+  BrowserOpened,
+  ComputerScreen,
+  Problem,
+  ScreenMode,
+  ScreenSession,
+  ScreenSessionStart,
+  Task,
+  TeammateAccessView,
+} from '@/api/schema';
 import { keys, queryClient, quietRoot, QUIET_STALE_MS, write } from '@/data';
 
 // Teammates, teams and computers have no live topic of their own (status lines come through the directory): read
@@ -894,27 +909,21 @@ export async function setProfile(slug: string, profile: string, dropRules?: bool
 
 /* ---------------------------------------------------------------- a computer's screen */
 
-/** One screen session (POST /api/v2/computers/{rid}/screen/sessions, backend/screen.py; in /api/v2 but not yet in the
-    published contract). `ws_path` carries a single-use ticket good for a minute: only the component that connects
-    holds it, never the query cache, the address or a log. */
-export interface ScreenSession {
-  session_id: string;
-  control: boolean;
-  ws_path: string;
-  width: number;
-  height: number;
-}
+/** One screen session (POST /api/v2/computers/{rid}/screen/sessions, backend/screen.py). `ws_path` carries a
+    single-use ticket good for a minute: only the component that connects holds it, never the query cache, the address
+    or a log. */
+export type { ScreenSession };
 
 /** The computer's operator or an admin, in person: the server refuses the Assistant and API tokens. */
 export const openScreenSession = (rid: string, control: boolean) =>
-  api.post<ScreenSession>(`/api/v2/computers/${at(rid)}/screen/sessions`, { control });
+  api.post<ScreenSession>(`/api/v2/computers/${at(rid)}/screen/sessions`, { control } satisfies ScreenSessionStart);
 
 /** Who may open the screen: off, view or control. Off closes open sessions; view closes the ones in control. */
 export function setScreenMode(rid: string, mode: 'off' | 'view' | 'control') {
   return write({
     key: computersQuery.queryKey,
     optimistic: (rows: Computer[] | undefined) => rows?.map((c) => (c.id === rid ? { ...c, screen: mode } : c)),
-    send: (idempotencyKey) => api.post<{ screen: string }>(`/api/v2/computers/${at(rid)}/screen`, { mode }, { idempotencyKey }),
+    send: (idempotencyKey) => api.post<ComputerScreen>(`/api/v2/computers/${at(rid)}/screen`, { mode } satisfies ScreenMode, { idempotencyKey }),
   });
 }
 

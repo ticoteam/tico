@@ -30,6 +30,7 @@ import {
   type DirectoryCredentials,
   type DirectoryPreview,
   type DirectorySource,
+  type DirectorySynced,
   type DirectoryView,
   type ScreenMode,
 } from './queries';
@@ -488,7 +489,7 @@ function SyncForm({ v, onToken }: { v: DirectoryView; onToken: (token: string) =
     setBusy(false);
     if (!r.ok) return toast({ text: "Couldn't sync", kind: 'failed' });
     toast({ text: r.did ?? 'Synced', kind: 'done' });
-    if ((r.out as DirectoryPreview | undefined)?.applied) setPreview(null);
+    if ((r.out as DirectorySynced | undefined)?.applied) setPreview(null);
   };
 
   const last = v.last.at ? `${v.last.ok === false ? 'Failed' : v.last.held ? 'Held for a check' : 'Synced'}, ${new Date(v.last.at).toLocaleString('en-US')}` : 'Never';

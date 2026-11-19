@@ -460,7 +460,7 @@ type Change = { what: 'model' | 'tasks' | 'limit'; slug: string; name: string };
 function TasksDialog({ slug, name, now, onClose }: { slug: string; name: string; now?: TaskModel | null; onClose: () => void }) {
   const models = useQuery(modelsQuery);
   const [model, setModel] = useState(now?.model ?? '');
-  const [effort, setEffort] = useState(now?.effort ?? '');
+  const [effort, setEffort] = useState(now?.reasoning_effort ?? '');
   const [busy, setBusy] = useState(false);
   const v = models.data;
   const on = v?.enabled_providers;
@@ -582,8 +582,8 @@ function FleetLine({ a, slug, r, by, picked, open, owner, machines, next, limit,
       <ValueButton label={`${a.name}'s model`} disabled={!manage} onClick={edit('model')}>
         {modelWords(r) || 'None'}
       </ValueButton>
-      {tm?.model || tm?.effort ? (
-        <ValueButton label={`${a.name}'s tasks`} more={cap(tm.effort)} className="c-tasks" disabled={!manage} onClick={edit('tasks')}>
+      {tm?.model || tm?.reasoning_effort ? (
+        <ValueButton label={`${a.name}'s tasks`} more={cap(tm.reasoning_effort)} className="c-tasks" disabled={!manage} onClick={edit('tasks')}>
           {tasks || 'Same'}
         </ValueButton>
       ) : (

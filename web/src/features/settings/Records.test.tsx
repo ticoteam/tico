@@ -113,8 +113,9 @@ const SYNC = {
   mass_leave_limit: 10,
   revision: 4,
   last: {},
-  credentials: {},
-  scim: { enabled: true, url: 'https://tico.example.test/scim/v2' },
+  confirmed: true,
+  credentials: { google: { configured: false, hint: '' }, entra: { configured: false, hint: '' } },
+  scim: { enabled: true, created_at: '2026-01-01T00:00:00Z', url: 'https://tico.example.test/scim/v2' },
 };
 
 describe('Settings › People › Directory sync', () => {

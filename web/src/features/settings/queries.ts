@@ -1,12 +1,24 @@
 import { queryOptions } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
 import type {
+  BotTaskChoice,
+  BotTaskModel,
+  BotTaskModelSaved,
   ChangelogList,
   CloudSupportView,
+  DirectoryCredentials,
+  DirectoryPlan,
+  DirectorySaved,
+  DirectoryScimToken,
+  DirectorySyncResult,
+  DirectoryUpdate,
+  DirectoryView as DirectoryViewWire,
   Health,
   ModelSubscription,
   ModelSubscriptionList,
   ScreeningModes,
+  SyncRequest,
+  TaskModelSetting,
   Usage,
   UsageFigures,
   UsageLimits,
@@ -120,50 +132,31 @@ export const setRule = (rule: string, value: boolean) =>
     send: (idempotencyKey) => api.put('/api/v2/access/rules', { [rule]: value }, { idempotencyKey }),
   });
 
-// ---------------------------------------------------------------- directory sync (owner; /api/v2/directory, not in the generated schema yet)
+// ---------------------------------------------------------------- directory sync (owner; /api/v2/directory)
 
-export type DirectorySource = '' | 'google' | 'entra' | 'scim';
+export type { DirectoryCredentials };
 
-export interface DirectoryFilter {
-  groups: string[];
-  org_units: string[];
-  domains: string[];
-}
+/** The schema leaves the last sync an open object; these are the fields backend/directory.py writes into it. A saved
+    key is never read back: `credentials` says only whether there is one and its last few characters. */
+export type DirectoryView = Omit<DirectoryViewWire, 'last'> & { last: { at?: string; ok?: boolean; error?: string; held?: boolean } };
 
-export interface DirectoryView {
-  source: DirectorySource;
-  filter: DirectoryFilter;
-  interval_minutes: number;
-  mass_leave_limit: number;
-  revision: number;
-  last: { at?: string; ok?: boolean; error?: string; held?: boolean };
-  /** A saved key is never read back: only whether there is one and its last few characters. */
-  credentials: Partial<Record<'google' | 'entra', { configured?: boolean; hint?: string }>>;
-  scim: { enabled?: boolean; created_at?: string; url?: string };
-}
+export type DirectorySource = DirectoryView['source'];
 
-export interface DirectoryCredentials {
-  service_account_json?: string;
-  admin_email?: string;
-  tenant?: string;
-  client_id?: string;
-  client_secret?: string;
-}
-
+/** One person in a plan (backend/directory.py `plan`); the schema leaves the rows open. */
 export interface DirectoryPlanRow {
   email: string;
   name?: string;
   reason?: string;
 }
 
-/** POST /api/v2/directory/preview: what a sync would do. Nothing changes until it is applied. */
-export interface DirectoryPreview {
+type WithRows<T extends { plan: object }> = Omit<T, 'plan'> & {
   plan: { hash: string } & Record<'adds' | 'updates' | 'restores' | 'leaves' | 'protected' | 'skipped', DirectoryPlanRow[]>;
-  needs_confirmation: { first?: boolean; mass_leave?: boolean };
-  mass_leave_limit: number;
-  applied?: boolean;
-  stale?: boolean;
-}
+};
+
+/** POST /api/v2/directory/preview: what a sync would do. Nothing changes until it is applied. */
+export type DirectoryPreview = WithRows<DirectoryPlan>;
+/** POST /api/v2/directory/sync: the plan again, and whether it was applied (`stale`: the directory changed since). */
+export type DirectorySynced = WithRows<DirectorySyncResult>;
 
 export const directorySyncQuery = queryOptions({
   queryKey: ['settings', 'directory-sync'],
@@ -184,26 +177,19 @@ export const directorySyncQuery = queryOptions({
   ...quiet,
 });
 
-export interface DirectorySave {
-  source: DirectorySource;
-  interval_minutes: number;
-  mass_leave_limit: number;
-  filter: DirectoryFilter;
-  /** Only when the person typed new ones; they are never read back. */
-  credentials?: DirectoryCredentials;
-  replace_lost_key?: boolean;
-}
+/** `credentials` only when the person typed new ones; they are never read back. */
+export type DirectorySave = Omit<DirectoryUpdate, 'expected_revision'>;
 
 export const saveDirectory = async (body: DirectorySave) => {
   const expected_revision = queryClient.getQueryData(directorySyncQuery.queryKey)?.revision ?? 0;
-  const r = await api.put<{ revision: number }>('/api/v2/directory', { ...body, expected_revision });
+  const r = await api.put<DirectorySaved>('/api/v2/directory', { ...body, expected_revision } satisfies DirectoryUpdate);
   await queryClient.invalidateQueries({ queryKey: directorySyncQuery.queryKey });
   return r;
 };
 
 /** A new SCIM token. It goes back to the press that asked for it and nowhere else: not the cache, not a toast. */
 export const newScimToken = async () => {
-  const r = await api.post<{ token: string }>('/api/v2/directory/scim-token', {});
+  const r = await api.post<DirectoryScimToken>('/api/v2/directory/scim-token', {});
   await queryClient.invalidateQueries({ queryKey: directorySyncQuery.queryKey });
   return r.token;
 };
@@ -211,7 +197,7 @@ export const newScimToken = async () => {
 export const previewDirectory = () => api.post<DirectoryPreview>('/api/v2/directory/preview', {});
 
 export const syncDirectory = async (planHash: string, confirm: boolean) => {
-  const r = await api.post<DirectoryPreview>('/api/v2/directory/sync', { confirm, plan_hash: planHash });
+  const r = await api.post<DirectorySynced>('/api/v2/directory/sync', { confirm, plan_hash: planHash } satisfies SyncRequest);
   await queryClient.invalidateQueries({ queryKey: directorySyncQuery.queryKey });
   await queryClient.invalidateQueries({ queryKey: accessQuery.queryKey });
   return r;
@@ -831,18 +817,13 @@ export async function saveGateway(change: { url: string; key?: string; credentia
   return saved;
 }
 
-/** What an agent's tasks run on (backend BotTaskChoice); a missing model is the agent's own. */
-export interface TaskModel {
-  harness?: string | null;
-  model?: string | null;
-  effort?: string | null;
-  compact_at?: number | null;
-}
+/** What an agent's tasks run on, as the agent row carries it (`reasoning_effort`; the write takes `effort`). */
+export type TaskModel = TaskModelSetting;
 
 /** The model an agent's tasks run on; null runs them on the agent's own model. `warning`: a cheaper pick on an agent
-    that sends, spends or publishes, in plain words; it still saves. Not in the generated schema yet. */
-export const setTaskModel = (bot: string, pick: TaskModel | null, revision: number) =>
-  api.post<{ warning?: string }>(`/api/v2/bots/${enc(bot)}/task-model`, { task_model: pick, expected_revision: revision });
+    that sends, spends or publishes, in plain words; it still saves. */
+export const setTaskModel = (bot: string, pick: BotTaskChoice | null, revision: number) =>
+  api.post<BotTaskModelSaved>(`/api/v2/bots/${enc(bot)}/task-model`, { task_model: pick, expected_revision: revision } satisfies BotTaskModel);
 
 // ---------------------------------------------------------------- computers: sleep when idle, hosted servers
 

@@ -121,7 +121,7 @@ describe('Settings › Agents', () => {
   it('a row reads its model, effort and where it compacts, and its tasks follow it unless set', async () => {
     queryClient.setQueryData(agentsQuery.queryKey, [
       { ...ROWS[0], resolved_model_label: 'Claude Model One', resolved_effort: 'high', compact_at: 400000 } as never,
-      { ...ROWS[1], task_model: { model: 'model-two', effort: 'low' } } as never,
+      { ...ROWS[1], task_model: { model: 'model-two', reasoning_effort: 'low' } } as never,
     ]);
     serve(() => ({ status: 200, body: {} }));
     show(<SettingsPage section="agents" />, '/settings/agents');
