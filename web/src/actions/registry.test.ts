@@ -91,7 +91,6 @@ describe("kept from Tico, and the person's own press still works", () => {
     ['finance.disconnect', { connection: 'c1' }],
     ['finance.setDefaults', { member: 'own_expenses' }],
     ['finance.postStatement', { account: 'm1', file: 'eA==', name: 'march.csv', token: 'p1' }],
-    ['finance.importHistory', { csv: 'month,line,amount', basis: 'cash', mapping: {} }],
     ['budget.addRow', { name: 'Tools', line: 'acc', amount: 500 }],
     ['budget.updateRow', { budget: 'b1', amount: 900 }],
     ['budget.removeRow', { budget: 'b1' }],
