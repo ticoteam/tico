@@ -3,6 +3,7 @@ import { ApiError } from '@/api/client';
 import { toast } from '@/kit/Toast';
 import { writePref } from '@/prefs';
 import {
+  addRequester,
   assignMany,
   createTask,
   listsOf,
@@ -11,8 +12,10 @@ import {
   moveMany,
   moveTask,
   pipelinesQuery,
+  removeRequester,
   savePipeline,
   snoozeMany,
+  updateRequester,
   type Pipeline,
   type Skipped,
 } from './queries';
@@ -24,8 +27,8 @@ const tasks = s.array(task, { max: 500 });
 const actor = s.string({ min: 1, max: 120, what: 'an actor id: human:<id> or bot:<slug>' });
 const where = (p: string) => `/tasks/${encodeURIComponent(p)}`;
 
-/** A pipeline's page is on screen (`/tasks/<pipeline>`), not a task or another page. */
-const onPipeline = (pathname: string) => /\/tasks\/[^/]+\/?$/.test(pathname);
+/** A pipeline's page (`/tasks/<pipeline>`) or the Roadmap is on screen, not a task or another page. */
+const onPipeline = (pathname: string) => /\/tasks\/[^/]+\/?$/.test(pathname) || /\/roadmap\/?$/.test(pathname);
 
 export const openTasks = defineAction({
   id: 'tasks.open',
@@ -240,4 +243,80 @@ export const savePipelineStages = defineAction({
   run: (_ctx, { pipeline, stages, move_to }) => savePipeline(pipeline, stages, move_to),
   did: () => 'Saved the pipeline',
   target: ({ pipeline }) => ({ kind: 'page', id: where(pipeline) }),
+});
+
+/* ---------------------------------------------------------------- Roadmap */
+
+const ROADMAP = '/roadmap';
+
+export const openRoadmap = defineAction({
+  id: 'tasks.openRoadmap',
+  title: 'Open Roadmap',
+  kind: 'view',
+  input: s.object({}),
+  run: ({ router }) => router.navigate({ to: ROADMAP }),
+  show: ({ router }) => router.navigate({ to: ROADMAP }),
+  did: () => 'Opened Roadmap',
+  target: () => ({ kind: 'page', id: ROADMAP }),
+  offer: () => [{ input: {} }],
+});
+
+/** Who asked for a roadmap task: a dialog over the Roadmap, held in the address (`?requesters=<task id>`). */
+export const openRequesters = defineAction({
+  id: 'tasks.openRequesters',
+  title: 'Show who asked for a feature',
+  kind: 'view',
+  input: s.object({ task, open: s.optional(s.boolean()) }),
+  run: async ({ router }, { task, open = true }) => {
+    await router.navigate({
+      to: ROADMAP,
+      search: (prev: Record<string, unknown>) => {
+        const next: Record<string, unknown> = { ...prev, requesters: task };
+        if (!open) delete next.requesters;
+        return next;
+      },
+    });
+  },
+  did: ({ open = true }) => (open ? 'Opened Requesters' : 'Closed Requesters'),
+});
+
+const text = (max: number) => s.optional(s.string({ max }));
+const requesterFields = {
+  name: text(200),
+  email: text(320),
+  phone: text(100),
+  other: text(500),
+  organization: text(200),
+  note: text(4000),
+  source: s.optional(s.oneOf(['manual', 'public_form', 'inbox', 'meeting'] as const)),
+  important: s.optional(s.boolean()),
+};
+
+/** Record who asked for a task: a teammate (`actor`) or someone outside the team. */
+export const addTaskRequester = defineAction({
+  id: 'tasks.addRequester',
+  title: 'Add who asked for a feature',
+  kind: 'change',
+  input: s.object({ task, actor: s.optional(actor), ...requesterFields }),
+  run: (_ctx, { task, ...input }) => said(() => addRequester(task, input), "Couldn't add the requester"),
+  did: () => 'Added a requester',
+});
+
+export const updateTaskRequester = defineAction({
+  id: 'tasks.updateRequester',
+  title: 'Change a requester',
+  kind: 'change',
+  input: s.object({ task, requester: s.string({ min: 1, max: 100, what: 'a requester id' }), ...requesterFields }),
+  run: (_ctx, { task, requester, ...input }) => said(() => updateRequester(task, requester, input), "Couldn't save the requester"),
+  did: () => 'Saved the requester',
+  target: ({ requester }) => ({ kind: 'requester', id: requester }),
+});
+
+export const removeTaskRequester = defineAction({
+  id: 'tasks.removeRequester',
+  title: 'Remove a requester',
+  kind: 'change',
+  input: s.object({ task, requester: s.string({ min: 1, max: 100, what: 'a requester id' }) }),
+  run: (_ctx, { task, requester }) => said(() => removeRequester(task, requester), "Couldn't remove the requester"),
+  did: () => 'Removed a requester',
 });

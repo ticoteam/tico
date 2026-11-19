@@ -45,7 +45,20 @@ export function validateTasksSearch(raw: Record<string, unknown>): TasksSearch {
   return out;
 }
 
-export const filtersOf = ({ owner, waiting, asked, tag, due, late, q }: TasksSearch): Filters => ({ owner, waiting, asked, tag, due, late, q });
+/** What the Roadmap's address holds: the filters, and the task whose requesters are open. */
+export interface RoadmapSearch extends Filters {
+  /** A task's id: its Requesters dialog is open. */
+  requesters?: string;
+}
+
+/** `?owner=…&late=true&requesters=<task id>`: the pipeline's filters, without its view or panel. */
+export function validateRoadmapSearch(raw: Record<string, unknown>): RoadmapSearch {
+  const { view: _view, panel: _panel, ...filters } = validateTasksSearch(raw);
+  const task = text(raw.requesters, 100);
+  return task ? { ...filters, requesters: task } : filters;
+}
+
+export const filtersOf = ({ owner, waiting, asked, tag, due, late, q }: Filters): Filters => ({ owner, waiting, asked, tag, due, late, q });
 
 /* ---------------------------------------------------------------- Cmd+K */
 

@@ -274,7 +274,7 @@ export const ROWS: readonly Row[] = [
   { page: 'Team', path: /^#\/team\/([^/]+)(?:\/.*)?$/, to: ([name]) => `/team/${seg(name)}` },
   { page: 'Welcome (first run)', path: /^#\/welcome$/, to: () => at('/start', { setup: 'path' }) },
   // The Roadmap ranked the Product pipeline's tasks; that pipeline is on Tasks.
-  { page: 'Roadmap', path: /^#\/roadmap$/, to: () => '/tasks' },
+  { page: 'Roadmap', path: /^#\/roadmap$/, to: () => '/roadmap' },
   { page: 'Tags', path: /^#\/tags$/, to: () => '/tags' },
   { page: 'Tag', path: /^#\/tag\/(.+)$/, to: ([tag]) => `/tags/${seg(tag)}` },
   // A task by number: the new app finds its pipeline and replaces the address.

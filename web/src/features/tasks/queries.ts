@@ -5,6 +5,7 @@ import type {
   PipelineSettings,
   PipelineSettingsList,
   PipelineSettingsResult,
+  RequesterInput,
   Task,
   TaskList,
   TaskManyResult,
@@ -44,6 +45,10 @@ export interface Pipeline {
   closed: Stage | null;
   /** The reader may edit its stages. */
   mayChange: boolean;
+  /** The preset it was made from ('features', 'engineering'...): the Roadmap reads the Product one. */
+  preset?: string | null;
+  /** Who manages it: an actor id. */
+  manager?: string | null;
 }
 
 type PipelineRecord = PipelineSettings & {
@@ -51,6 +56,7 @@ type PipelineRecord = PipelineSettings & {
   manager_id?: string | null;
   retired_at?: string | null;
   may_change?: boolean;
+  preset?: string | null;
 };
 
 function adaptPipeline(p: PipelineRecord): Pipeline {
@@ -62,6 +68,8 @@ function adaptPipeline(p: PipelineRecord): Pipeline {
     done: p.done ? { id: p.done.id, name: p.done.name } : null,
     closed: p.closed ? { id: p.closed.id, name: p.closed.name } : null,
     mayChange: p.may_change !== false,
+    preset: p.preset ?? null,
+    manager: p.manager_id ?? null,
   };
 }
 
@@ -82,7 +90,7 @@ export type TaskItem = Pick<
   Task,
   'id' | 'number' | 'title' | 'status' | 'pipeline_id' | 'stage_id' | 'owner_id' | 'labels' | 'late' | 'turn' | 'updated_at' | 'version'
 > &
-  Partial<Pick<Task, 'stuck' | 'stage_since' | 'snoozed' | 'created_at'>>;
+  Partial<Pick<Task, 'stuck' | 'stage_since' | 'snoozed' | 'created_at' | 'due_at' | 'visibility'>>;
 
 /** The cache's shape for a list: the server's page, kept as is so the stream's patches apply (live/patch.ts). */
 export interface TaskPage {
@@ -605,4 +613,129 @@ export async function mergeTask(id: string, into: string, owner?: string | null)
   });
   void queryClient.invalidateQueries({ queryKey: keys.tasks.detail(into) });
   return out;
+}
+
+/* ---------------------------------------------------------------- Roadmap: who asked for a task */
+
+// Who asked for a task has no live topic: read again after the person's own writes and on reconnect.
+quietRoot('requesters');
+
+// These match TaskRequester, TaskRequesterList and TaskRequesterAdded in PR 4467 (backend/api_schemas/roadmaps.py).
+// Switch to the `@/api/schema` types once it merges; today the schema types these answers as unknown.
+export interface Requester {
+  id: string;
+  kind: 'teammate' | 'external';
+  /** A teammate's actor id; null for someone outside the team. */
+  actor: string | null;
+  name: string;
+  email: string;
+  phone: string;
+  other: string;
+  organization: string;
+  note: string;
+  source: 'manual' | 'public_form' | 'inbox' | 'meeting';
+  /** 1 for an important requester. */
+  important: 0 | 1;
+  created_at: string;
+}
+
+export interface RequesterList {
+  requesters: Requester[];
+  /** Pass back as offset; null on the last page. */
+  next_offset: number | null;
+  my_requester_id: string | null;
+}
+
+/* The answer also carries a removal token, for a person outside the team who asked on a public page. A teammate
+   removes with Remove, so the token is never read here: it is not kept, shown or handed on. */
+interface RequesterAdded {
+  id?: string;
+}
+
+/** The server's most per page (backend/roadmaps.py). */
+export const REQUESTERS_PAGE = 100;
+
+const requestersKey = (task: string) => ['requesters', task] as const;
+
+/** GET /api/v2/tasks/{tid}/requesters: the first page, oldest first. */
+export const requestersQuery = (task: string) =>
+  queryOptions({
+    queryKey: requestersKey(task),
+    queryFn: ({ signal }) =>
+      api.get<RequesterList>(`/api/v2/tasks/${encodeURIComponent(task)}/requesters?limit=${REQUESTERS_PAGE}`, { signal }),
+    staleTime: QUIET_STALE_MS,
+  });
+
+const blank: Omit<Requester, 'id' | 'created_at'> = {
+  kind: 'external',
+  actor: null,
+  name: '',
+  email: '',
+  phone: '',
+  other: '',
+  organization: '',
+  note: '',
+  source: 'manual',
+  important: 0,
+};
+
+const asRow = (input: RequesterInput, base: Omit<Requester, 'id' | 'created_at'>) => ({
+  ...base,
+  ...Object.fromEntries(Object.entries(input).filter(([k, v]) => v !== undefined && k !== 'important' && k !== 'actor')),
+  ...(input.actor !== undefined && { actor: input.actor ?? null, kind: input.actor ? ('teammate' as const) : ('external' as const) }),
+  ...(input.important !== undefined && { important: input.important ? (1 as const) : (0 as const) }),
+});
+
+const withRows = (cur: RequesterList | undefined, change: (rows: Requester[]) => Requester[]) => cur && { ...cur, requesters: change(cur.requesters) };
+
+/** Add who asked for a task: the row shows at once, and is taken back if refused. */
+export async function addRequester(task: string, input: RequesterInput): Promise<void> {
+  const tmp = `tmp:${newId()}`;
+  const row: Requester = { ...asRow(input, blank), id: tmp, created_at: new Date().toISOString() };
+  await write<RequesterAdded>({
+    key: requestersKey(task),
+    optimistic: (cur: RequesterList | undefined) => withRows(cur, (rows) => [...rows, row]),
+    send: (idempotencyKey) => api.post<RequesterAdded>(`/api/v2/tasks/${encodeURIComponent(task)}/requesters`, input, { idempotencyKey }),
+    settle: (cur: RequesterList | undefined, answer) =>
+      withRows(cur, (rows) => (answer.id ? rows.map((r) => (r.id === tmp ? { ...r, id: answer.id as string } : r)) : rows.filter((r) => r.id !== tmp))),
+    revert: (cur: RequesterList | undefined) => withRows(cur, (rows) => rows.filter((r) => r.id !== tmp)),
+  });
+}
+
+/** Change a requester's details (not who they are): shown at once, taken back if refused. */
+export async function updateRequester(task: string, id: string, input: Omit<RequesterInput, 'actor'>): Promise<void> {
+  let before: Requester | undefined;
+  await write<unknown>({
+    key: requestersKey(task),
+    optimistic: (cur: RequesterList | undefined) =>
+      withRows(cur, (rows) =>
+        rows.map((r) => {
+          if (r.id !== id) return r;
+          before = r;
+          return { ...asRow(input, r), id: r.id, created_at: r.created_at };
+        }),
+      ),
+    send: (idempotencyKey) =>
+      api.post(`/api/v2/tasks/${encodeURIComponent(task)}/requesters/${encodeURIComponent(id)}`, input, { idempotencyKey }),
+    revert: (cur: RequesterList | undefined) => withRows(cur, (rows) => rows.map((r) => (r.id === id && before ? before : r))),
+  });
+}
+
+/** Remove a requester: gone at once, back if refused. */
+export async function removeRequester(task: string, id: string): Promise<void> {
+  let at = -1;
+  let gone: Requester | undefined;
+  await write<unknown>({
+    key: requestersKey(task),
+    optimistic: (cur: RequesterList | undefined) =>
+      withRows(cur, (rows) => {
+        at = rows.findIndex((r) => r.id === id);
+        gone = rows[at];
+        return rows.filter((r) => r.id !== id);
+      }),
+    send: (idempotencyKey) =>
+      api.post(`/api/v2/tasks/${encodeURIComponent(task)}/requesters/${encodeURIComponent(id)}/delete`, {}, { idempotencyKey }),
+    revert: (cur: RequesterList | undefined) =>
+      withRows(cur, (rows) => (gone && !rows.some((r) => r.id === id) ? [...rows.slice(0, at), gone, ...rows.slice(at)] : rows)),
+  });
 }

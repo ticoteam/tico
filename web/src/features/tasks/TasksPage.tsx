@@ -288,7 +288,7 @@ function HeadActions({
 }
 
 /** The filters that are set, one chip each, then Clear. */
-function Chips({ search }: { search: TasksSearch }) {
+export function Chips({ search }: { search: Filters }) {
   const filter = useAction('tasks.filter');
   const dir = useQuery(directoryQuery).data;
   const name = (id: string) => dir?.byId[id]?.name;

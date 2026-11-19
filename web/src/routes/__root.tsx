@@ -9,7 +9,7 @@ import { FileViewerHost } from '@/features/library/exports';
 import { AssetRecovery, PlanLock } from '@/features/notices/exports';
 import { FirstRun, StartScreen, useStartGate } from '@/features/start/exports';
 import { SUPPORT_CHAT, SupportChat, supportUnreadQuery } from '@/features/support/exports';
-import { flowQuery, pipelinesQuery } from '@/features/tasks/exports';
+import { flowQuery, pipelinesQuery, roadmapPipeline } from '@/features/tasks/exports';
 import { TeammateChat, teamSlug, whoHref } from '@/features/team/exports';
 import { ChatSheet, catchUpQuery, updateListQuery } from '@/features/threads/exports';
 import { Avatar } from '@/kit/Avatar';
@@ -278,7 +278,11 @@ function AppMenu({ note }: { note: ReactNode }) {
       company={{ name, mark: name.slice(0, 1).toUpperCase() }}
       me={meMate}
       teams={teamsOf(dir, me?.id)}
-      pipelines={pipelines?.map((p) => ({ id: p.id, name: p.name, to: `/tasks/${encodeURIComponent(p.id)}` }))}
+      pipelines={pipelines && [
+        ...pipelines.map((p) => ({ id: p.id, name: p.name, to: `/tasks/${encodeURIComponent(p.id)}` })),
+        // the Features pipeline read as horizons: only a company that has one gets the line
+        ...(roadmapPipeline(pipelines) ? [{ id: 'roadmap', name: 'Roadmap', to: '/roadmap' }] : []),
+      ]}
       counts={{ flow: some(flow?.count), threads: some(catchUp?.count), updates: some(updates?.pages[0]?.unread), support: some(support) }}
       note={note}
       onSearch={() => openSearch()}
