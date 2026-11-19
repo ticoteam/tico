@@ -16,6 +16,23 @@ export function arrangementFor(pathname: string, search: Record<string, unknown>
   return 'page';
 }
 
+/** Whether `/team/<who>` is a teammate's own page, for `arrangementFor`'s `isActor`: not a team's page, and not
+    your own (your page has no chat beside it: your assistant is Tico). `find` looks a key up in the directory
+    (undefined while it loads); `me` is your actor id once known. Until the directory is here, every `<who>` but
+    you is taken for a teammate, so an agent's page does not jump; a person's page waits for `me`. */
+export function isTeammate(
+  who: string,
+  find: ((key: string) => { id: string; kind: 'person' | 'agent' } | undefined) | undefined,
+  me: string | undefined,
+): boolean {
+  const mine = (id: string) => id === me || `human:${id}` === me;
+  if (!find) return !mine(who);
+  const a = find(who) ?? find(`human:${who}`);
+  if (!a) return false;
+  if (a.kind === 'agent') return true;
+  return !!me && a.id !== me;
+}
+
 export function useArrangement(isActor?: (who: string) => boolean): Arrangement {
   return useLocation({ select: l => arrangementFor(l.pathname, l.search as Record<string, unknown>, isActor) });
 }

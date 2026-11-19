@@ -1,6 +1,9 @@
 /* The sheets placed by layout(): the mock draws them in a grid, the app places each at the x and width the sizing
    function gives (from the design's tico/sheets-live.css). Only tokens; no new values. */
 .app-tico.shell-frame{display:block;position:relative;padding:0;overflow:hidden;background:var(--ground)}
+/* the window: a call's bar on top while a call is on (and not on its page), the frame takes the rest */
+.shell-col{display:flex;flex-direction:column;height:100dvh;background:var(--ground)}
+.shell-col>.shell-frame{flex:1;min-height:0;height:auto}
 .shell-place{position:absolute;top:var(--gap-pane);bottom:var(--gap-pane);display:flex}
 .shell-place>.pane{flex:1;min-width:0}
 /* the page's side panel is drawn into a host the frame holds (pagekinds PanelHost): the host and its pane fill the place */

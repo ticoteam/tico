@@ -1,24 +1,39 @@
 import { useInfiniteQuery, useQuery, type QueryClient } from '@tanstack/react-query';
 import { Outlet, createRootRouteWithContext, useLocation, useRouter } from '@tanstack/react-router';
-import { useEffect, type ReactNode } from 'react';
+import { Suspense, lazy, useEffect, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
 import { ticoRoomQuery } from '@/conversation';
 import { configQuery, directoryQuery, meQuery, recordVisit, useHeldCount, type Actor, type Directory } from '@/data';
+import { CallBar, CallSide, RingCard, TOGGLE_MUTE, useCall } from '@/features/calls/exports';
 import { FirstRun, StartScreen, useStartGate } from '@/features/start/exports';
-import { TaskChat } from '@/features/task/exports';
 import { flowQuery, pipelinesQuery } from '@/features/tasks/exports';
 import { TeammateChat, teamSlug, whoHref } from '@/features/team/exports';
 import { ChatSheet, catchUpQuery, updateListQuery } from '@/features/threads/exports';
 import { Avatar } from '@/kit/Avatar';
+import { IconButton } from '@/kit/IconButton';
+import { MenuItem, MenuRule } from '@/kit/Menu';
 import { OfflineBar } from '@/kit/OfflineBar';
 import { Placeholder } from '@/kit/placeholder/Placeholder';
+import { Segmented } from '@/kit/Segmented';
 import { Toasts } from '@/kit/Toast';
 import { startLive, useLiveStatus } from '@/live';
 import { useMotionRoot } from '@/motion';
 import { PanelHost, usePagePanelOpen } from '@/pagekinds';
-import { useTheme } from '@/prefs';
+import { THEME_KEY, usePref, useTheme, type Theme } from '@/prefs';
 import { openSearch } from '@/search';
-import { Frame, Menu, Sheet, SheetHead, arrangementFor, foldSheet, type MenuMate, type MenuTeam } from '@/shell';
+import {
+  Frame,
+  Menu,
+  Sheet,
+  SheetHead,
+  arrangementFor,
+  foldSheet,
+  isTeammate,
+  useCompanies,
+  type Company,
+  type MenuMate,
+  type MenuTeam,
+} from '@/shell';
 import { TicoSheet } from '@/tico';
 import { dot } from '@/tico/dot';
 import { pageName } from '@/tico/pageName';
@@ -48,6 +63,9 @@ export const Route = createRootRouteWithContext<RouterContext>()({
   notFoundComponent: () => <Placeholder title="Not found" />,
 });
 
+/* An open task's chat comes with the task's own code: the first load carries the shell only. */
+const TaskChat = lazy(() => import('@/features/task/exports').then((m) => ({ default: m.TaskChat })));
+
 const dotEl = () => dot.el();
 const closeChat = () => void run('shell.closeChat', {}, { via: 'click' });
 const bare = (id: string) => id.slice(id.indexOf(':') + 1);
@@ -70,8 +88,9 @@ function App() {
   const held = useHeldCount();
   const panel = usePagePanelOpen();
 
-  // A teammate's own page is the `agent` arrangement; a team's page (not a teammate) is a plain page.
-  const isActor = (who: string) => !!(dir?.byId[who] ?? dir?.byId[`human:${who}`]);
+  // A teammate's own page is the `agent` arrangement; a team's page and your own page are plain pages.
+  const find = dir ? (key: string) => dir.byId[key] : undefined;
+  const isActor = (who: string) => isTeammate(who, find, me.data?.id);
   const at = {
     path: useLocation({ select: (l) => l.pathname.replace(/^\/next(?=\/|$)/, '') || '/' }),
     chat: useLocation({ select: (l) => word((l.search as Record<string, unknown>).chat) }),
@@ -101,13 +120,18 @@ function App() {
   let page: ReactNode = <Outlet />;
   let chat: ReactNode = at.chat ? <SecondChat chat={at.chat} /> : undefined;
   let widgets: ReactNode;
+  let side: ReactNode;
   if (arrangement === 'task') {
     const task = top === 'tasks' ? b : a;
     chat = task ? (
       <Sheet kind="chat" label="The task's chat">
-        <TaskChat task={decodeURIComponent(task)} flow={top === 'flow'} />
+        <Suspense fallback={null}>
+          <TaskChat task={decodeURIComponent(task)} flow={top === 'flow'} />
+        </Suspense>
       </Sheet>
     ) : undefined;
+  } else if (arrangement === 'call' && a) {
+    side = <CallSide room={decodeURIComponent(a)} />;
   } else if (arrangement === 'agent' && a) {
     widgets = page;
     page = <TeammateSheet who={decodeURIComponent(a)} />;
@@ -116,20 +140,27 @@ function App() {
 
   return (
     <>
-      <Frame
-        arrangement={arrangement}
-        tico={<TicoSheet />}
-        menu={<AppMenu note={status === 'offline' ? <OfflineBar held={held} /> : null} />}
-        page={page}
-        chat={chat}
-        widgets={widgets}
-        panel={panel ? <PanelHost /> : undefined}
-        onCloseChat={closeChat}
-        onClosePanel={closePanel}
-      />
+      {/* a call on another page shows its bar over the frame; the frame takes the rest of the window */}
+      <div className="shell-col">
+        <CallBar />
+        <Frame
+          arrangement={arrangement}
+          tico={<TicoSheet />}
+          menu={<AppMenu note={status === 'offline' ? <OfflineBar held={held} /> : null} />}
+          page={page}
+          chat={chat}
+          widgets={widgets}
+          side={side}
+          panel={panel ? <PanelHost /> : undefined}
+          lipActs={{ call: <CallMute /> }}
+          onCloseChat={closeChat}
+          onClosePanel={closePanel}
+        />
+      </div>
       {signedIn ? <FirstRun /> : null}
       <ActionsRoot dot={dotEl} fold={foldSheet} />
       <Toasts />
+      <RingCard />
     </>
   );
 }
@@ -163,6 +194,8 @@ function teamsOf(d: Directory | undefined, meId: string | undefined): MenuTeam[]
 
 /* Counts are what the server already answers (needs-you, catch-up, updates); the stream keeps them current. */
 const some = (n: number | undefined) => (n ? n : undefined);
+/** A menu row's press: the same action Tico would run. */
+const press = (id: string, input: unknown = {}) => () => void run(id, input, { via: 'click' });
 
 function AppMenu({ note }: { note: ReactNode }) {
   const { data: me } = useQuery(meQuery);
@@ -172,6 +205,7 @@ function AppMenu({ note }: { note: ReactNode }) {
   const { data: flow } = useQuery(flowQuery);
   const { data: catchUp } = useQuery(catchUpQuery);
   const { data: updates } = useInfiniteQuery(updateListQuery('all'));
+  const companies = useCompanies();
   const self = me ? dir?.byId[me.id] : undefined;
   const name = config?.company_name || config?.app_name || '';
   const meMate: MenuMate = self
@@ -186,8 +220,80 @@ function AppMenu({ note }: { note: ReactNode }) {
       counts={{ flow: some(flow?.count), threads: some(catchUp?.count), updates: some(updates?.pages[0]?.unread) }}
       note={note}
       onSearch={() => openSearch()}
+      onAddTeammate={press('shell.addTeammate')}
+      companyMenu={<CompanyRows name={name} all={companies} />}
+      accountMenu={<AccountRows me={meMate} email={me?.email ?? ''} />}
     />
   );
+}
+
+/* The company pick: every company the desktop app holds, this one checked, then Add company. A browser holds one
+   company per address, so it lists this one only. */
+function CompanyRows({ name, all }: { name: string; all: Company[] | null }) {
+  const list = all ?? [{ id: '', name, active: true, self: true, needs: 0 }];
+  return (
+    <>
+      {list.map((c) => (
+        <MenuItem
+          key={c.id || 'here'}
+          label={c.name}
+          lead={
+            <span className="co-mark" aria-hidden="true">
+              {c.name.slice(0, 1).toUpperCase()}
+            </span>
+          }
+          meta={c.needs && !c.self ? String(c.needs) : undefined}
+          on={c.self}
+          onSelect={c.self ? () => undefined : press('shell.switchCompany', { id: c.id })}
+        />
+      ))}
+      {all ? (
+        <>
+          <MenuRule />
+          <MenuItem label="Add company" icon="plus" onSelect={press('shell.addCompany')} />
+        </>
+      ) : null}
+    </>
+  );
+}
+
+const THEMES = [
+  { value: 'dark', label: 'Dark' },
+  { value: 'light', label: 'Light' },
+  { value: 'system', label: 'Auto' },
+] as const;
+
+/* The account menu over your name (pages/8-settings/more.js account): you, your page and Settings, the theme, Sign out
+   last. Every row is an action; Sign out is the person's own (settings.signOut, tico: false). */
+function AccountRows({ me, email }: { me: MenuMate; email: string }) {
+  const [theme] = usePref<Theme>(THEME_KEY, 'dark');
+  return (
+    <>
+      <div className="acct-me">
+        <Avatar decorative kind={me.kind} name={me.name} initials={me.short} hue={me.hue} size={36} />
+        <span>
+          <b>{me.name}</b>
+          {email && email !== me.name ? <em>{email}</em> : null}
+        </span>
+      </div>
+      <MenuRule />
+      <MenuItem label="My page" onSelect={press('team.open', { who: bare(me.id) })} />
+      <MenuItem label="Settings" onSelect={press('shell.goTo', { to: '/settings' })} />
+      <MenuRule />
+      <div className="acct-line">
+        <span>Theme</span>
+        <Segmented label="Theme" options={THEMES} value={theme} onValueChange={(v) => void run('settings.setTheme', { theme: v }, { via: 'click' })} />
+      </div>
+      <MenuRule />
+      <MenuItem label="Sign out" onSelect={press('settings.signOut')} />
+    </>
+  );
+}
+
+/* The phone's call lip: mute without opening the call. */
+function CallMute() {
+  const { muted } = useCall();
+  return <IconButton icon={muted ? 'micoff' : 'mic'} label={muted ? 'Unmute' : 'Mute'} on={muted} onClick={() => void run(TOGGLE_MUTE, {}, { via: 'click' })} />;
 }
 
 /* ---------------------------------------------------------------- the chats */

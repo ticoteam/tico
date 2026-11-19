@@ -21,14 +21,12 @@ import os
 import platform
 import shlex
 import signal
-import sqlite3
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
 import urllib.request
-from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -115,10 +113,6 @@ def restore(replica, region, profile, scratch):
     if done.returncode != 0 or not db.exists():
         sys.exit(f"serve: could not restore {replica}")
     say(f"Restored {db.stat().st_size // 2**20} MB in {time.monotonic() - started:.0f} s")
-    # devcopy revokes only job-backed attempts' tokens but then refuses any unrevoked one, so a company with job-less
-    # runs fails it. Revoke those here, on this scratch file, until backend/devcopy.py does it itself.
-    with closing(sqlite3.connect(db)) as c, c:
-        c.execute("UPDATE attempts SET token_hash='devcopy-revoked:'||id WHERE job_id IS NULL AND token_hash IS NOT NULL")
     return db
 
 
@@ -201,7 +195,9 @@ def serve(company, port):
     say(f"Sign in (browser, as the copy's owner): {url}/api/v2/local-signin?token=$(cat {token})")
     say(f'API: curl -H "Authorization: Bearer $(cat {token})" {url}/api/v2/me')
     say("HUB " + json.dumps({"company": company, "url": url, "pid": server.pid, "token_file": str(token), "db": str(db)}))
-    server.wait()
+    # poll rather than wait(): a blocking wait holds the Popen lock, so stop()'s own wait stalls its full 30 s
+    while server.poll() is None:
+        time.sleep(1)
 
 
 def main():

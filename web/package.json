@@ -2,6 +2,13 @@
   "name": "tico-web",
   "private": true,
   "type": "module",
+  "sideEffects": [
+    "*.css",
+    "./src/conversation/index.ts",
+    "./src/motion/index.ts",
+    "./src/tico/dot/index.ts",
+    "./src/main.tsx"
+  ],
   "engines": {
     "node": ">=24.15"
   },

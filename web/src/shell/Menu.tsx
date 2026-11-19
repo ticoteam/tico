@@ -1,10 +1,12 @@
 import { Link, useLocation, type LinkProps } from '@tanstack/react-router';
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
 import { Avatar } from '@/kit/Avatar';
 import { Icon, type IconName } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { Menu as Drop } from '@/kit/Menu';
 import { usePhoneCards } from './phone';
 import { useSheet } from './Sheet';
+import './Menu.css';
 
 /* The menu: a port of PK.menu and its rail in the design's system/shell.js, with the mock's classes.
    Calendar holds Meetings, so there is no Meetings row. Pages a person cannot open are not drawn. */
@@ -58,6 +60,12 @@ export interface MenuProps {
   /* a note above the foot, open menu only: the offline bar */
   note?: ReactNode;
   onSearch?: () => void;
+  /* the company pick's menu (the root's rows: this company, the others the desktop app holds, Add company); without
+     it the pick is a plain button that calls onPickCompany */
+  companyMenu?: ReactNode;
+  /* the account menu that opens from your name at the foot (your page, Settings, the theme, Sign out); without it
+     your name links to your page */
+  accountMenu?: ReactNode;
   onPickCompany?: () => void;
   onAddTeammate?: () => void;
   onHelp?: () => void;
@@ -95,6 +103,16 @@ function FlowMark() {
   );
 }
 
+/* a control that opens a kit menu of the given rows, or the bare control when there are none */
+function dropIf(rows: ReactNode, trigger: ReactElement, side: 'top' | 'bottom' | 'right', align: 'start' | 'end') {
+  if (!rows) return trigger;
+  return (
+    <Drop trigger={trigger} side={side} align={align}>
+      {rows}
+    </Drop>
+  );
+}
+
 export function Menu(p: MenuProps) {
   const sheet = useSheet();
   const phone = usePhoneCards();
@@ -118,9 +136,14 @@ export function Menu(p: MenuProps) {
     return (
       <nav className="pane nav is-rail" aria-label="Main">
         <header className="nav-head">
-          <button className="co-mark" type="button" aria-label={p.company.name} title={p.company.name} onClick={p.onPickCompany}>
-            {p.company.mark}
-          </button>
+          {dropIf(
+            p.companyMenu,
+            <button className="co-mark" type="button" aria-label={p.company.name} title={p.company.name} onClick={p.companyMenu ? undefined : p.onPickCompany}>
+              {p.company.mark}
+            </button>,
+            'right',
+            'start',
+          )}
         </header>
         <div className="nav-scroll">
           <div className="nav-items">
@@ -156,9 +179,20 @@ export function Menu(p: MenuProps) {
             </Link>
           ) : null}
           <IconButton icon="panel" label="Open the menu" quiet onClick={sheet.toggleFold} />
-          <Link className="me" to={to(p.me.to)} aria-label={p.me.name} title={p.me.name}>
-            <Face m={p.me} size={28} />
-          </Link>
+          {p.accountMenu ? (
+            dropIf(
+              p.accountMenu,
+              <button className="me" type="button" aria-label={p.me.name} title={p.me.name}>
+                <Face m={p.me} size={28} />
+              </button>,
+              'right',
+              'end',
+            )
+          ) : (
+            <Link className="me" to={to(p.me.to)} aria-label={p.me.name} title={p.me.name}>
+              <Face m={p.me} size={28} />
+            </Link>
+          )}
         </footer>
       </nav>
     );
@@ -184,15 +218,18 @@ export function Menu(p: MenuProps) {
     return null;
   };
 
-  const pick = (
-    <button className="co-pick" type="button" aria-haspopup="menu" aria-expanded="false" onClick={p.onPickCompany}>
+  const pick = dropIf(
+    p.companyMenu,
+    <button className="co-pick" type="button" aria-haspopup="menu" onClick={p.companyMenu ? undefined : p.onPickCompany}>
       <span className="co-mark" aria-hidden="true">
         {p.company.mark}
       </span>
       <span className="co-name">{p.company.name}</span>
       <Icon name="chevdown" />
       {p.company.needs ? <FlowMark /> : null}
-    </button>
+    </button>,
+    'bottom',
+    'start',
   );
   const items = (
     <div className="nav-items">
@@ -284,10 +321,22 @@ export function Menu(p: MenuProps) {
   );
   const foot = (
     <>
-      <Link className="me me-name" to={to(p.me.to)}>
-        <Face m={p.me} size={28} />
-        <span>{p.me.name}</span>
-      </Link>
+      {p.accountMenu ? (
+        dropIf(
+          p.accountMenu,
+          <button className="me me-name" type="button">
+            <Face m={p.me} size={28} />
+            <span>{p.me.name}</span>
+          </button>,
+          'top',
+          'start',
+        )
+      ) : (
+        <Link className="me me-name" to={to(p.me.to)}>
+          <Face m={p.me} size={28} />
+          <span>{p.me.name}</span>
+        </Link>
+      )}
       <span className="grow" />
       <IconButton icon="help" label="Tico support" onClick={p.onHelp} />
       {can('settings') ? (

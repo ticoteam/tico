@@ -1,6 +1,7 @@
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { MenuItem } from '@/kit/Menu';
 import { Menu, type MenuProps } from './Menu';
 
 const mate = (id: string, name: string, kind: 'person' | 'agent' = 'agent') => ({ id, name, short: name.slice(0, 2), hue: 200, kind, to: `/team/${id}` });
@@ -43,5 +44,23 @@ describe('Menu', () => {
     expect(within(nav).getByRole('button', { name: 'Fernhill' })).toBeTruthy();
     expect(within(nav).getByRole('button', { name: 'Search' })).toBeTruthy();
     expect(within(nav).getByRole('link', { name: 'Tasks' }).textContent).toBe(''); // the folded Dot holds no count
+  });
+
+  it('opens the company pick and the account menu from the company and your name, and the plus adds a teammate', async () => {
+    const pick = vi.fn();
+    const add = vi.fn();
+    const nav = await show({
+      companyMenu: <MenuItem label="Okafor Garden Tours" onSelect={pick} />,
+      accountMenu: <MenuItem label="Sign out" onSelect={() => undefined} />,
+      onAddTeammate: add,
+    });
+    fireEvent.click(within(nav).getByRole('button', { name: 'Fernhill' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Okafor Garden Tours' }));
+    expect(pick).toHaveBeenCalledOnce();
+    // your name at the foot opens your menu (the Team section still links to your page)
+    fireEvent.click(within(nav).getByRole('button', { name: 'Maya' }));
+    expect(await screen.findByRole('menuitem', { name: 'Sign out' })).toBeTruthy();
+    fireEvent.click(within(nav).getByRole('button', { name: 'Add a teammate' }));
+    expect(add).toHaveBeenCalledOnce();
   });
 });

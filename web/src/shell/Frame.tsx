@@ -1,6 +1,6 @@
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { motionLevel } from '@/motion';
-import { PhoneCards } from '@/shell/phone';
+import { PhoneCards, type PhoneCardsProps } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
 import { useArrangement } from './arrangement';
 import { IconButton } from '@/kit/IconButton';
@@ -29,6 +29,8 @@ export interface FrameProps {
   widgets?: ReactNode;
   /* a call's chat, transcript and people */
   side?: ReactNode;
+  /* on the phone: a control on a card's lip that is not its tap target (mute on a call's) */
+  lipActs?: PhoneCardsProps['lipActs'];
   /* by default the address decides */
   arrangement?: Arrangement;
   onCloseChat?: () => void;
@@ -288,8 +290,8 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
     // a call takes the screen in the chat's place (phone/notes.md)
     const call = p.arr === 'call';
     // a teammate's own page: their page at the back, their chat the card that comes up over it
-    if (p.arr === 'agent' && p.widgets) return <PhoneCards page={p.widgets} tico={p.tico} menu={p.menu} chat={p.page} />;
-    return <PhoneCards page={call ? null : p.page} tico={p.tico} menu={p.menu} chat={call ? undefined : p.chat} call={call ? p.page : undefined} />;
+    if (p.arr === 'agent' && p.widgets) return <PhoneCards page={p.widgets} tico={p.tico} menu={p.menu} chat={p.page} lipActs={p.lipActs} />;
+    return <PhoneCards page={call ? null : p.page} tico={p.tico} menu={p.menu} chat={call ? undefined : p.chat} call={call ? p.page : undefined} lipActs={p.lipActs} />;
   }
 
   const st = find(stretch.id);

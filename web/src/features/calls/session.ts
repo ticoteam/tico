@@ -1,9 +1,18 @@
 // The one call this window is in: one LiveKit room, held outside React so the press that starts it can open the
 // microphone and unlock sound inside the press itself (platforms.md: Safari allows both only there). Nothing here
 // joins or opens the microphone by itself: prime() runs from a person's press, and join() follows it.
+// LiveKit loads on demand (it is most of a megabyte): the first press asks for it; the microphone is still asked for
+// inside the press, and sound a browser held back waits for "Play audio".
 import { useSyncExternalStore } from 'react';
-import { DisconnectReason, Room, RoomEvent, Track, type Participant, type RemoteTrack, type TranscriptionSegment } from 'livekit-client';
+import type * as LiveKitModule from 'livekit-client';
+import type { DisconnectReason, Participant, RemoteTrack, Room, TranscriptionSegment } from 'livekit-client';
 import { freshCall, joinCall, leaveCall } from './queries';
+
+type LiveKit = typeof LiveKitModule;
+let lk: LiveKit | null = null;
+let loading: Promise<LiveKit> | null = null;
+/** LiveKit, loaded once. A page that may start a call can call it early so the first press finds it ready. */
+export const loadLiveKit = (): Promise<LiveKit> => (loading ??= import('livekit-client').then((m) => (lk = m)));
 
 export type Phase = 'idle' | 'joining' | 'live' | 'reconnecting' | 'lost' | 'ended' | 'mic-refused' | 'no-mic';
 
@@ -54,6 +63,8 @@ const set = (patch: Partial<CallState>) => {
 };
 
 let room: Room | null = null;
+/** The room prime() made, once LiveKit is loaded. */
+let ready: Promise<Room | null> | null = null;
 let mic: Promise<MediaStream> | null = null;
 let stream: MediaStream | null = null;
 /** Bumped by every prime and leave, so a join that was overtaken stops at its next step. */
@@ -89,10 +100,17 @@ export function prime(callId: string | null): void {
   if (state.callId && (state.phase === 'live' || state.phase === 'reconnecting')) void leaveCall(state.callId).catch(() => undefined);
   teardown();
   gen += 1;
-  const r = new Room({ adaptiveStream: false, dynacast: false });
-  room = r;
-  wire(r);
-  void r.startAudio().catch(() => undefined);
+  const g = gen;
+  const make = (m: LiveKit): Room | null => {
+    if (g !== gen) return null;
+    const r = new m.Room({ adaptiveStream: false, dynacast: false });
+    room = r;
+    wire(r, m);
+    void r.startAudio().catch(() => undefined);
+    return r;
+  };
+  // in the press when LiveKit is here already; otherwise as soon as it arrives
+  ready = lk ? Promise.resolve(make(lk)) : loadLiveKit().then(make, () => null);
   const deviceId = savedMic();
   const md = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
   mic = md?.getUserMedia ? md.getUserMedia({ audio: deviceId ? { deviceId } : true }) : Promise.reject(new DOMException('No microphone', 'NotFoundError'));
@@ -108,11 +126,17 @@ export function claim(callId: string): void {
 /** After prime(): the server's token, the room, my microphone in it. */
 export async function join(callId: string): Promise<void> {
   const g = gen;
-  const r = room;
-  if (!r || !mic) return;
+  const m = mic;
+  const r = ready ? await ready : null;
+  if (g !== gen) return;
+  if (!r || !m || !lk) {
+    if (m) set({ callId, phase: 'lost' });
+    return;
+  }
+  const { Track } = lk;
   set({ callId });
   try {
-    stream = await mic;
+    stream = await m;
   } catch (e) {
     if (g !== gen) return;
     const name = e instanceof DOMException ? e.name : '';
@@ -204,7 +228,8 @@ export function levelOf(identity: string): () => number {
 
 async function devices(): Promise<void> {
   try {
-    const list = await Room.getLocalDevices('audioinput', false);
+    if (!lk) return;
+    const list = await lk.Room.getLocalDevices('audioinput', false);
     set({ devices: list.filter((d) => d.deviceId).map((d, i) => ({ id: d.deviceId, label: d.label || `Microphone ${i + 1}` })) });
   } catch {
     // no list: the pick stays hidden
@@ -221,7 +246,7 @@ function people(r: Room): void {
   });
 }
 
-function wire(r: Room): void {
+function wire(r: Room, { DisconnectReason: Why, RoomEvent, Track }: LiveKit): void {
   const mine = () => room === r;
   const onPeople = () => mine() && people(r);
   // Someone came or went: the call's own view (who is in it, its agents) is read again; the room says so first.
@@ -240,7 +265,7 @@ function wire(r: Room): void {
     .on(RoomEvent.Disconnected, (why?: DisconnectReason) => {
       if (!mine()) return;
       // The server closed the room: the call is over for everyone, not lost.
-      const over = why === DisconnectReason.ROOM_DELETED;
+      const over = why === Why.ROOM_DELETED;
       set({ phase: over ? 'ended' : 'lost', speaking: [], caption: null });
       teardown();
       if (over && state.callId) freshCall(state.callId);
@@ -269,6 +294,7 @@ function wire(r: Room): void {
 function teardown(): void {
   const r = room;
   room = null;
+  ready = null;
   mic = null;
   stream?.getTracks().forEach((t) => t.stop());
   stream = null;
