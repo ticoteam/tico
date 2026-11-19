@@ -371,6 +371,8 @@ def _restart(service):
 def test_a_restart_hands_out_the_kept_token_without_github_or_a_write_while_it_has_the_margin(api, gh, monkeypatch):
     connect(api)
     runner_token(api, "cpo")
+    # An installation that accepted every read a turn asks for (one that has not narrows once per process first).
+    gh.permissions = {**G.TURN_READS, **G.TURN_PERMISSIONS}
     clock = [time.time()]
     gh.clock = lambda: clock[0]
     monkeypatch.setattr(G, "_now", lambda: clock[0])
