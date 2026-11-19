@@ -574,14 +574,17 @@ def test_a_poll_with_nothing_to_write_is_answered_off_the_write_lock_as_the_writ
     modes.clear()
     again = poll(api, m, [(sid, 1)])
     assert modes == [False] and again == first
-    # The same answer as a poll under the write lock gives.
+    # The same answer as a poll under the write lock gives, and the read writes nothing.
     store, vault = api.app.state.store, api.app.state.vault
+    body = CL.Poll.model_validate({"live": [{"subscription": sid, "revision": 1}]})
     with store.read_transaction() as c:
-        read = real(c, vault, m["runner_id"], CL.Poll.model_validate({"live": [{"subscription": sid, "revision": 1}]}))
+        c.execute("PRAGMA query_only=ON")
+        try:
+            read = real(c, vault, m["runner_id"], body, write=False)
+        finally:
+            c.execute("PRAGMA query_only=OFF")
     with store.transaction() as c:
-        written = real(
-            c, vault, m["runner_id"], CL.Poll.model_validate({"live": [{"subscription": sid, "revision": 1}]})
-        )
+        written = real(c, vault, m["runner_id"], body)
     assert read == written == first
     # A turn that holds a newer revision than its record moves the record: under the write lock.
     with store.transaction() as c:
@@ -593,11 +596,12 @@ def test_a_poll_with_nothing_to_write_is_answered_off_the_write_lock_as_the_writ
         assert (
             c.execute("SELECT revision FROM attempt_subscriptions WHERE attempt_id=?", (turn["id"],)).fetchone()[0] == 1
         )
-    # Before the vault's key is in memory, a poll that hands a value out loads it under the write lock.
+    # Before the vault's key is in memory (a restart), a poll that hands a value out loads it outside the write lock
+    # and is read again.
     vault.cipher.cached = None
     modes.clear()
     assert poll(api, m, [(sid, 1)]) == first
-    assert modes == [False, True]
+    assert modes == [False, False] and vault.cipher.cached is not None
 
 
 def test_the_plans_next_in_line_are_read_once_per_poll_and_are_the_ones_each_plan_asked_for(api, monkeypatch):
@@ -625,9 +629,9 @@ def test_the_plans_next_in_line_are_read_once_per_poll_and_are_the_ones_each_pla
         return False
 
     with store.read_transaction() as c:
-        line = CL._in_line(c)
+        line = CL._Line(c)
         expected = {sid for sid in plans if asked_each(c, sid)}
-    assert line == expected and 2 <= len(line) < len(plans)
+        assert {sid for sid in plans if sid in line} == expected and 2 <= len(expected) < len(plans)
     listings = []
     real = MS._listing
 
@@ -638,4 +642,4 @@ def test_the_plans_next_in_line_are_read_once_per_poll_and_are_the_ones_each_pla
     monkeypatch.setattr(MS, "_listing", counted)
     jobs = poll(api, m)["usage"]
     assert {j["subscription"] for j in jobs} == expected
-    assert listings == [None, None]  # once on the read snapshot, once more under the write lock
+    assert len(listings) <= 2  # at most once on the read snapshot and once more under the write lock

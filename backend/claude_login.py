@@ -366,14 +366,18 @@ def drop(c: Any, sid: str) -> None:
 
 class _Write(Exception):
     """A poll read on a snapshot (`write=False`) came to something it would write: it is asked again whole under the
-    write lock, which decides it as it always has."""
+    write lock, which decides it as it always has. `key`: only the vault's key is wanted (`_value`)."""
+
+    def __init__(self, key: bool = False) -> None:
+        super().__init__()
+        self.key = key
 
 
 def _value(c: Any, vault: Any, sub: Any, write: bool) -> str | None:
     """The plan's value. A read-only poll opens it only with the vault's key already in memory: the key's first use
-    may save it (credentials.CredentialCipher.key), so that poll goes on under the write lock."""
+    may save it (credentials.CredentialCipher.key), so the route loads it first (`prepare`) and reads again."""
     if not write and getattr(vault.cipher, "cached", None) is None:
-        raise _Write
+        raise _Write(key=True)
     return _MS().value_of(c, vault.cipher, sub)
 
 
@@ -632,33 +636,47 @@ def _request(runner_id: str, now: str) -> Row:
     }
 
 
-def _in_line(c: Any) -> set[str]:
-    """The plans a computer signs in with now or next: each plan given a computer on its own, and of each person's set
-    given one, the plan in use and the first two available in pick order (model_subscriptions._ordered). Read once per
-    poll, with one reading of the plans' usage (`_listing`) for every set: neither changes while a poll runs (its writes
-    are leases and asked reads, which no pick reads)."""
-    MS = _MS()
+class _Line:
+    """The plans a computer signs in with now or next (`_wanted`), read once per poll and only as far as a plan asks:
+    first the plans in use (each given a computer on its own, and the one in use of each person's set given one), then
+    the first two available of each person's set in pick order (model_subscriptions._ordered), with one reading of the
+    plans' usage (`_listing`) for every set. Neither changes while a poll runs: its writes are leases and asked reads,
+    which no pick reads."""
 
-    out: set[str] = set()
-    ctx: Any = None
-    given: dict[tuple[str, str], Row] = MS._given(c) or {}
-    for (_, runtime), entry in given.items():
-        if entry.get("id"):
-            out.add(entry["id"])
-        if not entry.get("person"):
-            continue
-        members: list[Row] = entry.get("members") or []
-        ready = [m for m in members if MS.available(c, m, runtime)]
-        if len(ready) > 1 and ctx is None:
-            ctx = MS._listing(c)
-        out.update(m["id"] for m in MS._ordered(c, ready, runtime, ctx)[:2])
-    return out
+    def __init__(self, c: Any) -> None:
+        self.c = c
+        self.current: set[str] | None = None
+        self.following: set[str] | None = None
+        self._given: dict[tuple[str, str], Row] | None = None
+
+    def given(self) -> dict[tuple[str, str], Row]:
+        if self._given is None:
+            self._given = _MS()._given(self.c) or {}
+        return self._given
+
+    def __contains__(self, sid: str) -> bool:
+        if self.current is None:
+            self.current = {entry["id"] for entry in self.given().values() if entry.get("id")}
+        if sid in self.current:
+            return True
+        if self.following is None:
+            MS = _MS()
+            self.following = set()
+            ctx: Any = None
+            for (_, runtime), entry in self.given().items():
+                if not entry.get("person"):
+                    continue
+                members: list[Row] = entry.get("members") or []
+                ready = [m for m in members if MS.available(self.c, m, runtime)]
+                if len(ready) > 1 and ctx is None:
+                    ctx = MS._listing(self.c)
+                self.following.update(m["id"] for m in MS._ordered(self.c, ready, runtime, ctx)[:2])
+        return sid in self.following
 
 
-def _wanted(c: Any, sid: str, schedule: Row, line: Callable[[], set[str]]) -> bool:
+def _wanted(c: Any, sid: str, schedule: Row, line: _Line) -> bool:
     """Whether a plan's usage is read on its schedule: never read yet, in use (a turn runs on it, or a computer signs in
-    with it now), or next in line in a person's set (`line`, the poll's `_in_line`). Others wait for ↻ or their turn to
-    come up."""
+    with it now), or next in line in a person's set (`line`, the poll's). Others wait for ↻ or their turn to come up."""
     if not schedule.get("read_at"):
         return True
     if c.execute(
@@ -667,7 +685,7 @@ def _wanted(c: Any, sid: str, schedule: Row, line: Callable[[], set[str]]) -> bo
         (sid,),
     ).fetchone():
         return True
-    return sid in line()
+    return sid in line
 
 
 def _usage_jobs(c: Any, vault: Any, runner_id: str, write: bool = True) -> list[Row]:
@@ -676,13 +694,7 @@ def _usage_jobs(c: Any, vault: Any, runner_id: str, write: bool = True) -> list[
     now = H.now()
     fresh = H.shift(now, seconds=120)
     out: list[Row] = []
-    found: list[set[str]] = []
-
-    def line() -> set[str]:
-        if not found:
-            found.append(_in_line(c))
-        return found[0]
-
+    line = _Line(c)
     for sub in H._rows(
         c.execute(
             f"SELECT * FROM {_MS().SUBS} WHERE kind=? AND status<>'needs_reconnect' AND access_expires_at>?",
@@ -907,17 +919,27 @@ def install(app: Any, store: Any) -> None:
         who = request.state.identity
         # Every computer polls every few minutes and most polls change nothing: answered from a read snapshot, off the
         # write lock. One that comes to a write (a turn's revision to move, a lease to take or keep, a usage read to
-        # ask, the vault's key to load) is decided again whole under the write lock, as before, so no two computers
-        # take the same lease.
-        with store.read_transaction() as c:
-            runner_only(c, who)
+        # ask) is decided again whole under the write lock, as before, so no two computers take the same lease.
+        vault = app.state.vault
+        for first in (True, False):
+            key = False
+            with store.read_transaction() as c:
+                runner_only(c, who)
+                try:
+                    return poll(c, vault, who.runner_id, body, write=False)
+                except _Write as why:
+                    key = why.key
+            if not (first and key):
+                break
+            # The vault's key is not in memory yet (a restart): loaded outside the write lock, then the poll is read again.
+            # A key that will not load here goes on under the write lock, as before.
             try:
-                return poll(c, app.state.vault, who.runner_id, body, write=False)
-            except _Write:
-                pass
+                vault.cipher.prepare(store)
+            except Exception:  # noqa: BLE001 - the write path loads it and refuses as it always has
+                break
         with store.transaction() as c:
             runner_only(c, who)
-            return poll(c, app.state.vault, who.runner_id, body)
+            return poll(c, vault, who.runner_id, body)
 
     @app.post("/api/v2/runner-claude-logins/{sid}/refreshed")
     def runner_refreshed(request: Request, sid: str, body: RefreshResult) -> Row:
