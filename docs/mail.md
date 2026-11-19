@@ -161,8 +161,22 @@ so a changed file or another set of files is a new draft. An email is at most 24
 Attachments use the shared sending policy, whose attachment prompt is on by default. The server freezes and hashes
 every attachment, including unnamed inline parts. An OK binds that exact snapshot; changed files need a new send and OK.
 
-`discard <draft-id>` deletes an unsent draft, and nothing else: a draft already sent, or a message id, is refused. It
-needs Read and write on the mailbox and is audited.
+Every draft in the mailbox counts, whoever made it (a person in Gmail, an older tool, a bot), and is named by its draft
+id (`r-...`) or by its message's id, which `thread` and `search` show beside the draft's `draft_id`:
+
+```bash
+tico email drafts ana@acme.example --thread 18f2c9a3b4d5e6f7     # draft id, message id, to, subject, updated, files
+tico email draft-show ana@acme.example r-882...                  # headers, body and files; audited as a read
+tico email draft-update ana@acme.example r-882... --body-file out/reply.txt
+```
+
+`draft-update` changes a draft in place and keeps its draft id: `--to`, `--cc`, `--subject`, the body and `--attach`
+(which replaces the draft's files); whatever you leave out stays as the draft has it, and a reply stays in its thread.
+It meets the lint and the second reviewer again, as a new draft does. `tico email message` given a draft id opens the
+draft.
+
+`discard <draft-id>` deletes an unsent draft for good (Gmail keeps no copy), named by its draft id or its message id; a
+name that is no draft is `not_found`. It needs Read and write on the mailbox and is audited.
 
 ### Send
 
@@ -170,7 +184,9 @@ needs Read and write on the mailbox and is audited.
 tico email send ana@acme.example --draft r-882... --task 1a2b3c4d
 ```
 
-`send` freezes the draft and queues it with Tico. Your sending policy is set in Tico, never in `bot.yaml`: **Settings >
+`send` freezes the draft (named by its draft id or its message id) and queues it with Tico, and prints the send: its
+`id`, `state`, `task_id` and `approval_id`. A draft that is gone (sent, discarded) is said so. `cancel` stops a queued
+send and keeps its draft in Gmail. Your sending policy is set in Tico, never in `bot.yaml`: **Settings >
 Bots > <bot> > Email sending**, or the company or inbox sending policy (see [Turning sending on](#turning-sending-on)).
 
 - **On their own**: the send waits out the undo window (two minutes by default), then goes.

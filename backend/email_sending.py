@@ -640,6 +640,7 @@ def public(row):
         "finished_at",
         "provider_message_id",
         "detail",
+        "draft_id",
     )
     return {
         **{key: row[key] for key in keys},
@@ -1524,14 +1525,24 @@ def install(app, store, auth, mutate):
 
     def frozen_draft(who, body):
         """The request with the draft's MIME and thread as Gmail holds them now: what is sent is what was frozen here,
-        whatever the draft says later. The caller must be able to read the mailbox to read its draft."""
+        whatever the draft says later. The caller must be able to read the mailbox to read its draft. The draft is named
+        by its draft id or by its message's id; one Gmail no longer has is said so, with where to find the drafts."""
         from . import gmail_live
 
         mailbox = body.mailbox.strip().lower()
         with store.read() as c:
             if not access.may(c, who, mailbox)["read"]:
                 raise Problem("forbidden", "The sender cannot use this inbox", 403)
-            found = gmail_live.draft_raw(c, mailbox, body.draft_id)
+            named = gmail_live.draft_resolve(c, mailbox, body.draft_id)
+            if not named:
+                raise Problem(
+                    "not_found",
+                    f"Draft {body.draft_id} no longer exists in {mailbox}: it was sent, discarded or replaced. "
+                    f"`tico email drafts {mailbox}` lists its drafts",
+                    404,
+                )
+            found = gmail_live.draft_raw(c, mailbox, named["id"])
+            body = body.model_copy(update={"draft_id": named["id"]})
         if len(found["raw"]) > MAX_RAW * 4 // 3 + 8:
             raise Problem("raw", "This draft is too large to send through Tico; send it from Gmail", 413)
         # Gmail files every draft in a thread, a new email in a thread of its own: only a draft that answers a message
@@ -1558,6 +1569,9 @@ def install(app, store, auth, mutate):
                 raise Problem("raw", "Send the frozen MIME (raw) or name a Gmail draft (draft_id)", 422)
             body = frozen_draft(who, body)
         with store.read() as c:
+            # A retry of a send already queued gets its answer back without asking the reviewer again: a caller that
+            # gave up waiting is answered at once.
+            replay = store.saved(c, who, request.url.path, request.headers.get("idempotency-key"))
             if body.calendar_action_id or body.automation_action_id:
                 # Tico books calendars and runs automations on the server; it enqueues those emails itself.
                 raise Problem("forbidden", "Only the server sends a calendar or automation email", 403)
@@ -1584,7 +1598,12 @@ def install(app, store, auth, mutate):
                 },
             )
             # A bot's own email (not one Tico composed for an automation or the calendar) is linted and reviewed.
-            writing = actor.startswith("bot:") and not body.automation_action_id and not body.calendar_action_id
+            writing = (
+                actor.startswith("bot:")
+                and not body.automation_action_id
+                and not body.calendar_action_id
+                and not replay
+            )
             review = review_context(c, auth, actor, body, mailbox, snap) if writing else None
             lint = (
                 lint_errors(
@@ -1593,16 +1612,23 @@ def install(app, store, auth, mutate):
                 if writing
                 else []
             )
-        classification = {**classify(app, store, snap, review), "lint": lint}
+        classification = {} if replay else {**classify(app, store, snap, review), "lint": lint}
         # Every bot's writing, the Assistant's for its person included, meets the org rules (`rule_gate` answers None
         # for a person's own mail); Tico's own automation and calendar email does not.
-        composed = body.automation_action_id or body.calendar_action_id
+        composed = body.automation_action_id or body.calendar_action_id or replay
         rules = None if composed else rule_gate(app, store, who, snap)
         via = who.via or ("agent:" + who.agent if who.agent else "")
+
+        def unchecked(c):
+            # Only a replay skips the checks; a receipt gone since it was seen is never queued unchecked.
+            raise Problem("receipt_expired", "This send's receipt expired; retry with a new operation id", 409)
+
         return mutate(
             request,
             body,
-            lambda c: {
+            unchecked
+            if replay
+            else lambda c: {
                 "send": enqueue(
                     c,
                     auth,
@@ -1755,12 +1781,25 @@ def install(app, store, auth, mutate):
         ),
     )
     def cancel(request: Request, sid: str):
+        def kept(row):
+            # Canceling never touches Gmail: the draft a send was frozen from stays in Drafts, to edit, send or discard.
+            if not row["draft_id"]:
+                return {}
+            return {
+                "draft": {
+                    "id": row["draft_id"],
+                    "kept": True,
+                    "detail": f"The Gmail draft {row['draft_id']} is kept in {row['mailbox']}'s Drafts; "
+                    f"`tico email discard {row['mailbox']} {row['draft_id']}` discards it",
+                }
+            }
+
         def work(c):
             row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
             if not row or not can_cancel(c, request.state.identity, row):
                 raise Problem("forbidden", "Only the sender, its manager or an inbox admin cancels a send", 403)
             if row["state"] == "canceled":
-                return {"send": public(row)}
+                return {"send": public(row), **kept(row)}
             if row["state"] not in ("pending", "waiting_approval"):
                 raise Problem("state", "This email can no longer be canceled; delivered email cannot be recalled", 409)
             c.execute("UPDATE email_sends SET state='canceled',raw='',finished_at=? WHERE id=?", (H.now(), sid))
@@ -1768,6 +1807,6 @@ def install(app, store, auth, mutate):
             if row["approval_id"]:
                 task_asks.withdraw(c, row["approval_id"], "The email was canceled.")
             H.event(c, request.state.identity.actor, "email.canceled", sid, {})
-            return {"send": public(c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone())}
+            return {"send": public(c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()), **kept(row)}
 
         return mutate(request, Empty(), work, durable=True)

@@ -46,6 +46,9 @@ State (visible in Gmail too; each prints an undo line)
 Writing (all go through the guardrails below)
   tico email draft   <address> --to <addr> [--cc <addr>] --subject "..." --body-file <path>
   tico email draft   <address> --reply-to <thread-id> --body-file <path>
+  tico email drafts  <address> [--q '<gmail query>'] [--thread <thread-id>]   draft ids, whoever made them
+  tico email draft-show   <address> <draft-id>         one draft (a draft id or its message id)
+  tico email draft-update <address> <draft-id> [--to ...] [--subject ...] [--body-file <path>] [--attach ...]
   tico email discard <address> <draft-id>
   tico email send    <address> --draft <draft-id>      queue it with Tico, which decides
   tico email reply   <address> --thread <thread-id> --body-file <path>   draft, then queue it
