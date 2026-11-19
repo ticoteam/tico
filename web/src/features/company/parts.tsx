@@ -39,7 +39,7 @@ export function Go({ to, search, className, title, children, ...rest }: { to: st
 }
 
 /** A link that sets `?panel=` on this address; Back closes it. */
-export function PanelLink({ panel, className, title, children, ...rest }: { panel: string; className?: string; title?: string; children: ReactNode; 'data-target'?: string }) {
+export function PanelLink({ panel, className, title, children, ...rest }: { panel: string; className?: string; title?: string; children: ReactNode; 'data-target'?: string; 'aria-label'?: string }) {
   return (
     <Link to="." search={((prev: Record<string, unknown>) => ({ ...prev, panel })) as never} className={className} title={title} {...rest}>
       {children}
@@ -50,6 +50,7 @@ export function PanelLink({ panel, className, title, children, ...rest }: { pane
 /** A refusal in words: the server's reason from its code (`owner_not_found` is "Owner not found"), else that it failed. */
 export function refusal(error = ''): string {
   if (error === 'not_allowed') return 'Not allowed';
+  if (error === 'librarian') return 'The Librarian is not running yet';
   if (error.startsWith('bad_input')) return 'Check the fields';
   return /^[a-z]+(_[a-z]+)*$/.test(error) ? error[0]!.toUpperCase() + error.slice(1).replace(/_/g, ' ') : "Couldn't save";
 }

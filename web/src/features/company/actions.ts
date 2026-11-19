@@ -2,6 +2,7 @@ import type { AnyRouter } from '@tanstack/react-router';
 import { defineAction, s } from '@/actions';
 import { meQuery } from '@/data';
 import {
+  acceptSize,
   addReading,
   archiveKpi,
   closeGoal,
@@ -10,8 +11,13 @@ import {
   createProduct,
   createRisk,
   decideProposal,
+  moveTeammate,
+  placeKpi,
   publishBrand,
   saveBrandDraft,
+  setSizeParam,
+  setUpMarket,
+  sizeMarket,
   updateGoal,
   updateKpi,
   updateProduct,
@@ -31,6 +37,8 @@ const day = s.string({ pattern: /^\d{4}-\d{2}-\d{2}$/, what: 'a date, 2026-12-31
 
 const GOALS = '/company/strategy/goals';
 const BRAND = '/company/strategy/brand';
+const MARKET = '/company/strategy/market';
+const ORG = '/company/strategy/org';
 const go = (router: AnyRouter, to: string, search: Record<string, string> = {}) => router.navigate({ to, search });
 
 // ---------------------------------------------------------------- views
@@ -397,4 +405,105 @@ export const brandPublish = defineAction({
   },
   did: () => 'Published the brand book',
   target: () => ({ kind: 'page', id: BRAND }),
+});
+
+// ---------------------------------------------------------------- Market: its panels, set-up and sizes
+
+/** Market, or one of its panels: 'segment:<id>', 'player:<entity id>', 'definition', 'briefing'. */
+export const openMarket = defineAction({
+  id: 'market.open',
+  title: 'Open Market or one of its panels',
+  kind: 'view',
+  input: s.object({ panel: s.optional(s.string({ min: 1, max: 200, pattern: /^(segment:\S+|player:\S+|definition|briefing)$/, what: 'segment:<id>, player:<id>, definition or briefing' })) }),
+  run: ({ router }, { panel }) => go(router, MARKET, panel ? { panel } : {}),
+  did: ({ panel }) => (panel ? 'Opened it on Market' : 'Opened Market'),
+  target: ({ panel }) => (panel ? { kind: 'panel', id: panel } : { kind: 'page', id: MARKET }),
+});
+
+const answer = s.string({ max: 4000 });
+
+/** The owner's answers to Market's four questions: kept (`save`, `skip`), or `finish` files the research. */
+export const marketSetUp = defineAction({
+  id: 'market.setUp',
+  title: "Answer Market's set-up questions",
+  kind: 'change',
+  input: s.object({
+    answers: s.object({ sell: answer, buyers: answer, competitors: answer, watch: answer }),
+    step: s.number({ int: true, min: 0 }),
+    action: s.oneOf(['save', 'skip', 'finish'] as const),
+  }),
+  run: (_ctx, { answers, step, action }) => setUpMarket(answers, Math.min(step, 3), action),
+  did: ({ action }) => (action === 'finish' ? 'Asked for the market research' : action === 'skip' ? 'Set Market aside' : 'Kept the answers'),
+  target: () => ({ kind: 'page', id: MARKET }),
+});
+
+export const marketSize = defineAction({
+  id: 'market.size',
+  title: 'Ask for the market to be defined and sized',
+  kind: 'change',
+  input: s.object({ description: s.string({ min: 1, max: 500 }) }),
+  run: (_ctx, { description }) => sizeMarket(description.trim()),
+  did: () => 'Asked for the market to be sized',
+  target: () => ({ kind: 'panel', id: 'definition' }),
+});
+
+export const marketAcceptSize = defineAction({
+  id: 'market.acceptSize',
+  title: "Accept an estimate as its segment's size",
+  kind: 'change',
+  input: s.object({ size: id }),
+  run: (_ctx, { size }) => acceptSize(size),
+  did: () => 'Accepted the estimate',
+  target: ({ size }) => ({ kind: 'estimate', id: size }),
+});
+
+export const marketSetParam = defineAction({
+  id: 'market.setParam',
+  title: "Change a parameter of a market estimate",
+  kind: 'change',
+  input: s.object({ size: id, name: s.string({ min: 1, max: 100 }), value: s.number() }),
+  run: (_ctx, { size, name, value }) => setSizeParam(size, name, value),
+  did: ({ name, value }) => `Set ${name} to ${value}`,
+  target: ({ size }) => ({ kind: 'estimate', id: size }),
+});
+
+// ---------------------------------------------------------------- KPI places and the Org chart
+
+const role = s.oneOf(['north_star', 'input', 'guardrail', 'check_signups', 'check_new_customers', 'check_cost'] as const);
+
+/** What a KPI feeds and its role in the KPI tree (Loop, Step and the funnel stage are gone). */
+export const kpiPlace = defineAction({
+  id: 'kpis.place',
+  title: 'Place a KPI in the KPI tree',
+  kind: 'change',
+  input: s.object({ kpi: id, feeds: s.nullable(id), role: s.nullable(role) }),
+  run: async ({ router }, { kpi, feeds, role }) => {
+    const out = await placeKpi(kpi, feeds, role);
+    await go(router, GOALS, { panel: `kpi:${kpi}` });
+    return out;
+  },
+  did: () => 'Placed the KPI',
+  target: ({ kpi }) => ({ kind: 'kpi', id: kpi }),
+});
+
+export const openOrgMate = defineAction({
+  id: 'org.openTeammate',
+  title: 'Open a teammate on the Org chart',
+  kind: 'view',
+  input: s.object({ who: actor }),
+  run: ({ router }, { who }) => go(router, ORG, { panel: `mate:${who}` }),
+  did: () => 'Opened the teammate',
+  target: ({ who }) => ({ kind: 'mate', id: who }),
+});
+
+/** Into another group, or out of its group (`to` empty). The owner moves anyone; a lead within what it leads. */
+export const orgMove = defineAction({
+  id: 'org.move',
+  title: 'Move a teammate to another group',
+  kind: 'change',
+  input: s.object({ who: actor, from: s.string({ max: 200 }), to: s.string({ max: 200 }) }),
+  can: (_ctx, { from, to }) => from !== to && !!(from || to),
+  run: (_ctx, { who, from, to }) => moveTeammate(who, from, to),
+  did: () => 'Moved the teammate',
+  target: ({ who }) => ({ kind: 'mate', id: who }),
 });

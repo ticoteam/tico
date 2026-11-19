@@ -8,17 +8,18 @@ import { Field } from '@/kit/Field';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import { fmtAge, fmtDate } from '@/lib';
 import { List, SidePanel, type PageTab } from '@/pagekinds';
 import { amount, Face, NameOf, PanelLink, Trend, useDo } from './parts';
-import { goalQuery, goalsTreeQuery, kpiQuery, type Proposal, type ProposalCard, type TreeGoal } from './queries';
+import { goalQuery, goalsTreeQuery, kpiQuery, placedKpisQuery, type GrowthRole, type PlacedKpi, type Proposal, type ProposalCard, type TreeGoal } from './queries';
 import type { Kpi, KpiDetail, KpiReadingView } from '@/api/schema';
 
 /* Goals (pages/3-company/company.js goalsBody): a List of the goal tree, a goal sits under the goal it feeds and each
    KPI is a quiet line under its goal's title. A goal, a KPI, and the KPI and goal forms open in the panel:
-   `?panel=goal:<id>`, `kpi:<id>`, `kpi-new:<goal>`, `kpi-edit:<kpi>`, `goal-new`. */
+   `?panel=goal:<id>`, `kpi:<id>`, `kpi-new:<goal>`, `kpi-edit:<kpi>`, `kpi-place:<kpi>`, `goal-new`. */
 
 export interface GoalsSearch {
   panel?: string;
@@ -62,6 +63,8 @@ export function GoalsPage({ head, search }: { head: Head; search: GoalsSearch })
           <KpiForm goal={ref} goals={goals} />
         ) : kind === 'kpi-edit' ? (
           <KpiEdit kid={ref} goals={goals} />
+        ) : kind === 'kpi-place' ? (
+          <KpiPlace kid={ref} />
         ) : null
       }
     />
@@ -444,6 +447,13 @@ function KpiPanel({ kid }: { kid: string }) {
         )
       }
       onClose={() => void close.run({})}
+      actions={
+        d.may_edit && (
+          <Menu trigger={<IconButton icon="more" label="More" quiet />}>
+            <MenuItem label="Place in tree" onSelect={() => void open.run({ panel: `kpi-place:${kid}` })} />
+          </Menu>
+        )
+      }
       foot={
         d.may_edit && (
           <>
@@ -649,6 +659,82 @@ function KpiForm({ goal, goals, kpi }: { goal: string; goals: readonly TreeGoal[
           />
         </div>
       </form>
+    </SidePanel>
+  );
+}
+
+const ROLES: { value: GrowthRole | ''; label: string }[] = [
+  { value: '', label: 'None' },
+  { value: 'north_star', label: 'North Star' },
+  { value: 'input', label: 'Input' },
+  { value: 'guardrail', label: 'Guardrail' },
+  { value: 'check_signups', label: 'Check: sign-ups' },
+  { value: 'check_new_customers', label: 'Check: new customers' },
+  { value: 'check_cost', label: 'Check: cost' },
+];
+
+/** The KPIs under `kid` in the KPI tree, and itself: what it may not feed. */
+function below(kpis: readonly PlacedKpi[], kid: string): Set<string> {
+  const out = new Set([kid]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const k of kpis)
+      if (k.parent_kpi_id && out.has(k.parent_kpi_id) && !out.has(k.id)) {
+        out.add(k.id);
+        grew = true;
+      }
+  }
+  return out;
+}
+
+/** A KPI's place in the KPI tree: what it feeds (never itself or anything under it) and its role (goals-kpi-views.ts
+    gkvPlace). Loop, Step and the funnel stage went with the Loops and Journey views. */
+function KpiPlace({ kid }: { kid: string }) {
+  const q = useQuery(placedKpisQuery);
+  const place = useDo('kpis.place');
+  const open = useDo('company.openPanel');
+  const close = useDo('company.closePanel');
+  const kpis = q.data ?? [];
+  const k = kpis.find((x) => x.id === kid);
+  const [feeds, setFeeds] = useState<string | null>(null);
+  const [role, setRole] = useState<GrowthRole | '' | null>(null);
+  const shownFeeds = feeds ?? k?.parent_kpi_id ?? '';
+  const shownRole = role ?? k?.growth_role ?? '';
+  const out = below(kpis, kid);
+  const back = () => void open.run({ panel: `kpi:${kid}` });
+  return (
+    <SidePanel
+      title={k?.name ?? 'Place KPI'}
+      target="panel:kpi-place"
+      onClose={() => void close.run({})}
+      foot={
+        k && (
+          <>
+            <Button variant="primary" busy={place.pending} onClick={() => void place.run({ kpi: kid, feeds: shownFeeds || null, role: shownRole || null })}>
+              Save
+            </Button>
+            <Button variant="quiet" onClick={back}>
+              Cancel
+            </Button>
+          </>
+        )
+      }
+    >
+      {q.isPending && <p className="rail-sec pt-none">Loading</p>}
+      {q.isError && <p className="rail-sec pt-none">The KPI tree did not load</p>}
+      {q.data && !k && <p className="rail-sec pt-none">Not in the KPI tree</p>}
+      {k && (
+        <div className="rail-sec kf">
+          <span className="kf-l">Feeds</span>
+          <div className="kf-c">
+            <Select label="Feeds" labelHidden options={[{ value: '', label: 'None' }, ...kpis.filter((x) => !out.has(x.id)).map((x) => ({ value: x.id, label: x.name }))]} value={shownFeeds} onValueChange={setFeeds} />
+          </div>
+          <span className="kf-l">Role</span>
+          <div className="kf-c">
+            <Select label="Role" labelHidden options={ROLES} value={shownRole} onValueChange={setRole} />
+          </div>
+        </div>
+      )}
     </SidePanel>
   );
 }

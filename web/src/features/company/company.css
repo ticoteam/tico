@@ -153,6 +153,38 @@
 .co .none{color:var(--muted)}
 .co .table .dim,.co .table td.dim{color:var(--muted)}
 .co .table tr.is-us td:first-child{font-weight:var(--w-strong)}
+/* how it reaches buyers: each layer's name, then its organizations as rows, in order */
+.co .mkt-chain{list-style:none;margin:0;padding:0}
+.co .mkt-layer{margin:var(--s-2h) 0 var(--s-0);padding:0 var(--s-2);font-size:var(--t-sm);font-weight:var(--w-text);color:var(--muted)}
+.co .mkt-chain>li:first-child .mkt-layer{margin-top:0}
+.co .mkt-node{grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h)}
+.co .mkt-node.is-us .row-title{font-weight:var(--w-strong)}
+.co .row-fig{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--ink-2)}
+/* the four set-up questions, one at a time */
+.co .mkt-setup{grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h)}
+.co .mkt-ask{display:flex;flex-direction:column;gap:var(--s-2);max-width:var(--measure);padding:var(--s-1) var(--s-2) var(--s-2)}
+.co .mkt-hint{font-size:var(--t-sm);color:var(--muted)}
+.co .mkt-acts{display:flex;gap:var(--s-2)}
+/* Market's panels: a segment, the definition, the briefing, an organization's note */
+.pnl .mkt-pills{display:flex;flex-wrap:wrap;gap:var(--s-1h);margin-bottom:var(--s-2)}
+.pnl .mkt-p{margin:0 0 var(--s-2);color:var(--ink-2);line-height:var(--lh-meta);text-wrap:pretty}
+.pnl .mkt-kick{margin-bottom:var(--s-1);font-size:var(--t-sm);color:var(--muted)}
+.pnl .mkt-list{margin:0;padding-left:var(--s-3h);color:var(--ink-2);line-height:var(--lh-meta)}
+.pnl .mkt-est{padding:var(--s-1h) 0;border-top:1px solid var(--line)}
+.pnl .mkt-est:first-of-type{border-top:0}
+.pnl .mkt-est-h{display:flex;align-items:center;gap:var(--s-2);min-height:30px}
+.pnl .mkt-est-h .row-fig{margin-left:auto}
+.pnl .mkt-arith,.pnl .mkt-ev{margin-top:var(--s-0);font-size:var(--t-sm);color:var(--ink-2);line-height:var(--lh-meta);overflow-wrap:anywhere}
+.pnl .mkt-ev q{display:block;color:var(--muted)}
+.pnl .mkt-param{display:flex;align-items:center;flex-wrap:wrap;gap:var(--s-2);min-height:30px;font-size:var(--t-sm)}
+.pnl .mkt-param-f{display:flex;align-items:center;gap:var(--s-1h)}
+.pnl .mkt-param-f input{width:96px;text-align:right;font-variant-numeric:tabular-nums}
+.pnl .mkt-src{color:var(--muted)}
+.pnl .mkt-who{display:flex;flex-direction:column;padding:var(--s-1) 0;line-height:20px}
+.pnl .mkt-fig{font-size:var(--t-sm);color:var(--muted)}
+.pnl .mkt-quote{margin:0 0 var(--s-2);padding-left:var(--s-2h);border-left:2px solid var(--line-strong);color:var(--ink-2);line-height:var(--lh-meta)}
+.pnl .mkt-quote p+p{margin-top:var(--s-1);color:var(--muted)}
+.pnl .mkt-read{line-height:var(--lh-read);color:var(--ink-2)}
 
 /* ---------- Org: a light org chart. A spine runs down the left to each team's lead; a team's teammates hang from it
    on a comb, row after row. ---------- */
@@ -187,6 +219,7 @@
 .co .oc-mate:nth-child(3n+1)::before{left:-14px;width:29px}
 .co .oc-in{display:flex;align-items:center;gap:var(--s-2h);width:fit-content;max-width:calc(100% + 6px);height:32px;margin-left:calc(-1 * var(--s-1h));padding:0 var(--s-2) 0 var(--s-1h);border-radius:var(--r-row);transition:background var(--dur-fast) var(--ease)}
 .co .oc-mate:hover .oc-in{background:var(--hover)}
+.co .oc-mate.is-open .oc-in{background:var(--selected)}
 .co .oc-name{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 @container pg (min-width:800px){
   .co .oc-row{grid-template-columns:repeat(4,minmax(0,1fr))}
@@ -283,9 +316,16 @@
 :where(html[data-layout="cards"]){
   .co .hall{grid-template-columns:minmax(0,1fr);padding:var(--s-3) 0 var(--s-1h)}
   .co .hall-head{flex-direction:row;justify-content:space-between;align-items:center;padding:0 0 var(--s-0)}
-  .co .pipe{grid-template-columns:76px 38px minmax(0,1fr) 38px;column-gap:var(--s-1h)}
-  .co .deck,.co .deck-none{width:10px}
+  /* The name takes its own line over the row, so the stage line gets the width between the two rates. The line is a
+     size container: the first and last stage names each keep to half of it and end in an ellipsis; a stage's stacks
+     keep to that stage. */
+  .co .pipe{height:auto;grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:auto 72px;column-gap:var(--s-1h);padding-top:var(--s-1h)}
+  .co .pipe-name{grid-column:1/-1;margin-bottom:0;-webkit-line-clamp:1;line-clamp:1}
+  .co .line{container-type:inline-size}
+  .co .decks{max-width:100%;overflow:hidden}
+  .co .deck,.co .deck-none{width:10px;flex:none}
   .co .st:not(:first-child):not(:last-child) .st-name{visibility:hidden}
+  .co .st:first-child .st-name,.co .st:last-child .st-name{max-width:calc(50cqi - var(--s-1h));overflow:hidden;text-overflow:ellipsis}
   .co .st:first-child .st-name{align-self:flex-start}
   .co .st:last-child .st-name{align-self:flex-end;margin-right:var(--s-1h)}
   .co .oc-row{grid-template-columns:repeat(2,minmax(0,1fr))}
