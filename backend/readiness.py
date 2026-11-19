@@ -298,6 +298,12 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
         # Its turns run on the Gateway until it is signed in (backend/models_preset.py): say so, never "login required".
         out["gateway"] = line
         return verdict(True)
+    if signed in SIGNED_OUT and (held := model_subscriptions.plan_hold(c, row["id"], runtime)):
+        # Every plan this computer is given for it is at its usage limit: that, its reset and the plan to give it
+        # instead, never "login required" or "has no plan" (it has one).
+        problem, fix, _ = model_subscriptions.hold_words(held, label, runtime)
+        out["bot_problems"] = [problem[0].upper() + problem[1:]]
+        return verdict(False, problem[0].upper() + problem[1:], fix, "#/settings")
     if signed in SIGNED_OUT and (plan := model_subscriptions.company_plan(c, runtime)):
         # The company has a plan for it and this computer was given none: giving it one is the fix, not a sign-in.
         return verdict(

@@ -293,7 +293,7 @@ def _computers(c, runners_online, settings, limits=None):
     default = providers.default_runtime(providers.load(c, settings))
     wanted = {default} - {""}
     from .cloud_machines import resting as resting_machines
-    from .model_subscriptions import KINDS, RUNNER_CAPABILITIES_SQL, in_effect
+    from .model_subscriptions import KINDS, RUNNER_CAPABILITIES_SQL, in_effect, plan_hold
     from .performance import latest_disks
     from .read_cache import prime
 
@@ -314,6 +314,16 @@ def _computers(c, runners_online, settings, limits=None):
         # A runtime the company's plan signs in on this computer (model_subscriptions.in_effect, what a claim uses)
         # needs no sign-in of its own: its missing login is not a problem.
         plan = {n: KINDS[sub["kind"]]["billing"] for n in runtimes if (sub := in_effect(c, r["id"], n))}
+        # A runtime whose given plans are all held at their usage limit, with no sign-in of its own to run on meanwhile:
+        # its bots wait for a plan, not a sign-in (model_subscriptions.plan_hold).
+        held = {
+            n: found
+            for n, v in runtimes.items()
+            if n not in plan
+            and v.get("authenticated") != "ready"
+            and n not in covered.get(r["id"], ())
+            and (found := plan_hold(c, r["id"], n))
+        }
         rows.append(
             {
                 "id": r["id"],
@@ -353,9 +363,11 @@ def _computers(c, runners_online, settings, limits=None):
                             n in run_on.get(r["id"], ())
                             and n not in plan
                             and n not in covered.get(r["id"], ())
+                            and n not in held
                             and computer_login(document, n).get("authenticated") in SIGNED_OUT
                         ),
                         "gateway_covered": n in covered.get(r["id"], ()),
+                        "plan_held": held.get(n),
                         "login_problem": _login_problem(computer_login(document, n)),
                         "signable": bool(v.get("installed"))
                         and v.get("authenticated") != "ready"
@@ -368,6 +380,7 @@ def _computers(c, runners_online, settings, limits=None):
                         and v.get("authenticated") == "missing"
                         and n in model_login.RUNTIMES
                         and n not in plan
+                        and n not in held
                         and n in assigned.get(r["id"], {default}),
                     }
                     for n, v in sorted(runtimes.items())
@@ -738,6 +751,20 @@ def _needs_sign_in(computers):
         for r in x["runtimes"]
         if r["sign_in"] and not r["gateway_covered"]
     ]
+
+
+def _plans_held(computers):
+    """(problem, fix, settings tab) for each online computer whose turns on a model wait because every plan it is given
+    for it is at its usage limit (`plan_held`, model_subscriptions.plan_hold)."""
+    from .model_subscriptions import hold_words
+
+    out = []
+    for x in computers:
+        for r in x["runtimes"] if x["online"] else ():
+            if held := r.get("plan_held"):
+                problem, fix, tab = hold_words(held, x["label"], r["name"])
+                out.append((problem[0].upper() + problem[1:], fix, tab))
+    return out
 
 
 def _rejected_summary(rows):
@@ -3633,6 +3660,7 @@ def view(c, who, settings, auth, github, config, filing=False):
                     )
                 )
         wanted = _wanted_runtimes(providers.load(c, settings))
+        held_plans = _plans_held(computers)
         # Signed in by the computer's own login or by the company's plan given to it (`ready` on each runtime row).
         signed = next(
             (r["name"] for x in computers if x["online"] for r in x["runtimes"] if r["name"] in wanted and r["ready"]),
@@ -3664,6 +3692,17 @@ def view(c, who, settings, auth, github, config, filing=False):
                         _fix("Open Keys", "#/tools/keys?show=credentials"),
                         _fix("Open Computers", "#/settings", "devices"),
                     ],
+                )
+            )
+        elif online and not signed and held_plans:
+            # Its plans are there but at their limit: Computer plans at their limit says which and what to give it.
+            checks.append(
+                _check(
+                    "models",
+                    "Models",
+                    "bad",
+                    "No online computer can run your model now: the plans it is given are at their usage limit.",
+                    [_fix("Open Computers", "#/settings", "devices")],
                 )
             )
         elif online and not signed and gateway_runs:
@@ -3704,6 +3743,35 @@ def view(c, who, settings, auth, github, config, filing=False):
         else:
             checks.append(_check("models", "Models", "unknown", "Nothing to check until a computer is online."))
 
+    if (held := _plans_held(computers)) and not full:
+        # Plan names, owners and resets are Settings > Models' to show: other readers get the count, as Computer
+        # logins below gives them.
+        checks.append(
+            _check(
+                "computer_plan_held",
+                "Computer plans at their limit",
+                "bad",
+                f"{len(held)} computer(s) wait for a model plan at its usage limit. "
+                "Ask an owner or admin to check Settings > Computers.",
+            )
+        )
+    elif held:
+        # Every plan a computer is given is at its usage limit: name the plan, the limit and its reset, and the one
+        # change that runs its turns now. It needs no sign-in, so it is not in Computer sign-in below.
+        fixes = {
+            "devices": _fix("Open Computers", "#/settings", "devices"),
+            "models": _fix("Open Models", "#/settings", "models"),
+        }
+        checks.append(
+            _check(
+                "computer_plan_held",
+                "Computer plans at their limit",
+                "bad",
+                "; ".join(f"{problem}. {fix}." for problem, fix, _ in held[:5])
+                + ("" if len(held) <= 5 else f" And {len(held) - 5} more."),
+                [fixes[tab] for tab in dict.fromkeys(tab for _, _, tab in held)],
+            )
+        )
     if full and (unsigned := _needs_sign_in(computers)):
         checks.append(
             _check(
