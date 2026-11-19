@@ -45,9 +45,8 @@ class FakeSystem:
         self.input = ["-A INPUT -i lo -j ACCEPT"]  # INPUT as `iptables -S` prints it; the firewall script edits it
         self.firewall_works = True  # False: running the firewall script leaves INPUT as it is
         self.meet_cert = True  # `up` of an edge project with Tico Meet: the certificate Caddy gets its certificate
-        # py-spy: what `py-spy --version` says when no file is at its path (the pinned one; None: not installed), what a
-        # download of each url answers (missing: it fails), and the machine type
-        self.py_spy, self.downloads, self.arch = cell.PY_SPY_VERSION, {}, "aarch64"
+        # py-spy's download: what each url answers (missing: it fails), and the machine type
+        self.downloads, self.arch = {}, "aarch64"
 
     def run(self, argv, *, input=None, timeout=900):
         self.calls.append(list(argv))
@@ -55,10 +54,6 @@ class FakeSystem:
         for key, res in self.fail.items():
             if key in joined:
                 return res
-        if argv[0].endswith("/py-spy") and argv[1:] == ["--version"]:
-            if Path(argv[0]).exists():  # an installed fake binary holds what it prints
-                return Result(0, Path(argv[0]).read_text())
-            return Result(0, f"py-spy {self.py_spy}\n") if self.py_spy else Result(127, "", "not found")
         if argv[:3] == ["iptables", "-S", "INPUT"]:
             return Result(0, "-P INPUT ACCEPT\n" + "".join(r + "\n" for r in self.input))
         if argv and argv[0].endswith(cell.FIREWALL_SCRIPT) and self.firewall_works:

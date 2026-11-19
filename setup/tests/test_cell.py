@@ -2967,23 +2967,17 @@ def test_compose_gives_the_gateway_only_the_companys_own_data_network_and_limits
     assert slack["labels"] == {cell.LABEL: "boatyard"} and slack["mem_limit"] == str(1024**3)
 
 
-def py_spy_wheel(text):
-    """A wheel holding a fake py-spy that prints `text` (FakeSystem runs it by reading it)."""
-    buf = io.BytesIO()
-    import zipfile
-
-    with zipfile.ZipFile(buf, "w") as z:
-        z.writestr(cell.PY_SPY_MEMBER, text)
-    return buf.getvalue()
-
-
 def test_init_installs_the_pinned_py_spy_once_and_a_bad_download_never_fails_it(host, monkeypatch):
     import hashlib
+    import zipfile
 
-    wheel = py_spy_wheel(f"py-spy {cell.PY_SPY_VERSION}\n")
-    url = "https://files.example/py_spy.whl"
-    monkeypatch.setattr(cell, "PY_SPY_WHEELS", {"aarch64": (url, hashlib.sha256(wheel).hexdigest())})
-    host.system.py_spy = None  # not on the host yet
+    binary = b"\x7fELF fake py-spy"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr(cell.PY_SPY_MEMBER, binary)
+    wheel, url = buf.getvalue(), "https://files.example/py_spy.whl"
+    sha = lambda b: hashlib.sha256(b).hexdigest()  # noqa: E731 - a name for the pins below
+    monkeypatch.setattr(cell, "PY_SPY_WHEELS", {"aarch64": (url, sha(wheel), sha(binary))})
     host.system.downloads[url] = wheel[:-1] + b"x"  # not what was pinned
     first = host("init", "--json")
     assert first["ok"] and "sha256" in first["py_spy"] and not (host.etc / cell.PY_SPY).exists()
@@ -2991,9 +2985,13 @@ def test_init_installs_the_pinned_py_spy_once_and_a_bad_download_never_fails_it(
     second = host("init", "--json")
     spy = host.etc / cell.PY_SPY
     assert second["ok"] and "py-spy" in second["changed"] and "py_spy" not in second
-    assert spy.read_text() == f"py-spy {cell.PY_SPY_VERSION}\n" and stat.S_IMODE(spy.stat().st_mode) == 0o755
+    assert spy.read_bytes() == binary and stat.S_IMODE(spy.stat().st_mode) == 0o755
+    n = len(host.system.calls)
     third = host("init", "--json")
     assert third["changed"] == [] and "py_spy" not in third
+    assert not any("py-spy" in " ".join(c) for c in host.system.calls[n:])  # known by its hash, never run
+    spy.write_bytes(b"something else")  # a hand-installed binary of another version is replaced
+    assert "py-spy" in host("init", "--json")["changed"] and spy.read_bytes() == binary
     host.system.arch = "riscv64"
     spy.unlink()
     assert "riscv64" in host("init", "--json")["py_spy"]

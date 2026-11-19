@@ -137,8 +137,9 @@ SERVER_SERVICE, SLACK_SERVICE = "server", "slack"  # compose.yaml's service name
 SLACK_MEMORY = "1g"  # the Slack gateway's memory limit: one Python process with an outbound websocket
 SERVER_UID = 10001  # the server image's user (Dockerfile)
 TUNNEL_UID = 65532  # cloudflared's image runs as nonroot (uid and gid 65532)
-# py-spy on every cell host, for `profile` (setup/cell_stats.py `t_profile`): the static binary from its PyPI wheel, pinned
-# by the wheel's sha256 for each machine type. 0.4.3 reads Python 3.15, the server image's Python.
+# py-spy on every cell host, for `profile` (setup/cell_stats.py `t_profile`): the static binary from its PyPI wheel, for
+# each machine type the wheel's url and sha256 and the binary's sha256 (checked without running it). 0.4.3 reads
+# Python 3.15, the server image's Python.
 PY_SPY = "usr/local/bin/py-spy"
 PY_SPY_VERSION = "0.4.3"
 PY_SPY_WHEELS = {
@@ -146,11 +147,13 @@ PY_SPY_WHEELS = {
         "https://files.pythonhosted.org/packages/60/c3/c9384da6992d64e0dffab551cda3d1e990de1a2685fcfcc16fc8e5a98b18/"
         "py_spy-0.4.3-py2.py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
         "bbcec46930d464b3bfc142d6d02ade4dd8ad5627823263b3eff0280e80c7c132",
+        "ad6e22882e8dcaced4f0a76fef10d372645cc7b94c48a289ebe1bedb754774ed",
     ),
     "x86_64": (
         "https://files.pythonhosted.org/packages/78/1f/651389a861f6148754443834a50dd576993257af5f645d4316ab94505267/"
         "py_spy-0.4.3-py2.py3-none-manylinux1_x86_64.manylinux_2_5_x86_64.whl",
         "8a4277225f470d394a85cca0cdd944bef87f0097b6f20150a6dd3ac2e92806b8",
+        "a41205d4925beafd108e1ace85e66c0a1a7adbfcbebcd4441f07848b608886c0",
     ),
 }
 PY_SPY_MEMBER = f"py_spy-{PY_SPY_VERSION}.data/scripts/py-spy"
@@ -506,7 +509,7 @@ class System:
 
     def fetch(self, url: str, limit: int = 64 << 20) -> bytes:
         """A download's bytes (at most `limit`); OSError when it fails."""
-        with urllib.request.urlopen(url, timeout=60) as r:
+        with urllib.request.urlopen(url, timeout=30) as r:
             return r.read(limit)
 
     def machine(self) -> str:
@@ -2023,7 +2026,15 @@ class Cell:
             kms_key = saved.get("kms_key")
             if getattr(args, "kms_key", None) is not None:
                 kms_key = check_kms_key(args.kms_key) if args.kms_key.strip() else None
-            return self._init(saved, domain, token, page_domain, meet_domain, kms_key)
+            result = self._init(saved, domain, token, page_domain, meet_domain, kms_key)
+        # Last and outside the cell's lock: py-spy is a tool for people, so a slow or failed download never holds up or
+        # fails the rest of init (a core update runs init).
+        spy = self.py_spy()
+        if spy == "installed":
+            result["changed"].append("py-spy")
+        elif spy != "current":
+            result["py_spy"] = spy
+        return result
 
     def _init(
         self,
@@ -2103,9 +2114,6 @@ class Cell:
             changed.append("updater")
         if self.wake_service():
             changed.append("wake")
-        spy = self.py_spy()
-        if spy == "installed":
-            changed.append("py-spy")
         cell = {**saved, "domain": domain, "router": f"http://{ROUTER_ADDRESS}:{ROUTER_PORT}"}
         for name, value in (("page_domain", page_domain), ("meet_domain", meet_domain), ("kms_key", kms_key)):
             if value:
@@ -2132,35 +2140,43 @@ class Cell:
             **({"page_domain": page_domain} if page_domain else {}),
             **({"meet_domain": meet_domain} if meet_domain else {}),
             **({"kms_key": kms_key} if kms_key else {}),
-            **({"py_spy": spy} if spy not in ("installed", "current") else {}),
         }
 
     def py_spy(self) -> str:
-        """PY_SPY_VERSION at /usr/local/bin/py-spy: "current" when it is there, "installed" when this run put it there,
-        else why not. A failed download never fails init: the host runs its companies without a profiler."""
-        target = self.host / PY_SPY
-        if self.system.run([str(target), "--version"]).stdout.split() == ["py-spy", PY_SPY_VERSION]:
-            return "current"
+        """PY_SPY_VERSION at /usr/local/bin/py-spy, known by its sha256 (never by running it): "current" when it is
+        there, "installed" when this run put it there, else why not."""
         arch = self.system.machine()
         if arch not in PY_SPY_WHEELS:
             return f"no py-spy wheel for {arch}"
-        url, digest = PY_SPY_WHEELS[arch]
+        url, wheel_digest, digest = PY_SPY_WHEELS[arch]
+        target = self.host / PY_SPY
+        with contextlib.suppress(OSError):
+            if not target.is_symlink() and hashlib.sha256(target.read_bytes()).hexdigest() == digest:
+                return "current"
         try:
             wheel = self.system.fetch(url)
         except OSError as e:
             return f"py-spy download failed: {e}"
-        if hashlib.sha256(wheel).hexdigest() != digest:
+        if hashlib.sha256(wheel).hexdigest() != wheel_digest:
             return "py-spy download does not match its pinned sha256"
         try:
             with zipfile.ZipFile(io.BytesIO(wheel)) as z:
                 binary = z.read(PY_SPY_MEMBER)
         except (zipfile.BadZipFile, KeyError) as e:
             return f"py-spy wheel unreadable: {e}"
-        target.parent.mkdir(parents=True, exist_ok=True)
+        if hashlib.sha256(binary).hexdigest() != digest:
+            return "py-spy in the wheel does not match its pinned sha256"
         tmp = target.with_name(f".{target.name}.{os.getpid()}.new")
-        tmp.write_bytes(binary)
-        os.chmod(tmp, 0o755)
-        os.replace(tmp, target)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_bytes(binary)
+            os.chmod(tmp, 0o755)
+            os.replace(tmp, target)
+        except OSError as e:
+            return f"py-spy not written: {e}"
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
         return "installed"
 
     def profile(self, args) -> dict:

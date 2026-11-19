@@ -59,9 +59,11 @@ python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.
 6. Installs and starts `tico-cell-wake.service`, which starts a sleeping company on its first request
    ([Sleep, wake and the hold](#sleep-wake-and-the-hold)), running `python3 -m setup.cell_wake` from this checkout on
    `127.0.0.1:8082`. It is restarted and started the same way as the updater.
-7. Installs py-spy (`PY_SPY_VERSION` in `setup/cell.py`) at `/usr/local/bin/py-spy` when that path does not report
-   that version. The binary comes from py-spy's PyPI wheel for the host's machine type (`aarch64` or `x86_64`), checked
-   against its pinned sha256. A failed download does not fail `init`: the answer's `py_spy` says why. To profile a
+7. Installs py-spy (`PY_SPY_VERSION` in `setup/cell.py`) at `/usr/local/bin/py-spy` unless the file there already
+   has the pinned binary's sha256 (it is never run to check). The binary comes from py-spy's PyPI wheel for the host's
+   machine type (`aarch64` or `x86_64`), and both the wheel and the binary are checked against their pinned sha256.
+   This runs last, outside the cell's lock, and a failed download does not fail `init`: the answer's `py_spy` says
+   why. To profile a
    company's server, run `python3 -m setup cell profile --company <slug> --seconds 30` as root from the core checkout.
    It samples the server process's threads that hold the GIL for that long, without pausing it, and prints the
    hottest stacks. All the stacks are kept in `/srv/tico-cell/profiles/` (the newest 20). This is the `profile` debug

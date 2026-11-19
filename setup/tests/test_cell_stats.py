@@ -970,11 +970,19 @@ def test_profile_runs_py_spy_on_the_server_by_its_host_pid_and_ranks_its_stacks(
     def spy(argv, timeout=20, cwd=None):
         if argv[0].endswith("/py-spy"):
             box.calls.append(list(argv))
-            Path(argv[argv.index("--output") + 1]).write_text("main;serve;read_rows 30\nmain;serve;json 10\nmain 0\n")
+            Path(argv[argv.index("--output") + 1]).write_text(stacks)
             return Result(0)
         return run(argv, timeout, cwd)
 
     box.run = spy
+    stacks = ""
+    r = cs.run_tool(box, "profile", {"company": "boatyard", "seconds": 10})
+    assert r["ok"] and "(0 samples" in r["output"] and len(r["output"].splitlines()) == 1  # an idle server
+    old = box.cell_root / cs.PROFILES
+    for k in range(cs.PROFILES_KEPT + 3):
+        (old / f"zz-{k}.txt").write_text("")
+        os.utime(old / f"zz-{k}.txt", (1000 + k, 1000 + k))
+    stacks = "main;serve;json 10\nmain;serve;read_rows 30\nmain 0\n"
     r = cs.run_tool(box, "profile", {"company": "boatyard", "seconds": 10})
     assert r["ok"], r
     call = next(c for c in box.calls if c[0].endswith("/py-spy"))
@@ -982,6 +990,9 @@ def test_profile_runs_py_spy_on_the_server_by_its_host_pid_and_ranks_its_stacks(
     assert call[call.index("--pid") + 1] == "4150" and call[call.index("--duration") + 1] == "10"
     lines = r["output"].splitlines()
     assert "40 samples" in lines[0] and lines[1:3] == [" 75.0%  main;serve;read_rows", " 25.0%  main;serve;json"]
+    kept = sorted(f.name for f in old.glob("*.txt"))
+    assert len(kept) == cs.PROFILES_KEPT and any(name.startswith("boatyard-") for name in kept)
+    assert "zz-0.txt" not in kept and "zz-22.txt" in kept  # the oldest go, whichever company they are
     assert cs.run_tool(box, "profile", {"company": "boatyard", "seconds": 61})["ok"] is False
 
 
