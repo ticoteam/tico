@@ -944,5 +944,19 @@
   "idle": [
    "productsStop"
   ]
+ },
+ "risk": {
+  "files": [
+   "app/risk.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageRisk",
+   "pageRiskOne"
+  ],
+  "calls": [],
+  "idle": [
+   "riskStop"
+  ]
  }
 }

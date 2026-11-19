@@ -19,6 +19,7 @@ from . import (
     products,
     recruit,
     reach,
+    risk,
     schedules,
     services,
     skills,
@@ -48,6 +49,7 @@ SECTIONS = (
     skills,
     directory,
     products,
+    risk,
     software,
     floor,
 )

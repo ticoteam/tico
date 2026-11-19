@@ -145,6 +145,7 @@ sell
 sentiment_satisfied
 settings
 settings_suggest
+shield
 shield_person
 shopping_cart
 smart_toy
