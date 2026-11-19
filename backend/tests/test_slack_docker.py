@@ -387,7 +387,13 @@ def test_the_gateway_with_no_tokens_says_where_to_paste_them(tmp_path, monkeypat
 def test_the_waiting_gateway_reports_a_refused_start_and_a_failed_socket_then_connects(tmp_path, monkeypatch, caplog):
     """TICO_SLACK_WAIT=1: a refused verify and a socket that does not connect are reported on the Health page and
     retried; the vault's unpinned tokens are pinned to the workspace and app they verified against."""
-    for name, value in {**ENV, "TICO_DB": str(tmp_path / "hub.db"), "TICO_SLACK_GATEWAY_ENABLED": "1"}.items():
+    env = {
+        **ENV,
+        "TICO_DB": str(tmp_path / "hub.db"),
+        "TICO_SLACK_GATEWAY_ENABLED": "1",
+        "TICO_ENVIRONMENT_ID": "acme-test",
+    }
+    for name, value in env.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setenv("TICO_SLACK_WAIT", "1")
     for name in ("TICO_AUTH_PROXY", "TICO_SLACK_SECRET_ARN"):
