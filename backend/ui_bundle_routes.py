@@ -10,6 +10,40 @@ from . import brand_icons
 from . import ui_build
 
 
+# Each sent file's ETag, by path, while its size and modified time stay the same. file_reply serves backend/web_routes.py too.
+_ETAGS = {}
+
+
+def file_reply(request, path, media_type, cache_control=None, gz=None):
+    """The file at `path` with a strong ETag of its content (read again when it changes), its gzip copy `gz` to a
+    browser that accepts it, and a 304 for a matching If-None-Match (a weak form too: Cloudflare sends one)."""
+    from .json_response import accepts_gzip
+
+    source = gz if gz is not None and gz.is_file() and accepts_gzip(request.headers) else path
+    zipped = source is not path
+    try:
+        stat = source.stat()
+    except OSError:
+        raise Problem("not_found", "Not found", 404) from None
+    raw = source.read_bytes()
+    entry = _ETAGS.get(source)
+    if not entry or entry[0] != (stat.st_mtime_ns, stat.st_size):
+        entry = _ETAGS[source] = ((stat.st_mtime_ns, stat.st_size), f'"{hashlib.sha256(raw).hexdigest()[:32]}"')
+    etag = entry[1]
+    headers = {"ETag": etag}
+    if cache_control:
+        headers["Cache-Control"] = cache_control
+    if gz is not None:
+        headers["Vary"] = "Accept-Encoding"
+    if zipped:
+        headers["Content-Encoding"] = "gzip"
+    if etag in [t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")]:
+        return Response(status_code=304, headers=headers)
+    if request.method == "HEAD":
+        return Response(None, media_type=media_type, headers={**headers, "Content-Length": str(len(raw))})
+    return Response(raw, media_type=media_type, headers=headers)
+
+
 def register(app, auth, settings):
     # The two icons browsers ask for at the root (backend/brand_icons.py). Before the static mounts below, which would
     # otherwise answer first.
@@ -28,36 +62,6 @@ def register(app, auth, settings):
     # is revalidated on every load. Nothing here builds or checks the build: a server starts only on a current one.
     build_dir = ui_build.out_dir(settings.ui_dir)
     bundle_dir = ui_build.bundle_dir(settings.ui_dir)
-    etags = {}
-
-    def file_reply(request, path, media_type, cache_control=None, gz=None):
-        """The file at `path` with a strong ETag of its content (read again when it changes), its gzip copy `gz` to a
-        browser that accepts it, and a 304 for a matching If-None-Match (a weak form too: Cloudflare sends one)."""
-        from .json_response import accepts_gzip
-
-        source = gz if gz is not None and gz.is_file() and accepts_gzip(request.headers) else path
-        zipped = source is not path
-        try:
-            stat = source.stat()
-        except OSError:
-            raise Problem("not_found", "Not found", 404) from None
-        raw = source.read_bytes()
-        entry = etags.get(source)
-        if not entry or entry[0] != (stat.st_mtime_ns, stat.st_size):
-            entry = etags[source] = ((stat.st_mtime_ns, stat.st_size), f'"{hashlib.sha256(raw).hexdigest()[:32]}"')
-        etag = entry[1]
-        headers = {"ETag": etag}
-        if cache_control:
-            headers["Cache-Control"] = cache_control
-        if gz is not None:
-            headers["Vary"] = "Accept-Encoding"
-        if zipped:
-            headers["Content-Encoding"] = "gzip"
-        if etag in [t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")]:
-            return Response(status_code=304, headers=headers)
-        if request.method == "HEAD":
-            return Response(None, media_type=media_type, headers={**headers, "Content-Length": str(len(raw))})
-        return Response(raw, media_type=media_type, headers=headers)
 
     def built(name):
         """build/ui/<name>, or the 503 that names the command when the UI was never built."""

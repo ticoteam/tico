@@ -207,6 +207,8 @@ class Settings:
     # The bot templates onboarding offers. A deployment may ship its own set of cards.
     catalog_dir: Path = ROOT / "templates" / "catalog"
     ui_dir: Path = ROOT / "ui"
+    # The new web app's build, served at /next (backend/web_routes.py); /next is a 404 while it is missing.
+    web_dir: Path = ROOT / "build" / "web"
     integrations_dir: Path = ROOT / "integrations"
     # A company's own pages and query catalogs, layered over integrations_dir; None means
     # <registry_dir>/integrations.
