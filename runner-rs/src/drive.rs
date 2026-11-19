@@ -40,25 +40,20 @@ fn scrubbed<'a>(redactor: Option<&Arc<Redactor>>, v: &'a Value) -> Cow<'a, Value
     redactor.map_or(Cow::Borrowed(v), |r| r.scrub_json(v))
 }
 
-/// What one drive step heard from the hub beyond the upload.
+/// What one drive step heard from the hub beyond the upload. The step only talks to the hub; what it heard is acted
+/// on in the drive loop, as it was when the step ran inline.
 #[derive(Default)]
 struct Asked {
-    /// A person changed or cleared the chat goal: an explicit goal control.
+    /// The chat goal is no longer the one this run started with: a person changed or cleared it.
     controlled: bool,
-    /// A person's message was among the inputs.
-    person: bool,
+    /// This attempt's inputs, to be steered into the turn.
+    messages: Vec<Value>,
 }
 
-/// A finished drive step: inputs the turn refused as it ended, and what the hub said.
-struct Step {
-    carried: BTreeMap<String, Value>,
-    asked: Result<Asked, Fail>,
-}
-
-type StepFuture<'a> = Pin<Box<dyn Future<Output = Step> + Send + 'a>>;
+type StepFuture<'a> = Pin<Box<dyn Future<Output = Result<Asked, Fail>> + Send + 'a>>;
 
 /// The drive step in flight; never ready when there is none.
-async fn step_done(step: &mut Option<StepFuture<'_>>) -> Step {
+async fn step_done(step: &mut Option<StepFuture<'_>>) -> Result<Asked, Fail> {
     match step {
         Some(step) => step.as_mut().await,
         None => std::future::pending().await,
@@ -210,12 +205,11 @@ impl Runner {
         // count at the last ask, None before the first.
         let mut asked: Option<u64> = None;
         let mut recovery_at = Instant::now();
-        // The 1-second step (upload, then the goal and inputs asks) runs beside the harness output, so a slow hub never
-        // holds back the turn's text or its end. `step_asks`: it asks the hub more than the upload. A goal verdict is
-        // kept only when no goal row was written while it was out (`goal_rows`): one read against a row still going up
-        // is asked again.
+        // The 1-second step (upload, then the goal and inputs reads) runs beside the harness output, so a slow hub never
+        // holds back the turn's text or its end. `step_asks`: it reads more than the upload. A step that read is
+        // always heard out before the drive ends: the hub hands an input to this attempt when it is read.
         let mut step: Option<StepFuture<'_>> = None;
-        let (mut step_asks, mut goal_rows, mut step_goal_rows) = (false, 0u64, 0u64);
+        let mut step_asks = false;
 
         // Count a continuation; past the cap, interrupt the turn so its goal can be cleared.
         macro_rules! stuck {
@@ -230,7 +224,6 @@ impl Runner {
                     let note = format!("Goal paused after {n} tries without progress{}", if last.is_empty() { String::new() } else { format!(": {shown}") });
                     if goal_running {
                         self.state.append(aid, "goal", &json!({"goal_id": goal_id, "revision": revision, "status": "paused", "note": note}))?;
-                        goal_rows += 1;
                     }
                     goal.paused = Some(note);
                     goal_running = false;
@@ -241,26 +234,32 @@ impl Runner {
             }};
         }
 
-        // Apply a finished step, as the loop once did inline right after it.
+        // Act on a finished step, as the loop once did inline: its inputs are steered into the turn now running (one
+        // the turn refuses as it ends is carried), and a person's goal control ends the run.
         macro_rules! settle {
             ($done:expr) => {{
-                let done: Step = $done;
-                carried.extend(done.carried);
+                let done: Result<Asked, Fail> = $done;
+                let done = match done {
+                    Ok(heard) if !heard.messages.is_empty() => self
+                        .steer_inputs(aid, host, thread, &turn, carried, &heard.messages)
+                        .await
+                        .map(|()| heard),
+                    done => done,
+                };
                 last_flush = Some(Instant::now());
-                match done.asked {
+                match done {
                     Ok(heard) => {
-                        if heard.person {
+                        if heard.messages.iter().any(from_person) {
                             tries().take(&goal.tries_key);
                         }
-                        if heard.controlled && goal_running && goal_rows == step_goal_rows {
+                        // Not once the run's own goal row ended the goal: then the change is this run's.
+                        if heard.controlled && goal_running {
                             goal.controlled = true;
                             let _ = host.interrupt(thread, &turn).await;
                             // An explicit goal control settles this run so its queued successor can claim.
                             goal_running = false;
                             complete = true;
                             outcome = "completed".into();
-                        } else if heard.controlled {
-                            asked = None;
                         }
                     }
                     Err(e) => {
@@ -277,13 +276,36 @@ impl Runner {
                 }
             }};
         }
-        // Before the drive ends early: a step that only uploads is dropped (the attempt's final flush sends its rows
-        // again, and the hub skips what it has); one that asked is heard out, so an input it steered keeps its record.
+        // A step still out when the drive is about to end. One that only uploads is dropped: the attempt's final flush
+        // sends its rows again, and the hub skips what it has. One that read is heard out and acted on first.
+        macro_rules! settle_step {
+            () => {
+                if let Some(s) = step.take() {
+                    if step_asks {
+                        settle!(s.await);
+                    }
+                }
+            };
+        }
+        // The same before an early end, whose own reason stands: an error the step met is not the drive's.
         macro_rules! end_step {
             () => {
                 if let Some(s) = step.take() {
                     if step_asks {
-                        carried.extend(s.await.carried);
+                        if let Ok(heard) = s.await {
+                            if !heard.messages.is_empty() {
+                                let _ = self
+                                    .steer_inputs(
+                                        aid,
+                                        host,
+                                        thread,
+                                        &turn,
+                                        carried,
+                                        &heard.messages,
+                                    )
+                                    .await;
+                            }
+                        }
                     }
                 }
             };
@@ -480,7 +502,6 @@ impl Runner {
                         row["goal_id"] = g["id"].clone();
                         row["revision"] = revision.clone();
                         self.state.append(aid, "goal", &row)?;
-                        goal_rows += 1;
                         goal_running = event["status"] == "active" && pausing.is_none();
                     }
                     let record_key = text_of(&record);
@@ -622,19 +643,20 @@ impl Runner {
                 }
             }
             if complete {
-                // An upload in flight is left to the attempt's final flush; a step that asked is heard out first, so an
-                // input it carried goes into the next turn as it would have a step earlier.
-                if let Some(s) = step.take() {
-                    if step_asks {
-                        settle!(s.await);
-                    }
-                }
+                // An input the step read is steered, or carried into the next turn as it would have been a step
+                // earlier.
+                settle_step!();
             }
             if complete
                 && outcome == "completed"
                 && !carried.is_empty()
                 && !goal.controlled
                 && salvage.is_none()
+                // Nothing new is started once the run was stopped or its lease, time or computer ran out meanwhile.
+                && !d.flags.stopped.load(Ordering::SeqCst)
+                && !d.flags.lost.load(Ordering::SeqCst)
+                && Instant::now() < d.limit
+                && !self.stopping()
             {
                 // Not on a failed or stopped turn: those settle the attempt, inputs included.
                 turn = self
@@ -664,36 +686,26 @@ impl Runner {
                         recovery_at = Instant::now() + self.events.turn_recovery();
                     }
                     host.poll_goal(thread);
-                    let (steer_turn, goal_id, revision) =
-                        (turn.clone(), goal_id.clone(), revision.clone());
-                    (step_asks, step_goal_rows) = (check_goal || steer, goal_rows);
+                    let (goal_id, revision) = (goal_id.clone(), revision.clone());
+                    step_asks = check_goal || steer;
                     step = Some(Box::pin(async move {
-                        let mut carried = BTreeMap::new();
-                        let asked: Result<Asked, Fail> = async {
-                            self.flush(aid).await?;
-                            let mut asked = Asked::default();
-                            if check_goal {
-                                let latest =
-                                    self.client.get(&format!("attempts/{aid}/goal")).await?;
-                                let latest = &latest["goal"];
-                                if !latest.is_object()
-                                    || latest["id"] != goal_id
-                                    || latest["updated_at"] != revision
-                                {
-                                    asked.controlled = true;
-                                    return Ok(asked);
-                                }
+                        self.flush(aid).await?;
+                        let mut asked = Asked::default();
+                        if check_goal {
+                            let latest = self.client.get(&format!("attempts/{aid}/goal")).await?;
+                            let latest = &latest["goal"];
+                            if !latest.is_object()
+                                || latest["id"] != goal_id
+                                || latest["updated_at"] != revision
+                            {
+                                asked.controlled = true;
+                                return Ok(asked);
                             }
-                            if steer {
-                                let messages = self
-                                    .receive_inputs(aid, host, thread, &steer_turn, &mut carried)
-                                    .await?;
-                                asked.person = messages.iter().any(from_person);
-                            }
-                            Ok(asked)
                         }
-                        .await;
-                        Step { carried, asked }
+                        if steer {
+                            asked.messages = self.fetch_inputs(aid).await?;
+                        }
+                        Ok(asked)
                     }));
                     if complete {
                         let s = step.take().unwrap();
@@ -705,18 +717,21 @@ impl Runner {
                 complete = true;
             }
             if complete {
+                // What the step read is acted on before the run's result is: the hub counts it handed over.
+                settle_step!();
                 break;
             }
             if !host.alive() {
+                // A step that read is heard out first: a lease it found lost turns this into a salvage read.
+                settle_step!();
                 // Whatever it said before it went is read first.
                 while let Ok(ev) = rx.try_recv() {
                     queue.push(ev);
                 }
-                if !queue.is_empty() {
+                if complete || !queue.is_empty() {
                     continue;
                 }
                 if salvage.is_none() {
-                    end_step!();
                     return Err(Fail::runtime("Local runtime exited unexpectedly"));
                 }
             }
@@ -1371,6 +1386,75 @@ mod tests {
         );
         assert!(
             !seen.lock().unwrap().iter().any(|p| p.contains("/inputs")),
+            "nothing acknowledged"
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn an_input_read_while_the_turn_ends_is_kept_and_starts_nothing_after_a_stop() {
+        // The turn's first inputs read takes a second; the turn ends meanwhile, and a person presses Stop. The input
+        // the hub handed over is not dropped with the read, and no new turn is started for it after the Stop.
+        let (url, seen) = hub_answering_after(
+            |path| {
+                if path.ends_with("/inputs") {
+                    Duration::from_secs(1)
+                } else {
+                    Duration::ZERO
+                }
+            },
+            |path, body| {
+                if path.ends_with("/inputs") {
+                    (
+                        "200 OK",
+                        json!({"messages": [{"id": "m-7", "body": "Also add Q3.", "from_actor": "human:ana"}]}),
+                    )
+                } else {
+                    events_taken(body)
+                }
+            },
+        )
+        .await;
+        let (runner, dir) = runner_at(&url);
+        runner
+            .events
+            .dispatch("ready", None, &json!({"seq": 1, "release": "v1"}), false);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let claude = ClaudeHost::new("acme", vec![], tx.clone());
+        claude.pretend_up(true);
+        let host = Host::Claude(claude);
+        assert!(host.supports_steer());
+        let f = Arc::new(flags(false));
+        let stopper = f.clone();
+        let feed = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            for ev in answer_events("th-7", "turn-1") {
+                tx.send(ev).unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            stopper.stopped.store(true, Ordering::SeqCst);
+        });
+        let (drove, left, _) = drive_with(
+            &runner,
+            &host,
+            &mut rx,
+            &f,
+            "th-7",
+            "claude",
+            None,
+            BTreeMap::new(),
+        )
+        .await;
+        feed.await.unwrap();
+        let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
+        assert_eq!(drove.reply, "Acme's renewal summary is ready.");
+        assert_eq!(
+            left.keys().collect::<Vec<_>>(),
+            ["m-7"],
+            "still carried, so the result reports it undelivered"
+        );
+        assert!(
+            !seen.lock().unwrap().iter().any(|p| p.contains("/ack")),
             "nothing acknowledged"
         );
         std::fs::remove_dir_all(dir).ok();
