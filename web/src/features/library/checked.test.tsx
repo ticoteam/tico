@@ -71,6 +71,14 @@ function serve(reply: (url: string, method: string) => unknown = () => ({})) {
 }
 const writes = (sent: Sent[]) => sent.filter((x) => x.method !== 'GET').map(({ url, method, body }) => ({ url, method, body }));
 
+function holdResponse() {
+  let send: (response: Response) => void = () => {};
+  const response = new Promise<Response>((resolve) => {
+    send = resolve;
+  });
+  return { response, send };
+}
+
 function at(path: string, node: ReactNode = null) {
   const root = createRootRoute({ component: Outlet });
   const page = createRoute({ getParentRoute: () => root, path: path.split('?')[0] ?? '/', component: () => node });
@@ -133,6 +141,42 @@ describe('a file', () => {
     expect(await screen.findByText('first words')).toBeTruthy();
     expect(sent.map((x) => x.url)).toEqual(['/api/v2/files/f1/versions/1']);
   });
+
+  it('waits for the selected file version before previewing or offering a download', async () => {
+    const ready = holdResponse();
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', async (url: string) => {
+      requests.push(url);
+      if (url.endsWith('/versions')) return ready.response;
+      return Response.json(url.endsWith('/versions/1') ? 'first words' : 'later words');
+    });
+    queryClient.setQueryData(fileQuery('f1').queryKey, file() as never);
+    at('/library/files?file=f1&v=1', <FilesPage search={{ file: 'f1', v: 1 }} />);
+    await screen.findByRole('status', { name: 'Loading' });
+    expect(screen.queryByRole('link', { name: 'Download' })).toBeNull();
+    expect(requests).not.toContain('/api/v2/files/f1/versions/2');
+
+    ready.send(Response.json({ versions: [version(2, true), version(1)] }));
+    expect(await screen.findByText('first words')).toBeTruthy();
+    expect(linkOf('Download')).toBe('/api/v2/files/f1/versions/1');
+    expect(requests).not.toContain('/api/v2/files/f1/versions/2');
+  });
+
+  it('offers download and lets a phone open an older file version without clearing the filters', async () => {
+    document.documentElement.dataset.layout = 'cards';
+    try {
+      serve(() => 'plain words');
+      queryClient.setQueryData(fileQuery('f1').queryKey, file() as never);
+      queryClient.setQueryData(fileVersionsQuery('f1').queryKey, [version(2, true), version(1)]);
+      const router = at('/library/files?file=f1&kind=document', <FilesPage search={{ file: 'f1', kind: 'document' }} />);
+      expect((await screen.findByRole('link', { name: 'Download' })).hasAttribute('data-phone')).toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'Versions' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: /^v1/ }));
+      await waitFor(() => expect(router.state.location.search).toMatchObject({ file: 'f1', kind: 'document', v: 1 }));
+    } finally {
+      delete document.documentElement.dataset.layout;
+    }
+  });
 });
 
 describe('Files', () => {
@@ -169,6 +213,17 @@ describe('Files', () => {
     expect(page.parentElement?.classList.contains('lib-drop')).toBe(false);
     fireEvent.drop(page, { dataTransfer: { files: [new File(['x'], 'a.txt')], types: ['Files'] } });
     expect(await screen.findByRole('dialog', { name: 'Add a.txt' })).toBeTruthy();
+  });
+
+  it('searches within the selected file kind', async () => {
+    const sent = serve(() => ({ results: [{ id: 'f1', title: 'Seed photo' }] }));
+    queryClient.setQueryData(filesQuery('image').queryKey, {
+      pages: [{ files: [], has_more: false, next_cursor: null }],
+      pageParams: [''],
+    });
+    at('/library/files?kind=image&q=seed', <FilesPage search={{ kind: 'image', q: 'seed' }} />);
+    expect(await screen.findByText('Seed photo')).toBeTruthy();
+    expect(sent).toContainEqual(expect.objectContaining({ url: '/api/v2/files/search?q=seed&limit=50&kind=image' }));
   });
 });
 
@@ -210,6 +265,22 @@ describe('a doc', () => {
     await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/docs/d1/restore', method: 'POST', body: { version: 2 } }]));
   });
 
+  it('never shows or edits the current doc when a historical version is loading or fails', async () => {
+    const ready = holdResponse();
+    vi.stubGlobal('fetch', async () => ready.response);
+    queryClient.setQueryData(docQuery('d1').queryKey, fullDoc());
+    queryClient.setQueryData(docVersionsQuery('d1').queryKey, []);
+    at('/library/d1?v=2', <DocPage doc="d1" search={{ v: 2 }} />);
+    await screen.findByRole('status', { name: 'Loading' });
+    expect(screen.queryByLabelText('Text')).toBeNull();
+    expect(screen.queryByText('Grow slowly.')).toBeNull();
+
+    ready.send(Response.json({ error: { code: 'not_found' } }, { status: 404 }));
+    expect(await screen.findByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(screen.queryByLabelText('Text')).toBeNull();
+    expect(screen.queryByText('Grow slowly.')).toBeNull();
+  });
+
   it('a new doc is the same page, empty: naming it in the head makes it with what was typed, and opens it @s775', async () => {
     const sent = serve(() => ({ doc: { ...fullDoc(), id: 'd9', version: 1 } }));
     const router = at('/library/new', <DocPage doc="new" search={{}} />);
@@ -225,6 +296,18 @@ describe('a doc', () => {
 
 describe('Contacts', () => {
   const row = (o: Record<string, unknown>) => ({ type: 'person', status: 'active', primary_email: null, primary_domain: null, last_activity_at: null, ...o });
+
+  it('keeps the relationship filter when searching contacts', async () => {
+    serve(() => ({ rows: [], next: null, types: [], counts: [] }));
+    queryClient.setQueryData(contactsQuery('person', '', 'customer_of').queryKey, {
+      pages: [{ rows: [], next: null }],
+      pageParams: [''],
+    });
+    const router = at('/library/contacts?link=customer_of', <ContactsPage search={{ link: 'customer_of' }} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Search' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search contacts' }), { target: { value: 'seed' } });
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ q: 'seed', link: 'customer_of' }));
+  });
 
   it('shows what each contact is to us, and filters by relationship @s785', async () => {
     const sent = serve(() => ({ rows: [], next: null }));

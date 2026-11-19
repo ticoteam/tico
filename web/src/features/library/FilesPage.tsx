@@ -10,6 +10,7 @@ import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Link } from '@/kit/Link';
 import { Menu, MenuItem } from '@/kit/Menu';
+import { useCards } from '@/kit/Popover';
 import { Row } from '@/kit/Row';
 import { Document, FilterRow, List, Section } from '@/pagekinds';
 import { SectionHead } from '@/kit/SectionHead';
@@ -58,7 +59,7 @@ export function FilesPage({ search }: { search: FilesSearch }) {
 function FilesList({ search }: { search: FilesSearch }) {
   const kind = search.kind ?? '';
   const files = useSuspenseInfiniteQuery(filesQuery(kind));
-  const found = useQuery(fileSearchQuery(search.q ?? ''));
+  const found = useQuery(fileSearchQuery(search.q ?? '', kind));
   const [chosen, setChosen] = useState<File[] | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
@@ -230,9 +231,11 @@ function UploadDialog({ files, onClose }: { files: File[]; onClose: () => void }
 function FilePage({ id, version }: { id: string; version?: number }) {
   const { data: file } = useSuspenseQuery(fileQuery(id));
   const versions = useQuery(fileVersionsQuery(id));
-  const current = versions.data?.find((v) => v.current);
-  const shown = (version && versions.data?.find((v) => v.version === version)) || current;
-  const n = shown?.version ?? file.version;
+  const cards = useCards();
+  const older = version !== undefined && version !== file.version;
+  const shown = versions.data?.find((v) => (version === undefined ? v.current : v.version === version));
+  const unavailable = older && !shown;
+  const n = version ?? shown?.version ?? file.version;
   const mime = shown?.mime ?? file.mime ?? '';
   const url = fileUrl(id, n);
 
@@ -242,9 +245,34 @@ function FilePage({ id, version }: { id: string; version?: number }) {
       path={`/library/files?file=${id}`}
       crumb={[{ label: 'Files', to: '/library/files' }]}
       className="lib"
+      state={unavailable ? (versions.isPending ? 'loading' : 'fault') : 'ready'}
+      onRetry={versions.isError ? () => void versions.refetch() : undefined}
+      after={
+        cards && (versions.data?.length ?? 0) > 1 && (
+          <Menu
+            align="start"
+            trigger={
+              <button type="button" className="btn btn-quiet ver-pick" title="Versions" aria-label="Versions">
+                v{n}
+                <Icon name="chevdown" />
+              </button>
+            }
+          >
+            {versions.data?.map((v) => (
+              <MenuItem
+                key={v.version}
+                label={`v${v.version}`}
+                meta={when(v.created_at)}
+                on={v.version === n}
+                onSelect={() => void press('files.open', { file: id, version: v.current ? undefined : v.version })}
+              />
+            ))}
+          </Menu>
+        )
+      }
       actions={
         <>
-          <FileGet url={url} link={linkOf(file)} />
+          {!unavailable && <FileGet url={url} link={linkOf(file)} />}
           <OwnerButton page="docs" />
         </>
       }

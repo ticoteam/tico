@@ -37,21 +37,22 @@ async function keep(from: Doc, change: { title?: string; body?: string }): Promi
 function OneDoc({ id, search }: { id: string; search: DocSearch }) {
   const { data: doc } = useSuspenseQuery(docQuery(id));
   const versions = useQuery(docVersionsQuery(id));
-  const old = useQuery(docVersionQuery(id, search.v ?? 0));
-  const past = search.v && search.v !== doc.version ? old.data : undefined;
+  const requested = search.v !== doc.version ? search.v : undefined;
+  const old = useQuery(docVersionQuery(id, requested ?? 0));
+  const past = old.data;
   const body = past?.body ?? doc.body;
   const outline = headings(body);
   // A locked doc changes only by an owner (docs-page.ts canChange; the server lets agent administrators too).
   const owner = useQuery(meQuery).data?.role === 'owner';
   const canChange = owner || !doc.locked;
-  const typable = canChange && !past;
+  const typable = canChange && !requested;
 
   const versionPick = (versions.data?.length ?? 0) > 1 && (
     <Menu
       align="start"
       trigger={
         <button type="button" className="btn btn-quiet ver-pick" title="Versions" data-target={`doc-version:${id}`}>
-          v{past ? past.version : doc.version}
+          v{requested ?? doc.version}
           <Icon name="chevdown" />
         </button>
       }
@@ -61,7 +62,7 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
           key={v.version}
           label={`v${v.version}`}
           meta={`${v.actor_name}, ${when(v.created_at)}`}
-          on={v.version === (past?.version ?? doc.version)}
+          on={v.version === (requested ?? doc.version)}
           onSelect={() => void press('docs.open', { doc: id, version: v.current ? undefined : v.version })}
         />
       ))}
@@ -74,11 +75,13 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
       path={`/library/${id}`}
       crumb={CRUMB}
       className="lib"
+      state={requested && !past ? (old.isError ? 'fault' : 'loading') : 'ready'}
+      onRetry={requested ? () => void old.refetch() : undefined}
       after={versionPick}
       onRename={typable ? (title) => void keep(doc, { title }) : undefined}
       actions={<OwnerButton page="docs" />}
       more={
-        !past &&
+        !requested &&
         !doc.archived && (
           <PageMore>
             {owner && (
@@ -99,7 +102,7 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
             <b>{past ? past.actor_name : doc.updated_by_name}</b>
             <span>{when(past ? past.created_at : doc.updated_at)}</span>
           </p>
-          {typable ? <TypeHere doc={doc} /> : search.v && !past && old.isLoading ? null : <Markdown text={body} />}
+          {typable ? <TypeHere doc={doc} /> : <Markdown text={body} />}
         </>
       }
       foot={

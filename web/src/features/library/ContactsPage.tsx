@@ -114,7 +114,7 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
       path="/library/contacts"
       className="lib"
       tabs={tabs.length > 1 ? tabs : undefined}
-      search={<Find label="Search contacts" value={search.q} onFind={(q) => void press('contacts.list', { type: search.type, q })} />}
+      search={<Find label="Search contacts" value={search.q} onFind={(q) => listed({ type: search.type, q, link: search.link })} />}
       actions={
         <>
           {(type === 'person' || type === 'organization') && (
