@@ -53,3 +53,5 @@ first_routine:
 example_output: knowledge/examples/sweep.md
 reasoning_effort: low
 recommend_when: [tracks_mentions, publishes_content, sells_to_consumers]
+shared_files:
+  - .claude/skills/handle-press-and-a-crisis

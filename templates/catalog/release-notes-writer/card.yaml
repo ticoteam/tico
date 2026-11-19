@@ -53,3 +53,7 @@ first_routine:
 example_output: knowledge/examples/release-notes.md
 reasoning_effort: medium
 recommend_when: [sells_software, publishes_content]
+shared_files:
+  - .claude/skills/find-hidden-breaking-changes
+  - .claude/skills/ship-a-release
+  - .claude/skills/write-marketing-copy

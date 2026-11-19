@@ -15,7 +15,7 @@ thread with `tico email search <address> "<investor>"`.
 ## 2. Find the facts
 
 Answer only from the record: `tico goal list --all`, `tico kpi show <kpi id>`, `tico update list`, `tico meeting search`, and the finance inputs. Check every
-figure with `skills/check-a-figure-before-it-goes-out/SKILL.md`. A fact you cannot source is a marked gap, never a guess. Check `knowledge/exclusions.md` before
+figure with `.claude/skills/write-investor-and-board-updates/SKILL.md`. A fact you cannot source is a marked gap, never a guess. Check `knowledge/exclusions.md` before
 naming anyone.
 
 ## 3. Draft

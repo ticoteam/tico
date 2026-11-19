@@ -57,3 +57,10 @@ first_routine:
 example_output: knowledge/examples/spend-report.md
 reasoning_effort: medium
 recommend_when: [uses_docs, uses_slack, sells_software]
+shared_files:
+  - .claude/skills/count-a-notice-deadline
+  - .claude/skills/build-the-pnl
+  - .claude/skills/forecast-cash-and-budget
+  - .claude/skills/pay-bills-and-buy
+  - .claude/skills/measure-unit-economics
+  - .claude/skills/write-investor-and-board-updates

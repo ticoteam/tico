@@ -41,7 +41,7 @@ Start from the diff, the Spec page and the failing checks. Read other files only
 2. The risk map: follow `skills/map-the-risk-in-a-diff/SKILL.md`. Mark the risky surfaces before you read any line.
 3. The design: should this change exist, and does it fit the code around it? Ask this before any line.
 4. The tests, and whether a test would fail on the old code (follow
-   `skills/check-that-a-test-proves-the-change/SKILL.md`). Read the callers of a changed function only when its
+   `.claude/skills/review-code/SKILL.md`, step 10). Read the callers of a changed function only when its
    behaviour or signature changed.
 5. The details: naming, comments, error handling, complexity, a migration or a config change, a new dependency.
 6. Other open changes, and base branch commits since the branch point, only where they touch the same lines.

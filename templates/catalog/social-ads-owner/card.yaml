@@ -71,3 +71,4 @@ shared_files:
   - playbooks/build-a-bet.md
   - playbooks/run-and-measure.md
   - playbooks/fix-a-slip.md
+  - .claude/skills/run-lifecycle-and-paid

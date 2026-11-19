@@ -54,3 +54,5 @@ first_routine:
 example_output: knowledge/examples/ip-watch.md
 reasoning_effort: medium
 recommend_when: [sells_to_consumers, sells_to_businesses, publishes_content]
+shared_files:
+  - .claude/skills/send-a-cease-and-desist

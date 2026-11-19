@@ -21,7 +21,7 @@ report if the team runs one. List each source: what it is, when, and whether you
 
 ## 3. Snapshot each new source
 
-Follow `playbooks/write-an-interview-snapshot.md` for each new interview or call, and a short batch summary
+Write a snapshot (`.claude/skills/learn-from-customers/SKILL.md`, step 8) for each new interview or call, and a short batch summary
 for feedback exports. Save under `knowledge/snapshots/`.
 
 ## 4. Update the opportunities

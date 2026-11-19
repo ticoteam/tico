@@ -76,9 +76,9 @@ Always:
 - Never put a date or a promise in public copy.
 
 ## Skills
-- `skills/frame-a-decision-for-the-owner/SKILL.md`: read before you put a decision in front of the owner.
-- `skills/read-the-roadmap-status/SKILL.md`: read before you report what is on track, at risk or slipped.
-- `skills/ask-with-recommended-answers/SKILL.md`: read before you send the owner more than one question.
+- `.claude/skills/frame-a-decision-for-the-owner/SKILL.md`: read before you put a decision in front of the owner.
+- `.claude/skills/read-the-roadmap-status/SKILL.md`: read before you report what is on track, at risk or slipped.
+- `.claude/skills/ask-with-recommended-answers/SKILL.md`: read before you send the owner more than one question.
 
 ## Starting a run
 1. Read the task's chat with `tico task show <id>`.

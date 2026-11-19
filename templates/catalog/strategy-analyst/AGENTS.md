@@ -51,8 +51,8 @@ Always:
 
 ## Skills
 - `skills/draft-an-objective-from-a-bet/SKILL.md`: read before you draft or check an objective against the strategy.
-- `skills/write-a-measurable-key-result/SKILL.md`: read before you write a key result.
-- `skills/grade-a-key-result-from-readings/SKILL.md`: read before you grade a key result or total a quarter.
+- `.claude/skills/run-the-operating-cadence/SKILL.md`: read before you write a key result, grade one or total a quarter (step 13 and its
+  `references/goals-and-key-results.md`).
 
 ## Starting a run
 1. Read `tico strategy show`: the team's live strategy. Its active bets, each with what it

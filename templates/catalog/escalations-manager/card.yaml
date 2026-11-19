@@ -57,3 +57,10 @@ first_routine:
 example_output: knowledge/examples/escalation-digest.md
 reasoning_effort: medium
 recommend_when: [sells_to_businesses, has_support_inbox, uses_tickets, sells_software]
+shared_files:
+  - .claude/skills/write-an-engineering-bug-report
+  - .claude/skills/answer-a-customer
+  - .claude/skills/recover-a-bad-experience
+  - .claude/skills/answer-a-demand-or-complaint
+  - .claude/skills/defend-a-consumer-claim
+  - .claude/skills/handle-press-and-a-crisis

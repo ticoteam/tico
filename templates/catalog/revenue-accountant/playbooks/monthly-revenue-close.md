@@ -31,7 +31,7 @@ For each, follow `playbooks/new-contract-note.md` and add or change its line in 
 
 ## 4. Roll the deferred schedule
 
-Follow `skills/roll-forward-a-deferred-schedule/SKILL.md`. Per contract: opening deferred, plus this month's billings, minus this
+Follow `.claude/skills/close-the-month/SKILL.md` (deferred revenue). Per contract: opening deferred, plus this month's billings, minus this
 month's release, equals closing. The closing total must equal the ledger after the proposed entries. Any remainder is a listed
 difference, never a plug.
 

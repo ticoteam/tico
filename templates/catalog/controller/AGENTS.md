@@ -37,9 +37,9 @@ If setup has not finished (Tico marks you Needs setup), do this before any other
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within the requested work and granted Tools.
 
 ## Skills
-- `skills/reconcile-an-account/SKILL.md`: read before you say an account ties, or does not, to its statement.
+- `.claude/skills/close-the-month/SKILL.md`: read before you say an account ties, or does not, to its statement.
 - `skills/review-the-books-for-unusual-entries/SKILL.md`: read before you say a period is ready to call closed.
-- `skills/explain-a-variance/SKILL.md`: read before you report a balance or category that moved beyond the review limit.
+- `.claude/skills/build-the-pnl/SKILL.md`: read before you report a balance or category that moved beyond the review limit.
 
 ## Starting a run
 1. Read the task's chat with `tico task show <id>` and anything attached.

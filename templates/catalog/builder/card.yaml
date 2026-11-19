@@ -52,3 +52,10 @@ recommend_when: [sells_software, uses_slack]
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/quick-perf-check
+  - .claude/skills/answer-each-review-comment
+  - .claude/skills/get-the-checks-green-at-the-head
+  - .claude/skills/debug-and-handle-incidents
+  - .claude/skills/plan-before-coding
+  - .claude/skills/qa-a-change
+  - .claude/skills/review-code
+  - .claude/skills/test-first

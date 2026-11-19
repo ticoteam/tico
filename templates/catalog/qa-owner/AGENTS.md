@@ -69,7 +69,7 @@ Always:
 ## Skills
 - `skills/classify-a-test-failure/SKILL.md`: read before you name a cause for a failing test or add it to the register.
 - `skills/fix-or-delete-flaky-test/SKILL.md`: read before you record a decision on a flaky test.
-- `skills/prove-a-test-catches-the-bug/SKILL.md`: read before you call a test a regression test, or write one for a fix.
+- `.claude/skills/test-first/SKILL.md`: read before you call a test a regression test, or write one for a fix.
 
 ## Subagents
 Use Haiku 5.5 extra-high-effort subagents whenever possible for simpler work: searching, reading logs, running tests,

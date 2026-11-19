@@ -59,3 +59,8 @@ first_routine:
 example_output: knowledge/examples/account-review.md
 reasoning_effort: medium
 recommend_when: [sells_to_businesses, uses_crm, has_pipeline]
+shared_files:
+  - .claude/skills/get-customers-to-their-outcome
+  - .claude/skills/run-a-sales-deal
+  - .claude/skills/collect-receivables
+  - .claude/skills/review-a-contract

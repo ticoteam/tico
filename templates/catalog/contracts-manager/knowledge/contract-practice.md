@@ -3,7 +3,7 @@
 Standing practice for summarising contracts and counting notice. It is practice for the desk, not legal advice. Where a law is named, check the current text before relying on it. Each entry names its source and the date it was read.
 
 ## Notice and renewal
-- The date that matters is usually the last day notice can be given, not the renewal date. Count back from the anchor the clause names, and show both dates (`skills/count-a-notice-deadline`).
+- The date that matters is usually the last day notice can be given, not the renewal date. Count back from the anchor the clause names, and show both dates (`.claude/skills/count-a-notice-deadline`).
 - Auto-renewal clauses differ: some renew unless notice is given before a date, and some renew only on written notice of renewal. Record which one the clause says, with its words.
 - A CRM field that says "auto-renew" does not carry the notice period. Read the clause.
 - A renewal that changes the price or scope may need its own notice. Check the clause for that separately from the renewal itself.
@@ -13,7 +13,7 @@ Standing practice for summarising contracts and counting notice. It is practice 
 - The FTC's click-to-cancel rule (the amended Negative Option Rule) was vacated by the Eighth Circuit on 8 July 2025, on procedural grounds. Law-firm summaries from July 2025 say state laws still apply and federal Section 5 enforcement remains available. Later developments were not searched.
 
 ## Reading the contract
-- Read the five clauses that carry the risk first, then the rest (`skills/flag-a-clause-against-the-playbook`).
+- Read the five clauses that carry the risk first, then the rest (`.claude/skills/review-a-contract`).
 - A referenced schedule or order form that was not given is named at the top of the summary, and its clauses are marked "not read".
 - Quote the current signed text, and check every citation against it (`skills/check-quotes-against-the-current-text`).
 

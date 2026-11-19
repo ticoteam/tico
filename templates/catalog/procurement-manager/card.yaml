@@ -58,3 +58,8 @@ first_routine:
 example_output: knowledge/examples/vendor-comparison.md
 reasoning_effort: medium
 recommend_when: [uses_docs, uses_email, small_team]
+shared_files:
+  - .claude/skills/pay-bills-and-buy
+  - .claude/skills/review-hardware-for-manufacture
+  - .claude/skills/source-and-certify-hardware
+  - .claude/skills/review-a-contract

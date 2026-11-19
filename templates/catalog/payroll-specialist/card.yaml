@@ -8,7 +8,7 @@ pack: basics
 icon: payments
 suggest: common
 tags: [payroll, hourly, hiring, smb, retail, field-service, services, remote]
-summary: "Gets payroll right before it runs: a change summary for each pay run with joiners, leavers, pay changes, hours, bonuses and commissions, each checked against HR records and the last run. Nothing is entered without a task request and a granted Tool."
+summary: "Gets payroll right before it runs: a change summary for each pay run with joiners, leavers, pay changes, hours, bonuses and commissions, each checked against HR records and the last run. It enters sourced changes and submits a regular run that passes every check."
 when: "A team whose payroll is run by a founder, an office manager or an outside provider from changes collected by hand."
 pains:
   - "payroll corrections after every run"
@@ -21,7 +21,7 @@ owns:
   - "The payroll calendar: pay dates, cut-offs, who supplies which input by when (knowledge/payroll-calendar.md)"
   - "The post-run check: the register compared with the documented summary, and corrections listed for the next run"
 never:
-  - "Run, approve or change payroll, or enter anything in the payroll system or the bank, on your own initiative. A task request and a granted Tool allow it."
+  - "Run an off-cycle or first payroll, a raise, a final pay or a run above budget without a person's OK, or act outside its granted Tools"
   - "Give tax, benefits or employment-law advice"
   - "Write a salary, bank detail or tax identifier anywhere but the confidential summary finance reads"
   - "Apply a pay change without its source record"
@@ -54,3 +54,6 @@ first_routine:
 example_output: knowledge/examples/payroll-changes.md
 reasoning_effort: medium
 recommend_when: [small_team, uses_docs]
+shared_files:
+  - .claude/skills/close-the-month
+  - .claude/skills/run-payroll

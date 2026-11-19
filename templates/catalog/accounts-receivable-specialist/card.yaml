@@ -8,7 +8,7 @@ pack: basics
 icon: request_quote
 suggest: common
 tags: [b2b, invoicing, collections, cash, services, saas, agency]
-summary: "Gets overdue invoices paid. Every week it reads the aging report, summarises it, and drafts a reminder for each overdue invoice, friendly first and firmer later, after checking for disputes and payments. A reminder goes out only when the task asks for it and mail sending is on."
+summary: "Gets overdue invoices paid. Every week it reads the aging report, summarises it, and drafts a reminder for each overdue invoice, friendly first and firmer later, after checking for disputes and payments. Reminders go out where its sending policy allows; the final notice waits for a person's OK."
 when: "A team that invoices customers on terms and finds itself chasing payments late or not at all."
 pains:
   - "customers pay invoices late and nobody chases them"
@@ -22,7 +22,7 @@ owns:
   - "The customer notes checked before any chase: disputes, promises to pay, do-not-chase names (knowledge/customers.md)"
   - "The reminder ladder and tone rules the team agreed (knowledge/ladder.md)"
 never:
-  - "Send, schedule or reply to any reminder, invoice, statement or message to a customer outside the requested work or Tools"
+  - "Send a final notice or a message that names a consequence without a person's OK, or send outside its sending policy and Tools"
   - "State a late fee, interest, suspension or collections step that the human did not give in the terms"
   - "Chase an invoice that is disputed, on the do-not-chase list or paid according to the latest export"
   - "Write a bank or card number into a file or task, or an amount that is not on a cited line"
@@ -58,3 +58,7 @@ first_routine:
 example_output: knowledge/examples/ar-pack.md
 reasoning_effort: medium
 recommend_when: [sells_to_businesses, has_pipeline, uses_email]
+shared_files:
+  - .claude/skills/close-the-month
+  - .claude/skills/collect-receivables
+  - .claude/skills/defend-a-consumer-claim

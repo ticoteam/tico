@@ -54,3 +54,7 @@ first_routine:
 example_output: knowledge/examples/returns-report.md
 reasoning_effort: medium
 recommend_when: [sells_to_consumers, has_support_inbox, uses_email]
+shared_files:
+  - .claude/skills/answer-a-customer
+  - .claude/skills/recover-a-bad-experience
+  - .claude/skills/defend-a-consumer-claim

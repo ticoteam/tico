@@ -10,7 +10,7 @@ newest reports, the product team's open tasks, `knowledge/pipeline.md`, and last
 ## Steps
 1. Read each Feature Owner's newest file in `reports/` (`tico update list --bot <slug>`), and `tico task list --all`.
 2. Mark each roadmap item on track, at risk or done, with its evidence and the date you read it.
-3. List decisions that wait on a person. Frame at most three with `skills/frame-a-decision-for-the-owner/SKILL.md`.
+3. List decisions that wait on a person. Frame at most three with `.claude/skills/frame-a-decision-for-the-owner/SKILL.md`.
 4. Note the evidence that changed since last week, from the Feature Owners' reports and from meetings.
 5. Score each new request with `playbooks/score-a-request.md`, and list each routing or hire proposal.
 6. Pipeline: read the open tasks (`tico task list --status open`; each row has its stage and its Turn line; check a

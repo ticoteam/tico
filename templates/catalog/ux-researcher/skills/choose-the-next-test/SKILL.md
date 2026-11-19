@@ -1,6 +1,8 @@
 ---
 name: choose-the-next-test
 description: Choose one cheap test for the opportunity with the most evidence and the least testing, name its riskiest assumption, and write the result that would change the decision before anyone runs it.
+metadata:
+  function: product
 ---
 # Choose the next test
 
@@ -13,7 +15,7 @@ Steps:
 3. Write its riskiest assumption in one sentence, as something that could be false. "Most teams move bookings by hand
    each week" can be false. "Users want this" cannot.
 4. Pick the cheapest test that could prove the assumption wrong within a week: a few interviews on past behaviour
-   (`skills/write-a-discussion-guide/SKILL.md`), a usability round (`skills/plan-a-usability-round/SKILL.md`), or a count
+   (`.claude/skills/learn-from-customers/SKILL.md`), a usability round (`skills/plan-a-usability-round/SKILL.md`), or a count
    from existing records.
 5. Write the result that would change the decision before the test runs. For example: "If fewer than three of five
    describe a manual move in the last month, drop the opportunity."

@@ -29,7 +29,7 @@ waited without hearing from us.
 
 ## 4. Write the bug report, if it is a defect
 
-Follow `skills/write-an-engineering-bug-report/SKILL.md`. If you cannot reproduce it, ask the Technical Support Engineer with
+Follow `.claude/skills/write-an-engineering-bug-report/SKILL.md`. If you cannot reproduce it, ask the Technical Support Engineer with
 `tico task create --owner technical-support-engineer` first.
 
 ## 5. Prepare the first update

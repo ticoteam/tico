@@ -21,7 +21,7 @@ readings instead; do not invent key results after the fact.
 
 ## 2. Grade each on 0 to 1
 
-Use `skills/grade-a-key-result-from-readings/SKILL.md` for each result.
+Use `.claude/skills/run-the-operating-cadence/SKILL.md` (step 13) for each result.
 
 - Read the final `tico kpi show <kpi id>` value and compare it with the target and the baseline.
 - Grade as a fraction of the way from baseline to target, to one decimal. Binary results are 0 or 1.

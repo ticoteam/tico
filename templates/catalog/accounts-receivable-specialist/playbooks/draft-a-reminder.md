@@ -11,7 +11,7 @@ and a human takes over at the end.
 
 ## 1. Run the checks
 
-Run `skills/check-before-you-chase/SKILL.md`: paid, disputed or promised, do-not-chase, recent thread, personal-touch amount. Any hit means no
+Run the checks before a chase in `.claude/skills/collect-receivables/SKILL.md`: paid, disputed or promised, do-not-chase, recent thread, personal-touch amount. Any hit means no
 draft, and the reason goes in the pack. Confirm the terms in `knowledge/customers.md`. If none are recorded, the draft leaves a marked gap.
 
 ## 2. Find the step
@@ -25,7 +25,7 @@ Days past due, against the ladder in `knowledge/ladder.md`. The default, until t
 
 ## 3. Write it
 
-Run `skills/write-a-payment-reminder/SKILL.md`. The draft is plain text, 50 to 125 words, in the voice in `knowledge/voice.md`. It has the
+Write it as `.claude/skills/collect-receivables/SKILL.md` says (`references/reminder-writing.md`). The draft is plain text, 50 to 125 words, in the voice in `knowledge/voice.md`. It has the
 invoice number, the amount and the due date from the row, how to pay as the invoice says, one ask, and a line inviting a reply if it crossed with
 a payment. If a term or a payment-plan answer is needed, write "[for you to decide]" and ask on the task.
 

@@ -12,17 +12,17 @@ digits only), and the sender's address. A lookalike address, or a layout that di
 
 ## 2. Check for a duplicate
 
-Run `skills/find-a-duplicate-bill/SKILL.md`. A probable duplicate is held and the bill it repeats is named.
+Run the duplicate check in `.claude/skills/pay-bills-and-buy/SKILL.md` (step 2). A probable duplicate is held and the bill it repeats is named.
 
 ## 3. Check the payment details
 
 Compare the printed bank details with `knowledge/vendor-details.md`. Any difference, and any message asking to change them, is a
-bank-detail change: run `skills/check-a-bank-detail-change/SKILL.md`. Hold every bill from the vendor until a callback on a number
+bank-detail change: follow step 7 of `.claude/skills/pay-bills-and-buy/SKILL.md`. Hold every bill from the vendor until a callback on a number
 already on file confirms the details.
 
 ## 4. Match
 
-Run `skills/match-a-bill-to-its-order/SKILL.md` against the order, contract or receipt the rule requires. A bill with no order where
+Match it with `.claude/skills/pay-bills-and-buy/SKILL.md` (steps 4 and 5) against the order, contract or receipt the rule requires. A bill with no order where
 one is required is held for its owner.
 
 ## 5. Route

@@ -15,12 +15,12 @@ is older than 3 days, say so in the first line.
 
 ## 2. Read and tie out the aging
 
-Run `skills/read-an-aging-report/SKILL.md`: tie the total, net unapplied cash and credit notes, find duplicates, bucket the rest, and compute DSO with
+Read it with `.claude/skills/collect-receivables/SKILL.md`: tie the total, net unapplied cash and credit notes, find duplicates, bucket the rest, and compute DSO with
 its formula.
 
 ## 3. Choose the invoices, with the checks first
 
-For each overdue invoice, and each due within the "before due" window in the ladder, run `skills/check-before-you-chase/SKILL.md` in its order. An
+For each overdue invoice, and each due within the "before due" window in the ladder, run the checks before a chase in `.claude/skills/collect-receivables/SKILL.md`, in their order. An
 invoice that passes goes to the draft step. Work the largest overdue balances first when the list is longer than fifteen.
 
 ## 4. Draft

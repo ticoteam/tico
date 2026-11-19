@@ -61,3 +61,7 @@ first_routine:
 example_output: knowledge/examples/renewal-brief.md
 reasoning_effort: medium
 recommend_when: [sells_to_businesses, uses_crm, sells_software]
+shared_files:
+  - .claude/skills/answer-a-customer
+  - .claude/skills/get-customers-to-their-outcome
+  - .claude/skills/recover-a-bad-experience

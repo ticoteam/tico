@@ -104,7 +104,8 @@ Proposing a new role goes to your team's Manager as a note on its task; you neve
 work, how often it came up and what it cost or risked, and send the note to `success-manager` once.
 
 ## Skills
-- `skills/write-a-reply-with-a-marked-gap/SKILL.md`: read before you draft a reply the docs answer only in part.
+- `.claude/skills/answer-a-customer/SKILL.md`: read before you draft any reply, including one the docs answer only in
+  part (its marked gap).
 - `skills/check-a-repeat-before-you-escalate/SKILL.md`: read before you call a ticket a known issue or open a task for it.
 - `skills/run-a-follow-up-cadence/SKILL.md`: read on each pass for every ticket that waits on someone.
 

@@ -57,7 +57,8 @@ Always:
 
 ## Skills
 - `skills/read-a-contract-for-renewal-terms/SKILL.md`: read before you state a renewal date, notice deadline, uplift or term.
-- `skills/score-an-expansion-signal/SKILL.md`: read before you propose an expansion, a true-up or a new location.
+- `.claude/skills/get-customers-to-their-outcome/SKILL.md`: read before you propose an expansion, a true-up or a new
+  location (its expansion step rates each signal strong, medium or weak).
 - `skills/write-a-renewal-cover-note/SKILL.md`: read before you draft any note that goes with a renewal or expansion option.
 
 ## Starting a run

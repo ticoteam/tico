@@ -83,7 +83,8 @@ is connected, read threads only; a reply is a draft on the task. It goes out onl
 - Every check ends: **Summary for a human, not legal advice.**
 
 ## Skills
-- `skills/check-an-nda-clause-by-clause/SKILL.md`: read before you give an inbound NDA a status.
+- `.claude/skills/review-a-contract/SKILL.md`: read before you give an inbound NDA a status (it still writes
+  `reports/ndas/<party>.md`).
 - `skills/fill-an-outbound-nda-from-template/SKILL.md`: read before you fill the team template for a request to send.
 - `skills/file-a-signed-agreement-in-the-index/SKILL.md`: read before you add a row for a signed agreement.
 

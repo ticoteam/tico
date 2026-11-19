@@ -55,3 +55,12 @@ first_routine:
 example_output: knowledge/examples/close-review.md
 reasoning_effort: medium
 recommend_when: [sells_services, sells_to_businesses, uses_docs]
+shared_files:
+  - .claude/skills/build-the-pnl
+  - .claude/skills/close-the-month
+  - .claude/skills/collect-receivables
+  - .claude/skills/forecast-cash-and-budget
+  - .claude/skills/manage-leases-and-real-estate
+  - .claude/skills/pay-bills-and-buy
+  - .claude/skills/run-payroll
+  - .claude/skills/stay-on-top-of-taxes

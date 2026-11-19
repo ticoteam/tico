@@ -54,3 +54,7 @@ first_routine:
 example_output: knowledge/examples/quarterly-plan.md
 reasoning_effort: high
 recommend_when: [uses_docs, sells_to_businesses]
+shared_files:
+  - .claude/skills/build-the-pnl
+  - .claude/skills/forecast-cash-and-budget
+  - .claude/skills/run-the-operating-cadence

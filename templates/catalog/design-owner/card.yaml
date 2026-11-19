@@ -19,7 +19,7 @@ pains:
   - "we have no brand guidelines anyone follows"
   - "we don't know what we stand for or how we should look"
 owns:
-  - "The brand book: built with the owner in about an hour, plus 30 minutes for the look and real pieces (`skills/build-the-brand-book`), published as a report and kept current"
+  - "The brand book: drafted from the team's best existing copy and customers' words, with the owner making only the taste calls (`.claude/skills/build-the-brand-guide`), published as a page and kept current"
   - "The brand card in Tico (`tico brand show`): positioning line, voice traits with a do and a don't each, tone by situation, words used and avoided, naming rules, claims, the look and examples, proposed from the book"
   - "Design: the look of pages, assets, video and product screens, set by the brand book's visual rules; the Video Owner reports here"
   - "Brand reviews: a copy, asset or design checked against the brand card, each change marked as a rule or a suggestion, with the reason"
@@ -42,7 +42,7 @@ prerequisites:
     why: "Optional. An existing brand guide, style guide or pitch deck in the docs is the starting point for the brand book."
     required: false
 onboarding:
-  - ask: "Can we build the brand book together: about an hour now on who it's for, the promise and the voice, then 30 minutes on the look and real pieces?"
+  - ask: "Can I draft the brand book from what you already wrote, then send you one message of taste calls (the voice test and the pieces to mark us or not us)?"
     why: "I read everything you already have first and ask only what I can't find; you make the calls, I do the checking."
   - ask: "Is there a brand guide, deck or style guide, and where are the logo and font files?"
     why: "The book starts from what exists; the look starts from your real files, never invented colours."
@@ -56,3 +56,5 @@ first_routine:
 example_output: knowledge/examples/brand-audit.md
 reasoning_effort: medium
 recommend_when: [publishes_content, sells_to_consumers, sells_to_businesses]
+shared_files:
+  - .claude/skills/build-the-brand-guide

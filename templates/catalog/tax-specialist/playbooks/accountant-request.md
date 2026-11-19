@@ -6,7 +6,9 @@ notice to respond to. Budget 30 minutes.
 Inputs: the request on the task, the team's own records (finance bot reports, exports attached to earlier tasks, team docs),
 and `knowledge/tax-calendar.md`.
 
-Outcome: a prepared package and a list of what is still missing. The package is a draft on the task.
+Method: `.claude/skills/stay-on-top-of-taxes/SKILL.md`, with the packet in its `references/cpa-packet.md`.
+
+Outcome: a prepared package and a list of what is still missing.
 
 Done when: every item asked for is in the package or named as missing with its owner, the mismatches are listed, and the
 request and its deadline are recorded in `knowledge/tax-calendar.md`.

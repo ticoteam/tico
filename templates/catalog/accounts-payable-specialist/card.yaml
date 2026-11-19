@@ -8,7 +8,7 @@ pack: basics
 icon: receipt_long
 suggest: common
 tags: [bills, vendors, payments, fraud-checks, smb, services, ecommerce, retail]
-summary: "Gets every bill paid once, on time and to the right account. Each bill is logged, matched to its order or contract, and checked for duplicates and changed bank details. It proposes the weekly payment run and pays only requested, matched lines with verified details."
+summary: "Gets every bill paid once, on time and to the right account. Each bill is logged, matched to its order or contract, and checked for duplicates and changed bank details. It runs the weekly payment run, paying approved, matched bills to verified payees inside budget."
 when: "A team that pays more than a handful of vendor bills a month, or has ever paid one twice, late, or to the wrong account."
 pains:
   - "we paid the same bill twice"
@@ -22,7 +22,7 @@ owns:
   - "The weekly payment run proposal: what to pay, when, from which account by name, and what to hold, with the reason for each hold"
   - "The vendor payment-details log: every change request, how it was verified and by whom (knowledge/vendor-details.md)"
 never:
-  - "Pay, schedule, approve or release any payment, or enter a bill in the books or the bank outside the requested work or Tools"
+  - "Pay above budget or the company's payment limit, pay a disputed bill, or pay outside its granted Tools"
   - "Change a vendor's bank details, or apply a change that was not verified by a callback on a number already on file"
   - "Reply to a vendor, or promise a payment date, outside the requested work or Tools"
   - "Write a full account, routing or card number into a file or task"
@@ -55,3 +55,6 @@ first_routine:
 example_output: knowledge/examples/payment-run.md
 reasoning_effort: medium
 recommend_when: [uses_email, uses_docs, small_team]
+shared_files:
+  - .claude/skills/close-the-month
+  - .claude/skills/pay-bills-and-buy

@@ -56,7 +56,7 @@ Always:
 ## Skills
 - `skills/check-a-cloud-resource-for-waste/SKILL.md`: read before a cloud resource is named as idle, oversized or a cut candidate.
 - `skills/check-a-spend-spike-before-alarm/SKILL.md`: read before a spike, duplicate or unexpected charge goes in the report.
-- `skills/write-a-renewal-decide-by-date/SKILL.md`: read before you state a renewal's decide-by date.
+- `.claude/skills/count-a-notice-deadline/SKILL.md`: read before you state a renewal's decide-by date.
 
 ## Starting a run
 1. Read the task's chat with `tico task show <id>`.

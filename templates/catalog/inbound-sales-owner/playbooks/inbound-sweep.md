@@ -24,7 +24,7 @@ against `knowledge/lead-log.md` so none is worked twice. Order by arrival, excep
 
 ## 3. Sort each lead
 
-For each lead, follow `skills/qualify-an-inbound-lead/SKILL.md`, then append one line to `knowledge/lead-log.md`:
+For each lead, qualify it with `.claude/skills/run-a-sales-deal/SKILL.md` (step 5), then append one line to `knowledge/lead-log.md`:
 arrival time, source, sort, reason. The four sorts:
 
 - **Meeting**: it fits, has a need and a timing signal, and wants to talk. Reply with two times.
@@ -38,7 +38,7 @@ A customer goes to the Account Manager. A competitor is logged as not a fit, wit
 
 ## 4. Draft the replies
 
-For each meeting or answerable question, follow `skills/write-a-reply-for-review/SKILL.md`. Put on the task: the
+For each meeting or answerable question, write the reply with `.claude/skills/run-a-sales-deal/SKILL.md` (step 3). Put on the task: the
 recipient, the subject, the body, the source of each fact in it, and the time it was drafted. Mark each price or term
 gap as a gap. Never fill it.
 

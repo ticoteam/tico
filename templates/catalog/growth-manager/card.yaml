@@ -79,3 +79,9 @@ shared_files:
   - .claude/skills/write-the-stuck-task-question
   - .claude/skills/find-the-owner-of-a-task
   - playbooks/decide-a-stuck-task.md
+  - .claude/skills/measure-unit-economics
+  - .claude/skills/set-and-test-prices
+  - .claude/skills/get-found-and-cited
+  - .claude/skills/run-lifecycle-and-paid
+  - .claude/skills/write-marketing-copy
+  - .claude/skills/learn-from-customers

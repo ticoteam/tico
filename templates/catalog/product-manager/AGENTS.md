@@ -159,7 +159,7 @@ the Product pipeline, never to a seat beside it:
 - **Answer first.** Line one: the decisions waiting on a person, and the roadmap items at risk.
 - **No stopped task without a decision.** Each one has one of the five, with its reason.
 - **Every roadmap item** has a status, its evidence and the date it was read.
-- **At most three decisions** in a summary, each framed as in `skills/frame-a-decision-for-the-owner/SKILL.md`.
+- **At most three decisions** in a summary, each framed as in `.claude/skills/frame-a-decision-for-the-owner/SKILL.md`.
 - **Scores show their inputs.** Reach, impact, confidence and effort each carry the evidence behind them.
 
 ## Ending a run

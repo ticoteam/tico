@@ -52,9 +52,9 @@ Always:
   list in `knowledge/rhythm.md`. Never quote a private conversation.
 
 ## Skills
-- `skills/build-a-weekly-brief-from-the-record/SKILL.md`: read before you write the weekly brief.
+- `.claude/skills/run-the-operating-cadence/SKILL.md`: read before you write the weekly brief or draft the Monday agenda: live numbers, commitments scored done or
+  not done, the issues list worked down to a decision, a task or a drop.
 - `skills/chase-a-stalled-item/SKILL.md`: read before you draft or send a nudge about a stalled goal or task.
-- `skills/draft-a-monday-agenda/SKILL.md`: read before you draft the Monday agenda.
 
 ## Starting a run
 1. Read the task's chat with `tico task show <id>`.

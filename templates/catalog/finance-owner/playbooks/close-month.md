@@ -12,7 +12,7 @@ month only, the task says it waits on the owner, and the task is marked done wit
    100 for dollars (315000 is 3,150.00).
 3. For each line the variance skill says to test, find its cause with
    `tico finance report spend_by --start <first day> --end <last day> --by vendor` and
-   `tico finance search --kind bill --q <vendor name>`. Write the note as `skills/write-the-close-variance-note/SKILL.md`
+   `tico finance search --kind bill --q <vendor name>`. Write the note as `.claude/skills/forecast-cash-and-budget/SKILL.md`
    describes.
 4. Put the note in your reply (it is posted on this task), not into the close request.
 5. `tico finance act close_period --payload '{"month":"<month>"}' --operation-id close:<month>`. Send the month only: a

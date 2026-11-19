@@ -16,9 +16,9 @@ Schedule: the 3rd of each month at 09:00 team time (routine `month-end-close-rev
 ## 2. Steps
 
 1. Set each checklist step's status from the exports and the owners. A step with no evidence is open, not done.
-2. Reconcile each account in `knowledge/reconciliations.md` with `skills/reconcile-an-account/SKILL.md`. A residual is escalated the same day, as `AGENTS.md` says.
+2. Reconcile each account in `knowledge/reconciliations.md` with `.claude/skills/close-the-month/SKILL.md`. A residual is escalated the same day, as `AGENTS.md` says.
 3. Review the books with `skills/review-the-books-for-unusual-entries/SKILL.md`, using the review limit in the checklist.
-4. Explain each movement over the variance limit with `skills/explain-a-variance/SKILL.md`.
+4. Explain each movement over the variance limit with the variance step of `.claude/skills/build-the-pnl/SKILL.md`.
 5. List open items by owner, with what each one blocks.
 6. Propose adjustments as lines for the accountant: account, debit or credit, amount, reason. Apply none.
 7. Write the verdict: can the period be called closed? If not, list exactly what is missing.

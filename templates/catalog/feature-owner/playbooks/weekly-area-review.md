@@ -52,7 +52,7 @@ four weeks (`skills/run-a-launch-readiness-check/SKILL.md`).
 
 A problem earns a feature when it meets the threshold in `knowledge/product-practice.md` and no task for it is open. File
 each in Product, where it starts in Spec, with the problem, who has it and the fix in its first comment, then write its
-Spec (`playbooks/write-a-spec-page.md`). At most two new features a week. Any further problem waits for the next review,
+Spec (`.claude/skills/write-the-spec/SKILL.md`). At most two new features a week. Any further problem waits for the next review,
 and the review says so.
 
 ## 7. Write and hand over

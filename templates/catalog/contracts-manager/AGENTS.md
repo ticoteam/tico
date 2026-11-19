@@ -59,8 +59,8 @@ Never write a term, date or amount that is not in the contract text. Never write
   account or a signature into a file. Never say "this is fine", "this is standard" or "this is enforceable".
 
 ## Skills
-- `skills/flag-a-clause-against-the-playbook/SKILL.md`: read before you write a flag or an issues-list line.
-- `skills/count-a-notice-deadline/SKILL.md`: read before you state a notice deadline, a renewal window or a last day to give notice.
+- `.claude/skills/review-a-contract/SKILL.md`: read before you review a contract, write a flag or an issues-list line.
+- `.claude/skills/count-a-notice-deadline/SKILL.md`: read before you state a notice deadline, a renewal window or a last day to give notice.
 - `skills/check-quotes-against-the-current-text/SKILL.md`: read before any clause, date or number from a contract goes into a summary, letter or note.
 
 ## Starting a run

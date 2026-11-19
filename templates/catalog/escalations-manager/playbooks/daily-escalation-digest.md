@@ -35,7 +35,7 @@ For each case: the ticket thread (mail read or the task), the engineering issue 
 
 For each update due, follow `skills/write-a-customer-update/SKILL.md`: the exact text, what happened since the last update,
 what is next, and when they will hear again. Name the recipient and the case owner. A defect going to engineering follows
-`skills/write-an-engineering-bug-report/SKILL.md`.
+`.claude/skills/write-an-engineering-bug-report/SKILL.md`.
 
 ## 5. Write and hand over
 

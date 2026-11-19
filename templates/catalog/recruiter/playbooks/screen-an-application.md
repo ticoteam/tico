@@ -24,7 +24,7 @@ the application that is not a stated criterion.
 
 ## 3. Match, item by item
 
-Run `skills/screen-against-stated-criteria/SKILL.md`. Each required criterion gets one result: **shown** (with the line),
+Follow `.claude/skills/fill-a-role/references/human-hire.md`, section 5: evidence, never a score. Each required criterion gets one result: **shown** (with the line),
 **partly shown**, or **not shown in the application**. Then the preferred criteria the same way. Add up to two questions
 for the manager.
 

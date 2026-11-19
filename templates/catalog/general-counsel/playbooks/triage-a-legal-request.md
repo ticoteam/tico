@@ -40,5 +40,5 @@ End with the not-legal-advice line, update `knowledge/requests.md`, and `tico ta
 
 ## Done when
 - The request has one of the three outcomes, on the task and in `knowledge/requests.md`.
-- Any deadline in it is sourced, or marked "not confirmed" with what you checked (`skills/check-a-legal-deadline`).
-- Anything that meets `knowledge/escalation.md` has a counsel brief (`skills/write-a-counsel-brief`) on the task.
+- Any deadline in it is sourced, or marked "not confirmed" with what you checked (`.claude/skills/check-a-legal-deadline`).
+- Anything that meets `knowledge/escalation.md` has a counsel brief (`.claude/skills/write-a-counsel-brief`) on the task.

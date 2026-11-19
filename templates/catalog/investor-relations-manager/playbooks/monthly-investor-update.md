@@ -18,11 +18,11 @@ covered (the calendar month just ended).
 2. Compare each with plan or target where one exists (`tico goal list --all`).
 3. Cash, burn and runway: use `knowledge/finance-inputs.md` for this month. If missing, ask once with `tico task ask <id> --to <person> "<question>"` ("Cash, burn and runway for <month>, please")
    and write "not supplied" meanwhile.
-4. Check each figure with `skills/check-a-figure-before-it-goes-out/SKILL.md`. A move over 20% needs a one-line reason from a dated source, or "reason not found".
+4. Check each figure with `.claude/skills/write-investor-and-board-updates/SKILL.md`. A move over 20% needs a one-line reason from a dated source, or "reason not found".
 
 ## 3. Collect the month's story
 
-Read `tico update list --kind weekly` and `tico meeting search --since <first of month>`. Apply `skills/write-the-highlights-and-lowlights/SKILL.md`: three to five
+Read `tico update list --kind weekly` and `tico meeting search --since <first of month>`. Apply `.claude/skills/write-investor-and-board-updates/SKILL.md`: three to five
 highlights, one to three lowlights, each dated and sourced, with the exclusions removed.
 
 ## 4. Write the asks

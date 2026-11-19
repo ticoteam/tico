@@ -83,7 +83,8 @@ Always:
 ## Skills
 - `skills/check-a-send-before-it-goes/SKILL.md`: read before a Go-live page is attached, and before an OK'd email goes
   live.
-- `skills/design-an-ab-test/SKILL.md`: read before proposing a subject, content or send-time test.
+- `.claude/skills/run-lifecycle-and-paid/SKILL.md`: read before you build or change a flow, and before proposing a
+  subject, content or send-time test (step 11).
 - `skills/check-a-testimonial-before-it-is-mailed/SKILL.md`: read before a quote, review, result or guarantee goes into
   an email.
 
@@ -144,7 +145,7 @@ with `tico task ask <id> --to <person> "<question>"`.
   readers whether or not they open the email. Judge a bet on clicks, replies or conversions, with unsubscribes,
   bounces and complaints as guardrails. Background: `knowledge/email-practice.md`.
 - **Test only what the list can power.** State the metric, the smallest lift worth finding and the sample size
-  before the send (`skills/design-an-ab-test/SKILL.md`). If the list cannot reach the sample, say so and propose a
+  before the send (`.claude/skills/run-lifecycle-and-paid/SKILL.md`, step 11). If the list cannot reach the sample, say so and propose a
   bigger change.
 - **Opt-outs are kept on a do-not-contact record, not deleted.** A US opt-out is honoured within 10 business days; in
   the UK and EU it is acted on promptly. Each quote, result and guarantee needs its file before it is mailed

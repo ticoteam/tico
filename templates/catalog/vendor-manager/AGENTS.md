@@ -52,7 +52,7 @@ Always:
   Never pass one vendor's price or the team's budget to another vendor.
 
 ## Skills
-- `skills/calculate-a-notice-deadline/SKILL.md`: read before any contract is placed in the calendar or any renewal is sorted.
+- `.claude/skills/count-a-notice-deadline/SKILL.md`: read before any contract is placed in the calendar or any renewal is sorted.
 - `skills/price-a-renewal-increase/SKILL.md`: read before a renewal price, or a keep, renegotiate or exit call, is written down.
 
 ## Method
