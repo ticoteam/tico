@@ -31,7 +31,7 @@ function settingsTaskBody(e: SettingsBot, change: SettingsTaskChange = {}) {
   const choice = 'choice' in change ? change.choice : was.model ? {harness: was.harness || was.runtime, model: was.model, effort: was.reasoning_effort} : null;
   let effort = 'effort' in change ? change.effort || '' : was.reasoning_effort || '';
   const compact_at = 'compact_at' in change ? change.compact_at || null : was.compact_at || null;
-  if (effort && !settingsModelEfforts(settingsTaskRunsOn(e, choice?.model)).includes(effort)) effort = '';
+  if (effort && !settingsModelEfforts(settingsTaskRunsOn(e, choice?.model || '')).includes(effort)) effort = '';
   if (choice?.model && !effort) effort = choice.effort || '';
   if (!choice?.model && !effort && !compact_at) return null;
   return choice?.model ? {harness: choice.harness, model: choice.model, effort: effort || null, compact_at}

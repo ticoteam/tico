@@ -9,7 +9,8 @@
 //    model at an effort of its own, "Same as bot HIGH"; Default is the bot's own effort), and its window the Compact
 //    row; Apply saves model, effort and window in one task-model save (a model "" record is the bot's own model, shown
 //    as Same as bot); only all three Same as bot sends null. No separate Task effort select remains. The editor holds
-//    the pick until Save bot and sends one task-model save.
+//    the pick until Save bot and sends one task-model save. Clearing a task model to Same as bot at an effort only the
+//    bot's model takes keeps that effort.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -44,7 +45,7 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
     const model = (id: string, harness: string, provider: string) => ({id, label: id.replace(/-/g, ' '), runtime: harness, provider,
       efforts: ['low', 'high'], default_effort: 'high', harnesses: [harness]});
     const catalog = {
-      models: [model('claude-sonnet-5-5', 'claude', 'anthropic'), model('claude-haiku-5-5', 'claude', 'anthropic'), {...model('gpt-6-luna', 'codex', 'openai'), context_tokens: 1_050_000}],
+      models: [{...model('claude-sonnet-5-5', 'claude', 'anthropic'), efforts: ['low', 'high', 'xhigh']}, model('claude-haiku-5-5', 'claude', 'anthropic'), {...model('gpt-6-luna', 'codex', 'openai'), context_tokens: 1_050_000}],
       harnesses: [{id: 'codex', label: 'Codex (OpenAI)', runtime: 'codex', capabilities: {compaction: true}}, {id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude', capabilities: {compaction: true}}],
       default: {runtime: 'claude', model: 'claude-sonnet-5-5'},
     };
@@ -193,7 +194,7 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
       const panel = await openPicker(pickers);
       await choose(panel, 'harness', '');
       assert.equal(await panel.locator('[data-choice-effort]').isVisible(), true, 'Effort shows on Same as bot');
-      assert.deepEqual(await efforts(panel), ['Default', 'low', 'high'], "Default (the bot's own effort), then the bot's model's efforts");
+      assert.deepEqual(await efforts(panel), ['Default', 'low', 'high', 'xhigh'], "Default (the bot's own effort), then the bot's model's efforts");
       assert.equal(await chosen(panel, 'effort'), '', 'it starts on Default');
       await choose(panel, 'effort', 'high');
       await applyPicker(panel);
@@ -241,6 +242,23 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
     // An effort of the task model's own, in the same panel: model, effort and window go in one save.
     assert.deepEqual(await savePart('effort', 'low'), {harness: 'claude', model: 'claude-haiku-5-5', effort: 'low', compact_at: 600000});
     assert.equal(await closedText(pickers), 'Haiku 5.5 LOW 600K');
+    // Review 1 of #3780: Same as bot at an effort only the bot's model takes (xhigh; Haiku has low and high) keeps it on
+    // Apply, judged against the bot's model, not the task model being cleared.
+    {
+      const before = helper.revision; calls = [];
+      const panel = await openPicker(pickers);
+      await choose(panel, 'harness', '');
+      await choose(panel, 'effort', 'xhigh');
+      await applyPicker(panel);
+      await loaded(before + 1);
+      assert.deepEqual(calls.map(c => c.body.task_model), [{model: null, effort: 'xhigh', compact_at: 600000}], "the bot's model's effort is kept");
+    }
+    {
+      const before = helper.revision; calls = [];
+      await pickTask(pickers, 'claude', 'claude-haiku-5-5', undefined, 'low');
+      await loaded(before + 1);
+      assert.deepEqual(calls.map(c => c.body.task_model), [{harness: 'claude', model: 'claude-haiku-5-5', effort: 'low', compact_at: 600000}]);
+    }
     // Same as bot for the model starts on Default effort and keeps the window; an effort of its own then saves with it.
     assert.deepEqual(await savePart('same', ''), {model: null, effort: null, compact_at: 600000});
     assert.equal(await closedText(pickers), 'Same as bot 600K', 'Same as bot, with the task window');
@@ -290,7 +308,7 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
     {
       const panel = await openPicker(task);
       await choose(panel, 'harness', '');
-      assert.deepEqual(await efforts(panel), ['Default', 'low', 'high'], "the bot's model's efforts");
+      assert.deepEqual(await efforts(panel), ['Default', 'low', 'high', 'xhigh'], "the bot's model's efforts");
       await choose(panel, 'effort', 'low');
       await applyPicker(panel);
     }
