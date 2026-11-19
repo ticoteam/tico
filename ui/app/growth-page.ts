@@ -22,7 +22,7 @@ interface GpPoint { period: string; signups: number | null; new_customers: numbe
 type GpWin = 'kept_d30' | 'kept_d90' | 'kept_d180';
 type GpCohort = { cohort: string; entered: number } & Partial<Record<GpWin, {value: number | null; n: number; status: string}>>;
 interface GpMetric { id: string; name: string; unit: string; value: number | null; estimate?: boolean }
-interface GpHealth { unknown_share?: number | null; no_segment?: number; mismatch?: number; reconciled?: string; checks?: Array<{figure: string; agrees: boolean}>; stale_sources?: string[] }
+interface GpHealth { unknown_share?: number | null; no_segment?: number; mismatch?: number; reconciled?: string; checks?: Array<{figure: string; agrees: boolean | null}>; stale_sources?: string[] }
 interface GpRead { scope: string; period: string; headline: GpHeadline; channels: GpChannel[]; health: GpHealth; metrics: GpMetric[]; series?: GpPoint[]; retention?: GpCohort[]; partial?: boolean }
 interface GpSegment { slug: string; name: string }
 interface GrState { load: number; scope: string; month: string; read: GpRead | null; segments: GpSegment[] }
@@ -251,7 +251,7 @@ const gpKpis = (ms: GpMetric[]) => ms.length ? `<section class="card gp-sec"><h2
   `<li><a href="${GR_GOALS}?kpi=${encodeURIComponent(m.id)}">${esc(m.name)}</a> <b>${m.value == null ? '—' : esc(kpiNum(m.value, m.unit))}</b>${m.estimate ? ' <small class="muted">estimate</small>' : ''}</li>`).join('')}</ul></section>` : '';
 function gpHealth(h: GpHealth) {
   const parts = [h.unknown_share != null ? `Unknown ${gpRate(h.unknown_share)}` : '', h.no_segment != null ? `No segment ${gpCount(h.no_segment)}` : '',
-    h.mismatch != null ? `Mismatch ${gpCount(h.mismatch)}` : '', h.reconciled === 'not_reconciled' ? 'Not reconciled' : h.reconciled === 'off' ? `Off: ${(h.checks || []).filter(x => !x.agrees).map(x => x.figure.replace('_', ' ')).join(', ')}` : h.reconciled ? 'Reconciled' : '',
+    h.mismatch != null ? `Mismatch ${gpCount(h.mismatch)}` : '', h.reconciled === 'not_reconciled' ? 'Not reconciled' : h.reconciled === 'off' ? `Off: ${(h.checks || []).filter(x => x.agrees === false).map(x => x.figure.replace('_', ' ')).join(', ')}` : h.reconciled ? 'Reconciled' : '',
     h.stale_sources?.length ? `Stale: ${h.stale_sources.join(', ')}` : ''].filter(Boolean);
   return parts.length ? `<p class="muted gp-health">${esc(parts.join(' · '))}</p>` : '';
 }

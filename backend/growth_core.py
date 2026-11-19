@@ -951,7 +951,8 @@ CHECK_TOLERANCE = 0.05  # within 5% (or 1 for counts) reads as reconciled
 
 def reconcile(c: sqlite3.Connection, company: Scope, month: str, hidden: Iterable[str] = ()) -> Row:
     """Each check KPI's reading for the month (an outside total: Stripe, Finance, analytics) against Growth's own
-    company-wide figure. `reconciled` when every check agrees, `off` when one doesn't, `not_reconciled` with none."""
+    company-wide figure. `reconciled` when every check agrees, `off` when one doesn't, `not_reconciled` with none filled; a check with
+    no reading for the month is listed with `outside` and `agrees` null."""
     own: dict[str, float | None] = {
         "signups": company.entered("signup", month),
         "new_customers": company.entered("customer", month),
@@ -974,7 +975,10 @@ def reconcile(c: sqlite3.Connection, company: Scope, month: str, hidden: Iterabl
             "ORDER BY r.collected_at DESC, r.created_at DESC LIMIT 1",
             (k["id"], month),
         ).fetchone()
-        if found is None:
+        if found is None:  # set up, not filled for this month: shown, not counted
+            checks.append(
+                {"figure": figure, "growth": _r(own[figure]), "outside": None, "kpi": k["name"], "agrees": None}
+            )
             continue
         outside, mine = float(found[0]), own[figure]
         agrees = mine is not None and abs(mine - outside) <= max(
@@ -983,9 +987,9 @@ def reconcile(c: sqlite3.Connection, company: Scope, month: str, hidden: Iterabl
         checks.append(
             {"figure": figure, "growth": _r(mine), "outside": _r(outside), "kpi": k["name"], "agrees": agrees}
         )
-    if not checks:
-        return {"reconciled": "not_reconciled"}
-    return {"reconciled": "reconciled" if all(x["agrees"] for x in checks) else "off", "checks": checks}
+    filled = [x for x in checks if x["agrees"] is not None]
+    state = ("reconciled" if all(x["agrees"] for x in filled) else "off") if filled else "not_reconciled"
+    return {"reconciled": state, "checks": checks} if checks else {"reconciled": state}
 
 
 def series(scope: Scope, month: str, window: str | None) -> list[Row]:
