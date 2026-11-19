@@ -88,7 +88,7 @@ ROW_REQUIRED = ("anchor", "period", "as_of", "entered")
 COST_REQUIRED = ("period", "kind", "amount")
 ROW_KEY = ("anchor", "period", "segment", "channel", "campaign")
 COST_KEY = ("period", "channel", "campaign", "kind", "purpose")
-TYPED = "typed"  # the source growth_cohorts' typed spend, bot cost and new customers read under
+TYPED = "typed"  # the source growth_cohorts' typed spend, bot cost and new customers read under; pushed data wins
 CAMPAIGNS_MAX, OTHER = 10, "other"
 COUNT_MAX = 10**12
 LABEL_MAX = 40
@@ -362,6 +362,8 @@ def check_rows(c: sqlite3.Connection, headers: list[str], rows: list[list[Any]],
                 bad.add("number", f"{net}_sum", n)
         entered = row["entered"] if row["entered"] is not None else 0
         for x, eligible in [(s, f"{s}_eligible") for s in STEPS] + [(f"{x}_sum", f"{x}_eligible") for x in NETS]:
+            if row[x] is None and row[eligible] == 0:
+                row[eligible] = None  # nobody eligible and nothing counted: not supplied, as if both were blank
             if (row[x] is None) != (row[eligible] is None):
                 bad.add("pair", x, n)
             elif row[eligible] is not None and (
@@ -547,9 +549,11 @@ def load(c: sqlite3.Connection) -> Data:
                 "entered": int(typed["new_customers"]),
             }
         )
+    pushed = {(k["channel"], k["period"], k["kind"]) for k in costs}
     for (slug, month), typed in typed_months.items():
         for field, kind in (("spend", "money"), ("bot_cost", "bot")):
-            if typed.get(field) is not None:
+            # A typed month's spend or bot cost counts where no pushed cost of that kind covers the channel and month.
+            if typed.get(field) is not None and (slug or "", month, kind) not in pushed:
                 costs.append(
                     {
                         "source": TYPED,
@@ -850,7 +854,11 @@ def channels(scope: Scope, month: str) -> list[Row]:
         owned.add(scope.slug)  # the channel shows, with its budget, even in a quiet month
     for slug in sorted(set(new) | spent | owned):
         n = new.get(slug, 0)
-        row: Row = {"slug": slug or GX.UNKNOWN, "new": n, "new_share": round(n / total_new, 2) if total_new else None}
+        row: Row = {
+            "slug": slug or GX.UNKNOWN,
+            "new_customers": n,
+            "new_share": round(n / total_new, 2) if total_new else None,
+        }
         if not slug:
             out.append(row)
             continue
@@ -887,7 +895,7 @@ def channels(scope: Scope, month: str) -> list[Row]:
         if effort is not None and n:
             row["with_effort"] = _r(((money or 0) + effort) / n)
         out.append(row)
-    out.sort(key=lambda r: (r["slug"] == GX.UNKNOWN, -int(r["new"]), str(r["slug"])))
+    out.sort(key=lambda r: (r["slug"] == GX.UNKNOWN, -int(r["new_customers"]), str(r["slug"])))
     return out
 
 
@@ -954,13 +962,13 @@ def campaigns(scope: Scope, month: str) -> dict[str, list[Row]]:
     found: dict[str, dict[str, Row]] = {}
     for r in scope.at("customer", month):
         cell = found.setdefault(r["channel"] or GX.UNKNOWN, {}).setdefault(
-            r["campaign"] or "none", {"new": 0, "cost": None}
+            r["campaign"] or "none", {"new_customers": 0, "cost": None}
         )
-        cell["new"] += int(r["entered"])
+        cell["new_customers"] += int(r["entered"])
     for k in scope.costs:
         if k["period"] == month and k["kind"] in MONEY and k["purpose"] == "acquisition":
             cell = found.setdefault(k["channel"] or COMPANY, {}).setdefault(
-                k["campaign"] or "none", {"new": 0, "cost": None}
+                k["campaign"] or "none", {"new_customers": 0, "cost": None}
             )
             cell["cost"] = round((cell["cost"] or 0) + float(k["amount"]), 2)
     out: dict[str, list[Row]] = {}
@@ -971,9 +979,11 @@ def campaigns(scope: Scope, month: str) -> dict[str, list[Row]]:
             {
                 "campaign": name,
                 **cell,
-                "cac": round(cell["cost"] / cell["new"], 2) if cell["cost"] is not None and cell["new"] else None,
+                "cac": round(cell["cost"] / cell["new_customers"], 2)
+                if cell["cost"] is not None and cell["new_customers"]
+                else None,
             }
-            for name, cell in sorted(cells.items(), key=lambda item: (-int(item[1]["new"]), item[0]))
+            for name, cell in sorted(cells.items(), key=lambda item: (-int(item[1]["new_customers"]), item[0]))
         ]
     return out
 

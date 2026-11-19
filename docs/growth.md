@@ -182,12 +182,15 @@ Every Growth number is a sum over two kinds of rows (backend/growth_core.py), re
   `campaign` (blank is none; at most 10 named per channel and month: name the rest `other`), `as_of` (when the counts were true),
   `entered`, and counts each with its `_eligible`: `activated`, `paid`, `kept_d30`, `kept_d90`, `kept_d180` (by the
   segment's own kept rule), and `net_d90_sum`, `net_d180_sum`, `net_d365_sum` with `net_dN_eligible`. Counts are whole
-  numbers with `x <= x_eligible <= entered`; a blank cell is not supplied, never 0. Customer facts fold into
+  numbers with `x <= x_eligible <= entered`; a blank cell is not supplied, never 0, and a blank count with
+  `_eligible` 0 is not supplied too. Customer facts fold into
   customer-anchor rows when read (kept by the segment's `churn_days`, net revenue by age); they are never copied.
 - **Costs** (`tico growth costs push --source LABEL --file costs.csv`, MCP `tico_growth_costs_push`): `period`,
   `channel` (blank is company-wide), `campaign`, `kind` (`money`, `promo_cash`, `promo_credits` at real cost when
   redeemed, `bot`, `hours` in money), `purpose` (`acquisition`, the default, or `retention`), `amount`, `quality`. Typed
-  spend and bot cost (and Finance's ad spend, which fills them) read as `money` and `bot` acquisition costs.
+  spend and bot cost (and Finance's ad spend, which fills them) read as `money` and `bot` acquisition costs, except
+  where a pushed cost of that kind covers the channel and month: pushed wins. Typed new customers count where no
+  customer-anchor row covers the channel and month.
 - **A segment's `value_kind`**: `revenue` (the default) or `retention` (`tico growth segment set viewers --value-kind
   retention`).
 
@@ -208,7 +211,7 @@ pushed. A source holds customer facts or pushed rows, never both.
   `with_effort` adds bot cost and hours. Retention costs show as `cost.retention` and never enter CAC. A segment's CAC
   is its own channels' costs; `cac_loaded` adds company-wide costs by its share of new customers. A CAC under the
   minimum cohort has the verdict `too_few`. `payback_months` is CAC over net revenue per month, an `estimate`.
-- **Channels** each carry their `owner`, `budget` (`budget_month`) and `over_budget` (cost past the budget, else null).
+- **Channels** each carry their `new_customers`, `new_share`, `owner`, `budget` (`budget_month`) and `over_budget` (cost past the budget, else null).
 - **A retention segment** reads `value` (`kept_d30` and `cost_per_retained`) in place of LTV, LTV:CAC and payback.
 - **Health**: the Unknown share, `no_segment` and `mismatch` (with segments), `reconciled` (`not_reconciled` for now),
   and `stale_sources` (rows whose newest `as_of` is over 45 days old).
