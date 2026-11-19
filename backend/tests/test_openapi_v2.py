@@ -425,6 +425,7 @@ def test_the_declared_answers_match_the_live_ones(api):
         params={"group": "hour", "from": "2026-01-01T17:00:00Z", "to": "2026-01-01T20:00:00Z"},
     )
     call("getHealth", "get", "/api/v2/health")
+    assert call("getGitHubApp", "get", "/api/v2/github/app")["connected"] is False
     from datetime import datetime, timezone
     from backend import heartbeat
 
