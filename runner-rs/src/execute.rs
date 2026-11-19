@@ -2034,7 +2034,7 @@ impl Runner {
             return Ok(self.published(bot, &repository, ("current", String::new())));
         }
         // A push cannot be taken back: the hub is asked first, never a place kept since the claim (keep_start_place).
-        // Boxed: the turn's future is deep enough already (a test's stack overflowed with it inline).
+        // Boxed: keeps the turn's future no larger for a rare ask.
         Box::pin(self.wait_start_place(attempt, flags)).await?;
         let result = self
             .pre_start_lock(attempt, flags, async {
@@ -9042,7 +9042,8 @@ for line in sys.stdin:
         } else {
             None
         };
-        let work = runner.clone().execute(attempt);
+        // On the heap, as the runner spawns it: a whole turn's future overflows a debug test thread's stack.
+        let work = Box::pin(runner.clone().execute(attempt));
         let release = async {
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
