@@ -789,3 +789,58 @@ def test_a_bot_brings_a_teammate_out_of_its_reach_into_a_task_it_owns(api):
 def version(api, task_id):
     with api.app.state.store.read() as c:
         return H.task(c, task_id)["version"]
+
+
+def refusal_for_ben(api, title="A question for Ben"):
+    own = task(api, "ops-test", "bot:ops", title=title)
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(reach.Refused) as refused:
+            question_marks.ask(c, "bot:ops", own["id"], "human:ben", "Which launch date do you want?")
+    return refused.value
+
+
+def delete(api, token, message_id):
+    r = api.delete(f"/api/v2/messages/{message_id}", headers=headers(token))
+    assert r.status_code == 200, r.text
+
+
+def test_a_message_the_person_deleted_is_not_named_and_the_refusal_is_todays(api):
+    """Ben writes to ops, then deletes it: ops could not file from it (--from-message reads no deleted message), so
+    the refusal is the one before he wrote, through the manager, naming no message."""
+    two_levels_down(api)
+    today = refusal_for_ben(api)
+    said = message(api, "ben-test", "ops", "Can you draft the launch note?")
+    delete(api, "ben-test", said["id"])
+    refused = refusal_for_ben(api, title="Another question for Ben")
+    assert refused.code == today.code == "reach_closed", refused.detail
+    assert refused.extra["via"] == today.extra["via"] == "bot:product-design", refused.detail
+    assert refused.detail == today.detail and "--from-message" not in refused.detail, refused.detail
+    with api.app.state.store.read() as c:
+        assert reach.wrote_lately(c, "bot:ops", "human:ben") is None
+
+
+def test_a_deleted_newest_message_does_not_hide_an_older_one_and_filing_from_it_works(api):
+    """Ben writes to ops twice and deletes the newer message: the refusal names the older one, and the filing it
+    suggests goes through."""
+    two_levels_down(api)
+    older = message(api, "ben-test", "ops", "Can you draft the launch note?")
+    newer = message(api, "ben-test", "ops", "And the pricing page?")
+    with api.app.state.store.transaction() as c:  # the newer one is strictly later, whatever the clock's resolution
+        c.execute(
+            "UPDATE messages SET created_at=? WHERE id=?",
+            ((datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S.%fZ"), older["id"]),
+        )
+    delete(api, "ben-test", newer["id"])
+    refused = refusal_for_ben(api)
+    assert refused.code == "reach_closed" and refused.extra["via"] is None, refused.detail
+    assert f"--for human:ben --from-message {older['id']}" in refused.detail, refused.detail
+    assert newer["id"] not in refused.detail, refused.detail
+    filed = task(
+        api,
+        "ops-test",
+        "bot:ops",
+        title="The launch note",
+        for_actor="human:ben",
+        from_message=older["id"],
+    )
+    assert filed["requester_id"] == "human:ben", filed

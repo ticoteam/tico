@@ -991,14 +991,15 @@ def solicited(c, sender, receiver, conversation_id=None, in_reply_to=None, befor
 
 def wrote_lately(c, sender, receiver, before=None):
     """The latest message (id, created_at) the person `receiver` wrote to `sender`, to it or @mentioning it, in the
-    last SOLICITED_DAYS, anywhere; None when there is none."""
+    last SOLICITED_DAYS, anywhere; None when there is none. A deleted message is skipped: the filing the refusal
+    suggests (--from-message) cannot read it, and it must not hide an older message that can be filed from."""
     until = before or H.now()
     at = H.parse_ts(until)
     if at is None:  # pragma: no cover - H.now() and the dry-run's timestamps always parse
         return None
     since = (at - timedelta(days=SOLICITED_DAYS)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     args = [receiver, since, until, sender]
-    where = "m.sender_id=? AND m.created_at>=? AND m.created_at<? AND (m.recipient_id=?"
+    where = "m.deleted_at IS NULL AND m.sender_id=? AND m.created_at>=? AND m.created_at<? AND (m.recipient_id=?"
     if H._has_table(c, "message_mentions"):
         # Only a mention the bot may read: one outside the thread's audience names a message it cannot file from.
         where += (
