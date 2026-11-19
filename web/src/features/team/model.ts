@@ -2,8 +2,10 @@
 import type { Actor, Directory } from '@/data';
 import type { AgentFile, AgentRow, Change, Group, Learned, ListRow, Model, PersonRow, Run, SlackThread } from './queries';
 
-/** The menu's address for a team: its name, lower case, words joined by "-" (shell/Menu teamSlug). */
-export const teamSlug = (name: string) =>
+/** A team address key uses the directory's team name and a prefix reserved for teams. */
+export const teamSlug = (name: string) => `team:${name}`;
+
+const legacyTeamSlug = (name: string) =>
   name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -14,11 +16,15 @@ export type Who =
   | { kind: 'person'; actor: Actor }
   | { kind: 'team'; group: Group };
 
-/** `/team/<who>`: an agent's slug, a person's id, or a team (its id or its name as the menu writes it). */
+/** `/team/<who>`: an agent's slug, a person's id, or a team name key, with old team links still accepted. */
 export function resolveWho(who: string, dir: Directory | undefined, groups: readonly Group[] | undefined): Who | null {
+  if (who.startsWith('team:')) {
+    const group = groups?.find((g) => teamSlug(g.name) === who);
+    return group ? { kind: 'team', group } : null;
+  }
   const actor = dir?.byId[who] ?? dir?.byId[`human:${who}`] ?? dir?.byId[`bot:${who}`];
   if (actor) return actor.kind === 'agent' ? { kind: 'agent', actor } : { kind: 'person', actor };
-  const group = groups?.find((g) => g.id === who || teamSlug(g.name) === who);
+  const group = groups?.find((g) => g.id === who || legacyTeamSlug(g.name) === who);
   return group ? { kind: 'team', group } : null;
 }
 
