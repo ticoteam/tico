@@ -105,6 +105,26 @@ const DEFAULT_THEMES = 'light,dark';
 // every run. TICO_DEMO_NOW overrides it; the demo reads the same variable (backend/demo.py demo_now).
 const DEMO_NOW = process.env.TICO_DEMO_NOW || '2026-11-06T18:00:00Z';
 
+// Refusals the app asks for on purpose and handles, so they are not problems. Each is matched by status, path, a query
+// part and the error code in the body, so the same route refusing for another reason (a missing route's 404) still fails.
+// GET /api/v2/threads/dm?create=false answers 404 no_dm when the viewer has no DM with that bot yet (backend/threads.py);
+// ui/app/thread-view.ts thvResolve and ui/app/bot-page.ts botDmRead read it as "no DM". The page chat asks it on
+// org-chart, market and strategy.
+const EXPECTED_REFUSALS: {status: number; path: string; query: string; code: string}[] = [
+  {status: 404, path: '/api/v2/threads/dm', query: 'create=false', code: 'no_dm'},
+];
+function expectedRefusal(status: number, url: string, code?: string): boolean {
+  const at = new URL(url);
+  return EXPECTED_REFUSALS.some(r => r.status === status && at.pathname === r.path && at.search.slice(1).split('&').includes(r.query)
+    && (code === undefined || code === r.code));
+}
+// Chrome logs every refused request a second time, as a console error naming no URL in its text; the message's location
+// is the request. That line is dropped only for a refusal above (its body code is checked on the HTTP line).
+function expectedRefusalLog(text: string, url: string | undefined): boolean {
+  const status = /^Failed to load resource: the server responded with a status of (\d+)/.exec(text);
+  return !!status && !!url && expectedRefusal(Number(status[1]), url);
+}
+
 // The files the Tasks page draws: the Needs you page shows the same list (its route is #/tasks).
 const TASKS_UI = [
   'ui/app/stage-rules.ts', 'ui/app/stage-rules-mark.ts', 'ui/styles/stage-rules.css',  // each stage header's Rules button and panel
@@ -147,8 +167,9 @@ const PAGES: PageSpec[] = [
     ui: ['ui/app/goals.ts', 'ui/app/goals-kpi-views.ts', 'ui/goals-kpis.ts', 'ui/app/redesign.ts', 'ui/app/redesign-org.ts',
       'ui/app/drag-pan.ts', 'ui/app/org-chart-shape.ts', 'ui/app/org-fan.ts', 'ui/app/org-factories.ts', 'ui/styles/goals.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css',
       'ui/styles/org-factories.css']},
-  // The "Have a draft ready" line shows on desktop only; the empty thread shows at both widths.
-  {name: 'bot-chat', route: '#/bot/support-owner', ready: 'No messages yet', ui: BOT_CHAT_UI},
+  // The "Have a draft ready" line shows on desktop only. The bot's Home holds seeded messages (backend/demo_content.py),
+  // so the page is ready when the newest shows; it was "No messages yet" while that thread was empty, and never showed.
+  {name: 'bot-chat', route: '#/bot/support-owner', ready: "Drafted 11 replies from Ben's list.", ui: BOT_CHAT_UI},
   {name: 'meetings', route: '#/meetings', ready: 'Larkford town bid call', ui: MEETINGS_UI},
   {name: 'meeting', route: async page => '#/meetings?meeting=' + encodeURIComponent(await page.evaluate(async () => {
     const list = (await (await fetch('/api/meetings')).json()) as Meeting[];
@@ -232,7 +253,10 @@ const PAGES: PageSpec[] = [
       'ui/styles/visual-*.css', 'ui/app/call-ring.ts', 'ui/app/new-message.ts', 'ui/styles/calls.css', 'ui/app/empty-art.ts']},
   {name: 'calendar', route: '#/calendar', ready: 'Calendar', ui: ['ui/app/calendar*.ts', 'ui/styles/calendar.css']},
   {name: 'recruit', route: async page => '#/seat/' + encodeURIComponent(await page.evaluate(async () =>
-    ((await (await fetch('/api/v2/seats')).json()) as {seats: Seat[]}).seats[0]!.id)), ready: 'Job post',
+    ((await (await fetch('/api/v2/seats')).json()) as {seats: Seat[]}).seats[0]!.id)),
+    // "Job post" is a header tool that a phone folds into the hidden ⋯ menu, so it never showed there: the ready text is
+    // the seat's Reports to line, shown at both widths.
+    ready: 'Reports to',
     ui: ['ui/app/recruit.ts', 'ui/app/team-build.ts', 'ui/styles/recruit.css', 'ui/styles/team-build.css']},
 ];
 
@@ -393,13 +417,24 @@ async function capture(): Promise<void> {
         });
         await page.clock.setFixedTime(new Date(DEMO_NOW));
         let where = 'load';
-        page.on('console', message => { if (message.type() === 'error') problems.push(`${where}: console error: ${message.text()}`); });
+        page.on('console', message => {
+          if (message.type() === 'error' && !expectedRefusalLog(message.text(), message.location().url)) problems.push(`${where}: console error: ${message.text()}`);
+        });
         page.on('pageerror', error => problems.push(`${where}: page error: ${error.message}`));
         // Leaving a page cancels its open event streams; that is not a failure.
         page.on('requestfailed', request => {
           if (request.failure()?.errorText !== 'net::ERR_ABORTED') problems.push(`${where}: request failed: ${request.url()}`);
         });
-        page.on('response', response => { if (response.status() >= 400) problems.push(`${where}: HTTP ${response.status()} ${response.url()}`); });
+        page.on('response', async response => {
+          if (response.status() < 400) return;
+          const label = where;
+          if (expectedRefusal(response.status(), response.url())) {
+            // Read the code before calling it expected; a body that cannot be read is reported, not assumed.
+            const code = await response.json().then((body: {error?: {code?: string}}) => body?.error?.code).catch(() => undefined);
+            if (code !== undefined && expectedRefusal(response.status(), response.url(), code)) return;
+          }
+          problems.push(`${label}: HTTP ${response.status()} ${response.url()}`);
+        });
         await page.goto(demo.url + '/');
         await page.locator('#tree a.node').first().waitFor({state: 'attached'});
         // Inter is font-display: optional, so a cold first load keeps the fallback face; every later load has it.
