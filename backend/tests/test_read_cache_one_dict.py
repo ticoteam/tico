@@ -26,10 +26,18 @@ def test_each_caller_gets_its_own_dict_of_the_row_and_a_write_reads_it_again(api
         c.execute("UPDATE bots SET display_name='Renamed' WHERE id='helper'")
         assert H._one(c, SQL, ("helper",))["display_name"] == "Renamed"  # the write dropped the kept dict
     with store.read_transaction() as c:
-        read_cache.prime(c, SQL, {("primed",): {"id": "primed", "tags": ["a"]}})
+        seeded = {"id": "primed", "tags": ["a"]}
+        read_cache.prime(c, SQL, {("primed",): seeded})
         primed = H._one(c, SQL, ("primed",))
-        assert primed == {"id": "primed", "tags": ["a"]}
+        assert primed == {"id": "primed", "tags": ["a"]} and primed is not seeded
         primed["id"] = "x"
         assert H._one(c, SQL, ("primed",))["id"] == "primed"
-    with store.read() as c:  # outside a snapshot: read each time
+        seeded["id"] = "changed where it was primed"  # a primed dict is never kept: each read copies it as it is now
+        assert H._one(c, SQL, ("primed",))["id"] == "changed where it was primed"
+        assert H._one(c, "SELECT :name AS name", {"name": "named"}) == {"name": "named"}  # named parameters, keyed
+        assert H._one(c, "SELECT :name AS name", {"name": "other"}) == {"name": "other"}  # by value too
+    with store.read() as c:  # outside a snapshot: read each time, a change committed elsewhere included
         assert H._one(c, SQL, ("helper",))["display_name"] == "Renamed"
+        with store.transaction() as other:
+            other.execute("UPDATE bots SET display_name='Again' WHERE id='helper'")
+        assert H._one(c, SQL, ("helper",))["display_name"] == "Again"

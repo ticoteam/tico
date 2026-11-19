@@ -81,10 +81,19 @@ def value(c: Any, key: Hashable, build: Callable[[], T], shared: bool = False) -
     return values[key] if shared else deepcopy(values[key])
 
 
+def _selects(statement: str) -> bool:
+    return statement.lstrip().upper().startswith("SELECT ")
+
+
+def _bound(args: Any) -> tuple[Any, ...]:
+    """A cache key's arguments: named parameters by name and value (a dict's own tuple would be its names alone)."""
+    return tuple(sorted(args.items())) if isinstance(args, dict) else tuple(args)
+
+
 def one(c: Any, statement: str, args: Iterable[Any] = ()) -> Any:
     """One neutral stored row; never cache a mutation or an answer outside its snapshot."""
-    values = cache(c) if statement.lstrip()[:7].upper() == "SELECT " else None
-    key = ("one", statement, tuple(args))
+    values = cache(c) if _selects(statement) else None
+    key = ("one", statement, _bound(args))
     if values is None:
         return c.execute(statement, args).fetchone()
     if key not in values:
@@ -97,20 +106,20 @@ def one_dict(c: Any, statement: str, args: Iterable[Any] = ()) -> dict[str, Any]
     a dict once a snapshot and each caller gets a copy of that: a Row's values are plain (text, numbers, bytes, None),
     so a shallow copy is a whole one, and copying a dict costs a fraction of building one from a Row (a task's 43
     columns: 6 µs a Row, 0.1 µs a dict). A list asks for each task, its visit, stage and pipeline several times. A row a
-    page primed as a dict is copied as before."""
-    args = tuple(args)
-    row = one(c, statement, args)
-    if row is None:
-        return None
-    if not isinstance(row, sqlite3.Row):
-        return dict(row)
-    values = cache(c)
+    page primed as a dict is copied as before; a statement `one` does not cache is read and turned as before."""
+    values = cache(c) if _selects(statement) else None
     if values is None:
-        return dict(row)
-    key = ("one_dict", statement, args)
-    kept = values.get(key)
+        row = c.execute(statement, args).fetchone()
+        return dict(row) if row is not None else None
+    key = ("one", statement, _bound(args))  # one's own entry: the snapshot's row, shared with `one`
+    if key not in values:
+        values[key] = c.execute(statement, args).fetchone()
+    row = values[key]
+    if row is None or not isinstance(row, sqlite3.Row):
+        return dict(row) if row is not None else None
+    kept = values.get(("one_dict", *key[1:]))
     if kept is None or kept[0] is not row:  # the row this dict was made from, not one read since
-        kept = values[key] = (row, dict(row))
+        kept = values[("one_dict", *key[1:])] = (row, dict(row))
     return dict(kept[1])
 
 
