@@ -1,0 +1,44 @@
+/* Tasks and Flow: what pages/1-tasks/list.css has that styles/ and pagekinds.css do not. Class names are the mock's. */
+
+/* a menu item that opens a second level */
+.menu a>.ico.is-next{width:14px;height:14px;color:var(--muted);stroke-width:1.8}
+
+/* pipeline, then stage: a list that crosses pipelines */
+.sec-sep{width:12px;height:12px;stroke-width:2;margin:calc(var(--s-0) / 2) var(--s-1h) 0;color:var(--faint)}
+
+/* stages with nothing in them: folded names on one line under the list */
+.stage-line{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-1) calc(var(--s-6) + var(--s-1));min-height:var(--row);margin-top:var(--s-2h);padding:var(--s-2h) 0 0 var(--s-8);border-top:1px solid var(--line)}
+
+/* a stage past twelve rows shows ten and says how many more */
+.row-more{color:var(--muted);font-size:var(--t-sm)}
+.row-more:hover{color:var(--ink)}
+button.row-more{width:100%;border:0;background:none;font:inherit;font-size:var(--t-sm);text-align:left;grid-template-columns:24px minmax(0,1fr)}
+
+/* a stage opened past its cap: its rows scroll inside it */
+.tk-long{max-height:calc(var(--row) * 12);overflow:auto;scrollbar-width:thin}
+
+/* a row's or a card's "⋯": shown under a pointer and on focus, over the row's right end */
+.tk-item{position:relative}
+.tk-item>.tk-more{position:absolute;top:50%;right:0;margin-top:calc(var(--ctl-sm)/-2);opacity:0}
+.tk-item>.card~.tk-more{top:6px;right:6px;margin-top:0}
+.tk-item:hover>.tk-more,.tk-item>.tk-more:focus-visible,.tk-item>.tk-more[aria-expanded="true"]{opacity:1}
+.tk-item:hover>.row{--surface:var(--hover);background:var(--hover)}
+.tk-item>.tk-more:not(:hover){background:var(--surface)}
+.tk-item.is-drag{z-index:var(--z-stick)}
+.col[data-drop]{border-radius:var(--r-ctl);background:var(--well)}
+
+.card-foot .row-age{width:32px;flex:none;line-height:var(--av-sm)}
+
+/* the board: whole columns only; past an edge, an arrow, how many stages lie that way, and how many wait on you */
+.board-wrap.has-more .board{margin-right:var(--s-12)}
+.board-more{position:absolute;top:6px;width:32px;display:grid;justify-items:center;gap:var(--s-2);color:var(--muted);font-size:var(--t-xs);font-variant-numeric:tabular-nums}
+.board-more.is-next{right:8px}
+.board-more.is-prev{left:0}
+.board-more .ib{--surface:var(--raised);border-radius:50%;background:var(--raised);box-shadow:var(--lift-ctl);color:var(--ink)}
+.board-more .ib:hover{background:var(--raised-hover)}
+.board-more .col-flow{flex-direction:column;gap:var(--s-1)}
+
+html[data-layout="cards"] .tk-item>.tk-more{display:none}
+
+/* a row that crosses stages names its stage (more.css) */
+.row-stage{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
