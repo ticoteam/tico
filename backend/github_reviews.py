@@ -57,7 +57,7 @@ class ReviewerApp(GitHubApp):
             "account_type": account_kind(primary),
         }
 
-    def private_key(self, c, row):
+    def private_key(self, c, row, reseal=True):
         try:
             return Path(self.settings.github_reviewer_private_key_file).read_text()
         except (OSError, UnicodeError):

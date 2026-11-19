@@ -884,7 +884,7 @@ class GitHubApp:
     def _key_ready(self):
         """Whether the at-rest key can be read without a write: always with the local key file; under KMS once the
         vault's key is loaded (CredentialCipher.prepare loads an existing one, outside the write lock)."""
-        if not self.kms():
+        if not self.kms() or self.vault is None:
             return True
         cipher = self.vault.cipher
         if cipher.cached is None:
