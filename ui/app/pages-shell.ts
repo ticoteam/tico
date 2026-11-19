@@ -184,7 +184,12 @@ function riskRoute(r: string): boolean {
 // Risk's nav row carries the Flow dot while a matter in the viewer's Needs you carries a risk (GET /v2/risks says so,
 // `waits`). It reads the risks again only when the tasks in Needs you change, and never while Needs you names none.
 // Here in the shell, not in risk.ts: the row shows on every page, and risk.ts loads with its page (ui/parts.json).
-const RISK_NAV = {wired: false, ids: '', run: 0};
+// Needs you moves many times in a burst of task events, so the read waits until it has been still for RISK_NAV_QUIET_MS
+// (at most RISK_NAV_MAX_MS from the first change), and one read is out at a time: a burst costs one read, not one each.
+const RISK_NAV_QUIET_MS = 1000;
+const RISK_NAV_MAX_MS = 10000;
+const RISK_NAV: {wired: boolean; ids: string; read: string; timer: ReturnType<typeof setTimeout> | null; since: number; busy: boolean} =
+  {wired: false, ids: '', read: '', timer: null, since: 0, busy: false};
 function riskNavWire(): void {
   if (RISK_NAV.wired) return;
   RISK_NAV.wired = true;
@@ -196,11 +201,23 @@ function riskNavSync(): void {
   const ids = [...new Set((S.v2?.needs || []).map(n => String(n.task_id || '')).filter(Boolean))].sort().join(',');
   if (ids === RISK_NAV.ids) return;
   RISK_NAV.ids = ids;
-  const run = ++RISK_NAV.run;
-  if (!ids) { riskNavMark(false); return; }
+  if (!ids) { RISK_NAV.read = ''; riskNavMark(false); return; }
+  const now = Date.now();
+  if (!RISK_NAV.timer) RISK_NAV.since = now;
+  else clearTimeout(RISK_NAV.timer);
+  RISK_NAV.timer = setTimeout(riskNavRead, Math.max(0, Math.min(RISK_NAV_QUIET_MS, RISK_NAV.since + RISK_NAV_MAX_MS - now)));
+}
+function riskNavRead(): void {
+  RISK_NAV.timer = null;
+  const ids = RISK_NAV.ids;
+  if (!ids) return;
+  if (RISK_NAV.busy || ids === RISK_NAV.read) return;   // the read out now ends by looking again
+  RISK_NAV.busy = true;
+  RISK_NAV.read = ids;
   void get<{risks: {waits?: boolean}[]}>('/v2/risks', {fresh: true})
-    .then(r => { if (run === RISK_NAV.run) riskNavMark(r.risks.some(x => x.waits)); })
-    .catch(() => { /* offline, or a server without risks: the mark stays as it is */ });
+    .then(r => { if (ids === RISK_NAV.ids) riskNavMark(r.risks.some(x => x.waits)); })
+    .catch(() => { /* offline, or a server without risks: the mark stays as it is until Needs you changes */ })
+    .finally(() => { RISK_NAV.busy = false; if (RISK_NAV.ids !== RISK_NAV.read && !RISK_NAV.timer) riskNavRead(); });
 }
 function riskNavMark(on: boolean): void {
   const link = document.querySelector<HTMLElement>('#side a[data-nav="risk"]');
