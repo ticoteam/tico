@@ -12,6 +12,7 @@
      "new_share": 0.56,
      "over_budget": null,
      "owner": null,
+     "signups": 402,
      "slug": "organic",
      "status": "no_spend"
     },
@@ -25,6 +26,7 @@
      "new_share": 0.44,
      "over_budget": null,
      "owner": null,
+     "signups": 312,
      "slug": "promotions",
      "verdict": "flat"
     }
@@ -82,6 +84,7 @@
     }
    },
    "health": {
+    "basis": "customers",
     "mismatch": 0,
     "no_segment": 0,
     "reconciled": "not_reconciled",

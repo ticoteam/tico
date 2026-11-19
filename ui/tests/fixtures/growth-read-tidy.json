@@ -13,6 +13,7 @@
      "new_share": 0.51,
      "over_budget": 390.0,
      "owner": "bot:b-ads",
+     "signups": 123,
      "slug": "search-consumer",
      "verdict": "flat"
     },
@@ -25,6 +26,7 @@
      "new_share": 0.26,
      "over_budget": null,
      "owner": "human:ana",
+     "signups": 0,
      "slug": "referrals",
      "status": "no_spend"
     },
@@ -38,6 +40,7 @@
      "new_share": 0.1,
      "over_budget": 140.0,
      "owner": "bot:b-ads",
+     "signups": 123,
      "slug": "search-rental",
      "verdict": "too_few"
     },
@@ -50,6 +53,7 @@
      "new_share": 0.03,
      "over_budget": null,
      "owner": null,
+     "signups": 0,
      "slug": "outbound",
      "status": "no_spend",
      "with_effort": 95.0
@@ -57,6 +61,7 @@
     {
      "new_customers": 14,
      "new_share": 0.1,
+     "signups": 0,
      "slug": "unknown"
     }
    ],
@@ -117,6 +122,7 @@
     }
    },
    "health": {
+    "basis": "customers",
     "mismatch": 0,
     "no_segment": 4,
     "reconciled": "not_reconciled",
@@ -369,6 +375,7 @@
      "new_share": 0.78,
      "over_budget": 140.0,
      "owner": "bot:b-ads",
+     "signups": 123,
      "slug": "search-rental",
      "verdict": "too_few"
     },
@@ -381,6 +388,7 @@
      "new_share": 0.22,
      "over_budget": null,
      "owner": null,
+     "signups": 0,
      "slug": "outbound",
      "status": "no_spend",
      "with_effort": 95.0
@@ -447,6 +455,7 @@
     }
    },
    "health": {
+    "basis": "customers",
     "mismatch": 0,
     "no_segment": 4,
     "reconciled": "not_reconciled",

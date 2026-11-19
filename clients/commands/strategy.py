@@ -949,7 +949,10 @@ def growth_customers_load(api, args):
     "each channel's new_customers, cost, CAC, owner and budget, health, and Growth's KPIs (metrics). Rates say which cohort "
     "they come from.",
     {
-        "scope": _s("all (default), mine (the channels you own), segment:<slug> or channel:<slug>"),
+        "scope": _s(
+            "all (default), mine (the channels you own), segment:<slug> (segment:none: no segment) or channel:<slug> "
+            "(channel:unknown)"
+        ),
         "period": _s("YYYY-MM; default the last full month"),
         "detail": _s("Comma list of campaigns, retention, series"),
     },

@@ -199,8 +199,8 @@ and the Growth Manager push anything; a channel's owner pushes rows and costs fo
 pushed. A source holds customer facts or pushed rows, never both.
 
 **The read** (`GET /api/v2/growth/read`, `tico growth read`, MCP `tico_growth_read`; everyone signed in): `--scope`
-`all`, `mine` (the channels the caller owns; none is an empty list), `segment:<slug>` or `channel:<slug>`, `--period`
-(default the last full month) and `--detail` (`campaigns`, `retention`, `series`). It answers `headline`, `channels`,
+`all`, `mine` (the channels the caller owns; none is an empty list), `segment:<slug>` (`segment:none` is the rows with no segment) or `channel:<slug>`
+(`channel:unknown`), `--period` (default the last full month; the current month reads `partial` with no verdicts) and `--detail` (`campaigns`, `retention`, `series`). It answers `headline`, `channels`,
 `health` and `metrics`:
 
 - **Counts** (signups, new customers) with `vs_3mo` and a `verdict`: `up`, `down` or `flat` (within 10%) against the
@@ -213,7 +213,8 @@ pushed. A source holds customer facts or pushed rows, never both.
   minimum cohort has the verdict `too_few`. `payback_months` is CAC over net revenue per month, an `estimate`.
 - **Channels** each carry their `new_customers`, `new_share`, `owner`, `budget` (`budget_month`) and `over_budget` (cost past the budget, else null).
 - **A retention segment** reads `value` (`kept_d30` and `cost_per_retained`) in place of LTV, LTV:CAC and payback.
-- **Health**: the Unknown share, `no_segment` and `mismatch` (with segments), `reconciled` (`not_reconciled` for now),
+- **Health**: the Unknown share, `no_segment` and `mismatch` (with segments), counted over customers when the company
+  pushes any, else over sign-ups (`basis`: `customers` or `signups`), `reconciled` (`not_reconciled` for now),
   and `stale_sources` (rows whose newest `as_of` is over 45 days old).
 - **Metrics**: Growth's KPIs (a channel's input or guardrail KPI, or the Growth Manager's own), at most 20, each with
   its `channel`, latest `value` up to the month's end, `period_end`, `estimate` and `vs_prior` (the reading before).

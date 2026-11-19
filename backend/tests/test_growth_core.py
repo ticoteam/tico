@@ -134,6 +134,7 @@ def test_a_company_with_no_segments_and_no_paid_spend_reads_no_spend_with_effort
     outbound = next(c for c in out["channels"] if c["slug"] == "outbound")
     assert outbound == {
         "slug": "outbound",
+        "signups": 10,
         "new_customers": 4,
         "name": "Outbound",
         "new_share": 0.33,
@@ -145,8 +146,13 @@ def test_a_company_with_no_segments_and_no_paid_spend_reads_no_spend_with_effort
         "status": "no_spend",
         "with_effort": 210.0,
     }
-    assert out["channels"][-1] == {"slug": "unknown", "new_customers": 2, "new_share": 0.17}
-    assert out["health"] == {"unknown_share": 0.17, "reconciled": "not_reconciled", "stale_sources": []}
+    assert out["channels"][-1] == {"slug": "unknown", "signups": 0, "new_customers": 2, "new_share": 0.17}
+    assert out["health"] == {
+        "basis": "customers",
+        "unknown_share": 0.17,
+        "reconciled": "not_reconciled",
+        "stale_sources": [],
+    }
     assert out["more"] == ["campaigns", "retention", "series"]
     assert len(json.dumps(out)) < 6000  # about 1.5k tokens without detail
 
@@ -294,6 +300,7 @@ def test_each_channel_carries_its_owner_and_budget_and_mine_is_the_callers_chann
     assert mine["headline"]["new_customers"]["value"] == 8 and mine["headline"]["cost"] == {"value": 650.0}
     assert mine["channels"][1] == {
         "slug": "events",
+        "signups": 0,
         "new_customers": 0,
         "name": "Events",
         "new_share": 0.0,
@@ -414,3 +421,44 @@ def test_pushed_costs_win_over_typed_spend_and_a_blank_count_with_none_eligible_
     assert read(api, "period=2026-10")["channels"][0]["with_effort"] == 35.0
     over = push(api, "rows", "hq", lines(header, "customer,2026-10,cards,2026-11-01,4,3,2,,"), expected=422)
     assert over["error"]["rule"] == "over"  # given values still keep x <= eligible <= entered
+
+
+def test_an_unfinished_month_reads_partial_with_no_verdicts(api):
+    post(api, "growth/channels", {"slug": "ads", "name": "Ads"})
+    months = ("2026-08", "2026-09", "2026-10", "2026-11")
+    rows = [f"customer,{m},ads,2026-11-12,{10 if m == '2026-11' else 50}" for m in months]
+    push(api, "rows", "hq", lines("anchor,period,channel,as_of,entered", *rows))
+    push(api, "costs", "ads", lines("period,channel,kind,amount", *(f"{m},ads,money,500" for m in months)))
+    done = read(api, "period=2026-10")
+    assert "partial" not in done and done["headline"]["new_customers"]["verdict"] == "flat"
+    now = read(api, "period=2026-11")  # the 13th: the month is not over
+    assert now["partial"] is True
+    assert now["headline"]["new_customers"]["verdict"] is None and now["headline"]["cac"]["verdict"] is None
+    assert now["channels"][0]["verdict"] is None
+
+
+def test_signup_rows_alone_give_health_and_channels_their_gaps_and_segment_none_reads_the_no_segment_group(api):
+    for slug in ("creators", "viewers"):
+        post(api, "growth/segments", {"slug": slug, "name": slug.title()})
+    header = "anchor,period,segment,channel,as_of,entered"
+    push(
+        api,
+        "rows",
+        "hotmic-db",
+        lines(
+            header,
+            "signup,2026-10,creators,,2026-11-12,40",
+            "signup,2026-10,viewers,,2026-11-12,62",
+            "signup,2026-10,,,2026-11-12,98",
+        ),
+    )
+    october = read(api, "period=2026-10")
+    health = october["health"]
+    assert health["basis"] == "signups" and health["unknown_share"] == 1.0 and health["no_segment"] == 98
+    assert october["channels"] == [{"slug": "unknown", "signups": 200, "new_customers": 0, "new_share": None}]
+    # nothing pushed for November: not supplied, never a measured 0
+    assert read(api, "period=2026-11")["headline"]["signups"] == {"value": None, "status": "not_supplied"}
+    none = read(api, "scope=segment:none&period=2026-10")
+    assert none["scope"] == "segment:none" and none["headline"]["signups"]["value"] == 98
+    push(api, "rows", "hotmic-db", lines(header, "customer,2026-10,viewers,,2026-11-12,10"))
+    assert read(api, "period=2026-10")["health"]["basis"] == "customers"

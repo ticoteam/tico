@@ -16,8 +16,8 @@ const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 declare const S: {me: unknown; emps?: unknown[]};
 declare function gpChatItem(): {kind: string; id: string; name: string} | null;
-interface Fig {value: number | null; status?: string; window?: string; verdict?: string}
-interface Read {period: string; headline: Record<string, Fig>; channels: Record<string, unknown>[]; metrics: {name: string}[]; series: {cac: number | null}[]}
+interface Fig {value: number | null; status?: string; window?: string; verdict?: string | null}
+interface Read {period: string; headline: Record<string, Fig>; channels: Record<string, unknown>[]; metrics: {name: string}[]; series: {cac: number | null}[]; partial?: boolean}
 interface Shape {segments: {slug: string; name: string}[]; reads: Record<string, Read>}
 const uiDir = path.join(__dirname, '..');
 const roster = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'redesign-roster.json'), 'utf8'));
@@ -183,6 +183,20 @@ async function shot(page: Page, name: string) {
       assert.equal(await word(page, 'tr[data-channel="idle"]'), 1, 'CAC says no customers');
       assert.equal(await page.locator('#gr-body .gp-chart svg').count(), 4, 'one month of CAC is a point');
       assert.equal(await sideways(page), false, 'a long KPI name wraps');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // The current month, not over yet: the read has no verdicts and the month says partial once.
+      const edit = (s: Shape) => {
+        const all = s.reads.all!;
+        all.partial = true;
+        for (const f of [...Object.values(all.headline), ...all.channels]) if (f && typeof f === 'object' && 'verdict' in f) f.verdict = null;
+      };
+      const {page, errors} = await open(browser, 'tidy', {edit});
+      await drawn(page);
+      assert.equal(await page.locator('#main .gp-month .gp-word').count(), 1, 'partial beside the month');
+      assert.equal(await page.locator('#gr-body .gr-d').count(), 0, 'no arrows');
       assert.deepEqual(errors, []);
       await page.close();
     }
