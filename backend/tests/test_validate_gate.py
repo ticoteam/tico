@@ -21,7 +21,7 @@ from backend import validate_gate as G
 from backend import waiting_on as W
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.product_engineering_presets import _answers, _team, legacy_pair
+from backend.tests.helpers.product_engineering_presets import EPM, _answers, _team, legacy_pair
 
 ANA, BEN, PM = X.ANA, "human:ben", "bot:pm"
 CHECKED = "Checked on rc.13, phone and desktop width: the account row is 40 px and not clipped."
@@ -44,8 +44,29 @@ def _in_validate(c, title="Drawer account row"):
     return row
 
 
+def _as_document(c, row, file_id, version):
+    """The page is the task's Checked in production document, as attaching it to Validate makes it: a live page at
+    `version`, linked to the task with that role."""
+    now = H.now()
+    c.execute(
+        "INSERT OR IGNORE INTO bot_files (id, bot_id, scope, identity, title, kind, mime, locator, first_activity_at, "
+        "last_activity_at) VALUES (?,?,?,?,?,'file','text/html','tico_blob',?,?)",
+        (file_id, "pm", "bot", file_id, "Checked in production", now, now),
+    )
+    c.execute("UPDATE bot_files SET current_version=max(current_version, ?) WHERE id=?", (version, file_id))
+    c.execute(
+        "INSERT OR IGNORE INTO pages (file_id, cadence, created_at, updated_at) VALUES (?, 'none', ?, ?)",
+        (file_id, now, now),
+    )
+    c.execute(
+        "INSERT OR IGNORE INTO page_links (id, page_id, target, role, created_by, created_at) VALUES (?,?,?,?,?,?)",
+        (H.new_id(), file_id, "task:" + row["id"], "Checked in production", PM, now),
+    )
+
+
 def _attach(c, row, file_id="f-check", version=1):
     rid = c.execute("SELECT id FROM requirements WHERE stage_id=? AND kind='page'", (G.STAGE,)).fetchone()[0]
+    _as_document(c, row, file_id, version)
     c.execute("DELETE FROM requirement_pages WHERE visit_id=? AND requirement_id=?", (row["visit"]["id"], rid))
     c.execute(
         "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
@@ -239,6 +260,31 @@ def test_not_validated_moves_the_task_back_with_the_note_and_files_new_engineeri
 
 
 def test_a_passed_page_with_no_ask_goes_to_done_with_no_person(c):
-    row = _jev(c, _attach(c, _in_validate(c)))
+    """Validate's page is the task's Checked in production document, and still nobody is asked."""
+    row = _in_validate(c)
+    (requirement,) = [r for r in R.for_visit(c, row["visit"]) if r["kind"] == "page"]
+    assert R.document_of(requirement) == "Checked in production"
+    row = _jev(c, _attach(c, row))
     assert E.advance(c, row["id"])["status"] == "done"
     assert not c.execute("SELECT 1 FROM answers WHERE by_id LIKE 'human:%'").fetchone()
+
+
+def test_the_manager_bot_deciding_an_unsure_page_it_cannot_open_answers_it_and_no_other_bot_does(c):
+    """Checked in production is a document now. When Jev is unsure, the pipeline's manager bot decides it, as it does a
+    plain page, even when the page is another bot's own file it may not open: else Validate stays stuck. Another bot
+    is still refused."""
+    row = _in_validate(c)
+    rid = c.execute("SELECT id FROM requirements WHERE stage_id=? AND kind='page'", (G.STAGE,)).fetchone()[0]
+    c.execute("UPDATE pipelines SET manager_id=? WHERE id='product'", ("bot:" + EPM,))
+    row = _jev(c, _attach(c, row), verdict="unsure")
+    standing = _standing(c, row["id"], rid)
+    if not (standing.on and standing.line.startswith(R.DECIDE)):
+        row = _jev(c, _attach(c, row, version=2), verdict="unsure", version=2)
+        standing = _standing(c, row["id"], rid)
+    manager = standing.on
+    assert manager and W.is_bot(manager) and standing.line.startswith(R.DECIDE), standing
+    assert manager != row["owner_id"]
+    with pytest.raises(Exception, match="asked of|unavailable"):
+        A.answer(c, row["id"], rid, "bot:rev-a", "ok", "Read it: it meets the check", seen_version=row["version"])
+    done = A.answer(c, row["id"], rid, manager, "ok", "Read it: it meets the check", seen_version=row["version"])
+    assert done["status"] == "done" or E.advance(c, row["id"])["status"] == "done"

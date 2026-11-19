@@ -895,7 +895,7 @@ def ok_kept(conn: "sqlite3.Connection", task: Row, requirement: Row, page: Row) 
 
 
 def document_of(requirement: Row) -> str | None:
-    """The task document a stage's page requirement approves (`settings.document`: Spec, QA report, Release report or
+    """The task document a stage's page requirement approves (`settings.document`: one of APPROVED, such as Spec or
     Invoice), or None for a page attached by hand. A bot writing that document while the task is in the stage submits
     it (task_pages.submit)."""
     settings: Row = requirement.get("settings") or {}
@@ -1350,7 +1350,7 @@ KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standi
 # - related_input: `bar` (Jev's score a bot needs to be asked, 0 to 1), `most` (bots asked at most), `wait_hours` (how
 #   long the stage waits for their comments before it is met anyway). Defaults in backend/related_input.py.
 # The documents a stage may name for a person to approve (task_documents: the fixed names a stage approves).
-APPROVED = ("Spec", "QA report", "Release report", "Invoice")
+APPROVED = ("Spec", "QA report", "Release report", "Invoice", "Proposal", "Results", "Checked in production")
 SETTINGS: dict[str, tuple[str, ...]] = {
     "owner_done": (),
     "ok": (),

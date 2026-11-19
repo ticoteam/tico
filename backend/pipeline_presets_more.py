@@ -171,10 +171,10 @@ def _experiments(pid: str, name: str, goal: str, prefix: str, factory: str) -> R
         _stage(
             f"{pid}-running",
             "Running",
-            "Put it live and snooze this task to its end date. When it wakes, measure it, tag the result and attach a "
-            "Results page. If it is kept and watched, file a Monitoring task as its follow-up first.",
+            "Put it live and snooze this task to its end date. When it wakes, measure it, tag the result and write "
+            "its Results. If it is kept and watched, file a Monitoring task as its follow-up first.",
             2 * DAY,
-            [{"kind": "page", "line": "Results page", "settings": {"rubric": RESULTS_RUBRIC}}],
+            [{"kind": "page", "line": "Results", "settings": {"document": "Results", "rubric": RESULTS_RUBRIC}}],
         ),
     ]
     for stage in stages:
@@ -290,7 +290,8 @@ PRESETS: dict[str, Row] = {
                         "kind": "page",
                         "line": "Proposal",
                         "settings": {
-                            "rubric": "Says what they get, the price and the terms, and matches what they asked for."
+                            "document": "Proposal",
+                            "rubric": "Says what they get, the price and the terms, and matches what they asked for.",
                         },
                     }
                 ],

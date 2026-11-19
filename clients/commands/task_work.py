@@ -609,8 +609,8 @@ def task_follow(api, args):
     "\"<point>: done|not done, <why>\"); never quote their note back to them. "
     "With document instead, the HTML in text or the .html file at path is that document: a page linked to the task "
     "with that name as its role, the same as tico page publish --task --as. Say what changed in a comment; a document "
-    "takes no note. Spec, QA report (the proof), Release report and Invoice are the names a stage approves; name any "
-    "other document as you like.",
+    "takes no note. Spec, QA report (the proof), Release report, Invoice, Proposal, Results and Checked in production "
+    "are the names a stage approves; name any other document as you like.",
     {
         "id": _s("Task id"),
         "document": {
