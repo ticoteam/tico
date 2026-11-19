@@ -105,7 +105,8 @@ async function open(browser: import('playwright').Browser, {phone = false, big =
       },
     };
     if (startup && location.hash === '#/call/c1?join=1') {
-      const now = performance.timeOrigin;
+      // Date.now(): under the pinned clock, performance.timeOrigin reads -1 this early; the app later reads the pinned time.
+      const now = Date.now();
       localStorage.setItem('tico.call-start', JSON.stringify([['c1', now - 100, now - 50, now, true]]));
     }
   }, startup);
@@ -700,7 +701,7 @@ let browser: import('playwright').Browser | null = null;
     await page.goto('https://tico-ui.test/#/call/c2');
     await page.locator('#call-window.cw-ended .cw-item').nth(2).waitFor();
     assert.equal(seen.joins, 0, 'an ended call is not joined');
-    assert.match(await page.locator('.cw-meta').innerText(), /^(Today|[A-Z][a-z]{2} \d{1,2}), .+ · 24 min$/);
+    assert.match(await page.locator('.cw-meta').innerText(), /^Today, .+ · 24 min$/);
     assert.equal(await page.locator('.cw-bar button, .cw-tabs .cw-tab').count(), 0);
     assert.deepEqual(await page.locator('.cw-summary li').allInnerTexts(), seen.notes.summary);
     await page.locator('.cw-after-turns .cw-turn').nth(1).waitFor();
