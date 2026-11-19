@@ -1054,15 +1054,18 @@ def linked_to(c: sqlite3.Connection, to_id: str, key: str) -> list[str]:
 
 
 def links_from(c: sqlite3.Connection, from_ids: Sequence[str], key: str) -> list[Row]:
-    """The links of one key that start at these entities and still show today, as a card reads them (a link ended today
-    is gone): each with its id, from_entity_id and to_entity_id. Callers show the far end only to a reader who sees it."""
+    """The links of one key that start at these entities and hold today: begun (a link set to start later is not yet
+    current, so replacing today's links leaves it be) and not ended (a link ended today is gone, as a card reads it).
+    Each with its id, from_entity_id and to_entity_id. Callers show the far end only to a reader who sees it."""
     if not from_ids:
         return []
+    today = _today()
     return _rows(
         c,
         "SELECT id, from_entity_id, to_entity_id FROM entity_links WHERE from_entity_id IN (SELECT value FROM json_each(?)) "
-        "AND link_key = ? AND (valid_until_on IS NULL OR valid_until_on > ?) ORDER BY created_at, id",
-        (json.dumps(list(from_ids)), key, _today()),
+        "AND link_key = ? AND (valid_from_on IS NULL OR valid_from_on <= ?) AND (valid_until_on IS NULL OR valid_until_on > ?) "
+        "ORDER BY created_at, id",
+        (json.dumps(list(from_ids)), key, today, today),
     )
 
 
