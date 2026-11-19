@@ -11,6 +11,7 @@ import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import type { AddStep } from './actions';
 import { computersQuery, groupsQuery, templatesQuery } from './queries';
+import './team.css';
 
 const TITLE: Record<AddStep, string> = { pick: 'Add teammate', new: 'New agent', template: 'From a template', person: 'Invite a person' };
 const PICKS: [AddStep, IconName, string][] = [
@@ -22,10 +23,23 @@ const PICKS: [AddStep, IconName, string][] = [
  * Add teammate (mates.js ADD): a new agent, one from a template, or an invite for a person. External agents are one
  * dimmed line. The step is in the address (`?add=`), so Back steps back.
  */
-export function AddTeammate({ step, team }: { step: AddStep; team: string }) {
+export function AddTeammate({
+  step,
+  team,
+  onStep,
+  onClose,
+}: {
+  step: AddStep;
+  team: string;
+  /** Off a team page the step is held by the caller instead of the address. */
+  onStep?: (step: AddStep) => void;
+  onClose?: () => void;
+}) {
   const navigate = useNavigate();
-  const go = useAction('team.addTeammate');
-  const close = () => void navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, add: undefined }) } as never);
+  const addOpen = useAction('team.addTeammate');
+  const to = (s: AddStep) => (onStep ? onStep(s) : void addOpen.run({ step: s }));
+  const close =
+    onClose ?? (() => void navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, add: undefined }) } as never));
   return (
     <Dialog
       open
@@ -34,7 +48,7 @@ export function AddTeammate({ step, team }: { step: AddStep; team: string }) {
       className="add"
       lead={
         step !== 'pick' && (
-          <button type="button" className="ib ib-sm" aria-label="Back" title="Back" onClick={() => void go.run({ step: 'pick' })}>
+          <button type="button" className="ib ib-sm" aria-label="Back" title="Back" onClick={() => to('pick')}>
             <Icon name="chevron" className="flip" />
           </button>
         )
@@ -45,13 +59,13 @@ export function AddTeammate({ step, team }: { step: AddStep; team: string }) {
         <>
           <div className="add-picks">
             {PICKS.map(([s, icon, label]) => (
-              <button key={s} type="button" className="add-pick" onClick={() => void go.run({ step: s })}>
+              <button key={s} type="button" className="add-pick" onClick={() => to(s)}>
                 <Icon name={icon} />
                 <b>{label}</b>
               </button>
             ))}
           </div>
-          <button type="button" className="add-person" onClick={() => void go.run({ step: 'person' })}>
+          <button type="button" className="add-person" onClick={() => to('person')}>
             <Icon name="people" />
             <span>Invite a person</span>
             <Icon name="chevron" />
@@ -67,6 +81,19 @@ export function AddTeammate({ step, team }: { step: AddStep; team: string }) {
       {step === 'template' && <FromTemplate team={team} />}
       {step === 'person' && <Invite team={team} />}
     </Dialog>
+  );
+}
+
+/** Add agent from outside the team pages (Settings' fleet): the same dialog, its step held here. */
+export function AddAgentButton({ team = '' }: { team?: string }) {
+  const [step, setStep] = useState<AddStep | null>(null);
+  return (
+    <>
+      <Button variant="primary" icon="plus" onClick={() => setStep('pick')} data-target="team:add">
+        Add agent
+      </Button>
+      {step && <AddTeammate step={step} team={team} onStep={setStep} onClose={() => setStep(null)} />}
+    </>
   );
 }
 

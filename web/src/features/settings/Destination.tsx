@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import type { DestinationChange, DestinationChoice } from './queries';
@@ -31,11 +31,18 @@ export function DestinationDialog({ change, onAnswer }: { change: DestinationCha
   );
 }
 
-/** `ask` for `withDestination`, and the dialog it opens; draw `dialog` where the editor is. */
-export function useDestination(): { ask: (change: DestinationChange) => Promise<DestinationChoice | null>; dialog: ReactNode } {
+type Ask = (change: DestinationChange) => Promise<DestinationChoice | null>;
+let onScreen: Ask | null = null;
+
+/** For an action's `withDestination`: asks through the editor on screen (its `useDestination`); none is Cancel. */
+export const askDestination: Ask = (change) => (onScreen ? onScreen(change) : Promise.resolve(null));
+
+/** `ask` for `withDestination`, and the dialog it opens; draw `dialog` where the editor is. While it is drawn, an
+    action's `askDestination` asks here too. */
+export function useDestination(): { ask: Ask; dialog: ReactNode } {
   const [change, setChange] = useState<DestinationChange | null>(null);
   const answer = useRef<(choice: DestinationChoice | null) => void>(() => {});
-  const ask = (c: DestinationChange) =>
+  const ask: Ask = (c) =>
     new Promise<DestinationChoice | null>((resolve) => {
       answer.current = (choice) => {
         setChange(null);
@@ -43,5 +50,11 @@ export function useDestination(): { ask: (change: DestinationChange) => Promise<
       };
       setChange(c);
     });
+  useEffect(() => {
+    onScreen = ask;
+    return () => {
+      if (onScreen === ask) onScreen = null;
+    };
+  });
   return { ask, dialog: change ? <DestinationDialog change={change} onAnswer={(choice) => answer.current(choice)} /> : null };
 }

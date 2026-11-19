@@ -108,6 +108,16 @@ describe('Settings › Agents', () => {
     expect(screen.getByTitle('Beta Agent')).toBeTruthy();
   });
 
+  it("one row's model opens the team's model picker, and Add agent opens Add teammate", async () => {
+    serve(() => ({ status: 200, body: {} }));
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    fireEvent.click(await screen.findByRole('button', { name: "Alpha Agent's model" }));
+    expect(await screen.findByRole('radiogroup', { name: 'Model' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add agent' }));
+    expect(await screen.findByRole('button', { name: /New agent/ })).toBeTruthy();
+  });
+
   it('a row reads its model, effort and where it compacts, and its tasks follow it unless set', async () => {
     queryClient.setQueryData(agentsQuery.queryKey, [
       { ...ROWS[0], resolved_model_label: 'Claude Model One', resolved_effort: 'high', compact_at: 400000 } as never,

@@ -231,3 +231,5 @@ html[data-layout="cards"] .cl-list li{grid-template-columns:48px minmax(0,1fr)}
 html[data-layout="cards"] .cl-list li.cl-act{grid-template-columns:minmax(0,1fr) auto}
 html[data-layout="cards"] .fl-tools{flex-wrap:wrap}
 .set-leaves{margin:0;white-space:normal;overflow-wrap:anywhere;font-size:var(--t-sm)}
+.set-link .set-out{display:grid;margin-left:auto;color:var(--faint)}
+.set-link .set-out .ico{width:13px;height:13px;stroke-width:2}

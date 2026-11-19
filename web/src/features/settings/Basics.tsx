@@ -16,6 +16,7 @@ import { toast } from '@/kit/Toast';
 import type { MotionChoice } from '@/motion';
 import { Section } from '@/pagekinds';
 import { THEME_KEY, usePref, type Theme } from '@/prefs';
+import { DesktopRows } from './Desktop';
 import { Foot, Line, SwitchLine, Verb, Word, act } from './parts';
 import {
   accessQuery,
@@ -90,6 +91,7 @@ export function General() {
           </Facts>
         </Section>
       )}
+      <DesktopRows />
     </>
   );
 }

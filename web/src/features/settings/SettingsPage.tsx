@@ -2,8 +2,10 @@ import { useQuery, type UseQueryOptions } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useEffect, useState, type ReactNode } from 'react';
 import { meQuery } from '@/data';
+import { AddAgentButton } from '@/features/team/exports';
 import { Empty } from '@/kit/Empty';
 import { Search } from '@/kit/Field';
+import { Icon } from '@/kit/Icon';
 import { Link as To } from '@/kit/Link';
 import { Section, Settings } from '@/pagekinds';
 import { Agents, Computers, Models } from './Agents';
@@ -53,6 +55,14 @@ function Nav({ current }: { current: SectionId }) {
           <div key={`gap-${i}`} className="set-gap" role="separator" />
         ),
       )}
+      {/* The style guide: a reference page, open to everyone, after the sections. */}
+      <div className="set-gap" role="separator" />
+      <Link to="/settings/style-guide" className="row set-link">
+        <span className="row-title">Style guide</span>
+        <span className="set-out">
+          <Icon name="arrow" />
+        </span>
+      </Link>
     </>
   );
 }
@@ -135,7 +145,12 @@ export function SettingsPage({ section, open, who, list = false }: { section: Se
       className="set-page"
       open={!list || searching}
       nav={<Nav current={section} />}
-      actions={<Search label="Search settings" placeholder="Search settings" value={q} onValueChange={setQ} />}
+      actions={
+        <>
+          {section === 'agents' && !searching && <AddAgentButton />}
+          <Search label="Search settings" placeholder="Search settings" value={q} onValueChange={setQ} />
+        </>
+      }
       state={state}
       onRetry={() => void main.refetch()}
       body={

@@ -17,6 +17,7 @@ import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
 import { AgentList } from './AgentList';
+import { Gateway } from './Gateway';
 import { installCommands, type Command, type ComputerKind, type RunnerConfig } from './install';
 import { Foot, Line, Meter, SwitchLine, Verb, Word, act, usd, useVisible } from './parts';
 import {
@@ -794,10 +795,17 @@ export function Models() {
   const on = v.enabled_providers;
   const shown = v.models.filter((m) => !m.deprecated && (!on || on.includes(m.provider)));
   const providers = [...new Set(shown.map((m) => m.provider))];
-  if (shown.length === 0) return <Empty title="No models yet" text="Connect a subscription or a key under Agents." />;
+  if (shown.length === 0)
+    return (
+      <>
+        <Empty title="No models yet" text="Connect a subscription or a key under Agents." />
+        <Gateway />
+      </>
+    );
   return (
     <>
       <Defaults names={shown.map((m) => ({ value: m.id, label: m.label }))} />
+      <Gateway />
       {providers.map((p) => {
         const rows = shown.filter((m) => m.provider === p);
         return (

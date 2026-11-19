@@ -6,6 +6,7 @@ import { Dialog } from '@/kit/Dialog';
 import { effortLabel } from './model';
 import { WordPick } from './parts';
 import { modelsQuery, type AgentRow } from './queries';
+import './team.css';
 
 /**
  * The model picker (mates.js modelPanel): Harness, Model, Effort, then Apply. Every choice and every default comes from

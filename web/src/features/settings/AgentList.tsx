@@ -3,7 +3,7 @@ import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { run } from '@/actions/run';
 import { directoryQuery, meQuery, type Actor } from '@/data';
-import { agentsQuery, computersQuery } from '@/features/team/exports';
+import { ModelPicker, agentsQuery, computersQuery, type AgentRow } from '@/features/team/exports';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Checkbox } from '@/kit/Checkbox';
@@ -63,6 +63,8 @@ function useMayRestore() {
     admin || (!!mine && (bare(b.owner_id ?? '') === mine || (b.bot_owners ?? []).some((o) => bare(o.id) === mine)));
 }
 
+const agentsWord = (n: number) => `${n} ${n === 1 ? 'agent' : 'agents'}`;
+
 const toggled = (s: Set<string>, id: string, on: boolean) => {
   const next = new Set(s);
   if (on) next.add(id);
@@ -70,9 +72,9 @@ const toggled = (s: Set<string>, id: string, on: boolean) => {
   return next;
 };
 
-// ---------------------------------------------------------------- change the model, for one agent or several
+// ---------------------------------------------------------------- change the model of several agents at once (one agent: team's ModelPicker)
 
-export function ModelDialog({ agents, onClose, onDone }: { agents: string[]; onClose: () => void; onDone?: () => void }) {
+function ModelsDialog({ agents, onClose, onDone }: { agents: string[]; onClose: () => void; onDone?: () => void }) {
   const models = useQuery(modelsQuery);
   const [harness, setHarness] = useState('');
   const [model, setModel] = useState('');
@@ -102,7 +104,7 @@ export function ModelDialog({ agents, onClose, onDone }: { agents: string[]; onC
       open
       onOpenChange={(o) => !o && onClose()}
       title="Change model"
-      description={agents.length > 1 ? `${agents.length} agents` : undefined}
+      description={agentsWord(agents.length)}
       actions={
         <>
           <Button variant="quiet" onClick={onClose}>
@@ -363,7 +365,7 @@ function AgentOpen({ slug, name, listed }: { slug: string; name: string; listed?
       <Facts label={name}>
         <Line label="Model">
           {row?.resolved_model_label ?? row?.resolved_model ?? row?.model ?? 'None'}
-          {manage && <Verb onClick={() => setEditing('model')}>Change</Verb>}
+          {manage && row && <Verb onClick={() => setEditing('model')}>Change</Verb>}
         </Line>
         {listed && (
           <Line label="Owners">
@@ -397,7 +399,7 @@ function AgentOpen({ slug, name, listed }: { slug: string; name: string; listed?
           Open page
         </To>
       </Foot>
-      {editing === 'model' && <ModelDialog agents={[slug]} onClose={() => setEditing(null)} />}
+      {editing === 'model' && row && <ModelPicker agent={row} open onOpenChange={(o) => !o && setEditing(null)} />}
       {editing === 'owners' && listed && <OwnersDialog bot={listed} name={name} listed={owners} onClose={() => setEditing(null)} />}
       {editing === 'access' && access.data && <AccessDialog bot={bot} name={name} now={access.data} onClose={() => setEditing(null)} />}
       {editing === 'stopped' && <StoppedDialog bot={bot} jobs={jobs} onClose={() => setEditing(null)} />}
@@ -421,7 +423,7 @@ const THIRD: Record<By, string> = { team: 'Computer', computer: 'Team', subscrip
 const useRows = () => useQuery(agentsQuery).data;
 const useMachines = () => useQuery(computersQuery).data;
 /** The server also sends where an agent compacts and what its tasks run on. */
-type Row = NonNullable<ReturnType<typeof useRows>>[number] & { compact_at?: number | null; task_model?: TaskModel | null };
+type Row = AgentRow & { compact_at?: number | null; task_model?: TaskModel | null };
 type Machine = NonNullable<ReturnType<typeof useMachines>>[number];
 
 const brief = (m?: string | null) => (m ?? '').replace(/^Claude /, '');
@@ -454,8 +456,6 @@ function dd(text: string, o: { label: string; more?: string; title?: string; cls
     </button>
   );
 }
-
-const agentsWord = (n: number) => `${n} ${n === 1 ? 'agent' : 'agents'}`;
 
 function MoveItems({ machines, rows, onPick }: { machines: Machine[]; rows: Row[]; onPick: (m: Machine) => void }) {
   return (
@@ -798,8 +798,8 @@ export function AgentList({ open }: { open?: string }) {
           })}
         </Section>
       )}
-      {changing && <ModelDialog agents={checked} onClose={() => setChanging(false)} onDone={() => setPicked(new Set())} />}
-      {editing?.what === 'model' && <ModelDialog agents={[editing.slug]} onClose={() => setEditing(null)} />}
+      {changing && <ModelsDialog agents={checked} onClose={() => setChanging(false)} onDone={() => setPicked(new Set())} />}
+      {editing?.what === 'model' && editRow && <ModelPicker agent={editRow} open onOpenChange={(o) => !o && setEditing(null)} />}
       {editing?.what === 'tasks' && <TasksDialog slug={editing.slug} name={editing.name} now={editRow?.task_model} onClose={() => setEditing(null)} />}
       {editing?.what === 'limit' && (
         <LimitDialog slug={editing.slug} name={editing.name} now={limits.data?.bots[editing.slug]?.own_monthly_usd} onClose={() => setEditing(null)} />

@@ -6,5 +6,8 @@ export { PersonPage } from './PersonPage';
 export { TeamPage } from './TeamPage';
 export { ComputerPage, type ComputerPageProps } from './ComputerPage';
 export { BrowserDialog, type BrowserDialogProps } from './BrowserView';
-export { agentsQuery, groupsQuery, computersQuery } from './queries';
+export { agentsQuery, groupsQuery, computersQuery, type AgentRow } from './queries';
+// The model picker for one agent, and Add agent for pages outside the team pages (Settings' fleet).
+export { ModelPicker } from './ModelPicker';
+export { AddAgentButton } from './AddTeammate';
 export { teamSlug, whoHref } from './model';

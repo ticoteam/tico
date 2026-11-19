@@ -803,6 +803,34 @@ export async function withDestination<T>(
   }
 }
 
+// ---------------------------------------------------------------- Tico Gateway: its key and address (owner)
+
+/** GET /api/v2/providers/gateway (backend gateway_connection.view): never the key, only its preview, to the owner. */
+export interface GatewayView {
+  connected: boolean;
+  url: string;
+  default_url: string;
+  /** false: set by the server's environment, not here. */
+  editable: boolean;
+  preview?: string;
+  revision?: number;
+}
+
+export const gatewayQuery = queryOptions({
+  queryKey: ['settings', 'gateway'],
+  queryFn: ({ signal }) => api.get<GatewayView>('/api/v2/providers/gateway', { signal }),
+  ...quiet,
+});
+
+/** A new key (left out to keep the saved one) and the address ('' for Tico's), against the revision on screen. The
+    route keeps no receipt (the key must not be stored), so no idempotency key. `credentials` answers a held move. */
+export async function saveGateway(change: { url: string; key?: string; credentials?: DestinationChoice }): Promise<GatewayView> {
+  const before = queryClient.getQueryData<GatewayView>(gatewayQuery.queryKey);
+  const saved = await api.put<GatewayView>('/api/v2/providers/gateway', { ...change, expected_revision: before?.revision ?? 0 });
+  queryClient.setQueryData(gatewayQuery.queryKey, saved);
+  return saved;
+}
+
 /** What an agent's tasks run on (backend BotTaskChoice); a missing model is the agent's own. */
 export interface TaskModel {
   harness?: string | null;

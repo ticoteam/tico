@@ -1,6 +1,7 @@
 import { defineAction, s } from '@/actions';
 import { run } from '@/actions/run';
 import { meQuery } from '@/data';
+import { desktopApp } from '@/desktop';
 import { agentsQuery } from '@/features/team/exports';
 import { setMotionChoice } from '@/motion';
 import { setThemeChoice, type Theme } from '@/prefs';
@@ -55,7 +56,10 @@ import {
   previewDirectory,
   saveDirectory,
   syncDirectory,
+  saveGateway,
+  withDestination,
 } from './queries';
+import { askDestination } from './Destination';
 import { SECTION_IDS } from './sections';
 
 /* Every change on Settings and Usage. Appearance is this device's own (prefs); the rest goes to the server. Anything
@@ -841,4 +845,67 @@ export const clearQueue = defineAction({
   },
   did: (_input, out) => (out ? `Cleared ${out.cancelled} queued, ${out.kept_people} kept, ${out.still_running} running` : 'Cleared'),
   target: () => ({ kind: 'limit', id: 'default' }),
+});
+
+// ---------------------------------------------------------------- Tico Gateway (owner)
+
+export const gatewaySave = defineAction({
+  id: 'settings.saveGateway',
+  title: 'Change the Tico Gateway key or address',
+  kind: 'change',
+  input: s.object({
+    url: s.string({ max: 300, what: "the Gateway's address; empty for Tico's" }),
+    key: s.optional(s.string({ min: 1, max: 500 })),
+  }),
+  // Sets a secret and where it goes: the owner's own press. A move with a key saved asks first (Keep or Clear).
+  tico: false,
+  run: (_ctx, input) => withDestination((credentials) => saveGateway({ ...input, ...(credentials ? { credentials } : {}) }), askDestination),
+  did: () => 'Saved',
+  target: () => setting('gateway'),
+});
+
+// ---------------------------------------------------------------- the desktop app (this person's own computer)
+
+const onDesktop = () => desktopApp() !== null;
+const theApp = () => {
+  const a = desktopApp();
+  if (!a) throw new Error('Only in the desktop app');
+  return a;
+};
+
+export const restartToUpdate = defineAction({
+  id: 'settings.restartToUpdate',
+  title: 'Restart the desktop app to update',
+  kind: 'change',
+  input: s.object({}),
+  tico: false,
+  can: onDesktop,
+  // The app refuses while a call is live.
+  run: () => theApp().restartToUpdate(),
+  did: () => 'Restarting',
+  target: () => setting('updates'),
+});
+
+export const showLog = defineAction({
+  id: 'settings.showLog',
+  title: "Show the desktop app's log",
+  kind: 'view',
+  input: s.object({}),
+  tico: false,
+  can: onDesktop,
+  run: () => theApp().showLog(),
+  did: () => 'Showed the log',
+  target: () => setting('log'),
+});
+
+export const openAtLogin = defineAction({
+  id: 'settings.openAtLogin',
+  title: 'Open the desktop app at login',
+  kind: 'change',
+  input: s.object({ on: s.boolean() }),
+  tico: false,
+  can: onDesktop,
+  run: (_ctx, { on }) => theApp().openAtLogin(on),
+  did: ({ on }) => (on ? 'Opens at login' : 'Stopped opening at login'),
+  target: () => setting('open-at-login'),
 });
