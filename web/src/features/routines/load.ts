@@ -1,7 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { RULE_TABS } from './actions';
+import { RULE_TABS, RUNS_RANGE } from './actions';
 import type { ListeningSearch } from './ListeningPage';
-import { dueQuery, hooksQuery, matchesQuery, orgRulesQuery, reachQuery, routinesQuery, ruleGroupsQuery, stageRulesQuery, teamsQuery, watchesQuery, watchQuery } from './queries';
+import { allRunsQuery, dueQuery, endpointsQuery, hooksQuery, matchesQuery, orgRulesQuery, reachQuery, routinesQuery, ruleGroupsQuery, RUN_RANGES, RUN_STATUSES, stageRulesQuery, teamsQuery, watchesQuery, watchQuery } from './queries';
 import type { RoutinesSearch } from './RoutinesPage';
 import type { RulesSearch } from './RulesPage';
 
@@ -17,7 +17,13 @@ const PARTY = /^(group|bot|human):\S+$/;
 
 export function validateRoutinesSearch(raw: Record<string, unknown>): RoutinesSearch {
   const out: RoutinesSearch = {};
-  if (raw.tab === 'webhooks') out.tab = 'webhooks';
+  if (raw.tab === 'webhooks' || raw.tab === 'runs') out.tab = raw.tab;
+  if (out.tab === 'runs') {
+    const status = RUN_STATUSES.find((x) => x === raw.status);
+    if (status) out.status = status;
+    const range = RUN_RANGES.find((x) => x === raw.range);
+    if (range) out.range = range;
+  }
   const panel = text(raw.panel);
   if (panel && PANEL.test(panel)) out.panel = panel;
   return out;
@@ -48,7 +54,9 @@ export function validateListeningSearch(raw: Record<string, unknown>): Listening
 const warm = (reads: Promise<unknown>[]) => Promise.all(reads).catch(() => undefined);
 
 export function loadRoutines(qc: QueryClient, search: RoutinesSearch): Promise<unknown> {
-  return warm([search.tab === 'webhooks' ? qc.ensureQueryData(hooksQuery) : qc.ensureQueryData(routinesQuery)]);
+  if (search.tab === 'runs') return warm([qc.ensureInfiniteQueryData(allRunsQuery(search.range ?? RUNS_RANGE, search.status))]);
+  if (search.tab === 'webhooks') return warm([qc.ensureQueryData(hooksQuery), qc.ensureQueryData(endpointsQuery)]);
+  return warm([qc.ensureQueryData(routinesQuery)]);
 }
 
 export function loadRules(qc: QueryClient, search: RulesSearch): Promise<unknown> {

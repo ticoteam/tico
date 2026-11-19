@@ -92,6 +92,25 @@
 /* a kept call's headers and body, as sent (Payload) */
 .rr-pre{margin:var(--s-1) 0 0;font-family:var(--font-code);font-size:var(--t-sm);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)}
 
+/* a row whose title opens an editor in place: the title is a button that covers the row */
+.rr .row-open{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.rr .row-open::before{content:"";position:absolute;inset:0;border-radius:inherit}
+/* the inbox board: one line per rule, question, the LLM and each destination */
+.rr .brow{grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);column-gap:var(--s-3);margin:0 calc(-1 * var(--s-2))}
+.rr .rr-head{display:flex;align-items:center;justify-content:space-between;gap:var(--s-2)}
+.rr .rr-more{display:flex;justify-content:center;padding:var(--s-2) 0 var(--s-3)}
+/* dialogs sit outside .rr: these are unscoped */
+.rr-note{margin:0;color:var(--muted);font-size:var(--t-sm)}
+.rr-list{display:grid;gap:var(--s-2);min-width:0;margin:0;padding:0;border:0}
+.rr-list>legend{display:flex;align-items:center;justify-content:space-between;width:100%;padding:0;margin-bottom:var(--s-1h);color:var(--ink-2);font-size:var(--t-sm);font-weight:var(--w-strong)}
+.rr-line{display:flex;align-items:center;gap:var(--s-2)}
+.rr-line>*{flex:1 1 0;min-width:0}
+.rr-line>.ib,.rr-line>.check{flex:none}
+.rr-secret{display:block;padding:var(--s-2h);border-radius:var(--r-chip);background:var(--well-2);font-family:var(--font-code);font-size:var(--t-sm);overflow-wrap:anywhere;color:var(--ink);user-select:all}
+.rr-dests{display:grid;gap:var(--s-1h);margin:0;padding:0;list-style:none}
+.rr-dests>li{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:var(--s-2)}
+.rr-dest{color:var(--ink)}
+
 /* ---------- a stage's rules in the pipeline editor: a moment, its rules, a rule being written (pages/1-tasks/more.css) ---------- */
 .ps-moments .ph{margin-top:var(--s-2h)}
 .ps-moments .ph-head{height:var(--ctl-sm);display:flex;align-items:center;gap:var(--s-2);margin:0 calc(var(--s-1h) * -1) 0 calc(var(--s-2) * -1);padding:0 0 0 var(--s-2);color:var(--muted)}
@@ -132,6 +151,9 @@
 
   .rr .auto{grid-template-columns:minmax(0,1fr) auto var(--av-sm) 32px;column-gap:var(--s-2h)}
   .rr :is(.auto,.watch,.hook) .row-sub{display:none}
+  .rr .brow{grid-template-columns:minmax(0,1fr)}
+  .rr .brow .row-sub{display:none}
+  .rr-line{flex-wrap:wrap}
   .rr .watch{grid-template-columns:minmax(0,1fr) 64px var(--av-sm) 32px;column-gap:var(--s-2h)}
   .rr .hook{grid-template-columns:minmax(0,1fr) auto 64px 40px;column-gap:var(--s-2h);padding-right:var(--s-2)}
   .rr .hook .ib{display:none}

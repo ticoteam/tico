@@ -3613,6 +3613,31 @@
       }
     },
     {
+      "id": "routines.applyTemplate",
+      "title": "Move an inbox routine onto a template",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "template": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "routine",
+          "template"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "routines.closePanel",
       "title": "Close the panel",
       "kind": "view",
@@ -3707,6 +3732,42 @@
       }
     },
     {
+      "id": "routines.newInbox",
+      "title": "Add an inbox routine from a template",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "inbox": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^(human|person|bot|group):\\S+$",
+            "description": "human:<id>, bot:<id> or group:<id>"
+          },
+          "template": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "inbox",
+          "owner",
+          "template"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "routines.open",
       "title": "Open a routine",
       "kind": "view",
@@ -3785,6 +3846,39 @@
       }
     },
     {
+      "id": "routines.removeBoardItem",
+      "title": "Remove a rule, question or destination from a routine's board",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "part": {
+            "enum": [
+              "rule",
+              "question",
+              "destination"
+            ]
+          },
+          "at": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 500
+          }
+        },
+        "required": [
+          "routine",
+          "part",
+          "at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "routines.restoreVersion",
       "title": "Restore a routine's version, or turn on a proposed one",
       "kind": "change",
@@ -3858,6 +3952,168 @@
       }
     },
     {
+      "id": "routines.saveBoardItem",
+      "title": "Add or change a rule, question, destination or the LLM on a routine's board",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "part": {
+            "enum": [
+              "rule",
+              "question",
+              "destination",
+              "llm"
+            ]
+          },
+          "at": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 500
+          },
+          "when": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "op": {
+                  "enum": [
+                    "is",
+                    "is_not",
+                    "contains",
+                    "matches",
+                    ">=",
+                    "<="
+                  ]
+                },
+                "value": {
+                  "type": "string",
+                  "maxLength": 2000
+                }
+              },
+              "required": [
+                "field",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 20
+          },
+          "match": {
+            "enum": [
+              "all",
+              "any"
+            ]
+          },
+          "then": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "do": {
+                  "enum": [
+                    "archive",
+                    "label",
+                    "star",
+                    "leave_for_you",
+                    "forward",
+                    "draft_reply",
+                    "send_reply",
+                    "unsubscribe",
+                    "create_task",
+                    "wake_bot",
+                    "assign",
+                    "note",
+                    "post_update",
+                    "call_webhook"
+                  ]
+                },
+                "args": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "maxLength": 20000
+                  }
+                }
+              },
+              "required": [
+                "do"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 20
+          },
+          "goTo": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "moveOn": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 8000
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "mode": {
+            "enum": [
+              "sort",
+              "draft",
+              "reply"
+            ]
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 20000
+          },
+          "dests": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "maxItems": 50
+          },
+          "unsure": {
+            "type": "string",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "routine",
+          "part"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "routines.setHeartbeat",
       "title": "Set how often Heartbeat checks",
       "kind": "change",
@@ -3926,6 +4182,33 @@
           },
           "stepOn": {
             "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "routines.showRuns",
+      "title": "Show every run across routines",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "enum": [
+              "failed",
+              "waiting",
+              "running",
+              "done"
+            ]
+          },
+          "range": {
+            "enum": [
+              "5m",
+              "1h",
+              "24h",
+              "7d"
+            ]
           }
         },
         "additionalProperties": false
@@ -8250,6 +8533,83 @@
         },
         "required": [
           "hook"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "webhooks.updateEndpoint",
+      "title": "Change an outgoing webhook",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "url": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 2000,
+            "pattern": "^https?:\\/\\/\\S+$",
+            "description": "an http(s) address"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "maxItems": 200
+          },
+          "allowHttp": {
+            "type": "boolean"
+          },
+          "headers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "value": {
+                  "type": "string",
+                  "maxLength": 1000
+                },
+                "secret": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 10
+          },
+          "credentials": {
+            "enum": [
+              "keep",
+              "clear"
+            ]
+          }
+        },
+        "required": [
+          "endpoint",
+          "name",
+          "url",
+          "events"
         ],
         "additionalProperties": false
       }
