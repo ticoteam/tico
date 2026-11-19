@@ -12,6 +12,7 @@ import time
 from fastapi import Request
 
 from . import routines
+from .api_contract import api_v2, error
 from .mail import live_message_public, visible_addresses
 from . import slack_channels as SC
 from .slack_gateway import permalink
@@ -311,7 +312,20 @@ def install_messaging(app, store, auth):
                 "slack": slack,
             }
 
-    @app.get("/api/v2/messaging/bots/{bot}/slack-thread")
+    @app.get(
+        "/api/v2/messaging/bots/{bot}/slack-thread",
+        **api_v2(
+            "Bots",
+            "getBotSlackThread",
+            "The owner only: one Slack thread in a channel the agent reads, oldest first, up to 100 messages",
+            "SlackThread",
+            parameters={"channel": "The Slack channel id", "thread_ts": "The thread's first message ts"},
+            responses={
+                "403": error("forbidden: not the owner, or the agent does not read this channel"),
+                "404": error("not_found: no such agent, or no such thread"),
+            },
+        ),
+    )
     def messaging_slack_thread(request: Request, bot: str, channel: str = "", thread_ts: str = ""):
         who = request.state.identity
         human_only(who)
@@ -340,7 +354,19 @@ def install_messaging(app, store, auth):
                 "messages": [_slack_message(row, team_url) for row in rows],
             }
 
-    @app.get("/api/v2/messaging/bots/{bot}/slack-digests/{digest_id}")
+    @app.get(
+        "/api/v2/messaging/bots/{bot}/slack-digests/{digest_id}",
+        **api_v2(
+            "Bots",
+            "getBotSlackPass",
+            "The owner only: a Slack pass the agent was given before it read channels through its threads, kept read-only",
+            "SlackPass",
+            responses={
+                "403": error("forbidden: not the owner"),
+                "404": error("not_found: no such agent, or no such pass"),
+            },
+        ),
+    )
     def messaging_slack_digest(request: Request, bot: str, digest_id: str):
         """A Slack pass the gateway wrote before bots read channels through their threads (D9-5): kept, read-only."""
         who = request.state.identity

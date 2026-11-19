@@ -384,3 +384,26 @@ SCHEMAS['BotDreamView'] = obj(
         }
     }
 )
+
+# The Slack messages a bot read (backend/messaging.py `_slack_message`): the owner only, from the channels it reads.
+SCHEMAS["SlackMessage"] = obj(
+    {
+        "event_id": "s",
+        "channel": "s",
+        "thread_ts": "s",
+        "ts": "s",
+        "author": "s",
+        "text": {"type": "string", "description": "Empty for a deleted message"},
+        "deleted": "b",
+        "edited": "b",
+        "state": "s",
+        "reason": "n",
+        "url": {"type": "string", "description": "The message in Slack: its permalink, or Slack's channel redirect"},
+    }
+)
+
+SCHEMAS["SlackThread"] = obj({"channel": "s", "thread_ts": "s", "messages": items(ref("SlackMessage"))})
+
+SCHEMAS["SlackPass"] = obj(
+    {"id": "s", "created_at": "s", "count": "i", "skipped": "i", "messages": items(ref("SlackMessage"))}
+)
