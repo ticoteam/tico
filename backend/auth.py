@@ -8,7 +8,6 @@ import re
 import sqlite3
 import stat
 from dataclasses import dataclass, replace
-from http.cookies import SimpleCookie, CookieError
 
 import yaml
 
@@ -35,12 +34,19 @@ LOGOUT_PATH = "/api/v2/logout"
 
 
 def cookies(headers):
-    jar = SimpleCookie()
-    try:
-        jar.load(headers.get("cookie", ""))
-    except CookieError:
-        return {}
-    return {name: morsel.value for name, morsel in jar.items()}
+    """The request's cookies by name. Read leniently, as browsers send them: one cookie Python's strict parser rejects
+    (another app on the same host, say localhost) must not hide the rest, the sign-in among them. The first of a name
+    wins, as a browser lists the most specific path first."""
+    jar = {}
+    for part in headers.get("cookie", "").split(";"):
+        name, sep, value = part.strip().partition("=")
+        name, value = name.strip(), value.strip()
+        if not sep or not name or name in jar:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] == '"':
+            value = value[1:-1]
+        jar[name] = value
+    return jar
 
 
 TASK_PREFIX_MIN = 8
