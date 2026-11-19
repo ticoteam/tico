@@ -15,8 +15,9 @@ const to = (path: string) => path as LinkProps['to'];
  * the name (aaa-audit-a, Breadcrumb). Then the controls, "⋯" last, then a button for each sheet the frame tucked
  * behind the page.
  */
-export function PageHead({ title, path, crumb, lead, after, actions, more, onRename, sub }: PageHeadProps) {
+export function PageHead({ title, path, crumb, lead, after, actions, more, onRename, sub, size }: PageHeadProps) {
   const sheet = useSheet();
+  const big = size === 'large' ? 't-figure' : undefined;
   const back = crumb?.at(-1);
   const [renaming, setRenaming] = useState(false);
   const trail = crumb && crumb.length > 0 && (
@@ -47,7 +48,7 @@ export function PageHead({ title, path, crumb, lead, after, actions, more, onRen
           trail
         )}
         {onRename && renaming ? (
-          <h1 data-target={`page:${path}`}>
+          <h1 data-target={`page:${path}`} className={big}>
             <EditableTitle
               title={title}
               label="Title"
@@ -61,7 +62,7 @@ export function PageHead({ title, path, crumb, lead, after, actions, more, onRen
           <h1
             data-target={`page:${path}`}
             title={title}
-            className="is-editable"
+            className={big ? `is-editable ${big}` : 'is-editable'}
             tabIndex={0}
             onClick={() => setRenaming(true)}
             onKeyDown={(e) => e.key === 'Enter' && setRenaming(true)}
@@ -69,7 +70,7 @@ export function PageHead({ title, path, crumb, lead, after, actions, more, onRen
             {title}
           </h1>
         ) : (
-          <h1 data-target={`page:${path}`} title={title}>
+          <h1 data-target={`page:${path}`} title={title} className={big}>
             {title}
           </h1>
         )}

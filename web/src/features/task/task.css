@@ -9,13 +9,20 @@
 .tv-pick .ico{width:12px;height:12px;stroke-width:2;color:var(--faint)}
 .tv-pick .av{margin-left:0}
 
-/* the framed body: the tab row, then the open page or Details, then the answer on a phone */
+/* the framed body: the open page or Details, then the answer on a phone */
 .tv-view{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
 
 /* ---------- tab marks: approved, waits on you, not yet (parts-kit.js tab) ---------- */
 .doc-tab .dot{margin-right:calc(var(--s-0) * -1)}
+.tv .doc-tab:has(>.hollow){color:var(--muted)}
 
-.tv-tabs{position:relative}
+/* ---------- Details' Add, at the tab row's end (more.css .tv-ver, .tv-add) ---------- */
+.tv-ver{height:var(--ctl-sm);border:0;background:none;border-radius:var(--r-ctl);display:inline-flex;align-items:center;gap:calc(var(--s-1) - 1px);flex:none;font-size:var(--t-sm);color:var(--muted);white-space:nowrap;
+  padding:0 var(--s-1) 0 var(--s-2);transition:background var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
+.tv-ver .ico{width:14px;height:14px}
+.tv-ver:hover,.tv-ver[aria-expanded="true"]{background:var(--hover);color:var(--ink)}
+.tv-add{padding:0 var(--s-2h) 0 var(--s-1h);gap:var(--s-1);color:var(--ink-2)}
+.tv-add .ico{width:15px;height:15px}
 
 /* ---------- Details: the sections scroll under the tab row ---------- */
 .dt{position:relative;padding:var(--s-2) var(--s-3) var(--s-10) 0}
@@ -40,6 +47,23 @@
 .dt-desc{grid-column:2/-1;min-width:0;line-height:var(--lh)}
 .dt-desc p+p{margin-top:var(--s-2)}
 
+/* a fact edits in place: its value is the button that opens the field (more.css .is-edit) */
+.dt-val{padding:0;border:0;background:none;color:inherit;font-family:inherit;font-size:inherit;text-align:left;cursor:pointer}
+.dt-kv.is-edit:hover{background:none}
+.dt-kv.is-edit .dt-v{display:grid;gap:var(--s-1h);margin:calc(var(--s-1) * -1) 0 0 calc(var(--s-2h) * -1)}
+.dt-in{min-width:0;display:grid;gap:var(--s-1)}
+.dt-in.is-row{display:flex;align-items:center;gap:var(--s-1)}
+.dt-in .f-err{margin:0 0 var(--s-1) var(--s-2h);gap:var(--s-1h)}
+/* a text button inside a row: Clear, Cancel */
+.dt-act{height:24px;flex:none;padding:0 var(--s-2);border:0;border-radius:var(--r-chip);background:none;color:var(--ink);font-family:inherit;font-size:var(--t-sm);font-weight:var(--w-strong);transition:background var(--dur-fast) var(--ease)}
+.dt-act:hover{background:var(--well-2)}
+/* a new line at a section's end: a task's number, a subtask, a link, an ask */
+.dt-line.is-new{grid-template-columns:24px minmax(0,1fr);align-items:center;padding-right:var(--s-1)}
+.dt-line.is-new.is-ask{grid-template-columns:24px minmax(0,1fr) auto;gap:var(--s-1)}
+.dt-line.is-new .dt-mark{height:auto}
+.dt-line.is-new:hover{background:none}
+.dt-line.is-new .field{margin-left:calc(var(--s-2h) * -1);width:calc(100% + var(--s-2h))}
+
 /* rows: a task with its stage, a run, a file, a link */
 .dt .row-sub{display:contents}
 .row-stage{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -62,9 +86,7 @@
 .frame.fv iframe,.frame.fv img,.frame.fv video{background:var(--desk)}
 .frame.fv img,.frame.fv video{flex:1;min-width:0;width:100%;height:100%;object-fit:contain}
 
-/* ---------- the answer card in the task's chat sits over the message box ---------- */
-.chat-2:has(>.tv-answer)>.chat-foot{order:3}
-.chat-2>.tv-answer{order:2;flex:none;padding:0 var(--s-3)}
+/* ---------- the answer card, over the message box in the task's chat ---------- */
 .an-err{margin:var(--s-2) var(--s-1h) 0 0;font-size:var(--t-sm);line-height:var(--lh);color:var(--ink-2);text-wrap:pretty}
 
 /* ---------- a phone: the page is the back card; Details fills it and the answer holds the bottom ---------- */
@@ -74,4 +96,5 @@
   .dt-kv{grid-template-columns:0 104px minmax(0,1fr);min-height:var(--row);padding:var(--s-3) var(--s-2)}
   .dt .task .row-sub{grid-area:pills;display:flex;align-items:center;gap:var(--s-2)}
   .task.has-stage .row-stage{order:-1}
+  .tv-add{display:none}
 }

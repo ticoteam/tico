@@ -82,6 +82,22 @@ export async function loadTask(client: QueryClient, param: string): Promise<Task
   }
 }
 
+/** A link on the task (GET /api/v2/tasks/{tid}/links; not in the schema). Pull requests and sessions have their own sections. */
+export interface TaskLink {
+  id: string;
+  kind: string;
+  url: string;
+  title?: string | null;
+  added_by?: string | null;
+  created_at?: string | null;
+}
+
+export const taskLinksQuery = (id: string) =>
+  queryOptions({
+    queryKey: [...keys.tasks.detail(id), 'links'] as const,
+    queryFn: async ({ signal }) => (await api.get<{ links: TaskLink[] }>(`${taskPath(id)}/links`, { signal })).links,
+  });
+
 /** The task's files, pages first (GET /api/v2/tasks/{tid}/files). */
 export const taskFilesQuery = (id: string) =>
   queryOptions({
@@ -200,7 +216,7 @@ export function moveTask(id: string, to: string, why?: string) {
   return change(id, shown, (idem) => post(`${taskPath(id)}/move`, why ? { to, why } : { to }, idem));
 }
 
-export const assignTask = (id: string, owner: string, setAnyway?: boolean) =>
+export const giveTask = (id: string, owner: string, setAnyway?: boolean) =>
   change(id, { owner_id: owner }, (idem) => post(`${taskPath(id)}/owner`, { owner, ...(setAnyway && { set_anyway: true }) }, idem));
 
 export const markDone = (id: string) => change(id, { status: 'done' }, (idem) => post(`${taskPath(id)}/done`, {}, idem));
@@ -245,4 +261,66 @@ async function sendAnswer(id: string, rid: string, value: 'ok' | 'no', note: str
     { value, ...(note && { note }), ...(page && { page_version: page }), ...(req?.approval?.visit_id && { visit_id: req.approval.visit_id }) },
     idem,
   );
+}
+
+/* What the answer cannot patch in place (a relation named by number, a new subtask, a parent): sent, then the task is
+   read again. */
+const reread = (id: string) => queryClient.invalidateQueries({ queryKey: keys.tasks.detail(id) });
+
+/** A task as a person names it: its number (412, #412) or its id. */
+const named = (other: string) => refOf(other.trim().replace(/^#/, ''));
+
+/** Put the task under `parent` as its subtask. */
+export async function setTaskParent(id: string, parent: string) {
+  const r = await api.post<TaskResult>(`${taskPath(id)}/parent`, { parent: named(parent) });
+  await reread(id);
+  return r;
+}
+
+export type RelationKind = 'related' | 'depends_on' | 'blocks';
+
+/** Relate another task: related, depends_on (it is blocked by the other), or blocks (the other is blocked by it). */
+export async function relateTask(id: string, other: string, kind: RelationKind, remove = false) {
+  const r =
+    kind === 'blocks'
+      ? await api.post<TaskResult>(`${taskPath(named(other))}/relations`, { task: id, kind: 'depends_on', ...(remove && { remove }) })
+      : await api.post<TaskResult>(`${taskPath(id)}/relations`, { task: named(other), kind, ...(remove && { remove }) });
+  await reread(id);
+  return r;
+}
+
+/** A new task filed under this one, given to this one's owner until someone gives it on. */
+export async function addSubtask(id: string, title: string, owner?: string | null) {
+  const r = await api.post<TaskResult>('/api/v2/tasks', { title, parent: id, ...(owner && { owner }) });
+  await reread(id);
+  return r;
+}
+
+/** Ask a person or an agent for an OK, as a requirement of the stage. */
+export async function askSomeone(id: string, to: string, line: string) {
+  const version = queryClient.getQueryData<TaskData>(keys.tasks.detail(id))?.version;
+  const r = await api.post<TaskResult>(`${taskPath(id)}/asks`, { to, line, kind: 'ok', ...(version != null && { version }) });
+  queryClient.setQueryData(keys.tasks.detail(id), settled(id)(queryClient.getQueryData(keys.tasks.detail(id)), r));
+  return r;
+}
+
+/** Add a link; it shows at once and the server's list replaces it. */
+export function linkTask(id: string, url: string, title?: string) {
+  const key = taskLinksQuery(id).queryKey;
+  const shown: TaskLink = { id: `pending:${url}`, kind: 'link', url, title: title ?? null, created_at: new Date().toISOString() };
+  return write<{ links: TaskLink[] }>({
+    key,
+    optimistic: (cur: TaskLink[] | undefined) => [...(cur ?? []), shown],
+    send: (idem) => api.post<{ links: TaskLink[] }>(`${taskPath(id)}/links`, { url, ...(title && { title }) }, { idempotencyKey: idem }),
+    settle: (_cur, answer) => answer.links,
+  });
+}
+
+export function dropLink(id: string, link: string) {
+  return write<{ links: TaskLink[] }>({
+    key: taskLinksQuery(id).queryKey,
+    optimistic: (cur: TaskLink[] | undefined) => cur?.filter((l) => l.id !== link),
+    send: (idem) => api.post<{ links: TaskLink[] }>(`${taskPath(id)}/links`, { remove: link }, { idempotencyKey: idem }),
+    settle: (_cur, answer) => answer.links,
+  });
 }

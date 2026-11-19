@@ -1,19 +1,20 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
+import { run } from '@/actions';
 import { ApiError } from '@/api/client';
 import { Conversation } from '@/conversation';
 import { useActor } from '@/data';
 import { Icon } from '@/kit/Icon';
-import { LatePill } from '@/kit/Pill';
+import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
-import { Document, type PageState } from '@/pagekinds';
+import { Document, type PageState, type PageTab } from '@/pagekinds';
 import { Decision } from './Answer';
-import { Details } from './Details';
+import { AddMenu, Details, type Adding } from './Details';
 import { DocFrame, FileView } from './FileView';
-import { FlowSteps, MoreMenu, OwnerPick, StagePick } from './Head';
-import { defaultTab, DETAILS, tabAddress, tabsOf, type TaskTab } from './model';
-import { Face, FlowMark, Go } from './parts';
+import { FlowSteps, MoreMenu, WhereLine } from './Head';
+import { defaultTab, DETAILS, reasonOf, tabAddress, tabsOf, type TaskTab } from './model';
+import { Face, FlowMark } from './parts';
 import { taskDetailQuery, taskRefQuery, type TaskData } from './queries';
 import './task.css';
 
@@ -22,7 +23,7 @@ export interface TaskPageProps {
   task: string;
   /** The address's pipeline (`/tasks/<pipeline>/<task>`); Flow has none. */
   pipeline?: string;
-  /** The open tab's slug; none opens the page that waits on the person. */
+  /** The open tab's slug; none opens the page that waits on the person, and the address then names it. */
   tab?: string;
   /** A file from Details, open in the page sheet. */
   file?: string;
@@ -69,20 +70,47 @@ export function TaskPage({ task, pipeline, tab, file, flow = false }: TaskPagePr
   return <TaskView key={t.id} t={t} tab={tab} file={file} flow={flow} />;
 }
 
+/** A tab's mark (parts-kit.js tab): approved, waits on you, not yet. */
+function markOf(x: TaskTab) {
+  if (x.mark === 'ok') return <Icon name="check" label="Approved" />;
+  if (x.mark === 'ask') return <FlowMark size={10} />;
+  if (x.mark === 'none') return <i className="hollow" />;
+  return undefined;
+}
+
 function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: string; flow: boolean }) {
+  const navigate = useNavigate();
   const tabs = tabsOf(t);
-  // With no tab in the address, the page it opened on stays open once it is answered.
+  const known = !!tab && tabs.some((x) => x.slug === tab);
+  // With no tab in the address, the page that waits on the person opens, and the address names it: the tab row reads
+  // the address, and an answer that changes which page waits does not move the person off the page they read.
   const [opened] = useState(() => defaultTab(tabs));
-  const on = tab && tabs.some((x) => x.slug === tab) ? tab : tabs.some((x) => x.slug === opened) ? opened : defaultTab(tabs);
+  const on = known ? (tab as string) : opened;
+  useEffect(() => {
+    if (known) return;
+    const a = tabAddress(t, opened, flow);
+    void navigate({ to: a.to as never, search: a.search as never, replace: true });
+  }, [known, opened, flow, t, navigate]);
+  const [adding, setAdding] = useState<Adding | null>(null);
+
   const current = tabs.find((x) => x.slug === on);
-  const address = tabAddress(t, tab ? on : undefined, flow);
+  const address = tabAddress(t, on, flow);
   const details = on === DETAILS;
+  const rename = async (title: string) => {
+    const r = await run('task.rename', { task: t.id, title }, { via: 'click' });
+    if (!r.ok) toast({ text: reasonOf(r.error), kind: 'failed' });
+  };
+
+  const pageTabs: PageTab[] = tabs.map((x) => {
+    const a = tabAddress(t, x.slug, flow);
+    return { label: x.label, to: a.to, ...(flow && { search: { tab: x.slug } }), mark: markOf(x), target: `task-tab:${x.slug}` };
+  });
 
   const body =
     file && details ? (
       <FileView t={t} file={file} flow={flow} />
     ) : details ? (
-      <Details t={t} flow={flow} />
+      <Details t={t} flow={flow} adding={adding} onAdding={setAdding} />
     ) : current?.doc ? (
       <DocFrame task={t.id} doc={current.doc} />
     ) : null;
@@ -93,49 +121,20 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       title={t.title}
       path={address.to}
       crumb={flow ? [{ label: 'Flow', to: '/flow' }] : [{ label: t.pipeline?.name ?? 'Tasks', to: `/tasks/${encodeURIComponent(t.pipeline_id ?? '')}` }]}
-      after={t.late ? <LatePill /> : undefined}
-      actions={
-        <>
-          <StagePick t={t} />
-          <OwnerPick t={t} />
-          {flow && <FlowSteps t={t} />}
-        </>
-      }
-      more={<MoreMenu t={t} />}
+      sub={<WhereLine t={t} />}
+      onRename={(title) => void rename(title)}
+      actions={flow ? <FlowSteps t={t} /> : undefined}
+      more={<MoreMenu t={t} flow={flow} />}
+      tabs={pageTabs}
+      tabsAfter={details && !file ? <AddMenu onAdding={setAdding} /> : undefined}
       framed
       body={
         <div className="tv-view">
-          <TaskTabs t={t} tabs={tabs} on={on} flow={flow} />
           {body}
           <Decision t={t} flow={flow} dock />
         </div>
       }
     />
-  );
-}
-
-/** The tab row (parts-kit.js tab): each of the stage's pages with its mark, then Details. Links: the address decides. */
-function TaskTabs({ t, tabs, on, flow }: { t: TaskData; tabs: TaskTab[]; on: string; flow: boolean }) {
-  return (
-    <div className="tv-tabs">
-      <nav className="docs" aria-label={`${t.title} pages`}>
-        {tabs.map((x) => {
-          const a = tabAddress(t, x.slug, flow);
-          return (
-            <Go
-              key={x.slug}
-              to={a.to}
-              search={a.search}
-              className={['doc-tab', x.mark === 'none' && 'is-none', x.slug === on && 'is-on'].filter(Boolean).join(' ')}
-              aria-current={x.slug === on ? 'page' : undefined}
-            >
-              {x.mark === 'ok' ? <Icon name="check" label="Approved" /> : x.mark === 'ask' ? <FlowMark size={10} /> : x.mark === 'none' ? <i className="hollow" /> : null}
-              <span>{x.label}</span>
-            </Go>
-          );
-        })}
-      </nav>
-    </div>
   );
 }
 
@@ -146,8 +145,8 @@ export interface TaskChatProps {
 }
 
 /**
- * The task's chat, for the second chat sheet of the 'task' arrangement: its owner's face and name, the conversation,
- * and the answer card over the message box. The root wraps it in the chat sheet.
+ * The task's chat, for the second chat sheet of the 'task' arrangement: its owner's face and name, then the
+ * conversation with the answer card over its message box. The root wraps it in the chat sheet.
  */
 export function TaskChat({ task, flow = false }: TaskChatProps) {
   const { t } = useTask(task);
@@ -161,8 +160,11 @@ export function TaskChat({ task, flow = false }: TaskChatProps) {
         <b>{name}</b>
         <span className="grow" />
       </header>
-      {t.conversation_id && <Conversation id={t.conversation_id} variant="task" title={name} actor={t.owner_id ?? undefined} />}
-      <Decision t={t} flow={flow} />
+      {t.conversation_id ? (
+        <Conversation id={t.conversation_id} variant="task" title={name} actor={t.owner_id ?? undefined} foot={<Decision t={t} flow={flow} />} />
+      ) : (
+        <Decision t={t} flow={flow} />
+      )}
     </>
   );
 }

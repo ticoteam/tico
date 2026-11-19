@@ -62,11 +62,35 @@ export function tabAddress(t: Pick<TaskData, 'number' | 'id' | 'pipeline_id'>, t
   return { to: tab ? `${base}/${tab}` : base, search: {} };
 }
 
-/** A refusal's reason, as the action layer carries it ("code: reason"). */
+/** A refusal's reason, as the action layer carries it ("code: reason", then what is missing a line each). */
 export function reasonOf(error: string | undefined): string {
   if (!error) return 'Not saved';
   if (error === 'not_allowed') return 'You can’t do that on this task';
   if (error.startsWith('network')) return 'Needs a connection';
-  const i = error.indexOf(': ');
-  return (i >= 0 && error.slice(i + 2).trim()) || 'Not saved';
+  const head = error.split('\n')[0] ?? '';
+  const i = head.indexOf(': ');
+  return (i >= 0 && head.slice(i + 2).trim()) || 'Not saved';
+}
+
+export interface Refusal {
+  code: string;
+  reason: string;
+  /** What the stage still needs, one line each ("QA report: not approved"). */
+  missing: string[];
+}
+
+export function refusalOf(error: string | undefined): Refusal {
+  const [head = '', ...rest] = (error ?? '').split('\n');
+  const i = head.indexOf(': ');
+  return {
+    code: i >= 0 ? head.slice(0, i) : head,
+    reason: reasonOf(error),
+    missing: rest.filter((l) => l.startsWith('- ')).map((l) => l.slice(2)),
+  };
+}
+
+/** The stages before the one it is in: where Move back can take it. */
+export function earlierStages<S extends { id: string }>(stages: readonly S[], at: string | null | undefined): S[] {
+  const i = stages.findIndex((s) => s.id === at);
+  return i > 0 ? stages.slice(0, i) : [];
 }

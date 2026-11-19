@@ -1,21 +1,38 @@
 import { useQuery } from '@tanstack/react-query';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { run } from '@/actions';
 import type { TaskRequirement } from '@/api/schema';
 import { Ago } from '@/kit/Ago';
+import { DatePick } from '@/kit/DatePick';
 import { DateText } from '@/kit/DateText';
 import { Icon } from '@/kit/Icon';
+import { IconButton } from '@/kit/IconButton';
+import { ContextMenu, Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { LatePill, Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { Section as Group } from '@/kit/SectionHead';
 import { PageBody, Section } from '@/pagekinds';
-import { DETAILS, tabAddress } from './model';
+import { ActorItems, OwnerMenu, tagsOf } from './Head';
+import { DETAILS, reasonOf, tabAddress } from './model';
 import { Face, Mark, NameOf, Go } from './parts';
-import { taskFilesQuery, type TaskData } from './queries';
+import { taskFilesQuery, taskLinksQuery, type TaskData } from './queries';
 
 /* Details (more.js detailsBody): named sections in a fixed order, from what it is judged by, to the work, to the
-   record. A section with nothing in it is not drawn; what is finished folds into one line; the record starts folded. */
+   record. A section with nothing in it is not drawn; what is finished folds into one line; the record starts folded.
+   Each fact edits in place and saves at once; Add (and a section's quiet +) opens a new line in its section. */
+
+/** What a new line is being written for: the Add menu's choices. */
+export type Adding = 'subtask' | 'depends_on' | 'blocks' | 'related' | 'ask' | 'link';
 
 const taskHref = (n: number | null | undefined, id: string) => `/task/${n ?? id}`;
+const day = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const domainOf = (url: string) => {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+};
 
 interface Linked {
   id: string;
@@ -50,6 +67,108 @@ function Kv({ k, children, target }: { k: string; children: ReactNode; target?: 
   );
 }
 
+/** A field written in place: Enter saves, Escape puts it back. A refusal reads under it and the words stay. */
+function Inline({ label, initial = '', placeholder, onSave, onEnd }: { label: string; initial?: string; placeholder?: string; onSave: (value: string) => Promise<string | null>; onEnd: () => void }) {
+  const [value, setValue] = useState(initial);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    if (busy) return;
+    if (!value.trim() && !initial) return onEnd();
+    setBusy(true);
+    const refused = await onSave(value);
+    setBusy(false);
+    if (refused) setError(refused);
+    else onEnd();
+  };
+  return (
+    <span className="dt-in">
+      <label className={error ? 'field is-wide is-error' : 'field is-wide'}>
+        <input
+          type="text"
+          aria-label={label}
+          placeholder={placeholder}
+          value={value}
+          disabled={busy}
+          autoFocus
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void save();
+            else if (e.key === 'Escape') onEnd();
+          }}
+        />
+      </label>
+      {error && (
+        <span className="f-err" role="alert">
+          <Icon name="alert" />
+          <span>{error}</span>
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Runs a change on the task; the refusal's reason, or null once it is saved. */
+async function saved(id: string, input: object): Promise<string | null> {
+  const r = await run(id, input, { via: 'click' });
+  return r.ok ? null : reasonOf(r.error);
+}
+
+/** A fact that edits in place: its value is the button that opens the field. */
+function EditKv({ k, target, value, edit }: { k: string; target?: string; value: ReactNode; edit: (end: () => void) => ReactNode }) {
+  const [on, setOn] = useState(false);
+  if (on)
+    return (
+      <div className="dt-kv is-edit" data-target={target}>
+        <span className="dt-k">{k}</span>
+        <div className="dt-v">{edit(() => setOn(false))}</div>
+      </div>
+    );
+  return (
+    <div className="dt-kv" data-target={target}>
+      <span className="dt-k">{k}</span>
+      <button type="button" className="dt-v dt-val" onClick={() => setOn(true)}>
+        {value}
+      </button>
+    </div>
+  );
+}
+
+/** A new line at the end of its section (more.js "is-new"). */
+function NewLine({ children }: { children: ReactNode }) {
+  return (
+    <div className="dt-line is-new">
+      <span className="dt-mark" />
+      {children}
+    </div>
+  );
+}
+
+/** Ask someone: what they are asked to OK, and who. */
+function AskLine({ t, onEnd }: { t: TaskData; onEnd: () => void }) {
+  const [to, setTo] = useState<string | null>(null);
+  return (
+    <div className="dt-line is-new is-ask">
+      <span className="dt-mark" />
+      <Inline
+        label="What to OK"
+        placeholder="What to OK"
+        onSave={(line) => (to ? saved('task.ask', { task: t.id, to, line }) : Promise.resolve('Pick who'))}
+        onEnd={onEnd}
+      />
+      <Menu
+        trigger={
+          <button className="tv-pick" type="button" aria-label={to ? 'Who is asked' : 'Pick who'}>
+            {to ? <Face id={to} decorative /> : <Icon name="people" />}
+          </button>
+        }
+      >
+        <ActorItems current={to} onPick={setTo} />
+      </Menu>
+    </div>
+  );
+}
+
 function Requirement({ r }: { r: TaskRequirement }) {
   return (
     <div className="dt-line">
@@ -60,21 +179,33 @@ function Requirement({ r }: { r: TaskRequirement }) {
   );
 }
 
-function Tasks({ name, rows }: { name: string; rows: Linked[] }) {
-  if (!rows.length) return null;
+const plus = (label: string, onClick: () => void) => <IconButton icon="plus" label={label} size="sm" quiet onClick={onClick} />;
+
+function Tasks({ name, rows, adding, onAdd, children }: { name: string; rows: Linked[]; adding: boolean; onAdd: () => void; children: ReactNode }) {
+  if (!rows.length && !adding) return null;
   return (
-    <Section name={name} count={rows.length}>
+    <Section name={name} count={rows.length || undefined} actions={plus('Add a task', onAdd)} open={adding || undefined}>
       {rows.map((t) => (
         <TaskLine key={t.id} t={t} />
       ))}
+      {adding && children}
     </Section>
   );
 }
 
 const paragraphs = (text: string) => text.split(/\n\s*\n/).filter((p) => p.trim());
 
-export function Details({ t, flow }: { t: TaskData; flow: boolean }) {
+export interface DetailsProps {
+  t: TaskData;
+  flow: boolean;
+  /** The new line open now, from Add or a section's +. */
+  adding?: Adding | null;
+  onAdding?: (what: Adding | null) => void;
+}
+
+export function Details({ t, flow, adding = null, onAdding = () => undefined }: DetailsProps) {
   const files = useQuery(taskFilesQuery(t.id));
+  const links = useQuery(taskLinksQuery(t.id));
   const criteria = t.acceptance_criteria ?? [];
   const leave = t.to_leave ?? [];
   const left = leave.filter((r) => !r.met);
@@ -87,9 +218,21 @@ export function Details({ t, flow }: { t: TaskData; flow: boolean }) {
     .map((x) => ({ id: x.id, title: x.title, number: x.number, owner: x.owner_id, stage: x.stage, done: x.status !== 'open' }));
   const code = (t.inputs ?? []).filter((x) => x.kind === 'pr');
   const shown = (files.data ?? []).filter((f) => !f.archived);
+  const web = (links.data ?? []).filter((l) => l.kind !== 'pr' && l.kind !== 'session');
   const details = tabAddress(t, DETAILS, flow);
   const fileSearch = (id: string) => (flow ? { tab: DETAILS, file: id } : { file: id });
   const request = t.request?.text || t.body || '';
+  const end = () => onAdding(null);
+  // Links starts folded, with the record; a link being added opens it, and it stays open to show the new row.
+  const [linksOpen, setLinksOpen] = useState(false);
+  if (adding === 'link' && !linksOpen) setLinksOpen(true);
+
+  /** A task named by its number, for Blocked by, Blocks and Related. */
+  const relating = (kind: 'depends_on' | 'blocks' | 'related') => (
+    <NewLine>
+      <Inline label="Task number" placeholder="Task number" onSave={(other) => saved('task.relate', { task: t.id, other, kind })} onEnd={end} />
+    </NewLine>
+  );
 
   return (
     <PageBody className="dt">
@@ -105,17 +248,25 @@ export function Details({ t, flow }: { t: TaskData; flow: boolean }) {
       )}
 
       <Section name="Now">
-        <Kv k="Has it" target={`task-owner-line:${t.id}`}>
-          <Face id={t.owner_id} />
-          <span>
-            <NameOf id={t.owner_id} />
-          </span>
-          {t.stage_since && t.stage && (
-            <small>
-              <Ago at={t.stage_since} /> in {t.stage.name}
-            </small>
-          )}
-        </Kv>
+        <div className="dt-kv" data-target={`task-owner-line:${t.id}`}>
+          <span className="dt-k">Has it</span>
+          <OwnerMenu
+            t={t}
+            trigger={
+              <button type="button" className="dt-v dt-val">
+                <Face id={t.owner_id} />
+                <span>
+                  <NameOf id={t.owner_id} />
+                </span>
+                {t.stage_since && t.stage && (
+                  <small>
+                    <Ago at={t.stage_since} /> in {t.stage.name}
+                  </small>
+                )}
+              </button>
+            }
+          />
+        </div>
         {t.turn?.who && t.turn.who !== t.owner_id && (
           <Kv k="Waiting on">
             <Face id={t.turn.who} />
@@ -126,18 +277,48 @@ export function Details({ t, flow }: { t: TaskData; flow: boolean }) {
           </Kv>
         )}
         {t.due_at && (
-          <Kv k="Due" target={`task-due:${t.id}`}>
-            <DateText at={t.due_at} />
-            {t.late && <LatePill />}
-          </Kv>
+          <EditKv
+            k="Due"
+            target={`task-due:${t.id}`}
+            value={
+              <>
+                <DateText at={t.due_at} />
+                {t.late && <LatePill />}
+              </>
+            }
+            edit={(done) => (
+              <span className="dt-in is-row">
+                <DatePick
+                  label="Due"
+                  labelHidden
+                  withTime={false}
+                  value={new Date(t.due_at as string)}
+                  onValueChange={(d) => void saved('task.setDue', { task: t.id, due: day(d) }).then(done)}
+                />
+                <button type="button" className="dt-act" onClick={() => void saved('task.setDue', { task: t.id, due: null }).then(done)}>
+                  Clear
+                </button>
+                <button type="button" className="dt-act" onClick={done}>
+                  Cancel
+                </button>
+              </span>
+            )}
+          />
         )}
       </Section>
 
-      {leave.length > 0 && (
-        <Section name={`To leave ${t.stage?.name ?? 'this stage'}`} count={leave.length}>
+      {(leave.length > 0 || adding === 'ask') && (
+        <Section
+          name={`To leave ${t.stage?.name ?? 'this stage'}`}
+          count={leave.length || undefined}
+          actions={plus('Ask someone', () => onAdding('ask'))}
+          open={adding === 'ask' || undefined}
+          target={`task-leave:${t.id}`}
+        >
           {left.map((r) => (
             <Requirement key={r.requirement_id} r={r} />
           ))}
+          {adding === 'ask' && <AskLine t={t} onEnd={end} />}
           {met.length > 0 && (
             <Group level={2} name="Met" count={met.length} defaultOpen={false}>
               {met.map((r) => (
@@ -151,15 +332,39 @@ export function Details({ t, flow }: { t: TaskData; flow: boolean }) {
       <Tasks
         name="Blocked by"
         rows={(t.blocked_by ?? []).filter((b) => b.id).map((b) => ({ id: b.id as string, title: b.title || b.label || `#${b.number}`, number: b.number }))}
-      />
-      <Tasks name="Blocks" rows={(t.blocks ?? []).map((b) => ({ id: b.id, title: b.label || `#${b.number}`, number: b.number }))} />
-      <Tasks name="Related" rows={related} />
+        adding={adding === 'depends_on'}
+        onAdd={() => onAdding('depends_on')}
+      >
+        {relating('depends_on')}
+      </Tasks>
+      <Tasks
+        name="Blocks"
+        rows={(t.blocks ?? []).map((b) => ({ id: b.id, title: b.label || `#${b.number}`, number: b.number }))}
+        adding={adding === 'blocks'}
+        onAdd={() => onAdding('blocks')}
+      >
+        {relating('blocks')}
+      </Tasks>
+      <Tasks name="Related" rows={related} adding={adding === 'related'} onAdd={() => onAdding('related')}>
+        {relating('related')}
+      </Tasks>
 
-      {kids.length > 0 && (
-        <Section name="Subtasks" count={kids.length}>
+      {(kids.length > 0 || adding === 'subtask') && (
+        <Section
+          name="Subtasks"
+          count={kids.length || undefined}
+          actions={plus('New subtask', () => onAdding('subtask'))}
+          open={adding === 'subtask' || undefined}
+          target={`task-subtasks:${t.id}`}
+        >
           {open.map((k) => (
             <TaskLine key={k.id} t={k} />
           ))}
+          {adding === 'subtask' && (
+            <NewLine>
+              <Inline label="Subtask" placeholder="What needs doing" onSave={(title) => saved('task.subtask', { task: t.id, title, ...(t.owner_id && { owner: t.owner_id }) })} onEnd={end} />
+            </NewLine>
+          )}
           {fin.length > 0 && (
             <Group level={2} name="Done" count={fin.length} defaultOpen={false}>
               {fin.map((k) => (
@@ -212,13 +417,20 @@ export function Details({ t, flow }: { t: TaskData; flow: boolean }) {
             by <NameOf id={t.requester_id} />
           </small>
         </Kv>
-        {t.labels.length > 0 && (
-          <Kv k="Tags" target={`task-tags:${t.id}`}>
-            {t.labels.map((l) => (
-              <Pill key={l}>{l}</Pill>
-            ))}
-          </Kv>
-        )}
+        <EditKv
+          k="Part of"
+          target={`task-parent:${t.id}`}
+          value={t.parent ? <span>{t.parent.title}</span> : <small>None</small>}
+          edit={(done) => <Inline label="Part of" placeholder="Task number" onSave={(parent) => saved('task.setParent', { task: t.id, parent })} onEnd={done} />}
+        />
+        <EditKv
+          k="Tags"
+          target={`task-tags:${t.id}`}
+          value={t.labels.length ? t.labels.map((l) => <Pill key={l}>{l}</Pill>) : <small>None</small>}
+          edit={(done) => (
+            <Inline label="Tags" initial={t.labels.join(', ')} placeholder="bug, checkout" onSave={(text) => saved('task.tag', { task: t.id, labels: tagsOf(text) })} onEnd={done} />
+          )}
+        />
         {t.public_title && <Kv k="Public title">{t.public_title}</Kv>}
         {t.public_summary && <Kv k="Public summary">{t.public_summary}</Kv>}
         {request && (
@@ -232,6 +444,28 @@ export function Details({ t, flow }: { t: TaskData; flow: boolean }) {
           </div>
         )}
       </Section>
+
+      {(web.length > 0 || adding === 'link') && (
+        <Section name="Links" count={web.length || undefined} actions={plus('Add a link', () => onAdding('link'))} open={linksOpen} onOpenChange={setLinksOpen} target={`task-links:${t.id}`}>
+          {web.map((l) => (
+            <ContextMenu key={l.id} items={<MenuItem label="Remove" icon="close" onSelect={() => void run('task.removeLink', { task: t.id, link: l.id }, { via: 'click' })} />}>
+              <a className="row dt-link" href={l.url} target="_blank" rel="noreferrer" title={l.title || l.url}>
+                <span className="row-mark">
+                  <Icon name="link" />
+                </span>
+                <span className="row-title">{l.title || l.url}</span>
+                <span className="row-stage">{domainOf(l.url)}</span>
+                {l.created_at ? <Ago at={l.created_at} className="row-age" /> : <span className="row-age" />}
+              </a>
+            </ContextMenu>
+          ))}
+          {adding === 'link' && (
+            <NewLine>
+              <Inline label="Link" placeholder="https://" onSave={(url) => saved('task.link', { task: t.id, url: url.trim() })} onEnd={end} />
+            </NewLine>
+          )}
+        </Section>
+      )}
 
       {t.runs.length > 0 && (
         <Section name="Sessions" count={t.runs.length} defaultOpen={false}>
@@ -249,5 +483,28 @@ export function Details({ t, flow }: { t: TaskData; flow: boolean }) {
         </Section>
       )}
     </PageBody>
+  );
+}
+
+/** Details' one control of its own (more.js addBtn): what a task can be given, so a section not drawn yet has a way in. */
+export function AddMenu({ onAdding }: { onAdding: (what: Adding) => void }) {
+  return (
+    <Menu
+      trigger={
+        <button className="tv-ver tv-add" type="button">
+          <Icon name="plus" />
+          Add
+        </button>
+      }
+    >
+      <MenuItem label="Subtask" onSelect={() => onAdding('subtask')} />
+      <MenuItem label="Blocked by" onSelect={() => onAdding('depends_on')} />
+      <MenuItem label="Blocks" onSelect={() => onAdding('blocks')} />
+      <MenuItem label="Related task" onSelect={() => onAdding('related')} />
+      <MenuRule />
+      <MenuItem label="Ask someone" onSelect={() => onAdding('ask')} />
+      <MenuRule />
+      <MenuItem label="Link" onSelect={() => onAdding('link')} />
+    </Menu>
   );
 }

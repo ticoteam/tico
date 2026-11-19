@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TaskDocument, TaskRequirement } from '@/api/schema';
-import { decisionName, decisionOf, defaultTab, reasonOf, slugOf, tabAddress, tabsOf } from './model';
+import { decisionName, decisionOf, defaultTab, earlierStages, reasonOf, refusalOf, slugOf, tabAddress, tabsOf } from './model';
 import type { TaskData } from './queries';
 
 const doc = (file_id: string, name: string, more: Partial<TaskDocument> = {}) => ({ file_id, name, version: 2, ...more }) as TaskDocument;
@@ -55,5 +55,18 @@ describe('the open task', () => {
     expect(reasonOf('network')).toBe('Needs a connection');
     expect(reasonOf(undefined)).toBe('Not saved');
     expect(reasonOf('http_409: ')).toBe('Not saved');
+  });
+
+  it('reads a refusal: its code, its reason, and each thing missing', () => {
+    const r = refusalOf('task_not_met: Not met: QA report.\n- QA report: not approved\n- Checks: 2 failing');
+    expect(r).toEqual({ code: 'task_not_met', reason: 'Not met: QA report.', missing: ['QA report: not approved', 'Checks: 2 failing'] });
+    expect(reasonOf('task_not_met: Not met: QA report.\n- QA report: not approved')).toBe('Not met: QA report.');
+  });
+
+  it('moves back only to the stages before the one it is in', () => {
+    const stages = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+    expect(earlierStages(stages, 'c').map((s) => s.id)).toEqual(['a', 'b']);
+    expect(earlierStages(stages, 'a')).toEqual([]);
+    expect(earlierStages(stages, null)).toEqual([]);
   });
 });

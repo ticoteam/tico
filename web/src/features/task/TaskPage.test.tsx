@@ -3,6 +3,7 @@ import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } fr
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ActionsRoot } from '@/actions';
 import { keys, queryClient } from '@/data';
 import { useFollow } from '@/live/follow';
 import type { TaskData } from './queries';
@@ -13,17 +14,28 @@ vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: 
 
 type Reply = { status: number; body: unknown };
 const calls: string[] = [];
-function serve(reply: (url: string, method: string) => Reply | Promise<Reply>) {
+const sent: { url: string; body: Record<string, unknown> }[] = [];
+function serve(reply: (url: string, method: string, body: Record<string, unknown>) => Reply | Promise<Reply>) {
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     calls.push(`${method} ${String(url)}`);
-    const r = await reply(String(url), method);
+    const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {};
+    if (method !== 'GET') sent.push({ url: String(url), body });
+    const r = await reply(String(url), method, body);
     return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
   });
 }
 
 function show(node: ReactNode, at = '/tasks/p1/12') {
-  const root = createRootRoute({ component: () => node });
+  // The shell's ActionsRoot lends the router to the action layer: a control's press runs through it.
+  const root = createRootRoute({
+    component: () => (
+      <>
+        <ActionsRoot dot={() => null} fold={() => undefined} />
+        {node}
+      </>
+    ),
+  });
   const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [at] }) });
   render(
     <QueryClientProvider client={queryClient}>
@@ -73,7 +85,12 @@ function base(url: string): Reply {
   if (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1')) return { status: 200, body: detail(task()) };
   if (url.includes('/files')) return { status: 200, body: { files: [] } };
   if (url.includes('/api/v2/pages/')) return { status: 200, body: { page: { src: 'about:blank' } } };
-  if (url.includes('/api/v2/pipelines')) return { status: 200, body: { pipelines: [] } };
+  if (url.includes('/links')) return { status: 200, body: { links: [] } };
+  if (url.includes('/api/v2/pipelines'))
+    return {
+      status: 200,
+      body: { pipelines: [{ id: 'p1', name: 'Product', stages: [{ id: 's1', name: 'Build', side: false }, { id: 's2', name: 'Review', side: false }, { id: 's3', name: 'Ship', side: false }] }] },
+    };
   if (url.includes('/needs-you')) return { status: 200, body: { items: [] } };
   return ok;
 }
@@ -83,6 +100,7 @@ beforeAll(() => {
 });
 beforeEach(() => {
   calls.length = 0;
+  sent.length = 0;
   queryClient.clear();
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
   queryClient.setQueryData(['directory'], { actors: [], byId: {} });
@@ -149,6 +167,51 @@ describe('one open task', () => {
       expect(back?.to_leave?.find((r) => r.requirement_id === 'r1')?.met).toBe(false);
     });
     expect(within(screen.getByRole('region', { name: 'Answer' })).getByRole('button', { name: 'Approve' })).toBeTruthy();
+  });
+
+  it('moves past what is missing only with a reason the person gives', async () => {
+    serve((url, method, body) => {
+      if (method === 'POST' && url.endsWith('/move') && !body.why)
+        return { status: 409, body: { error: { code: 'task_not_met', detail: 'Not met: QA report approved.', missing: ['QA report approved: not yet'] } } };
+      if (method === 'POST' && url.endsWith('/move')) return { status: 200, body: { task: task({ stage_id: 's3', stage: { id: 's3', name: 'Ship' } } as Partial<TaskData>) } };
+      return base(url);
+    });
+    show(<TaskPage task="12" pipeline="p1" tab="details" />, '/tasks/p1/12/details');
+    fireEvent.click(await screen.findByRole('button', { name: 'Stage: Review' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Ship' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Move to Ship?' });
+    expect(within(dialog).getByText('QA report approved: not yet')).toBeTruthy();
+    const anyway = within(dialog).getByRole('button', { name: 'Move anyway' });
+    expect(anyway).toHaveProperty('disabled', true);
+    fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: 'The owner checked it by hand' } });
+    fireEvent.click(anyway);
+    await waitFor(() => expect(sent.at(-1)?.body).toEqual({ to: 's3', why: 'The owner checked it by hand' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('edits a fact in place and adds a link from Add, each saved at once', async () => {
+    serve((url, method, body) => {
+      if (method === 'POST' && url.endsWith('/links')) return { status: 200, body: { links: [{ id: 'l1', kind: 'link', url: body.url, title: null, created_at: '2026-11-02T10:00:00Z' }] } };
+      if (method === 'POST' && url.endsWith('/api/v2/tasks/t1')) return { status: 200, body: { task: task({ labels: body.labels as string[] }) } };
+      return base(url);
+    });
+    show(<TaskPage task="12" pipeline="p1" tab="details" />, '/tasks/p1/12/details');
+    fireEvent.click(await screen.findByRole('button', { name: 'Facts' }));
+    // Part of, then Tags: neither is set yet.
+    fireEvent.click((await screen.findAllByRole('button', { name: 'None' }))[1] as HTMLElement);
+    const tags = await screen.findByRole('textbox', { name: 'Tags' });
+    fireEvent.change(tags, { target: { value: 'bug, checkout, bug' } });
+    fireEvent.keyDown(tags, { key: 'Enter' });
+    await waitFor(() => expect(sent.at(-1)?.body).toEqual({ labels: ['bug', 'checkout'] }));
+    expect(await screen.findByText('checkout')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Link' }));
+    const link = await screen.findByRole('textbox', { name: 'Link' });
+    fireEvent.change(link, { target: { value: 'https://status.example.com/today' } });
+    fireEvent.keyDown(link, { key: 'Enter' });
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/links', body: { url: 'https://status.example.com/today' } }));
+    expect(await screen.findByText('status.example.com')).toBeTruthy();
   });
 
   it('says when there is no such task', async () => {
