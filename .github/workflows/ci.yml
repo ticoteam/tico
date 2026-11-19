@@ -670,13 +670,21 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Every part of the release gate passed
+      # A neutral name: the step list must not read "passed" on a red gate. The exit code is the verdict.
+      - name: Release gate verdict (needs gate and images to succeed)
         env:
           GATE: ${{ needs.gate.result }}
           IMAGES: ${{ needs.images.result }}
         run: |
           echo "Release gate parts: $GATE; images: $IMAGES"
-          test "$GATE" = success && test "$IMAGES" = success
+          failed=""
+          test "$GATE" = success || failed="$failed gate ($GATE)"
+          test "$IMAGES" = success || failed="$failed images ($IMAGES)"
+          if [ -n "$failed" ]; then
+            echo "::error::Release gate failed:$failed"
+            exit 1
+          fi
+          echo "Release gate passed: gate and images succeeded"
 
   # The train dispatches this workflow with GITHUB_TOKEN, and GitHub starts no workflow_run for a run that token started,
   # so main-red.yml never heard of the train's validations (none ran from Nov 16 to Nov 18). A dispatch from GITHUB_TOKEN
