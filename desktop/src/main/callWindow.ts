@@ -13,7 +13,7 @@ export type CallHooks = {
   preloadArgs(): string[];
   userAgent: string;
   others(companyId: string): Array<{ id: string; origin: string }>;
-  switchTo(companyId: string, url: string): void;
+  switchTo(companyId: string, url?: string): void;
   notify(companyId: string, state: CallWindowState): void;
   quitting(): boolean;
 };
@@ -71,7 +71,7 @@ export class CallWindow {
       fullscreenable: false,
       backgroundColor: nativeTheme.shouldUseDarkColors ? '#0B0B0B' : '#E9E9E9',
       ...(mac ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 14, y: 14 } } : {}),
-      webPreferences: pageWebPreferences(company.partition, this.hooks.preloadArgs()),
+      webPreferences: pageWebPreferences(company.partition, company.url, this.hooks.preloadArgs()),
     });
     win.setAlwaysOnTop(true, 'floating');
     hardenSession(win.webContents.session, company.url, this.hooks.userAgent);

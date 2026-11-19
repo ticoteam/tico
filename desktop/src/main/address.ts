@@ -58,6 +58,28 @@ export function isAppUrl(raw: string, origin: string): boolean {
   }
 }
 
+/**
+ * A page on `origin` the app may load for someone other than that page itself (another company's link, a tico://
+ * link, a page's own switch): never the server's API or sign-in addresses, where a plain GET can act (sign-out is
+ * `GET /api/v2/logout`). Checked on the decoded path, as the server routes it, and with no encoded slash in it.
+ */
+export function isPageUrl(raw: string, origin: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (url.origin !== origin || /%2f|%5c/i.test(url.pathname)) return false;
+  let path: string;
+  try {
+    path = decodeURIComponent(url.pathname).toLowerCase().replace(/\/+/g, '/');
+  } catch {
+    return false;
+  }
+  return !/^\/(api|auth)(\/|$)/.test(path);
+}
+
 export function hostOf(origin: string): string {
   try {
     return new URL(origin).host;

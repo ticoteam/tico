@@ -23,6 +23,8 @@ export interface TicoDesktop {
     onChange(cb: (all: CompanyRef[]) => void): () => void;
   };
   setBadge(needs: number): void;
+  /** Optional: an older app has no such call. Whether this page is in a call; "Restart to update" waits for it. */
+  reportCall?(live: boolean): void;
   callWindow: {
     open(callId: string): Promise<void>;
     close(ending?: 'closed' | 'return'): Promise<void>;
@@ -101,11 +103,20 @@ export interface DesktopSelf {
   filesOrigin?: string;
 }
 
-let told = { self: '', badge: -1, files: '' };
+let told = { self: '', badge: -1, files: '', call: false };
 /** For tests: forget what was reported. */
 export const resetDesktopReports = () => {
-  told = { self: '', badge: -1, files: '' };
+  told = { self: '', badge: -1, files: '', call: false };
 };
+
+/** Tells the desktop app whether this page is in a call (joining, live or reconnecting), so "Restart to update" waits
+    for a call in any company, on screen or not. Sent only when it changed; nothing in a browser or an older app. */
+export function reportCallToDesktop(live: boolean): void {
+  const t = desktop();
+  if (!t?.reportCall || live === told.call) return;
+  told.call = live;
+  t.reportCall(live);
+}
 
 /** Tells the desktop app who is signed in here, this company's count for the Dock badge, and its files origin.
     Each is sent only when it changed. Signed out keeps the company's stored name and email and clears the count. */

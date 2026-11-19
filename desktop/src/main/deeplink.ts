@@ -1,8 +1,8 @@
 // tico:// links (platforms.md 4.5). Pure.
-import { APP_PATH, checkAddress } from './address';
+import { APP_PATH, checkAddress, isPageUrl } from './address';
 
 export type DeepLink =
-  | { kind: 'open'; companyId: string; url: string }
+  | { kind: 'open'; companyId: string; url?: string }
   | { kind: 'add'; server: string }
   | { kind: 'focus' };
 
@@ -32,7 +32,9 @@ export function parseDeepLink(
     if (!address.ok || !/^https?:\/\//i.test(u)) return { kind: 'focus' };
     const company = companies.find((c) => c.origin === address.origin);
     if (!company) return { kind: 'add', server: address.origin };
-    return { kind: 'open', companyId: company.id, url: new URL(u).href };
+    // Any website can hand the app a tico:// link: it opens the company, at the link only when that is an app page.
+    const href = new URL(u).href;
+    return isPageUrl(href, company.origin) ? { kind: 'open', companyId: company.id, url: href } : { kind: 'open', companyId: company.id };
   }
 
   const active = companies.find((c) => c.id === activeId);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { badgeFor, cleanUserAgent } from './badge';
+import { anyCallLive, badgeFor, cleanUserAgent } from './badge';
 import * as C from './companies';
-import { issuerCookie, parsePicks } from './portal';
+import { doneFromPortal, issuerCookie, parsePicks } from './portal';
 import * as V from './validate';
 
 describe('companies.json', () => {
@@ -95,6 +95,44 @@ describe('bridge arguments', () => {
     for (const f of bad) expect(f).toThrow(V.BadArgument);
   });
 
+  it('takes a page to switch to only from the company itself, and only an app page', () => {
+    const beta = 'https://beta.tico.team';
+    // another company: the address is ignored, the company opens where it was
+    expect(V.switchUrlArg(`${beta}/api/v2/logout`, 'cacme', 'cbeta', beta)).toBeUndefined();
+    expect(V.switchUrlArg(`${beta}/next/flow`, 'cacme', 'cbeta', beta)).toBeUndefined();
+    // its own main window: an app page on its own origin
+    expect(V.switchUrlArg(`${origin}/next/task/412`, 'cacme', 'cacme', origin)).toBe(`${origin}/next/task/412`);
+    expect(V.switchUrlArg(undefined, 'cacme', 'cacme', origin)).toBeUndefined();
+    for (const path of ['/api/v2/logout', '/auth/login', '/auth', '/%61pi/v2/logout', '//auth/login', '/next/..%2fapi/v2/logout']) {
+      expect(() => V.switchUrlArg(`${origin}${path}`, 'cacme', 'cacme', origin), path).toThrow(V.BadArgument);
+    }
+    expect(() => V.switchUrlArg(`${beta}/next/`, 'cacme', 'cacme', origin)).toThrow(V.BadArgument);
+  });
+
+  it('tells a page about the other companies only what the switcher draws', () => {
+    const file: C.CompaniesFile = {
+      version: 1,
+      active: 'cbeta',
+      companies: [
+        { id: 'cacme', url: origin, partition: 'persist:company-cacme', name: 'Acme', email: 'm@acme.example' },
+        { id: 'cbeta', url: 'https://beta.tico.team', partition: 'persist:company-cbeta', name: '', email: 'm@beta.example' },
+      ],
+    };
+    const refs = C.companyRefs(file, 'cacme', (id) => ({ signedOut: id === 'cbeta', needs: id === 'cbeta' ? 3 : 1 }));
+    expect(refs).toEqual([
+      { id: 'cacme', origin, name: 'Acme', email: 'm@acme.example', active: false, self: true, signedOut: false, needs: 1 },
+      { id: 'cbeta', origin: '', name: 'beta.tico.team', email: '', active: true, self: false, signedOut: true, needs: 3 },
+    ]);
+  });
+
+  it('sends to a view only while it shows its own company', () => {
+    expect(V.onOwnOrigin('https://acme.tico.team/next/', origin)).toBe(true);
+    expect(V.onOwnOrigin('https://accounts.google.com/o/oauth2/auth', origin)).toBe(false);
+    expect(V.onOwnOrigin('https://team.cloudflareaccess.com/cdn-cgi/access/login/acme.tico.team', origin)).toBe(false);
+    expect(V.onOwnOrigin('about:blank', origin)).toBe(false);
+    expect(V.onOwnOrigin('', origin)).toBe(false);
+  });
+
   it('lets only the top frame on the company origin call', () => {
     expect(V.senderAllowed('https://acme.tico.team/next/', true, origin)).toBe(true);
     expect(V.senderAllowed('https://acme.tico.team/next/', false, origin)).toBe(false);
@@ -109,6 +147,12 @@ describe('badge and user agent', () => {
     expect(badgeFor([{ needs: 2, signedOut: false }, { needs: 3, signedOut: false }])).toEqual({ count: 5, text: '5' });
     expect(badgeFor([{ needs: 0, signedOut: false }, { needs: 4, signedOut: true }])).toEqual({ count: 0, text: '!' });
     expect(badgeFor([])).toEqual({ count: 0, text: '' });
+  });
+  it('knows a call is live in any company’s page, not only the small window', () => {
+    expect(anyCallLive(false, [{ callLive: false }, { callLive: true }])).toBe(true);
+    expect(anyCallLive(true, [{ callLive: false }])).toBe(true);
+    expect(anyCallLive(false, [{ callLive: false }, { callLive: false }])).toBe(false);
+    expect(anyCallLive(false, [])).toBe(false);
   });
   it('drops the Electron and app tokens', () => {
     const ua = 'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) Tico/0.1.0 Chrome/140.0.0.0 Electron/45.4.1 Safari/537.36';
@@ -130,6 +174,17 @@ describe('Tico Cloud sign-in', () => {
     expect(parsePicks(portal, at('issuer=https%3A%2F%2Fapp.tico.dev'))).toBeNull();
     expect(parsePicks(portal, at('issuer=https%3A%2F%2Fa.example%2Fpath'))).toBeNull();
     expect(parsePicks(portal, 'https://evil.example/desktop/orgs/done?issuer=https%3A%2F%2Fa.example')).toBeNull();
+  });
+  it('takes a done page only when the portal’s own page asked for it', () => {
+    const done = `${portal}/desktop/orgs/done?issuer=${encodeURIComponent('https://accounts.tico.team')}&org=${encodeURIComponent('https://acme.tico.team')}`;
+    expect(doneFromPortal(portal, done, portal, `${portal}/desktop/orgs`)).toBe(true);
+    // a provider's or any other page reached during sign-in, by a link, a script or a redirect
+    expect(doneFromPortal(portal, done, 'https://evil.example', 'https://evil.example/x')).toBe(false);
+    expect(doneFromPortal(portal, done, portal, 'https://evil.example/redirect')).toBe(false);
+    expect(doneFromPortal(portal, done, 'https://evil.example', `${portal}/desktop/orgs`)).toBe(false);
+    expect(doneFromPortal(portal, done, null, `${portal}/desktop/orgs`)).toBe(false);
+    expect(doneFromPortal(portal, done, portal, null)).toBe(false);
+    expect(doneFromPortal(portal, `${portal}/desktop/orgs`, portal, `${portal}/desktop/orgs`)).toBe(false);
   });
   it('copies only the issuer host’s own cookies', () => {
     expect(issuerCookie('.accounts.tico.team', 'accounts.tico.team')).toBe(true);

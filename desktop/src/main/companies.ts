@@ -1,6 +1,7 @@
 // The companies list, companies.json (platforms.md 4.2): which servers this app opens, which is on screen, and what
 // is kept for each. Pure functions over the file's contents; main.ts does the reading and writing.
-import { checkAddress, isAppUrl } from './address';
+import type { CompanyRef } from '../bridge';
+import { checkAddress, hostOf, isAppUrl } from './address';
 
 export type Company = {
   id: string;
@@ -109,4 +110,29 @@ export function setLastUrl(file: CompaniesFile, id: string, url: string): Compan
     ...file,
     companies: file.companies.map((c) => (c.id === id && isAppUrl(url, c.url) ? { ...c, lastUrl: url } : c)),
   };
+}
+
+/**
+ * The list a company's page is given (`tico.companies.list`, `onChange`). Its own entry in full; the others carry only
+ * what the switcher draws (id, name, on screen, signed out, count), never their origin or the account's email.
+ */
+export function companyRefs(
+  file: CompaniesFile,
+  forId: string | null,
+  stateOf: (id: string) => { signedOut: boolean; needs: number },
+): CompanyRef[] {
+  return file.companies.map((c) => {
+    const self = c.id === forId;
+    const { signedOut, needs } = stateOf(c.id);
+    return {
+      id: c.id,
+      origin: self ? c.url : '',
+      name: c.name || hostOf(c.url),
+      email: self ? c.email : '',
+      active: c.id === file.active,
+      self,
+      signedOut,
+      needs,
+    };
+  });
 }

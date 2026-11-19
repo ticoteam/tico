@@ -26,13 +26,36 @@ describe('navigation in a company view', () => {
 
   it('starts sign-in only at the Cloudflare Access login for this host', () => {
     expect(decideNavigation('https://team.cloudflareaccess.com/cdn-cgi/access/login/acme.tico.team?kid=1', ctx)).toEqual({ kind: 'sign-in' });
-    expect(decideNavigation('https://team.cloudflareaccess.com/cdn-cgi/access/login/other.example', ctx)).toEqual({ kind: 'stay' });
+    expect(decideNavigation('https://team.cloudflareaccess.com/cdn-cgi/access/login/other.example', ctx).kind).toBe('external');
+    expect(decideNavigation('https://team.cloudflareaccess.com/cdn-cgi/access/logout', ctx).kind).toBe('external');
+    expect(decideNavigation('https://team.cloudflareaccess.com/cdn-cgi/access/callback', { ...ctx, signingIn: true })).toEqual({ kind: 'stay' });
     expect(decideNavigation('https://cloudflareaccess.com.evil.example/cdn-cgi/access/login/acme.tico.team', ctx).kind).toBe('external');
   });
 
   it('switches to another known company, and never shows the files origin top level', () => {
     expect(decideNavigation('https://beta.tico.team/next/flow', ctx)).toEqual({ kind: 'switch', companyId: 'cother', url: 'https://beta.tico.team/next/flow' });
     expect(decideNavigation('https://files.acme.example/page.html', ctx)).toEqual({ kind: 'block' });
+  });
+
+  it('starts a sign-in chain only at the exact sign-in path', () => {
+    for (const path of ['/next/auth/login', '/x/auth/login', '/auth/login/', '/auth/loginx']) {
+      expect(decideNavigation(`https://acme.tico.team${path}`, ctx), path).toEqual({ kind: 'stay' });
+    }
+  });
+
+  it('keeps companies and the files origin apart in the middle of a sign-in chain too', () => {
+    const chain = { ...ctx, signingIn: true };
+    expect(decideNavigation('https://beta.tico.team/next/', chain)).toEqual({ kind: 'switch', companyId: 'cother', url: 'https://beta.tico.team/next/' });
+    expect(decideNavigation('https://files.acme.example/page.html', chain)).toEqual({ kind: 'block' });
+  });
+
+  it('opens another company at a link only when it is one of its app pages, never its API or sign-in', () => {
+    for (const path of ['/api/v2/logout', '/auth/login?next=/next/', '/auth/signed-out', '/API/v2/logout', '/%61pi/v2/logout', '//api/v2/logout', '/next/..%2Fapi/v2/logout']) {
+      const raw = `https://beta.tico.team${path}`;
+      expect(decideNavigation(raw, ctx), path).toEqual({ kind: 'switch', companyId: 'cother' });
+      expect(decideNewWindow(raw, ctx), path).toEqual({ kind: 'switch', companyId: 'cother' });
+      expect(decideNavigation(raw, { ...ctx, signingIn: true }), path).toEqual({ kind: 'switch', companyId: 'cother' });
+    }
   });
 
   it('hands the browser https and mail links only', () => {
@@ -104,12 +127,15 @@ describe('tico:// links', () => {
     expect(parseDeepLink(`tico://open?u=${u}`, companies, 'cacme')).toEqual({ kind: 'open', companyId: 'cbeta', url: 'https://beta.tico.team/next/threads/t1?x=1' });
     expect(parseDeepLink(`tico://open?u=${encodeURIComponent('https://new.example/next/')}`, companies, 'cacme')).toEqual({ kind: 'add', server: 'https://new.example' });
     expect(parseDeepLink(`tico://open?u=${encodeURIComponent('javascript:alert(1)')}`, companies, 'cacme')).toEqual({ kind: 'focus' });
+    // a link to its API (sign-out) or sign-in only brings that company forward
+    expect(parseDeepLink(`tico://open?u=${encodeURIComponent('https://beta.tico.team/api/v2/logout')}`, companies, 'cacme')).toEqual({ kind: 'open', companyId: 'cbeta' });
+    expect(parseDeepLink(`tico://open?u=${encodeURIComponent('https://beta.tico.team/auth/login')}`, companies, 'cacme')).toEqual({ kind: 'open', companyId: 'cbeta' });
   });
   it('maps today’s tico://<path> onto the active company’s /next/, and never off it', () => {
     expect(parseDeepLink('tico://meetings/abc', companies, 'cacme')).toEqual({ kind: 'open', companyId: 'cacme', url: 'https://acme.tico.team/next/meetings/abc' });
     expect(parseDeepLink('tico://..%2F..%2Fapi/v2/logout', companies, 'cacme')?.kind).not.toBe('open');
     const dots = parseDeepLink('tico://a/../../api/v2/logout', companies, 'cacme');
-    expect(dots?.kind !== 'open' || dots.url.startsWith('https://acme.tico.team/next/')).toBe(true);
+    expect(dots?.kind !== 'open' || !!dots.url?.startsWith('https://acme.tico.team/next/')).toBe(true);
     expect(parseDeepLink('tico:////evil.example/x', companies, 'cacme')).toMatchObject({ url: 'https://acme.tico.team/next/evil.example/x' });
     expect(parseDeepLink('tico://', companies, 'cacme')).toEqual({ kind: 'focus' });
     expect(parseDeepLink('https://acme.tico.team/', companies, 'cacme')).toBeNull();

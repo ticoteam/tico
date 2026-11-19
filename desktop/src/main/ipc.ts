@@ -30,20 +30,20 @@ const MAIN: readonly Kind[] = ['main'];
 export function registerIpc(shell: Shell, updater: Updater, version: string): void {
   const handle = (channel: string, kinds: readonly Kind[], fn: (caller: Caller, ...args: unknown[]) => unknown) =>
     ipcMain.handle(channel, (event, ...args) => fn(callerOf(shell, event, kinds), ...args));
-  const listen = (channel: string, fn: (caller: Caller, arg: unknown) => void) =>
+  const listen = (channel: string, fn: (caller: Caller, arg: unknown) => void, kinds: readonly Kind[] = MAIN) =>
     ipcMain.on(channel, (event, arg) => {
       try {
-        fn(callerOf(shell, event, MAIN), arg);
+        fn(callerOf(shell, event, kinds), arg);
       } catch (error) {
         log('warn', `${channel}: ${(error as Error).message}`);
       }
     });
 
   handle('companies:list', BOTH, (c) => shell.list(c.company.id));
-  handle('companies:switch', BOTH, (_c, id, url) => {
+  handle('companies:switch', BOTH, (c, id, url) => {
     const target = shell.company(V.companyIdArg(id));
     if (!target) throw new Error('No such company.');
-    shell.switchTo(target.id, url === undefined ? undefined : V.urlOnOriginArg(url, target.url));
+    shell.switchTo(target.id, V.switchUrlArg(url, c.company.id, target.id, target.url));
   });
   handle('companies:add', MAIN, (_c, server) => {
     const prefill = V.serverPrefillArg(server);
@@ -52,6 +52,8 @@ export function registerIpc(shell: Shell, updater: Updater, version: string): vo
   handle('companies:remove', MAIN, (_c, id) => shell.remove(V.companyIdArg(id)));
   listen('companies:self', (c, info) => shell.reportSelf(c.company.id, V.selfInfoArg(info)));
   listen('badge:set', (c, n) => shell.setNeeds(c.company.id, V.countArg(n)));
+  // The small window's call is known already (it is open); a main page reports its own.
+  listen('call:live', (c, on) => c.kind === 'main' && shell.setCallLive(c.company.id, V.boolArg(on)), BOTH);
   listen('files:origin', (c, origin) => shell.setFilesOrigin(c.company.id, V.filesOriginArg(origin, c.company.url)));
 
   handle('call:open', MAIN, (c, callId) => shell.openCall(c.company.id, V.callIdArg(callId)));

@@ -8,7 +8,8 @@ import { log } from './log';
 
 export const PRELOAD = path.join(__dirname, '..', 'preload.js');
 
-export function pageWebPreferences(partition: string, preloadArgs: string[]): WebPreferences {
+/** A company page's preferences. `origin` goes to the preload, which gives `window.tico` only to pages on it. */
+export function pageWebPreferences(partition: string, origin: string, preloadArgs: string[]): WebPreferences {
   return {
     partition,
     preload: PRELOAD,
@@ -24,7 +25,7 @@ export function pageWebPreferences(partition: string, preloadArgs: string[]): We
     safeDialogs: true,
     spellcheck: true,
     backgroundThrottling: true,
-    additionalArguments: preloadArgs,
+    additionalArguments: [...preloadArgs, `--tico-origin=${origin}`],
   };
 }
 
@@ -86,7 +87,7 @@ export function openExternal(url: string): void {
 
 export type GuardHooks = {
   context(): Omit<NavContext, 'signingIn'>;
-  switchTo(companyId: string, url: string): void;
+  switchTo(companyId: string, url?: string): void;
   committed?(url: string): void;
   /** A window's own rule on top of the company view's (the small call window's `keepOnCall`). */
   rule?(raw: string, base: NavDecision, ctx: NavContext): NavDecision;

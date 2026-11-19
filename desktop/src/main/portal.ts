@@ -25,6 +25,20 @@ export function isDone(portal: string, raw: string): boolean {
   }
 }
 
+/**
+ * A done page is the portal's own answer only when the portal's page asked for it: the frame that started the
+ * navigation is on the portal's origin, and so is the page it leaves (for a redirect, the address that redirected).
+ * Any other page reached in the sign-in window (a provider's, a link's) cannot name companies or an issuer.
+ */
+export function doneFromPortal(portal: string, raw: string, initiatorOrigin: string | null, from: string | null): boolean {
+  if (!isDone(portal, raw) || initiatorOrigin !== portal || !from) return false;
+  try {
+    return new URL(from).origin === portal;
+  } catch {
+    return false;
+  }
+}
+
 export type Picks = { issuer: string; servers: string[] };
 
 /**

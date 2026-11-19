@@ -1,6 +1,6 @@
 // Where a top-level navigation in a company's view goes (platforms.md 4.3, after today's `stays_in_app` in
 // app/src/windows.rs). Pure: the window code applies the decision.
-import { isLoopback } from './address';
+import { isLoopback, isPageUrl } from './address';
 
 export type NavContext = {
   /** The company's origin. */
@@ -16,11 +16,13 @@ export type NavContext = {
 export type NavDecision =
   | { kind: 'stay' }
   | { kind: 'sign-in' } // stays, and starts a sign-in chain
-  | { kind: 'switch'; companyId: string; url: string }
+  | { kind: 'switch'; companyId: string; url?: string } // url: where to open it; without one, where it was
   | { kind: 'external'; url: string }
   | { kind: 'block' };
 
 const ACCESS_SUFFIX = '.cloudflareaccess.com';
+/** The company's own sign-in (backend/oidc.py LOGIN_PATH): exactly this path, nothing that merely ends in it. */
+const LOGIN_PATH = '/auth/login';
 
 function parse(raw: string): URL | null {
   try {
@@ -35,29 +37,34 @@ export function externalOrBlock(url: URL): NavDecision {
   return url.protocol === 'https:' || url.protocol === 'mailto:' ? { kind: 'external', url: url.href } : { kind: 'block' };
 }
 
+/** Another company: its view comes forward, at the link only when that is one of its app pages (never /api/ or /auth/). */
+function switchTo(other: { id: string; origin: string }, url: URL): NavDecision {
+  return isPageUrl(url.href, other.origin) ? { kind: 'switch', companyId: other.id, url: url.href } : { kind: 'switch', companyId: other.id };
+}
+
+/** Cloudflare Access's login for this company's host: /cdn-cgi/access/login/<host> on <team>.cloudflareaccess.com. */
+function accessLogin(url: URL, host: string): boolean {
+  if (url.protocol !== 'https:' || !url.hostname.endsWith(ACCESS_SUFFIX)) return false;
+  const prefix = '/cdn-cgi/access/login/';
+  return url.pathname.startsWith(prefix) && url.pathname.slice(prefix.length).split('/')[0] === host;
+}
+
 export function decideNavigation(raw: string, ctx: NavContext): NavDecision {
   const url = parse(raw);
   if (!url) return { kind: 'block' };
   if (url.href === 'about:blank') return { kind: 'stay' };
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return externalOrBlock(url);
 
-  const host = parse(ctx.origin)?.host ?? '';
-  if (url.origin === ctx.origin) {
-    return url.pathname.endsWith('/auth/login') ? { kind: 'sign-in' } : { kind: 'stay' };
-  }
+  if (url.origin === ctx.origin) return url.pathname === LOGIN_PATH ? { kind: 'sign-in' } : { kind: 'stay' };
+  // Isolation comes before any sign-in exception: another company always opens in its own view (its own session),
+  // and the files origin never loads top level, in the middle of a sign-in chain too.
+  const other = ctx.others.find((c) => c.origin === url.origin);
+  if (other) return switchTo(other, url);
+  if (ctx.filesOrigin && url.origin === ctx.filesOrigin) return { kind: 'block' };
+  if (accessLogin(url, parse(ctx.origin)?.host ?? '')) return { kind: 'sign-in' };
   const secure = url.protocol === 'https:' || isLoopback(url.hostname);
-  if (url.hostname.endsWith(ACCESS_SUFFIX) && url.protocol === 'https:') {
-    // Cloudflare's login names the application it signs in to: /cdn-cgi/access/login/<host>.
-    const app = url.pathname.startsWith('/cdn-cgi/access/login/')
-      ? url.pathname.slice('/cdn-cgi/access/login/'.length).split('/')[0]
-      : null;
-    return app === host ? { kind: 'sign-in' } : { kind: 'stay' };
-  }
   if (ctx.signingIn && secure) return { kind: 'stay' };
   if (url.hostname === 'accounts.google.com' && url.protocol === 'https:') return { kind: 'stay' };
-  const other = ctx.others.find((c) => c.origin === url.origin);
-  if (other) return { kind: 'switch', companyId: other.id, url: url.href };
-  if (ctx.filesOrigin && url.origin === ctx.filesOrigin) return { kind: 'block' };
   return externalOrBlock(url);
 }
 
@@ -69,7 +76,7 @@ export function decideNewWindow(raw: string, ctx: NavContext): NavDecision {
   const url = parse(raw);
   if (!url) return { kind: 'block' };
   const other = ctx.others.find((c) => c.origin === url.origin);
-  if (other) return { kind: 'switch', companyId: other.id, url: url.href };
+  if (other) return switchTo(other, url);
   if (ctx.filesOrigin && url.origin === ctx.filesOrigin) return { kind: 'block' };
   return externalOrBlock(url);
 }

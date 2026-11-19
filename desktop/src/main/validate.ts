@@ -1,6 +1,6 @@
 // Checks for everything that arrives from a page over IPC (platforms.md 4.3, 4.10). Every handler runs these first
 // and throws on anything else. Pure.
-import { checkAddress, isLoopback } from './address';
+import { checkAddress, isLoopback, isPageUrl } from './address';
 import { COMPANY_ID } from './companies';
 
 export class BadArgument extends Error {
@@ -47,6 +47,18 @@ export function urlOnOriginArg(v: unknown, origin: string): string {
   return url.href;
 }
 
+/**
+ * The page `companies:switch` may load. Only a company's own page may pass one, for itself (the small call window
+ * opening a page in its main window), and only one of the app's pages (never /api/ or /auth/). Switching to another
+ * company ignores it: that company opens where it was, so no company can drive another's session.
+ */
+export function switchUrlArg(v: unknown, callerId: string, targetId: string, origin: string): string | undefined {
+  if (v === undefined || callerId !== targetId) return undefined;
+  const url = urlOnOriginArg(v, origin);
+  if (!isPageUrl(url, origin)) throw new BadArgument('url is not a page of the app');
+  return url;
+}
+
 /** A server address to prefill Add company with: only a valid one is used, anything else is ignored. */
 export function serverPrefillArg(v: unknown): string | undefined {
   if (v === undefined) return undefined;
@@ -85,6 +97,11 @@ export function filesOriginArg(v: unknown, companyOrigin: string): string {
  * Only the top frame of a page this app opened, while it is on that page's company origin, may call the shell.
  * Today's rule is the same: "Only the selected server's page may call the app" (app/src/bridge.rs).
  */
+/** A view's top-level page is its company's own (not a provider's sign-in page, nor anything else it reached). */
+export function onOwnOrigin(pageUrl: string | null, origin: string): boolean {
+  return senderAllowed(pageUrl, true, origin);
+}
+
 export function senderAllowed(frameUrl: string | null, isTopFrame: boolean, origin: string): boolean {
   if (frameUrl === null || !isTopFrame) return false;
   try {

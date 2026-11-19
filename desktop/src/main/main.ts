@@ -69,7 +69,7 @@ function start(): void {
     else log('warn', `TICO_SERVER is not used: ${address.error}`);
   }
 
-  const updater = new Updater(app.isPackaged && !process.env.TICO_NO_UPDATES, () => shell?.call.live ?? false, () =>
+  const updater = new Updater(app.isPackaged && !process.env.TICO_NO_UPDATES, () => shell?.callLive ?? false, () =>
     log('info', `update ${updater.state.state} ${updater.state.version ?? ''}`),
   );
   const portal = portalOrigin(process.env.TICO_PORTAL_URL);

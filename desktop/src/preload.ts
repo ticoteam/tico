@@ -37,6 +37,7 @@ const tico: TicoDesktop = {
     onChange: listen<CompanyRef[]>('companies:changed'),
   },
   setBadge: (needs) => ipcRenderer.send('badge:set', needs),
+  reportCall: (live) => ipcRenderer.send('call:live', live),
   callWindow: {
     open: (callId) => ipcRenderer.invoke('call:open', callId) as Promise<void>,
     close: (ending) => ipcRenderer.invoke('call:close', ending) as Promise<void>,
@@ -56,7 +57,10 @@ const tico: TicoDesktop = {
   setFilesOrigin: (origin) => ipcRenderer.send('files:origin', origin),
 };
 
-contextBridge.exposeInMainWorld('tico', tico);
+// Only the company's own pages get the bridge: a provider's sign-in page (or anything else the view reaches) has no
+// `window.tico`, so it hears nothing the app sends. Main checks every call's sender and every send's page as well.
+const own = arg('tico-origin');
+if (own && window.location.origin === own) contextBridge.exposeInMainWorld('tico', tico);
 
 let fullscreen = false;
 function markFrame(): void {

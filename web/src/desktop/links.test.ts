@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { followFromSmallWindow, smallWindowLink, tellDesktopSigningOut, type CompanyRef, type TicoDesktop } from '@/desktop';
+import { followFromSmallWindow, reportCallToDesktop, resetDesktopReports, smallWindowLink, tellDesktopSigningOut, type CompanyRef, type TicoDesktop } from '@/desktop';
 
 const ORIGIN = 'https://acme.example';
 
@@ -67,5 +67,20 @@ describe('sign-out', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('a call in this page', () => {
+  it('tells the desktop app when it starts and ends, once each, and nothing to an older app', () => {
+    resetDesktopReports();
+    reportCallToDesktop(true); // no bridge: nothing
+    fakeBridge();
+    reportCallToDesktop(true); // an older app without reportCall: nothing
+    const reportCall = vi.fn();
+    fakeBridge({ reportCall });
+    reportCallToDesktop(true);
+    reportCallToDesktop(true);
+    reportCallToDesktop(false);
+    expect(reportCall.mock.calls).toEqual([[true], [false]]);
   });
 });

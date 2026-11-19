@@ -36,6 +36,8 @@ export interface TicoDesktop {
   };
   /** This company's "needs you" count; the shell sums every company's for the Dock badge. */
   setBadge(needs: number): void;
+  /** Whether this page is in a call (joining, live or reconnecting); "Restart to update" waits while any company is. */
+  reportCall(live: boolean): void;
   callWindow: {
     open(callId: string): Promise<void>;
     /** 'return' sends the call back to the main window; without it the call is left. */

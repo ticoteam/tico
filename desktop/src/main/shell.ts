@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { app, BaseWindow, dialog, nativeTheme, screen, session, WebContentsView, type Session, type WebContents } from 'electron';
 import type { CallWindowState, CompanyRef } from '../bridge';
 import { appUrl, checkAddress, hostOf } from './address';
-import { badgeFor } from './badge';
+import { anyCallLive, badgeFor } from './badge';
 import { CallWindow } from './callWindow';
 import * as C from './companies';
 import { guardNavigation, hardenSession, pageWebPreferences } from './contents';
@@ -15,6 +15,7 @@ import { parseDeepLink } from './deeplink';
 import { checkServer, type Health } from './health';
 import { log } from './log';
 import { issuerCookie, type Picks } from './portal';
+import { onOwnOrigin } from './validate';
 import { loadWindowState, MIN_HEIGHT, MIN_WIDTH, restoreFrame, saveWindowState } from './windowState';
 
 /** Where macOS puts the window buttons: inside the first sheet's 60 high head, which starts 8 in from the corner. */
@@ -32,6 +33,8 @@ type Entry = {
   signedOut: boolean;
   filesOrigin: string | null;
   failed: boolean;
+  /** The page reported it is in a call; it ends with the page (another document, a crash, sign-out). */
+  callLive: boolean;
 };
 
 export type LocalState = { page: 'add'; prefill?: string } | { page: 'unreachable'; companyId: string };
@@ -182,11 +185,11 @@ export class Shell {
   }
 
   private createEntry(company: C.Company): Entry {
-    const view = new WebContentsView({ webPreferences: pageWebPreferences(company.partition, this.preloadArgs()) });
+    const view = new WebContentsView({ webPreferences: pageWebPreferences(company.partition, company.url, this.preloadArgs()) });
     view.setBackgroundColor(background());
     const wc = view.webContents;
     hardenSession(wc.session, company.url, this.opts.userAgent);
-    const entry: Entry = { company, view, needs: 0, signedOut: false, filesOrigin: null, failed: false };
+    const entry: Entry = { company, view, needs: 0, signedOut: false, filesOrigin: null, failed: false, callLive: false };
     guardNavigation(wc, {
       context: () => ({ origin: company.url, others: this.others(company.id), filesOrigin: entry.filesOrigin }),
       switchTo: (id, url) => void this.switchTo(id, url),
@@ -203,7 +206,10 @@ export class Shell {
       if (this.file.active === company.id) this.showLocal({ page: 'unreachable', companyId: company.id });
     });
     wc.on('dom-ready', () => wc.send('frame:fullscreen', this.win.isFullScreen()));
+    // A new document has no room: whatever call the old one reported is over.
+    wc.on('did-navigate', () => (entry.callLive = false));
     wc.on('render-process-gone', (_e, details) => {
+      entry.callLive = false;
       log('error', `page of ${company.url} stopped: ${details.reason}`);
       if (details.reason !== 'clean-exit' && !wc.isDestroyed()) wc.reload();
     });
@@ -225,18 +231,9 @@ export class Shell {
   }
 
   list(forId: string | null): CompanyRef[] {
-    return this.file.companies.map((c) => {
-      const e = this.entries.get(c.id);
-      return {
-        id: c.id,
-        origin: c.url,
-        name: c.name || hostOf(c.url),
-        email: c.email,
-        active: c.id === this.file.active,
-        self: c.id === forId,
-        signedOut: e?.signedOut ?? false,
-        needs: e?.needs ?? 0,
-      };
+    return C.companyRefs(this.file, forId, (id) => {
+      const e = this.entries.get(id);
+      return { signedOut: e?.signedOut ?? false, needs: e?.needs ?? 0 };
     });
   }
 
@@ -380,6 +377,7 @@ export class Shell {
     if (this.call.belongsTo(id)) this.call.close('closed');
     entry.needs = 0;
     entry.signedOut = true;
+    entry.callLive = false;
     log('info', `signing out of ${entry.company.url}`);
     this.changed();
   }
@@ -389,6 +387,16 @@ export class Shell {
     if (!entry || entry.needs === needs) return;
     entry.needs = needs;
     this.changed();
+  }
+
+  setCallLive(id: string, live: boolean): void {
+    const entry = this.entries.get(id);
+    if (entry) entry.callLive = live;
+  }
+
+  /** A call is live in the small window or in any company's page: "Restart to update" waits for it. */
+  get callLive(): boolean {
+    return anyCallLive(this.call.live, [...this.entries.values()]);
   }
 
   setFilesOrigin(id: string, origin: string): void {
@@ -409,17 +417,21 @@ export class Shell {
     this.call.open(company, callId);
   }
 
+  /** Sends to a company's view only while it shows the company's own page: never to a provider's page it reached. */
+  private sendToPage(e: Entry, channel: string, value: unknown): void {
+    const wc = e.view.webContents;
+    if (!wc.isDestroyed() && onOwnOrigin(wc.getURL(), e.company.url)) wc.send(channel, value);
+  }
+
   private notifyCall(companyId: string, state: CallWindowState): void {
-    const wc = this.entries.get(companyId)?.view.webContents;
-    if (wc && !wc.isDestroyed()) wc.send('call:state', state);
+    const entry = this.entries.get(companyId);
+    if (entry) this.sendToPage(entry, 'call:state', state);
     if (state === 'return') this.switchTo(companyId);
   }
 
   /** Tells every page the list changed (each sees itself marked), and updates the badge and the menus. */
   changed(): void {
-    for (const [id, e] of this.entries) {
-      if (!e.view.webContents.isDestroyed()) e.view.webContents.send('companies:changed', this.list(id));
-    }
+    for (const [id, e] of this.entries) this.sendToPage(e, 'companies:changed', this.list(id));
     const badge = badgeFor([...this.entries.values()]);
     if (badge.text !== this.lastBadge) {
       this.lastBadge = badge.text;
