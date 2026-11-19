@@ -131,9 +131,9 @@ pub fn usage_tokens(usage: &Value) -> (i64, i64) {
 }
 
 /// A model request's usage from a stream-json line: (its message id, when the line names one; uncached input with cache
-/// writes, cache reads, output). `message_start` and each content block's `assistant` line carry the request's usage so
-/// far; the `message_delta` that ends it names no id and carries the final output count.
-fn request_usage(msg: &Value) -> Option<(Option<&str>, [i64; 3])> {
+/// writes, cache reads, output, and the cache writes alone). `message_start` and each content block's `assistant` line
+/// carry the request's usage so far; the `message_delta` that ends it names no id and carries the final output count.
+fn request_usage(msg: &Value) -> Option<(Option<&str>, [i64; 4])> {
     let ev = &msg["event"];
     let (id, u) = match (
         msg["type"].as_str()?,
@@ -151,8 +151,9 @@ fn request_usage(msg: &Value) -> Option<(Option<&str>, [i64; 3])> {
         usage_tokens(u).0 - cached,
         cached,
         count(u, "output_tokens"),
+        count(u, "cache_creation_input_tokens"),
     ];
-    tokens
+    tokens[..3]
         .iter()
         .any(|n| *n > 0)
         .then_some((id.filter(|id| !id.is_empty()), tokens))
@@ -229,6 +230,7 @@ impl VoiceSession {
             for (_, r, _) in &u.requests {
                 u.input += r[0] + r[1];
                 u.cached += r[1];
+                u.cache_write += r[3];
                 u.output += r[2];
             }
         }
@@ -282,7 +284,10 @@ struct Pipe {
     order: Vec<String>,
     /// The follow-ups written after the prompt, in order: a restart of a missing session writes them again.
     followups: Vec<String>,
-    cost: f64,
+    /// What the session had spent, by Claude's own cumulative count, before this process's next `result`: the
+    /// transcript's last `cost-state` when the process started (Claude restores it on `--resume`, a fork's too), then
+    /// each `result`'s. None when that start is not known.
+    cost: Option<Spent>,
     awaiting: Option<Instant>,
     timed_out: bool,
     /// Claude reported a usage limit: unless model work follows, the turn ends here, `result` or not.
@@ -557,8 +562,14 @@ struct Usage {
     cache_write: i64,
     cost: Option<f64>,
     texts: Vec<String>,
-    /// Each model request this turn, the bot's and its subagents', in the order Claude made them; true for the bot's own.
-    requests: Vec<(String, [i64; 3], bool)>,
+    /// Each model request this turn, the bot's and its subagents', in the order Claude made them ([`request_usage`]);
+    /// true for the bot's own.
+    requests: Vec<(String, [i64; 4], bool)>,
+    /// How many of `requests` a `result` has accounted for: those after it no result counted yet.
+    settled: usize,
+    /// A `result` spent money this turn that could not be told apart from the session's earlier spend: the turn's
+    /// cost is left unknown, and the server prices its tokens (backend/execution.py run_usage), never a session total.
+    cost_unknown: bool,
     /// The request each stream (the bot's, or a subagent's by its `parent_tool_use_id`) is in, for its `message_delta`.
     streaming: HashMap<String, String>,
 }
@@ -573,7 +584,7 @@ impl Usage {
         self.cache_write += count(usage, "cache_creation_input_tokens");
     }
 
-    fn record_request(&mut self, msg: &Value, id: Option<&str>, tokens: [i64; 3]) {
+    fn record_request(&mut self, msg: &Value, id: Option<&str>, tokens: [i64; 4]) {
         let stream = msg["parent_tool_use_id"].as_str().unwrap_or_default();
         let id = match id {
             Some(id) => {
@@ -584,7 +595,7 @@ impl Usage {
         };
         if let Some(id) = id {
             match self.requests.iter_mut().find(|(seen, _, _)| seen == id) {
-                Some((_, had, _)) => (0..3).for_each(|i| had[i] = had[i].max(tokens[i])),
+                Some((_, had, _)) => (0..4).for_each(|i| had[i] = had[i].max(tokens[i])),
                 None => self
                     .requests
                     .push((id.to_owned(), tokens, stream.is_empty())),
@@ -597,13 +608,13 @@ impl Usage {
             .iter()
             .rev()
             .find(|(_, _, main)| *main)
-            .map_or(self.input + self.output, |(_, r, _)| r.iter().sum())
+            .map_or(self.input + self.output, |(_, r, _)| r[0] + r[1] + r[2])
     }
 
     fn token_event(&self) -> Value {
         json!({
             "input": self.input, "output": self.output, "total": self.input + self.output,
-            "cost_usd": self.cost,
+            "cost_usd": self.cost.filter(|_| !self.cost_unknown),
             "usage": {
                 "input": self.input, "cached": self.cached, "cache_write": self.cache_write, "output": self.output,
                 // The fourth count tells the server which requests describe the main context.
@@ -612,6 +623,147 @@ impl Usage {
             }
         })
     }
+
+    /// Adds the requests no `result` has accounted for yet to the turn's totals; false when they used nothing.
+    fn add_unsettled(&mut self) -> bool {
+        let mut used = false;
+        for (_, [inp, cached, out, writes], _) in self.requests.iter().skip(self.settled) {
+            self.input += inp + cached;
+            self.cached += cached;
+            self.cache_write += writes;
+            self.output += out;
+            used |= inp + cached + out > 0;
+        }
+        self.settled = self.requests.len();
+        used
+    }
+}
+
+/// A Claude session's spend so far as Claude counts it: a `result`'s `total_cost_usd` and `modelUsage`, or the
+/// transcript's `cost-state` record (`totalCostUSD`, `modelUsage`) that Claude writes as a process exits and restores
+/// when a later process resumes or forks the session.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Spent {
+    cost: f64,
+    models: serde_json::Map<String, Value>,
+}
+
+/// The `modelUsage` counts compared: uncached input, cache reads, cache writes, output.
+const MODEL_TOKENS: [&str; 4] = [
+    "inputTokens",
+    "cacheReadInputTokens",
+    "cacheCreationInputTokens",
+    "outputTokens",
+];
+
+/// How far back from a transcript's end its last `cost-state` is looked for: past that the start is unknown.
+const COST_STATE_SCAN: u64 = 8 << 20;
+
+impl Spent {
+    fn of(cost: &Value, models: &Value) -> Option<Spent> {
+        let cost = cost.as_f64().filter(|c| c.is_finite() && *c >= 0.0)?;
+        let models = models.as_object().cloned().unwrap_or_default();
+        Some(Spent { cost, models })
+    }
+
+    fn of_result(result: &Value) -> Option<Spent> {
+        Spent::of(&result["total_cost_usd"], &result["modelUsage"])
+    }
+
+    /// What was spent since `before`: (USD, [uncached input, cache reads, cache writes, output]). None when this
+    /// count cannot have grown from `before`, as when Claude restored a different start than the runner read: less
+    /// money, a model's count that shrank or went missing, or fewer tokens than the `result` itself reports (`used`).
+    fn since(&self, before: &Spent, used: i64) -> Option<(f64, [i64; 4])> {
+        let cost = self.cost - before.cost;
+        if cost < -1e-9 {
+            return None;
+        }
+        let mut added = [0i64; 4];
+        for (model, had) in &before.models {
+            let now = self.models.get(model)?;
+            if MODEL_TOKENS.iter().any(|k| count(now, k) < count(had, k)) {
+                return None;
+            }
+        }
+        for (model, now) in &self.models {
+            let had = before.models.get(model);
+            for (i, k) in MODEL_TOKENS.iter().enumerate() {
+                added[i] += count(now, k) - had.map_or(0, |h| count(h, k));
+            }
+        }
+        if !self.models.is_empty() && added.iter().sum::<i64>() < used {
+            return None;
+        }
+        Some((cost.max(0.0), added))
+    }
+}
+
+/// What the session a turn's Claude starts from had spent: nothing for a new one, else the last `cost-state` in the
+/// transcript it resumes (a fork's source's, which Claude restores too). None when it cannot be read.
+fn start_spent(t: &Thread, thread_id: &str) -> Option<Spent> {
+    let from = match &t.fork_from {
+        Some(from) => from.clone(),
+        None if t.started => session_of(thread_id, t),
+        None => return Some(Spent::default()),
+    };
+    let path = transcript(&t.settings, &from)?;
+    last_cost_state(&path, COST_STATE_SCAN)
+        .ok()
+        .map(Option::unwrap_or_default)
+}
+
+/// The last `cost-state` record in a transcript, read back from its end: Ok(None) when it has none, Err when it cannot
+/// be read, the record is garbled, or none is within `limit` bytes of the end of a longer file.
+fn last_cost_state(path: &std::path::Path, limit: u64) -> Result<Option<Spent>, ()> {
+    const CHUNK: u64 = 64 << 10;
+    // A line longer than this is not a cost-state record (a few hundred bytes a model): it is skipped, not kept whole.
+    const RECORD: usize = 256 << 10;
+    let mut file = std::fs::File::open(path).map_err(|_| ())?;
+    let len = file.metadata().map_err(|_| ())?.len();
+    // `tail`: the start of the line the chunks after this one began, or nothing while skipping a long line (`long`).
+    let (mut end, mut tail, mut long) = (len, Vec::new(), false);
+    while end > 0 {
+        if len - end >= limit {
+            return Err(());
+        }
+        let start = end.saturating_sub(CHUNK);
+        let mut buf = vec![0; (end - start) as usize];
+        file.seek(SeekFrom::Start(start)).map_err(|_| ())?;
+        file.read_exact(&mut buf).map_err(|_| ())?;
+        buf.extend_from_slice(&tail);
+        end = start;
+        // The first line may begin in the chunk before: it waits for that one, unless this is the file's start.
+        let whole = match buf.iter().position(|b| *b == b'\n') {
+            _ if start == 0 => 0,
+            Some(i) => i + 1,
+            None => {
+                long |= buf.len() > RECORD;
+                tail = if long { vec![] } else { buf };
+                continue;
+            }
+        };
+        let mut lines: Vec<&[u8]> = buf[whole..].split(|b| *b == b'\n').collect();
+        if std::mem::take(&mut long) {
+            lines.pop(); // where the long line began
+        }
+        for line in lines.into_iter().rev() {
+            if !line.windows(10).any(|w| w == b"cost-state") {
+                continue;
+            }
+            let record: Value = serde_json::from_slice(line).map_err(|_| ())?;
+            if record["type"] == "cost-state" {
+                return Spent::of(&record["totalCostUSD"], &record["modelUsage"])
+                    .map(Some)
+                    .ok_or(());
+            }
+        }
+        tail = buf[..whole].to_vec();
+        long = tail.len() > RECORD;
+        if long {
+            tail.clear();
+        }
+    }
+    Ok(None)
 }
 
 #[derive(Default)]
@@ -630,6 +782,8 @@ struct Inner {
     reader: Option<tokio::task::JoinHandle<()>>,
     /// The status file of the reaping parent the last launched Claude runs under (crate::reap).
     reaping: Option<std::path::PathBuf>,
+    /// What the session the last launched Claude starts from had spent (Pipe::cost).
+    start_spent: Option<Spent>,
     /// How far each thread's transcript has been read for goal records.
     goal_offsets: HashMap<String, u64>,
     /// This turn's tool calls by `tool_use` id, the bot's own and its subagents'.
@@ -1156,6 +1310,9 @@ impl ClaudeHost {
         effort: Option<&str>,
     ) -> Result<String, HostError> {
         let turn = uuid::Uuid::new_v4().to_string();
+        // Read before the turn takes the lock: a long transcript is read back a chunk at a time.
+        let thread = self.inner().threads.get(thread_id).cloned();
+        let spent = thread.as_ref().and_then(|t| start_spent(t, thread_id));
         let (child, stderr, transcript_bytes) = {
             let mut inner = self.inner();
             if !inner.up {
@@ -1175,6 +1332,7 @@ impl ClaudeHost {
             if let Some(size) = size {
                 inner.goal_offsets.insert(thread_id.into(), size);
             }
+            inner.start_spent = spent;
             let (child, stderr, reaping) = self
                 .launch(thread_id, &t, effort, &turn)
                 .map_err(|e| failed(format!("could not start claude: {e}")))?;
@@ -1256,7 +1414,7 @@ impl ClaudeHost {
             unread: HashSet::from([first.clone()]),
             order: vec![first],
             followups: vec![],
-            cost: 0.0,
+            cost: inner.start_spent.take(),
             awaiting: None,
             timed_out: false,
             limit_at: None,
@@ -1478,6 +1636,8 @@ impl ClaudeHost {
                             t.session_id = None;
                             t.restored = true;
                             let t = t.clone();
+                            // A new session: Claude restores no earlier spend.
+                            inner.start_spent = Some(Spent::default());
                             self.launch(&tid, &t, effort.as_deref(), &turn)
                                 .ok()
                                 .map(|(c, s, r)| {
@@ -1729,21 +1889,48 @@ impl ClaudeHost {
 
     /// A `result` arrived: the turn is over when Claude read every message written to it.
     fn settle(&self, turn: &str, result: &Value) {
+        let (inp, out) = usage_tokens(&result["usage"]);
         let mut inner = self.inner();
-        let cost = result["total_cost_usd"].as_f64();
         let text = result["result"].as_str().unwrap_or_default().to_string();
-        let mut pipe_cost = inner.pipe.as_ref().map_or(0.0, |p| p.cost);
+        // `total_cost_usd` and `modelUsage` are the session's whole spend, a resumed one's from before this process
+        // too: the turn is charged what they grew by since the process's last known count.
+        let before = inner.pipe.as_ref().and_then(|p| p.cost.clone());
+        let now = Spent::of_result(result);
+        let added = before
+            .as_ref()
+            .zip(now.as_ref())
+            .and_then(|(b, n)| n.since(b, inp + out));
         let u = inner.usage.entry(turn.into()).or_default();
-        u.add_result_counts(result);
-        if let Some(c) = cost {
-            u.cost = Some(u.cost.unwrap_or(0.0) + (c - pipe_cost).max(0.0));
-            pipe_cost = c;
+        if inp + out > 0 {
+            u.add_result_counts(result);
+        } else {
+            // A step a "now" steer cut short ends on a result of no usage though its request ran, and a /compact's
+            // summary request is in no stream at all. The session's count has both, when its start is known; else
+            // the stream's requests since the last result do.
+            match added.filter(|(_, t)| t.iter().any(|n| *n > 0)) {
+                Some((_, [i, c, w, o])) => {
+                    u.input += i + c + w;
+                    u.cached += c;
+                    u.cache_write += w;
+                    u.output += o;
+                }
+                None => {
+                    u.add_unsettled();
+                }
+            }
+        }
+        u.settled = u.requests.len();
+        match (&now, added) {
+            (_, Some((cost, _))) => u.cost = Some(u.cost.unwrap_or(0.0) + cost),
+            (Some(n), None) if n.cost > 0.0 => u.cost_unknown = true,
+            _ => {}
         }
         if !text.is_empty() && u.texts.last() != Some(&text) {
             u.texts.push(text);
         }
         if let Some(p) = inner.pipe.as_mut() {
-            p.cost = pipe_cost;
+            // This process's own count from here on, whatever it started from; none, and the next is unknown.
+            p.cost = now;
             let first = p.first.clone();
             p.unread.remove(&first);
             if crate::util::truthy(result.get("is_error")) {
@@ -2136,8 +2323,13 @@ impl ClaudeHost {
             if !inner.done_turns.insert(turn.into()) {
                 return;
             }
-            let usage = inner.usage.remove(turn);
-            if let Some(u) = usage.as_ref() {
+            let mut usage = inner.usage.remove(turn);
+            if let Some(u) = usage.as_mut() {
+                // Requests no `result` came after (a stopped or killed process) ran all the same; what they cost
+                // Claude never said, so a cost from earlier results is not the turn's.
+                if u.add_unsettled() {
+                    u.cost_unknown = true;
+                }
                 // The newest of the bot's own requests is the session's context; without them, the turn's whole usage
                 // is more than it, never less.
                 let last = u.context_tokens();
@@ -3163,6 +3355,308 @@ mod tests {
         }
         std::fs::remove_dir_all(dir).unwrap();
         (got, steered)
+    }
+
+    /// A `modelUsage` for one model: uncached input, cache reads, cache writes, output.
+    fn model_usage(n: [i64; 4]) -> Value {
+        json!({"claude-haiku-5-5": {"inputTokens": n[0], "cacheReadInputTokens": n[1], "cacheCreationInputTokens": n[2],
+                                    "outputTokens": n[3], "costUSD": 0}})
+    }
+
+    fn cost_state(cost: f64, n: [i64; 4]) -> String {
+        json!({"type": "cost-state", "sessionId": "s", "totalCostUSD": cost, "modelUsage": model_usage(n)}).to_string()
+    }
+
+    fn cost_result(cost: f64, usage: [i64; 4], session: [i64; 4]) -> String {
+        json!({"type": "result", "subtype": "success", "is_error": false, "result": "Done.", "num_turns": 1,
+               "total_cost_usd": cost, "modelUsage": model_usage(session),
+               "usage": {"input_tokens": usage[0], "cache_read_input_tokens": usage[1],
+                         "cache_creation_input_tokens": usage[2], "output_tokens": usage[3]}})
+        .to_string()
+    }
+
+    /// One turn whose Claude prints `out`: on a new session, on a resumed one or on a fork of "old-session", with
+    /// `saved` as the transcript the resumed or forked session starts from (none: not on this computer). Its events.
+    async fn cost_turn(how: &str, saved: Option<&str>, out: &str) -> Vec<Value> {
+        let dir =
+            std::env::temp_dir().join(format!("claude-cost-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join(".claude/projects/acme")).unwrap();
+        std::fs::write(dir.join("out.jsonl"), out).unwrap();
+        let path = dir.join("claude");
+        crate::util::write_script(
+            &path,
+            "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.327 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\nIFS= read -r line\ncat out.jsonl\ncat >/dev/null\n",
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            ..Default::default()
+        };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        settings
+            .env
+            .insert("HOME".into(), dir.display().to_string());
+        let (thread, session) = match how {
+            "new" => (host.start_thread(&settings), String::new()),
+            "fork" => (
+                host.start_thread_forked(&settings, "old-session"),
+                "old-session".to_string(),
+            ),
+            _ => {
+                let id = uuid::Uuid::new_v4().to_string();
+                (host.resume_thread(&id, &settings), id)
+            }
+        };
+        if let Some(saved) = saved {
+            std::fs::write(
+                dir.join(format!(".claude/projects/acme/{session}.jsonl")),
+                saved,
+            )
+            .unwrap();
+        }
+        host.start_turn(&thread, "hello", None).unwrap();
+        let mut got = vec![];
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            let idle = ev["kind"] == "status" && ev["state"] == "idle";
+            got.push(ev);
+            if idle {
+                break;
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+        got
+    }
+
+    fn tokens_of(got: &[Value]) -> Value {
+        got.iter()
+            .find(|e| e["kind"] == "tokens")
+            .cloned()
+            .unwrap_or_else(|| panic!("no tokens: {got:?}"))
+    }
+
+    /// A transcript as Claude leaves it: messages, the cost-state its last process wrote as it exited, and what a
+    /// later killed process wrote with no cost-state of its own; a message that names the record is not one.
+    fn saved(cost: f64, n: [i64; 4]) -> String {
+        [
+            r#"{"type": "user", "message": {"role": "user", "content": "hello"}}"#.to_string(),
+            cost_state(0.4, [1, 100, 100, 10]),
+            r#"{"type": "system", "subtype": "compact_boundary"}"#.to_string(),
+            cost_state(cost, n),
+            r#"{"type": "user", "message": {"role": "user", "content": "what is a cost-state record?"}}"#.to_string(),
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    #[tokio::test]
+    async fn a_resumed_session_records_only_what_this_turn_spent() {
+        // Claude restores the session's 1.50 and counts on from it: this turn spent 0.25 of the 1.75 it reports.
+        let out = cost_result(1.75, [2, 3000, 500, 40], [12, 23000, 2500, 240]) + "\n";
+        let got = cost_turn("resume", Some(&saved(1.5, [10, 20000, 2000, 200])), &out).await;
+        let tokens = tokens_of(&got);
+        assert!(
+            (tokens["cost_usd"].as_f64().unwrap() - 0.25).abs() < 1e-9,
+            "{tokens}"
+        );
+        assert_eq!(tokens["usage"]["input"], json!(3502), "{tokens}");
+    }
+
+    #[tokio::test]
+    async fn a_fork_records_only_what_it_spent_past_its_source() {
+        // `--fork-session` restores the source session's spend as well (Claude Code 2.1.327).
+        let out = cost_result(2.1, [2, 3000, 500, 40], [12, 23000, 2500, 240]) + "\n";
+        let got = cost_turn("fork", Some(&saved(2.0, [10, 20000, 2000, 200])), &out).await;
+        assert!(
+            (tokens_of(&got)["cost_usd"].as_f64().unwrap() - 0.1).abs() < 1e-9,
+            "{got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_new_session_records_what_it_reports() {
+        let out = cost_result(0.3, [2, 3000, 500, 40], [2, 3000, 500, 40]) + "\n";
+        let got = cost_turn("new", None, &out).await;
+        assert!(
+            (tokens_of(&got)["cost_usd"].as_f64().unwrap() - 0.3).abs() < 1e-9,
+            "{got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_start_leaves_the_cost_to_the_server_never_the_session_total() {
+        let out = cost_result(1.75, [2, 3000, 500, 40], [12, 23000, 2500, 240]) + "\n";
+        // No transcript where the turn's Claude keeps it; a garbled cost-state; a start Claude did not restore (less
+        // spent than it, or fewer tokens): the tokens still go, at no cost of the runner's.
+        let garbled = saved(1.5, [10, 20000, 2000, 200])
+            + "{\"type\": \"cost-state\", \"totalCostUSD\": 1.\n";
+        let more = saved(2.5, [10, 20000, 2000, 200]);
+        let fewer = saved(1.0, [10, 90000, 2000, 200]);
+        for (start, why) in [
+            (None, "missing"),
+            (Some(garbled.as_str()), "garbled"),
+            (Some(more.as_str()), "not restored"),
+            (Some(fewer.as_str()), "fewer tokens"),
+        ] {
+            let got = cost_turn("resume", start, &out).await;
+            let tokens = tokens_of(&got);
+            assert_eq!(tokens["cost_usd"], Value::Null, "{why}: {tokens}");
+            assert_eq!(tokens["usage"]["input"], json!(3502), "{why}: {tokens}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_step_a_steer_cut_short_keeps_the_tokens_its_stream_reported() {
+        // Claude Code 2.1.327 ends the cut-short step on a result of no usage; the steer's own result follows.
+        let start = r#"{"type": "stream_event", "event": {"type": "message_start", "message": {"id": "m1", "usage": {"input_tokens": 2, "cache_creation_input_tokens": 3704, "cache_read_input_tokens": 14877, "output_tokens": 8}}}}"#;
+        let delta = r#"{"type": "stream_event", "event": {"type": "message_delta", "usage": {"input_tokens": 2, "cache_creation_input_tokens": 3704, "cache_read_input_tokens": 14877, "output_tokens": 8}}}"#;
+        let cut = cost_result(0.0009, [0, 0, 0, 0], [2, 14877, 3704, 8]);
+        let steer = r#"{"type": "stream_event", "event": {"type": "message_start", "message": {"id": "m2", "usage": {"input_tokens": 2, "cache_creation_input_tokens": 79, "cache_read_input_tokens": 18556, "output_tokens": 4}}}}"#;
+        let done = cost_result(0.0011, [2, 18556, 79, 4], [4, 33433, 3783, 12]);
+        let out = [start, delta, &cut, steer, &done].join("\n") + "\n";
+        let got = cost_turn("new", None, &out).await;
+        let tokens = tokens_of(&got);
+        assert_eq!(
+            (
+                &tokens["usage"]["input"],
+                &tokens["usage"]["cached"],
+                &tokens["usage"]["cache_write"],
+                &tokens["usage"]["output"]
+            ),
+            (
+                &json!(3706 + 14877 + 18637),
+                &json!(14877 + 18556),
+                &json!(3704 + 79),
+                &json!(12)
+            ),
+            "{tokens}"
+        );
+        assert!(
+            (tokens["cost_usd"].as_f64().unwrap() - 0.0011).abs() < 1e-9,
+            "{tokens}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_request_no_result_followed_keeps_its_tokens_and_leaves_the_cost_unknown() {
+        // A priced result, then a follow-up's request the process was stopped in: what that cost Claude never said.
+        let first = cost_result(0.05, [2, 10584, 5833, 8], [2, 10584, 5833, 8]);
+        let more = r#"{"type": "stream_event", "event": {"type": "message_start", "message": {"id": "m2", "usage": {"input_tokens": 2, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 16000, "output_tokens": 30}}}}"#;
+        let got = cost_turn("new", None, &[first.as_str(), more].join("\n")).await;
+        let tokens = tokens_of(&got);
+        assert_eq!(tokens["cost_usd"], Value::Null, "{tokens}");
+        assert_eq!(
+            (&tokens["usage"]["input"], &tokens["usage"]["output"]),
+            (&json!(16419 + 16102), &json!(38)),
+            "{tokens}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_compaction_counts_its_summary_from_the_session_count() {
+        // /compact's summary request is in no stream and its result reports no usage; the session's count grew.
+        // Claude echoes the /compact it read, so this result answers it.
+        let read = r#"{"type": "user", "isReplay": true, "message": {"role": "user", "content": "/compact"}}"#;
+        let out = read.to_string()
+            + "\n"
+            + &json!({"type": "result", "subtype": "success", "is_error": false, "result": "", "num_turns": 0,
+                         "total_cost_usd": 0.0856146, "modelUsage": model_usage([2000, 23378, 9460, 407]),
+                         "usage": {"input_tokens": 0, "output_tokens": 0}})
+        .to_string()
+            + "\n";
+        let got = cost_turn("resume", Some(&saved(0.0488888, [2, 10584, 5833, 5])), &out).await;
+        let tokens = tokens_of(&got);
+        assert_eq!(
+            (
+                &tokens["usage"]["input"],
+                &tokens["usage"]["cached"],
+                &tokens["usage"]["cache_write"],
+                &tokens["usage"]["output"]
+            ),
+            (
+                &json!(1998 + 12794 + 3627),
+                &json!(12794),
+                &json!(3627),
+                &json!(402)
+            ),
+            "{tokens}"
+        );
+        assert!(
+            (tokens["cost_usd"].as_f64().unwrap() - 0.0367258).abs() < 1e-9,
+            "{tokens}"
+        );
+    }
+
+    #[test]
+    fn the_last_cost_state_is_read_back_across_chunks() {
+        let dir = std::env::temp_dir().join(format!("claude-cs-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        let filler = |n: usize| {
+            (0..n)
+                .map(|i| {
+                    json!({"type": "assistant", "text": "x".repeat(700 + i % 300)}).to_string()
+                        + "\n"
+                })
+                .collect::<String>()
+        };
+        // Records far from the end and straddling a chunk edge: the last one wins.
+        let text = filler(150)
+            + &cost_state(1.0, [1, 2, 3, 4])
+            + "\n"
+            + &filler(100)
+            + &cost_state(2.0, [1, 2, 3, 4])
+            + "\n"
+            + &filler(180);
+        std::fs::write(&path, &text).unwrap();
+        assert_eq!(
+            last_cost_state(&path, COST_STATE_SCAN)
+                .unwrap()
+                .unwrap()
+                .cost,
+            2.0
+        );
+        // Not within reach of a longer file's end: unknown, unlike a file with none.
+        assert!(last_cost_state(&path, 4096).is_err());
+        std::fs::write(&path, filler(200)).unwrap();
+        assert_eq!(last_cost_state(&path, COST_STATE_SCAN), Ok(None));
+        // A line far longer than any record, between two records, is skipped over.
+        let huge = json!({"type": "assistant", "text": "y".repeat(3 << 20)}).to_string();
+        std::fs::write(
+            &path,
+            cost_state(4.0, [1, 2, 3, 4]) + "\n" + &huge + "\n" + &filler(3),
+        )
+        .unwrap();
+        assert_eq!(
+            last_cost_state(&path, COST_STATE_SCAN)
+                .unwrap()
+                .unwrap()
+                .cost,
+            4.0
+        );
+        std::fs::write(
+            &path,
+            huge.clone() + "\n" + &cost_state(5.0, [1, 2, 3, 4]) + "\n" + &huge,
+        )
+        .unwrap();
+        assert_eq!(
+            last_cost_state(&path, COST_STATE_SCAN)
+                .unwrap()
+                .unwrap()
+                .cost,
+            5.0
+        );
+        // The first line of the file, and a file of one line with no newline.
+        std::fs::write(&path, cost_state(3.0, [1, 2, 3, 4])).unwrap();
+        assert_eq!(
+            last_cost_state(&path, COST_STATE_SCAN)
+                .unwrap()
+                .unwrap()
+                .cost,
+            3.0
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
