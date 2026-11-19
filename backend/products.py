@@ -7,6 +7,10 @@ an agreement, `depends_on` a vendor) all live in the Directory's tables, under i
 also reads on its Contacts page and in `tico contacts get`.
 
 A product's path names it by its key: the part of its id after `product/` (a path parameter cannot hold the slash).
+
+Each product also carries its risks (`rollup`): the risks on the matters about it (matters.product_id, set through
+`tico risk matter --product`) and on the agreements it is sold under (risk_links), with a count of its open matters. Both
+follow task privacy as the Risk pages do; its matters list is GET /api/v2/matters?product=<key> (backend/risk.py).
 """
 
 import re
@@ -113,6 +117,50 @@ def install(
             )
         return shown
 
+    def rollup(c: sqlite3.Connection, who: Any, documents: dict[str, set[str]]) -> dict[str, dict[str, Any]]:
+        """Each product's risks as `who` reads them ({product id: {open_matters, risks}}): the open matters about it among
+        the tasks they read (a task that carries a risk, as the matters list has it), and the risks that touch it, through
+        one of those matters (open or closed) or a risk link to an agreement it is sold under (`documents`: the ones the
+        reader sees). A matter keeps the product id it was given, so a merged record counts toward the one it became."""
+        from backend import risk as R
+
+        out: dict[str, dict[str, Any]] = {i: {"open_matters": 0, "via": {}} for i in documents}
+        tasks = c.execute(
+            f"SELECT m.task_id, m.product_id, t.status FROM matters m JOIN (SELECT id, status FROM tasks WHERE "
+            f"({auth.task_sql(c, who)})) t ON t.id = m.task_id WHERE m.product_id IS NOT NULL AND m.task_id IN "  # pyright: ignore[reportUnknownMemberType]
+            "(SELECT tt.task_id FROM task_tags tt JOIN tags g ON g.id = tt.tag_id WHERE g.kind = 'risk')"
+        ).fetchall()
+        links = c.execute("SELECT risk_id, linkable_id FROM risk_links WHERE linkable_type = 'entity'").fetchall()
+        now: dict[str, str] = R._current(c, [r["product_id"] for r in tasks] + [r["linkable_id"] for r in links])  # pyright: ignore[reportPrivateUsage]
+        about: dict[str, str] = {}  # task id -> the product it is about
+        for row in tasks:
+            product = now[row["product_id"]]
+            if product in out:
+                about[row["task_id"]] = product
+                out[product]["open_matters"] += row["status"] == "open"
+        if about:
+            marks = ",".join("?" * len(about))
+            for row in c.execute(
+                "SELECT tt.task_id, tt.tag_id FROM task_tags tt JOIN tags g ON g.id = tt.tag_id "
+                f"WHERE g.kind = 'risk' AND tt.task_id IN ({marks})",
+                list(about),
+            ):
+                out[about[row["task_id"]]]["via"].setdefault(row["tag_id"], set()).add("matter")
+        for row in links:
+            for product, held in documents.items():
+                if now[row["linkable_id"]] in held:
+                    out[product]["via"].setdefault(row["risk_id"], set()).add("agreement")
+        wanted = sorted({risk for entry in out.values() for risk in entry["via"]})
+        readable = {r["id"]: r for r in R.risk_rows(c, who, wanted)} if wanted else {}
+        for entry in out.values():
+            via: dict[str, set[str]] = entry.pop("via")
+            entry["risks"] = [
+                {**{k: readable[risk][k] for k in ("id", "key", "label")}, "via": sorted(via[risk], reverse=True)}
+                for risk in sorted(via, key=lambda r: (str(readable.get(r, {}).get("label", "")).lower(), r))
+                if risk in readable
+            ]
+        return out
+
     def views(c: sqlite3.Connection, who: Any, ids: list[str]) -> list[dict[str, Any]]:
         """Each product as the answers carry it, read in a few queries for the whole list."""
         actor = str(who.actor)
@@ -145,6 +193,11 @@ def install(
                     return None
             return actor
 
+        risks = rollup(
+            c,
+            who,
+            {i: {item["id"] for item in linked[i]["agreements"] if item["id"] in seen} for i in ids},
+        )
         out: list[dict[str, Any]] = []
         for entity_id in ids:
             own = values.get(entity_id, {})
@@ -162,6 +215,7 @@ def install(
                     for item in items:
                         item["file"] = agreement_files.get(item["id"])
                 product[field] = sorted(items, key=lambda item: str(item["name"]).lower())
+            product.update(risks[entity_id])
             out.append(product)
         return sorted(out, key=lambda product: (str(product["name"]).lower(), product["id"]))
 

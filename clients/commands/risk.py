@@ -67,11 +67,12 @@ def risk_show(api, args):
         "kind": _s("Only this kind", enum=MATTER_KINDS),
         "open": {"type": "boolean", "description": "true: open matters only; false: closed ones only"},
         "risk": RISK,
+        "product": _s("Only the matters about this product: its key or id (tico products list)"),
         **PAGE,
     },
 )
 def risk_matters(api, args):
-    query = _present({k: args.get(k) for k in ("kind", "risk", "limit", "offset")})
+    query = _present({k: args.get(k) for k in ("kind", "risk", "product", "limit", "offset")})
     if args.get("open") is not None:
         query["open"] = "true" if args["open"] else "false"
     return _as_person(api).get("matters", **query)
@@ -142,7 +143,7 @@ def risk_update(api, args):
         "side": _s("Whose claim: theirs (default) or ours", enum=["theirs", "ours"]),
         "forum": _s("Where it is: AAA, small claims, a demand letter"),
         "place": _s("A place id from Contacts"),
-        "product": _s("A product id from Contacts"),
+        "product": _s("The product it is about: its key or id (tico products list)"),
         "unset": {"type": "array", "items": {"type": "string", "enum": list(FACTS)}, "description": "Facts to clear"},
         "clear": {"type": "boolean", "description": "Remove all its facts"},
         "version": {"type": "integer", "minimum": 1, "description": "The matter's version as you read it"},
@@ -153,6 +154,8 @@ def risk_update(api, args):
 def risk_matter(api, args):
     body = _present({"kind": args.get("kind"), "version": args.get("version")})
     body.update(_present({FACTS[k]: args.get(k) for k in FACTS}))
+    if body.get("product_id") and "/" not in body["product_id"]:
+        body["product_id"] = "product/" + body["product_id"]  # a product's key, as `tico products list` shows it
     for name in args.get("unset") or ():
         body[FACTS[name]] = None
     if args.get("clear"):
@@ -213,7 +216,7 @@ CLI = (
         "risk matters",
         "matters you can read, newest first",
         args=(Arg("open", default=None),),  # left out: open and closed alike
-        example="tico risk matters --kind dispute --open",
+        example="tico risk matters --product lightshow-kit --open",
     ),
     Command(
         "risk obligations",

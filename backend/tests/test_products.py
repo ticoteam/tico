@@ -248,3 +248,72 @@ def test_values_of_another_shape_read_as_unset_not_as_an_error():
     assert products.text("live") == "live" and products.text(3) is None and products.text("") is None
     assert products.texts("Acme/web") == ["Acme/web"]
     assert products.texts(["Acme/web", 4, ""]) == ["Acme/web"] and products.texts(None) == []
+
+
+def test_a_product_rolls_up_the_risks_on_its_matters_and_agreements_for_who_reads_them(api, monkeypatch):
+    product = ok(api, "post", "products", json={"name": "Lightshow Kit", "agreements": ["Kit Supply"]})["product"]
+    ok(api, "post", "risks", json={"label": "Recall claims"})
+    ok(api, "post", "risks", json={"label": "Supplier terms"})
+    ok(api, "post", "risks", json={"label": "Unrelated"})
+
+    def matter(title, risk, done=False):
+        # Private Legal work: Ana asked for it and ops owns it; Cara reads none of it.
+        task = ok(api, "post", "tasks", json={"owner": "ops", "title": title, "body": "A claim.", "private": True})
+        task = task["task"]
+        ok(api, "post", "tasks/" + task["id"], json={"version": task["version"], "labels": [risk]})
+        ok(api, "post", f"tasks/{task['id']}/matter", json={"kind": "dispute", "product_id": product["id"]})
+        if done:
+            ok(api, "post", f"tasks/{task['id']}/done", json={"note": "Settled."})
+        return task["id"]
+
+    open_id = matter("Kit overheated", "risk:recall-claims")
+    closed_id = matter("Kit arrived broken", "risk:recall-claims", done=True)
+    elsewhere = ok(api, "post", "tasks", json={"owner": "ops", "title": "No product", "body": "A claim."})["task"]
+    ok(api, "post", "tasks/" + elsewhere["id"], json={"version": elsewhere["version"], "labels": ["risk:unrelated"]})
+    [agreement] = product["agreements"]
+    link = {"linkable_type": "entity", "linkable_id": agreement["id"], "role": "covers"}
+    ok(api, "post", "risks/risk:supplier-terms/links", json=link)
+
+    def rollup(token):
+        shown = ok(api, "get", "products/" + product["key"], token)["product"]
+        [listed] = ok(api, "get", "products", token)["products"]
+        assert {k: listed[k] for k in ("open_matters", "risks")} == {k: shown[k] for k in ("open_matters", "risks")}
+        return shown["open_matters"], [(r["key"], r["label"], r["via"]) for r in shown["risks"]]
+
+    assert rollup("ana-test") == (
+        1,
+        [("risk:recall-claims", "Recall claims", ["matter"]), ("risk:supplier-terms", "Supplier terms", ["agreement"])],
+    )
+    # Cara reads none of the matters: the agreement's risk still shows, the matters' risk and count do not.
+    assert rollup("cara-test") == (0, [("risk:supplier-terms", "Supplier terms", ["agreement"])])
+
+    document = ok(api, "get", "openapi.json")
+    schema = document["paths"]["/api/v2/products/{key}"]["get"]["responses"]["200"]["content"]["application/json"]
+    assert conforms(ok(api, "get", "products/" + product["key"]), schema["schema"], document) is None
+
+    # The matters list filters by product, by its key or its id, open ones first.
+    for ident in (product["key"], product["id"]):
+        rows = ok(api, "get", "matters", params={"product": ident})["matters"]
+        assert [(r["task"]["id"], r["task"]["status"]) for r in rows] == [(open_id, "open"), (closed_id, "done")]
+        assert all(r["matter"]["product"]["id"] == product["id"] for r in rows)
+    assert ok(api, "get", "matters", "cara-test", params={"product": product["key"]})["matters"] == []
+    assert answer(api, "get", "matters", params={"product": "no-such-kit"}).status_code == 404
+
+    # `tico risk matter --product` takes the key `tico products list` shows; `tico risk matters --product` reads back.
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: Forward(api))
+
+    def tico(*argv):
+        return remotecli.run(hubcli.parser().parse_args(["risk", *argv]))
+
+    tico("matter", elsewhere["id"], "--kind", "notice", "--product", product["key"])
+    with api.app.state.store.transaction() as c:
+        stored = c.execute("SELECT product_id FROM matters WHERE task_id=?", (elsewhere["id"],)).fetchone()[0]
+    assert stored == product["id"]
+    tico("matters", "--product", product["key"], "--open")
+    assert ok(api, "get", "products/" + product["key"])["product"]["open_matters"] == 2
+    assert [r["key"] for r in ok(api, "get", "products/" + product["key"])["product"]["risks"]] == [
+        "risk:recall-claims",
+        "risk:supplier-terms",
+        "risk:unrelated",
+    ]
