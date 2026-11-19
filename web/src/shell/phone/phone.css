@@ -173,7 +173,11 @@ html:has(.ph),html:has(.ph) body{height:100%;overflow:hidden;overscroll-behavior
 .ph .ly-menu .co-pick{height:44px;font-size:var(--t-md)}
 .ph .ly-menu .co-pick .co-mark{color:var(--c-menu)}
 
-/* the second chat */
+/* the second chat. Its sheet is a desktop side sheet (.pane.side), which the phone rules hide (parts.css): in the card
+   it is drawn again and fills the card, so the conversation scrolls inside it and its box holds the bottom. Its head
+   is the mock's .c-head. */
+.ph .ly-chat>.full>.pane{display:flex;flex:1;min-height:0;border-radius:0;box-shadow:none;--surface:var(--c-chat)}
+.ph .ly-chat .side-head{height:60px;padding:6px 6px 0 16px;border-bottom:0;touch-action:none}
 .ph .c-head{flex:none;height:60px;display:flex;align-items:center;gap:10px;padding:6px 6px 0 16px}
 .ph .c-head b{font-weight:var(--w-title);font-size:var(--t-md);line-height:var(--lh-tight);margin-right:auto;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .ph .ly-chat .chat-body{padding:4px 16px 20px}

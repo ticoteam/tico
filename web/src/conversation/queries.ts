@@ -344,6 +344,14 @@ export interface SlackPlace {
   thread: string;
 }
 
+/** Whether a message came in from Slack. Every writer stores the channel and the message's time there (`refs.slack`:
+    backend/slack_gateway.py refs_for adds a link, the agent it went to and more; backend/slack_threads.py, a linked
+    channel, stores only `channel`, `ts` and `team`). */
+export function fromSlack(m: Pick<ChatMessage, 'refs'>): boolean {
+  const s = m.refs?.slack;
+  return typeof s?.channel === 'string' && !!s.channel && typeof s.ts === 'string' && !!s.ts;
+}
+
 /** A message that came in from Slack (`refs.slack`, backend/slack_gateway.py refs_for): its thread, read as the agent
     it was routed to. Null when the message did not come from Slack or names no agent. */
 export function slackPlaceOf(m: Pick<ChatMessage, 'refs'>): SlackPlace | null {

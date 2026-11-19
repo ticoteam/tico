@@ -17,7 +17,7 @@ import { clock, took } from './dates';
 import { Markdown } from '@/kit/Markdown';
 import { PictureViewer, type Picture } from '@/kit/PictureViewer';
 import { Rate, Rated, type RateControls } from './Feedback';
-import { proposalQuery, slackPlaceOf, slackThreadQuery, type Feedback, type SlackPlace } from './queries';
+import { fromSlack, proposalQuery, slackPlaceOf, slackThreadQuery, type Feedback, type SlackPlace } from './queries';
 import type { Attachment, ChatMessage, LiveRun, Variant } from './types';
 
 export interface Who {
@@ -126,13 +126,22 @@ const slackHref = (m: ChatMessage) => {
 };
 const slackChannel = (m: ChatMessage) => (m.refs?.slack?.channel_name ? `#${m.refs.slack.channel_name.replace(/^#/, '')}` : '');
 
-/** Said in Slack: where, as a link to the message there. The owner reads the whole Slack thread here instead. */
+/** Said in Slack: where, as a link to the message there. The owner reads the whole Slack thread here instead. A message
+    carried by a linked Slack channel keeps only its channel and time there (backend/slack_threads.py): the mark then
+    stands without a link. */
 function FromSlack({ m, onRead }: { m: ChatMessage; onRead: () => void }) {
   const { data: me } = useQuery(meQuery);
+  if (!fromSlack(m)) return null;
   const href = slackHref(m);
   const readable = me?.role === 'owner' && !!slackPlaceOf(m);
-  if (!href && !readable) return null;
   const where = slackChannel(m) ? `Slack ${slackChannel(m)}` : 'Slack';
+  if (!readable && !href)
+    return (
+      <span className="fold">
+        <Icon name="threads" />
+        <span>{where}</span>
+      </span>
+    );
   if (!readable)
     return (
       <a className="fold msg-from" href={href!} target="_blank" rel="noreferrer" title="Open in Slack">

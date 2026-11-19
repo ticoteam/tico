@@ -213,4 +213,12 @@ describe('A message that came from a Slack thread @s190', () => {
     expect(link.getAttribute('href')).toBe('https://example.slack.com/archives/C1/p1');
     expect(screen.queryByRole('button', { name: 'Slack #launch' })).toBeNull();
   });
+
+  it('a message carried from a linked Slack channel (its channel and time there, no link, no agent) still says so', async () => {
+    serve(() => ({ status: 200, body: { items: [], counts: [] } }));
+    show([{ ...msg(4, 'human:ana', 'Shipping Friday'), refs: { slack: { channel: 'C1', ts: '1789800000.000300' } } }], 'owner');
+    expect(await screen.findByText('Slack')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Slack' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Slack' })).toBeNull();
+  });
 });

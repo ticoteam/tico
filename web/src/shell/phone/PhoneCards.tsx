@@ -52,7 +52,7 @@ const Ctx = createContext<PhoneCardsControls | null>(null);
 export const usePhoneCards = () => use(Ctx);
 
 const KEY = 'tico-next:card';
-const GRAB = '.lip,.nub,.grab,.tico-head,.m-head,.c-head,.call-head,[data-grab]';
+const GRAB = '.lip,.nub,.grab,.tico-head,.m-head,.c-head,.ly-chat .side-head,.call-head,[data-grab]';
 const PRESSABLE = 'button,a,input,textarea,select,label,[contenteditable],[role="button"],[role="tab"],[role="link"]';
 const EDITABLE = 'input,textarea,select,[contenteditable]:not([contenteditable="false"])';
 const LIP = { tico: 58, peek: 84, menu: 38, chat: 38, draw: 28 } as const;
@@ -79,12 +79,13 @@ type Drag = {
 };
 
 export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = {}, peek, handle = false, labels = {}, onCardChange }: PhoneCardsProps) {
-  const [card, setCard] = useState<PhoneCard>('none');
+  // a chat that opens comes up; a call that starts takes over; either one ending tucks its card. An address that
+  // already names one (a shared link, a reload) opens on it.
+  const second = call ? 'call' : chat ? 'chat' : null;
+  const [card, setCard] = useState<PhoneCard>(second ? 'chat' : 'none');
   const root = useRef<HTMLDivElement>(null);
   const id = useId();
 
-  // a chat that opens comes up; a call that starts takes over; either one ending tucks its card
-  const second = call ? 'call' : chat ? 'chat' : null;
   const [seen, setSeen] = useState(second);
   if (seen !== second) {
     setSeen(second);
@@ -99,6 +100,7 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
   const label = { tico: 'Tico', menu: 'Menu', chat: second === 'call' ? (labels.call ?? 'Call') : (labels.chat ?? 'Chat') };
 
   // ---------- history, focus and the callback: everything that follows a change of card ----------
+  const router = useRouter({ warn: false });
   const was = useRef<PhoneCard>('none');
   const fromHistory = useRef(false);
   const navigating = useRef(false);
@@ -106,7 +108,28 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
   useLayoutEffect(() => {
     cardNow.current = card;
   });
+  // declared before the effect below so it runs first: a reload keeps the entry but not the card, so a stale mark is
+  // dropped (a tuck must never leave the page). A mark for the card the page opened on (a chat address) is kept.
   useEffect(() => {
+    const marked = historyCard(window.history.state);
+    if (marked && marked !== cardNow.current) {
+      const rest = { ...(window.history.state as Record<string, unknown>) };
+      delete rest[KEY];
+      window.history.replaceState(rest, '');
+    }
+    const onPop = (e: PopStateEvent) => {
+      const next = historyCard(e.state) ?? 'none';
+      if (next === cardNow.current) return;
+      fromHistory.current = true;
+      setCard(next);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+  const opened = useRef(false);
+  useEffect(() => {
+    const first = !opened.current;
+    opened.current = true;
     const prev = was.current;
     if (prev === card) return;
     was.current = card;
@@ -115,8 +138,14 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     fromHistory.current = false;
     navigating.current = false;
     if (!restoring) {
+      // The router writes a navigation to the address a moment later (a microtask), and it rereads the address on any
+      // other write. A card that comes up with that navigation (a chat opened from a menu sheet) would write first
+      // and take the router back to the old address, so the router's own write goes first.
+      router?.history.flush();
       const state = (window.history.state ?? {}) as Record<string, unknown>;
-      if (card !== 'none' && prev === 'none') window.history.pushState({ ...state, [KEY]: card }, '');
+      // the card the page opened on, after a reload that kept its mark: that entry is already its own
+      const reopened = first && historyCard(state) === card;
+      if (card !== 'none' && prev === 'none' && !reopened) window.history.pushState({ ...state, [KEY]: card }, '');
       else if (card !== 'none') window.history.replaceState({ ...state, [KEY]: card }, '');
       // a link in the menu pushes its own entry; going back here would race it. Back later returns to the menu.
       else if (historyCard(state) && !leaving) window.history.back();
@@ -131,24 +160,7 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
       const from = el.querySelector(`.ly-${prevSlot}`);
       if (from?.contains(document.activeElement)) from.querySelector<HTMLElement>(':scope > .lip')?.focus({ preventScroll: true });
     }
-  }, [card, onCardChange]);
-
-  useEffect(() => {
-    // a reload keeps the entry but not the card: drop the stale mark so a tuck never leaves the page
-    if (historyCard(window.history.state)) {
-      const rest = { ...(window.history.state as Record<string, unknown>) };
-      delete rest[KEY];
-      window.history.replaceState(rest, '');
-    }
-    const onPop = (e: PopStateEvent) => {
-      const next = historyCard(e.state) ?? 'none';
-      if (next === cardNow.current) return;
-      fromHistory.current = true;
-      setCard(next);
-    };
-    window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
-  }, []);
+  }, [card, onCardChange, router]);
 
   const raise = (next: Exclude<PhoneCard, 'none'>) => setCard(next);
   const tuck = () => setCard('none');
@@ -367,7 +379,6 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
 
   // a place picked in the menu: the menu tucks and the page comes forward. The menu's history entry gives way to the
   // page it opens (a replace, before the link's own push), so Back goes to the page before, not to a stranded menu.
-  const router = useRouter({ warn: false });
   const onMenuClick = (e: MouseEvent<HTMLDivElement>) => {
     const a = (e.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
     if (!a) return;

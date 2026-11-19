@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/api/client';
 import type { GetNeedsYouResponse, ModelSubscriptionList, NeedsYouItem } from '@/api/schema';
 import { queryClient } from '@/data';
-import { adaptNeeds, loginQuery, needHref, needsSetup, readLogin, screenFor, startConnect, type SetupRecord } from './queries';
+import { adaptNeeds, loginQuery, needHref, needLine, needsSetup, readLogin, screenFor, startConnect, type SetupRecord } from './queries';
 import { resumeStep, setupStep, stepBefore } from './steps';
 
 const err = (status: number, signIn: string | null = null) => new ApiError(status, 'x', 'Not on the list', false, signIn);
@@ -40,6 +40,19 @@ describe('needs', () => {
       ['n1', 'Approve the plan', '/task/t1', 'bot:ada'],
       ['n2', 'Approve the plan', '/task/t2', undefined],
     ]);
+  });
+
+  it('titles an ask by its task, with the kind it shares with other tasks beside it', () => {
+    const brief = (title: string) => ({ title }) as NonNullable<NeedsYouItem['task']>;
+    expect(needLine(need({ kind: 'ask', line: 'Spec', task: brief('Rename the export button') }))).toEqual({ title: 'Rename the export button', sub: 'Spec' });
+    expect(needLine(need({ kind: 'task', line: 'Let Ada see it', task: brief('Pick a theme') }))).toEqual({ title: 'Pick a theme', sub: 'Let Ada see it' });
+    // a task filed for the OK is titled by its kind: what it is about takes the title
+    expect(needLine(need({ kind: 'ask', line: 'Send $40', about: 'The printer refill', task: brief('OK a Finance action') }))).toEqual({ title: 'The printer refill', sub: 'Send $40' });
+    // a question or an @ is its own words, with its task beside it
+    expect(needLine(need({ kind: 'question', line: 'Which logo?', task: brief('Redo the header') }))).toEqual({ title: 'Which logo?', sub: 'Redo the header' });
+    expect(needLine(need({ kind: 'mention', line: 'Can you look?' }))).toEqual({ title: 'Can you look?', sub: undefined });
+    expect(needLine(need({ kind: 'paused', line: 'Sign-in ended', task: brief('Any') }))).toEqual({ title: 'Sign-in ended', sub: undefined });
+    expect(needLine(need({ kind: 'ask', line: 'Spec' }))).toEqual({ title: 'Spec', sub: undefined });
   });
 });
 
