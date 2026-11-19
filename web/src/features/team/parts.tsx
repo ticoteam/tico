@@ -14,6 +14,7 @@ import { Row, TaskRow } from '@/kit/Row';
 import { Select, type SelectOption } from '@/kit/Select';
 import { whoHref } from './model';
 import type { OwnTask } from './queries';
+import { chatAddress } from '@/lib';
 
 /** Flow's mark: two play-shaped dots (parts-kit.js flow()). Jade lives in dot.css. */
 export function FlowMark({ size = 12 }: { size?: number }) {
@@ -74,7 +75,7 @@ export function OwnerButton({ actor }: { actor: string }) {
   const href = useLocation({
     select: (l) => {
       const q = new URLSearchParams(l.searchStr);
-      q.set('chat', who?.id ?? actor);
+      q.set('chat', chatAddress(who?.id ?? actor, who?.kind));
       return `${l.pathname}?${q.toString()}`;
     },
   });

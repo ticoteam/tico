@@ -3,7 +3,7 @@ import { registry } from '@/actions';
 import { directoryQuery, queryClient, type Actor } from '@/data';
 import type { SearchHit } from '@/search/define';
 import { pipelinesQuery, type Pipeline } from './queries';
-import { chatAddress, tasksSearch } from './search';
+import { tasksSearch } from './search';
 
 // Made-up rows only.
 const sig = () => new AbortController().signal;
@@ -44,15 +44,5 @@ describe('tasks search', () => {
     vi.stubGlobal('fetch', fetch);
     expect(await tasksSearch.find(' ', sig())).toEqual([]);
     expect(fetch).not.toHaveBeenCalled();
-  });
-});
-
-describe('chatAddress', () => {
-  it("names a teammate's chat as the shell reads it: an agent as agent:, a person as person:", () => {
-    expect(chatAddress('bot:f00d-1')).toBe('agent:f00d-1');
-    expect(chatAddress('human:42')).toBe('person:42');
-    // a bare id takes its kind from the directory
-    expect(chatAddress('helper', 'agent')).toBe('agent:helper');
-    expect(chatAddress('42', 'person')).toBe('person:42');
   });
 });

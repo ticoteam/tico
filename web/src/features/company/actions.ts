@@ -18,6 +18,7 @@ import {
   updateRisk,
   type KpiFields,
 } from './queries';
+import { chatAddress } from '@/lib';
 
 /* Every change and every move a person makes on Company, Strategy, Products and Risk. Panels live in `?panel=`, so
    Back closes them; a change is shown first and taken back if the server refuses it. */
@@ -81,9 +82,9 @@ export const chatWith = defineAction({
   title: "Open a hall manager's chat beside the Floor",
   kind: 'view',
   input: s.object({ who: actor }),
-  run: ({ router }, { who }) => router.navigate({ to: '/company', search: { chat: who } as never }),
+  run: ({ router }, { who }) => router.navigate({ to: '/company', search: { chat: chatAddress(who) } as never }),
   did: () => 'Opened the chat',
-  target: ({ who }) => ({ kind: 'chat', id: who }),
+  target: ({ who }) => ({ kind: 'chat', id: chatAddress(who) }),
 });
 
 export const openGoal = defineAction({

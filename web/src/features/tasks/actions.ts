@@ -19,7 +19,8 @@ import {
   type Pipeline,
   type Skipped,
 } from './queries';
-import { chatAddress, VIEW_PREF } from './search';
+import { VIEW_PREF } from './search';
+import { chatAddress } from '@/lib';
 
 const pipeline = s.string({ min: 1, max: 100, what: 'a pipeline id' });
 const task = s.string({ min: 1, max: 100, what: 'a task id' });

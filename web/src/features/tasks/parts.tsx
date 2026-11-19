@@ -9,7 +9,7 @@ import { IconButton } from '@/kit/IconButton';
 import { ContextMenu, Menu, MenuItem } from '@/kit/Menu';
 import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
 import type { Stage, TaskItem } from './queries';
-import { chatAddress } from './search';
+import { chatAddress } from '@/lib';
 
 const FLOW_PLAY = 'M16 5.5C8 4 4.5 12 5 24 4.5 36 8 44 16 42.5 27 40 45 32 45 24 45 16 27 8 16 5.5Z';
 

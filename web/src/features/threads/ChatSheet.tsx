@@ -6,15 +6,8 @@ import { Empty } from '@/kit/Empty';
 import { isDm, othersOf } from './model';
 import { useMe, useNameOf, useTitle } from './people';
 import { chatQuery } from './queries';
+import { chatActor } from '@/lib';
 
-/** The face in the sheet's head: the agent or person the address names, or the other one in a DM. */
-function actorOf(chat: string): string | undefined {
-  const [kind, ...rest] = chat.split(':');
-  const id = rest.join(':');
-  if (kind === 'agent') return `bot:${id}`;
-  if (kind === 'person') return `human:${id}`;
-  return undefined;
-}
 
 export interface ChatSheetProps {
   /** The shell's `?chat=`: agent:<slug>, person:<id> or thread:<id>. */
@@ -35,7 +28,8 @@ export function ChatSheet({ chat }: ChatSheetProps) {
       </Empty>
     );
   if (!t) return null;
-  const actor = actorOf(chat) ?? (isDm(t) ? othersOf(t, me)[0] : undefined);
+  // The face in the head: the agent or person the address names, or the other one in a DM.
+  const actor = chatActor(chat) ?? (isDm(t) ? othersOf(t, me)[0] : undefined);
   const name = (actor && nameOf(actor)) || title;
   return <Conversation key={t.id} id={t.id} variant="side" title={name} actor={actor} card={callCard} />;
 }

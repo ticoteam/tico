@@ -10,6 +10,7 @@ import { IconButton } from '@/kit/IconButton';
 import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
 import { toast } from '@/kit/Toast';
 import { pageOwnersQuery } from './queries';
+import { chatAddress } from '@/lib';
 
 /** A teammate's face from the directory. `bot:<slug>`, `human:<id>`, a bare slug or id all resolve. */
 export function Face({ actor, name, size = 22 }: { actor: string | null | undefined; name?: string | null; size?: 22 | 28 }) {
@@ -48,7 +49,7 @@ export function ChatWith({ actor }: { actor: string | null }) {
   const href = useLocation({
     select: (l) => {
       const q = new URLSearchParams(l.searchStr);
-      if (actor) q.set('chat', actor);
+      if (actor) q.set('chat', chatAddress(actor, who?.kind));
       return `${l.pathname}?${q.toString()}`;
     },
   });

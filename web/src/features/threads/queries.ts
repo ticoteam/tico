@@ -3,6 +3,7 @@ import { api } from '@/api/client';
 import { sendMessage, timelineQuery, type ChatMessage } from '@/conversation';
 import { keys, queryClient, quietRoot, write } from '@/data';
 import { toPage, type Letter, type ListPage, type Member, type Text, type Thread, type ThreadList, type Update } from './model';
+import { chatActor } from '@/lib';
 
 const enc = encodeURIComponent;
 const qs = (params: Record<string, string | number | boolean | null | undefined>) => {
@@ -115,7 +116,8 @@ export const chatQuery = (chat: string) =>
       const [kind, ...rest] = chat.split(':');
       const id = rest.join(':');
       if (kind === 'thread') return api.get<Thread>(`/api/v2/threads/${enc(id)}`, { signal });
-      const actor = kind === 'agent' ? `bot:${id}` : `human:${id}`;
+      const actor = chatActor(chat);
+      if (!actor) throw new Error('not a chat address');
       return api.get<Thread>(`/api/v2/threads/dm${qs({ with: actor })}`, { signal });
     },
   });

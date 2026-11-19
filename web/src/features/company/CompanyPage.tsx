@@ -6,7 +6,7 @@ import { Sparkline } from '@/kit/Chart';
 import { FlowMark } from '@/kit/FlowMark';
 import { FoldButton } from '@/kit/SectionHead';
 import { LatePill } from '@/kit/Pill';
-import { fmtAge } from '@/lib';
+import { chatAddress, fmtAge } from '@/lib';
 import { Dashboard, FiguresStrip, SidePanel, type Figure } from '@/pagekinds';
 import { Face, Go, PanelLink, usd } from './parts';
 import { floorQuery, goalsTreeQuery, needsQuery, revenueQuery, spendQuery, stageTasksQuery, type Pipeline, type Stage } from './queries';
@@ -97,7 +97,7 @@ function ManagerChat({ who }: { who: string }) {
   const actor = who.includes(':') ? who : `bot:${who}`;
   const name = useActor(actor)?.name ?? 'the manager';
   return (
-    <Link to="." search={((prev: Record<string, unknown>) => ({ ...prev, chat: actor })) as never} className="crew-face" aria-label={`Chat with ${name}`} title={`Chat with ${name}`} data-target={`chat:${actor}`}>
+    <Link to="." search={((prev: Record<string, unknown>) => ({ ...prev, chat: chatAddress(actor) })) as never} className="crew-face" aria-label={`Chat with ${name}`} title={`Chat with ${name}`} data-target={`chat:${chatAddress(actor)}`}>
       <Face id={actor} />
     </Link>
   );
