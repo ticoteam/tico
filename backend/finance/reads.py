@@ -36,7 +36,7 @@ from .tax import form_1099_csv as form_1099_csv
 from .tax import form_1099_report as form_1099_report
 from .tax import sales_tax_csv as sales_tax_csv
 from .tax import sales_tax_report as sales_tax_report
-from .handlers import named_reason, private_scope, reads_budget, sees_budget, sees_scope, shows_numbers
+from .handlers import named_reason, private_scope, reads_budget, sees_scope, shows_numbers
 from .store import actions as SX
 from .store import access as SA
 from .store import banking as SK
@@ -291,7 +291,7 @@ def _bucket_index(buckets: list[tuple[date, date]], day: str) -> int:
 def _top_budgets(s: _Seen) -> list[B.Budget]:
     """The budgets this viewer sees whose parent they do not: one budget figure per scope, never double counted."""
     budgets = s.ctx.budgets()
-    seen = {b.id for b in budgets.values() if b.active and not b.catch_all and sees_budget(s.ctx, s.view.viewer, b)}
+    seen = {b.id for b in budgets.values() if b.active and not b.catch_all and reads_budget(s.ctx, s.view.viewer, b)}
     return [budgets[i] for i in seen if budgets[i].parent_id not in seen]
 
 
@@ -364,7 +364,7 @@ def _filter_budgets(s: _Seen, f: _Filter) -> list[B.Budget]:
     picked = {
         b.id
         for b in budgets.values()
-        if b.active and not b.catch_all and sees_budget(s.ctx, s.view.viewer, b) and f.keeps_budget(b)
+        if b.active and not b.catch_all and reads_budget(s.ctx, s.view.viewer, b) and f.keeps_budget(b)
     }
     return [budgets[i] for i in picked if budgets[i].parent_id not in picked]
 

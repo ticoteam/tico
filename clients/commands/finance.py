@@ -389,7 +389,7 @@ def finance_search(api, args):
 
 @tool(
     "tico_finance_report",
-    "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, "
+    "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual (your own budgets always), ap_aging, "
     "ar_aging, spend_by, campaigns (owner, spend, clicks, conversions), subscriptions (monthly "
     "total, renewals in 30 days) or close (a month's checklist). Rows past top_n fold into \"Other "
     "· n\". sales_tax and 1099 are a year's tax workpapers: whole, and only for someone who sees "

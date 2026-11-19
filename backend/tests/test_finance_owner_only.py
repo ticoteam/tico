@@ -90,3 +90,58 @@ def test_a_bot_needs_no_grant_for_its_own_budget_warnings(owner_only_books: Stor
     assert warn(owner_only_books) == [("bot:paid-rental-ads", ("pace",))]
     with owner_only_books.read() as c:
         assert [to for to, _ in warning_notes(c)] == ["bot:paid-rental-ads"]
+
+
+def test_a_bot_with_no_finance_view_is_briefed_on_its_own_budget_only(owner_only_books: Store):
+    from backend.finance import brief
+
+    w = world(owner_only_books)
+    platform_spend(owner_only_books, w["google_ads"], [("2026-10-03", 50_000)], "2026-10-01", "2026-10-15")
+    with owner_only_books.read() as c:
+        lines = brief.compute(c, "bot:paid-rental-ads", AT)
+        assert len(lines) == 1, lines
+        assert lines[0].startswith("Budget: Rental Google Ad Owner, $500 of $3,000/month (17%), id ")
+        assert lines[0].endswith(f"id {w['google']}") and len(lines[0]) <= brief.LINE_CHARS
+        assert brief.compute(c, "bot:cmo", AT) == []  # no budget of its own, no view: nothing
+
+
+def test_a_bot_is_told_once_when_a_budget_is_made_or_changed_for_it(owner_only_books: Store):
+    w = world(owner_only_books)
+
+    def told(c, bot):
+        return [
+            str(r[0])
+            for r in c.execute(
+                "SELECT body FROM notes WHERE to_actor=? AND body LIKE 'You have a budget:%' ORDER BY rowid", (bot,)
+            )
+        ]
+
+    with owner_only_books.transaction() as c:
+        assert told(c, "bot:paid-rental-ads") == [
+            "You have a budget: Rental Google Ad Owner 3,000.00 USD/month; read it with tico_finance_report "
+            "kind=budget_vs_actual"
+        ]
+        assert len(told(c, "bot:rental-social-ad-owner")) == 1 and told(c, "bot:cmo") == []
+        done = act(c, OWNER, "budget_update", {"budget_id": w["google"], "amount": 250_000})
+        assert done.status == "committed", done
+        assert told(c, "bot:paid-rental-ads")[-1].startswith("You have a budget: Rental Google Ad Owner 2,500.00 USD")
+        assert len(told(c, "bot:paid-rental-ads")) == 2
+
+
+def test_the_expenses_view_shows_a_bot_its_own_budget_outside_its_lines(owner_only_books: Store):
+    from backend.tests.helpers.finance_fixtures import account
+
+    w = world(owner_only_books)
+    with owner_only_books.transaction() as c:
+        grant = {
+            "subject": "bot:paid-rental-ads",
+            "what": "pnl_lines",
+            "whose": "own",
+            "account_ids": [account(c, "6100")],
+        }
+        assert act(c, OWNER, "view_grant", grant).status == "committed"
+    with owner_only_books.read() as c:
+        panel = reads.pnl(c, "bot:paid-rental-ads", "2026-10-01", "2026-10-31", view="expenses", at=AT)["teammates"]
+        mine = [r for r in panel if r["teammate"] == "bot:paid-rental-ads"]
+        assert mine and mine[0]["budget"] == 300_000, panel
+        assert w["google"]

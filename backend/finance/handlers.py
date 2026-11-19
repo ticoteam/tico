@@ -1014,6 +1014,7 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if route is not None:
             _raise_parent(ctx, route, effective, who)
         ctx.changed()
+        _tell_bot(ctx, who, made, amount, effective)
         return {"budget_id": made.id, "effective_from": effective if amount is not None else None}
 
     if hidden:
@@ -1037,6 +1038,26 @@ def _budget(ctx: Ctx, budget_id: str) -> B.Budget:
     if b is None:
         raise FinanceError(NOT_FOUND, "no such budget")
     return b
+
+
+def _tell_bot(ctx: Ctx, who: str, b: B.Budget, amount: int | None, effective: str) -> None:
+    """A budget made or changed for a teammate bot (by someone else): one note for its next turn, so the bot knows it
+    has a budget and where to read it. Any kind of budget, not only an ad budget (ad_warnings tells it of crossings)."""
+    bot = b.teammate
+    if not b.active or bot == who or not bot.startswith("bot:") or bot not in ctx.org.bots:
+        return
+    if not reads_budget(ctx, bot, b):
+        return
+    if amount is None:
+        amount = B.amount_at(SB.versions(ctx.c, [b.id])[b.id], dates.day(ctx.today))
+    figure = "no amount yet" if amount is None else f"{amount / 100:,.2f} {ctx.book.base_currency}/{b.period}"
+    if amount is not None and dates.day(effective) > dates.day(ctx.today):
+        figure += f" from {effective}"
+    tico.bot_note(
+        ctx.c,
+        bot,
+        f"You have a budget: {b.name} {figure}; read it with tico_finance_report kind=budget_vs_actual",
+    )
 
 
 def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -1112,6 +1133,7 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             from .cards import unfreeze_with_room  # a raise that leaves room lifts the freezes under it
 
             unfreeze_with_room(ctx, old.id, aid)
+        _tell_bot(ctx, who, new, amount, effective)
         return {"budget_id": old.id, "version": version}
 
     if hidden:

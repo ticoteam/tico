@@ -124,6 +124,27 @@ def _budget_lines(c: sqlite3.Connection, reader: str, at: str) -> list[str]:
     return lines[:3]
 
 
+def _own_lines(c: sqlite3.Connection, reader: str, at: str) -> list[str]:
+    """For a reader with no Finance view: only their own budgets, each with its id, so it can be read
+    (tico_finance_report kind=budget_vs_actual). The id is kept whole; a long name is cut instead."""
+    try:
+        rows = cast(list[Row], R.budgets(c, reader, limit=500, at=at)["budgets"])
+    except FinanceError:
+        return []
+    out: list[str] = []
+    for r in rows[:MAX_LINES]:  # with no view, the budgets they read are their own (handlers.reads_budget)
+        st = r["state"]
+        text = f"{_money(int(st['amount'] or 0))}/{r['period']}"
+        if st["actual"] is not None:
+            pct = st.get("pct")
+            text = f"{_money(int(st['actual']))} of {text}" + (f" ({float(pct):.0f}%)" if pct not in (None, "") else "")
+        tail = f", {text}, id {r['id']}"
+        room = max(8, LINE_CHARS - len("Budget: ") - len(tail))
+        name = str(r["name"]) if len(str(r["name"])) <= room else str(r["name"])[: room - 1] + "…"
+        out.append(f"Budget: {name}{tail}")
+    return out
+
+
 def _loose(
     c: sqlite3.Connection, ctx: Ctx, view: View, private: dict[str, Any], at: str
 ) -> tuple[tuple[int, int], tuple[int, int]]:
@@ -195,7 +216,7 @@ def compute(c: sqlite3.Connection, reader: str, at: str) -> list[str]:
     ctx = load(c, at)
     view = ctx.view(reader)
     if not view.sees_anything():
-        return []
+        return _own_lines(c, reader, at)  # a teammate always reads their own budgets (handlers.reads_budget)
     lines = _budget_lines(c, reader, at)
     lines += _loose_lines(c, ctx, view, SA.private_lines(c), at)
     lines += _company_lines(c, reader, at)
