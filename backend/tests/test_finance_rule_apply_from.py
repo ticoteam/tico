@@ -289,7 +289,7 @@ def test_a_row_that_raises_is_undone_alone_and_the_others_post(books, monkeypatc
 def _brex_charge(books, line_code=""):
     """A past Brex card charge on the card's default line: its budget's line when `line_code` gives the card a budget
     on that line (before the charge comes in), else Other expenses."""
-    from backend.tests.test_finance_brex import FakeBrex, brex_pass, card_txn, connect_brex
+    from backend.tests.helpers.finance_brex import FakeBrex, brex_pass, card_txn, connect_brex
 
     fake = FakeBrex()
     connect_brex(books, fake)
