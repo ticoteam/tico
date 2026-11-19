@@ -461,6 +461,28 @@ def test_a_token_that_cannot_be_kept_is_still_audited(api, gh, monkeypatch):
         assert c.execute("SELECT COUNT(*) FROM github_installation_tokens").fetchone()[0] == 0
 
 
+def test_a_token_minted_while_the_tokens_are_forgotten_is_answered_but_neither_cached_nor_kept(api, gh, monkeypatch):
+    """A repository refresh (or the App replaced) while GitHub is minting: the token is the asker's, but the old
+    scope's token never comes back from memory or, after a restart, from the database."""
+    connect(api)
+    runner_token(api, "cpo")
+    service, store = api.app_state.github_app, api.app_state.store
+    real = service._call
+
+    def forgotten_meanwhile(method, path, *a, **kw):
+        answer = real(method, path, *a, **kw)
+        if path.endswith("/access_tokens"):
+            service.forget_tokens()
+        return answer
+
+    monkeypatch.setattr(service, "_call", forgotten_meanwhile)
+    got = turn_token(api)
+    assert got.status_code == 200 and got.json()["token"]
+    assert not service.cache
+    with store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM github_installation_tokens").fetchone()[0] == 0
+
+
 def test_a_kept_token_this_server_cannot_open_is_minted_again(api, gh):
     connect(api)
     runner_token(api, "cpo")

@@ -555,10 +555,7 @@ class GitHubApp:
         )
         c.execute("DELETE FROM registry_metadata WHERE key=?", (PERMISSIONS_SEEN,))  # a new App's are learned anew
         c.execute("DELETE FROM github_installation_tokens")  # the old App's tokens
-        with self.lock:
-            self.generation += 1
-            self.cache.clear()
-            self.live.clear()
+        self._forget_memory(c, live=True)
 
     def row(self, c=None):
         if c is not None:
@@ -603,10 +600,25 @@ class GitHubApp:
         )
         c.execute("DELETE FROM service_health WHERE service=?", (GITHUB_HEALTH,))  # nothing left to be unhealthy
         c.execute("DELETE FROM github_installation_tokens")
-        with self.lock:
-            self.generation += 1
-            self.cache.clear()
-            self.live.clear()
+        self._forget_memory(c, live=True)
+
+    def _forget_memory(self, c, live=False, keep=None):
+        """Forget the cached tokens (and with `live` the JWT and live permissions) now, and again once `c` commits
+        (`after_commit`, still holding the writer): a JWT or kept token read on a plain read in between, from the rows
+        as they were before this write, is not kept or handed out after it (`generation`). `keep(key)`: entries to
+        keep (forget_tokens of one repository)."""
+
+        def clear():
+            with self.lock:
+                self.generation += 1
+                self.cache = {k: v for k, v in self.cache.items() if keep is not None and keep(k)}
+                if live:
+                    self.live.clear()
+
+        clear()
+        hooks = getattr(c, "after_commit", None)
+        if hooks is not None:
+            hooks.append(clear)
 
     # -- the owner's user token (a personal account) ------------------------------------------
     # The App's user-to-server token lets Tico create an EMPTY repository in the personal account (POST /user/repos); nothing
@@ -943,13 +955,16 @@ class GitHubApp:
         )
         new = int(found["id"]) if found else None
         with self.store.transaction() as c:
+            # As stored now, not as read before GitHub answered: another lookup may have finished meanwhile, and the
+            # App may have been replaced (its installation is then its own to find).
+            now = c.execute("SELECT app_id,installation_id FROM github_app WHERE id='app'").fetchone()
+            if not now or now["app_id"] != row["app_id"]:
+                return new
             c.execute("UPDATE github_app SET installation_id=? WHERE id='app'", (new,))
-            if row["installation_id"] and row["installation_id"] != new:
+            if now["installation_id"] and now["installation_id"] != new:
                 # Another installation (or none): its tokens are not this one's.
                 c.execute("DELETE FROM github_installation_tokens")
-                with self.lock:
-                    self.generation += 1
-                    self.cache.clear()
+                self._forget_memory(c)
         return new
 
     def installation_account_id(self, installation_id):
@@ -1246,23 +1261,31 @@ class GitHubApp:
         def names(repos):
             return repository is None or name in {str(r).lower() for r in repos}
 
-        if self.KEEPS_TOKENS:
-            with self.store.transaction() as c:
-                if repository is None:
-                    c.execute("DELETE FROM github_installation_tokens")
-                else:
-                    for (scope,) in c.execute("SELECT scope FROM github_installation_tokens").fetchall():
-                        if names(json.loads(scope)[0]):
-                            c.execute("DELETE FROM github_installation_tokens WHERE scope=?", (scope,))
-        # After the rows are gone; the generation stops a kept token read before then from coming back.
-        with self.lock:
-            self.generation += 1
-            self.cache = {k: v for k, v in self.cache.items() if not names(k[0])}
+        def kept(key):
+            return not names(key[0])
+
+        if not self.KEEPS_TOKENS:
+            with self.lock:
+                self.generation += 1
+                self.cache = {k: v for k, v in self.cache.items() if kept(k)}
+            return
+        with self.store.transaction() as c:
+            # Memory first, so a request's audit waiting for the writer cannot keep a dropped token again, and once
+            # more at commit (still holding the writer), so a kept row read before then does not come back.
+            self._forget_memory(c, keep=kept)
+            if repository is None:
+                c.execute("DELETE FROM github_installation_tokens")
+            else:
+                for (scope,) in c.execute("SELECT scope FROM github_installation_tokens").fetchall():
+                    if names(json.loads(scope)[0]):
+                        c.execute("DELETE FROM github_installation_tokens WHERE scope=?", (scope,))
 
     def _mint(self, key, repos, permissions, diagnose):
         if not permissions:
             # GitHub gives a token that names no permission every one the App has, Checks: write among them.
             raise Problem("github_app_permissions", "Name the permissions a GitHub token needs", 500)
+        with self.lock:
+            generation = self.generation  # before the installation is looked up
         installation = self.installation()
         if not installation:
             current = self.row()
@@ -1326,7 +1349,8 @@ class GitHubApp:
             )
         data = r.json()
         entry = {"token": data["token"], "expires_at": data["expires_at"], "exp": _iso(data["expires_at"])}
-        self._remember(key, entry)
+        # Forgotten meanwhile (the App replaced, a repository refresh): answered, but neither cached nor kept.
+        self._remember(key, entry, generation)
         return entry
 
     def should_audit_token(self, bot, token):
