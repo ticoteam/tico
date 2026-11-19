@@ -398,6 +398,17 @@ def example_line(p):
     return " ".join(parts)
 
 
+def missing_help(p, message):
+    """`finding-key: The finding's key: its signature (hm-...) on the finding's task`: the help of each argument the
+    required-arguments error names, so the error says where the value is, not only that it is missing."""
+    named = message.split(":", 1)[-1].split(", ")
+    return [
+        f"{argparse._get_action_name(a)}: {a.help}"
+        for a in p._actions
+        if a.help and a.help != argparse.SUPPRESS and argparse._get_action_name(a) in [n.strip() for n in named]
+    ]
+
+
 def _bad_command_word(p, message):
     """Whether argparse's error is about the word naming a command (`task lst`), not a flag's or argument's value
     (`rules due --status late`), which argparse's own list of choices already answers."""
@@ -417,6 +428,8 @@ class HubParser(argparse.ArgumentParser):
         if message.startswith("the following arguments are required"):
             self.print_usage(sys.stderr)
             print(f"Example: {example_line(self)}", file=sys.stderr)
+            for line in missing_help(self, message):
+                print(line, file=sys.stderr)
             self.exit(2, f"{self.prog}: error: {message}\n")
         hint = ""
         argv = getattr(self, "hub_argv", None)

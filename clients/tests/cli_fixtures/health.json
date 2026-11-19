@@ -100,7 +100,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico health report <finding-key>\ntico health report: error: the following arguments are required: finding-key",
+  "stderr": "Example: tico health report <finding-key>\nfinding-key: The finding's key: its signature (hm-...) on the finding's task, or a key from `tico health findings`\ntico health report: error: the following arguments are required: finding-key",
   "exit": 64
  },
  {

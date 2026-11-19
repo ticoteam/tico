@@ -13,6 +13,7 @@ from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s
 from clients.commands._requester import _as_person
 from clients.commands._shared import text_file
+from clients.tico import APIError
 
 
 @tool(
@@ -464,27 +465,26 @@ def health_findings(api, args):
     return api.get("health/findings")
 
 
+HEALTH_KEY_HELP = (
+    "The finding's key: its signature (hm-...) on the finding's task, or a key from `tico health findings`"
+)
+
+
 @tool(
     "tico_health_report",
     "Report a health finding as a Tico bug. The server writes the report from the finding and attaches the "
     "redacted diagnostics bundle: one ticket per problem, and a message on it when it happens again. With the team rule "
     "off it asks a person for an OK first.",
-    {"key": _s("The finding's key or signature (hm-...), from its task")},
+    {"key": _s(HEALTH_KEY_HELP)},
     required=("key",),
     writes=True,
 )
 def health_report(api, args):
     key = str(args.get("key") or "").strip()
     if not key:
-        # A plain refusal, not a raw ValueError: the key is on the finding's task, which a bot can read even though
-        # `tico health findings` is for people and BotOps.
-        return {
-            "refused": "health_report",
-            "detail": "Name the finding's key: its signature (hm-...) on the finding's task, "
-            "or a key from `tico health findings` (people and BotOps).",
-        }
-    from urllib.parse import quote
-
+        # A refusal, not a success: the CLI exits 1 and MCP answers isError. The key is on the finding's task, which a
+        # bot can read even though `tico health findings` is for people and BotOps.
+        raise APIError("validation", HEALTH_KEY_HELP)
     return api.post("health/findings/" + quote(key, safe="") + "/report", {}, key=_key(args))
 
 

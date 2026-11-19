@@ -126,25 +126,43 @@ def test_health_findings_and_report_reach_their_routes(monkeypatch):
     assert {"tico_health_findings", "tico_health_report"} <= set(hubtools.BY_NAME)
 
 
-def test_health_report_without_a_key_is_a_plain_refusal_that_says_where_the_key_is(capsys):
-    """The key is required on the command line (argparse refuses before any call) and in the tool's schema; a tool
-    call that still comes without one gets a refusal naming the finding's task, not a raw ValueError."""
-    from clients import hubtools
-    from clients.commands import computers
+def test_health_report_without_a_key_is_a_refusal_that_says_where_the_key_is(monkeypatch, capsys):
+    """Through the real entry points: the command line names the finding's task before any call, and over MCP or with
+    a blank key the answer is an error (exit 2, isError) naming the task, with no report sent."""
+    from clients import hubtools, remotecli
+    from clients.tico import APIError
 
     with pytest.raises(SystemExit):
         hubcli.parser().parse_args(["health", "report"])
-    assert "finding-key" in capsys.readouterr().err
-    assert hubtools.BY_NAME["tico_health_report"]["inputSchema"]["required"] == ["key"]
+    assert "on the finding's task" in capsys.readouterr().err
 
     class Api:
-        def post(self, *args, **kw):
-            raise AssertionError("no request without a key")
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False
 
-    for key in (None, "", "  "):
-        answer = computers.health_report(Api(), {"key": key})
-        assert answer["refused"] == "health_report"
-        assert "finding's task" in answer["detail"] and "hm-" in answer["detail"]
+        def get(self, path, **query):
+            return {"actor": "bot:acme"} if path == "me" else {}
+
+        def post(self, *args, **kw):
+            raise AssertionError("no report without a key")
+
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    assert remotecli.main(hubcli.parser().parse_args(["health", "report", "  "])) == 2
+    assert "on the finding's task" in capsys.readouterr().out
+
+    protocol = hubtools.Protocol(Api(), api_error=APIError, kind="bot")
+    for args in ({}, {"key": None}, {"key": ""}, {"key": "  "}):
+        reply = protocol.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "tico_health_report", "arguments": args},
+            }
+        )["result"]
+        assert reply["isError"] is True, args
+        assert "on the finding's task" in reply["structuredContent"]["detail"], args
 
 
 def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
