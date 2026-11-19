@@ -7038,6 +7038,7 @@ def tasks(
     match=(),
     after=None,
     keys_only=False,
+    per_stage=False,
 ):
     """Tasks, newest work first. `visible` is a WHERE fragment over the task's own columns (from
     `Auth.task_sql`), so a caller's page and its `offset` are cut in the query. `updated_since` is a stored timestamp.
@@ -7047,7 +7048,9 @@ def tasks(
     `exclude_owner` leaves out one owner's tasks. `limit=None` reads every match. `match` is more WHERE fragments
     over the task's own columns, each with its arguments (backend/task_match.py, the Tasks page's filters). `after` is
     a keyset start: the sort key of the last row a page gave (`task_sort_key`), so the page holds the rows after it.
-    `keys_only` answers every match's (id, title, number) in order instead, for a filter worked out in Python."""
+    `keys_only` answers every match's (id, title, number) in order instead, for a filter worked out in Python.
+    `per_stage` answers {stage_id: count} of every match instead (None for tasks in no stage), in one grouped read
+    that loads no row: the same selection whatever the page, its order or its keyset start."""
     sql, args, where = "SELECT * FROM tasks", [], []
     for fragment, values in match:
         where.append("(" + fragment + ")")
@@ -7114,6 +7117,12 @@ def tasks(
         ordering = "COALESCE(done_at,closed_at,updated_at,created_at) DESC, id DESC"  # most recently done first
     else:
         raise ValueError("task order is queue or finished")
+    if per_stage:
+        # Before the keyset start: a count is of the whole selection, not of the pages after one row.
+        clause = " WHERE " + " AND ".join(where) if where else ""
+        return {
+            r[0]: r[1] for r in conn.execute(f"SELECT stage_id, COUNT(*) FROM tasks{clause} GROUP BY stage_id", args)
+        }
     if after is not None:
         # The same tuple the ORDER BY sorts on; a rank-less row's rank is never compared (its first part decides).
         where.append(KEYSET_SQL[order])

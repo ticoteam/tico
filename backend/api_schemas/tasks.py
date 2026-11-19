@@ -3,6 +3,7 @@
 
 from ..task_documents import NAMES as DOCUMENT_NAMES
 from ..api_contract import ref
+from ..hubdb import LINK_KINDS
 from ._base import ACTORS, SCHEMAS, items, obj
 
 SCHEMAS.update(
@@ -329,6 +330,44 @@ SCHEMAS.update(
                 "may",
             ],
         ),
+        # One of a task's links (hubdb.task_links). A pull request's GitHub state is filled in as GitHub reports it.
+        "TaskLinkView": obj(
+            {
+                "id": "s",
+                "task_id": "s",
+                "kind": {"type": "string", "enum": list(LINK_KINDS)},
+                "url": {
+                    "type": "string",
+                    "description": "An http(s) URL; a session link's is `session:<reference>`, not a page",
+                },
+                "title": "n",
+                "state": {
+                    "type": ["string", "null"],
+                    "description": "A pull request's (open, merged, closed, shipped) or a checkout's state",
+                },
+                "added_by": "n",
+                "created_at": "s",
+                "repo": "n",
+                "number": {"type": ["integer", "null"]},
+                "branch": "n",
+                "pr_merged_at": "n",
+                "checks": {
+                    "type": ["string", "null"],
+                    "description": "A pull request's checks: passing, failing, pending or cancelled",
+                },
+                "mergeable": "n",
+                "review_state": "n",
+                "pending_comments": {"type": ["integer", "null"]},
+                "computer_id": "n",
+                "path": "n",
+                "detail": {
+                    "type": ["string", "null"],
+                    "description": "JSON text of the link's own record (a session's thread, a checkout's setup). On the "
+                    "task's own read and its /links only",
+                },
+            },
+            required=["id", "task_id", "kind", "url", "created_at"],
+        ),
         "TaskList": obj(
             {
                 "tasks": items(ref("Task")),
@@ -354,6 +393,21 @@ SCHEMAS.update(
             },
             required=["tasks", "next_offset", "cursor"],
             actors=ACTORS,
+            counts=obj(
+                {
+                    "total": {"type": "integer", "description": "Every task the filters select, on all pages"},
+                    "stage": {
+                        "type": "object",
+                        "additionalProperties": {"type": "integer"},
+                        "description": "By stage id: how many of them are in that stage. A stage with none is absent; "
+                        "a task in no stage counts in the total only",
+                    },
+                },
+            )
+            | {
+                "description": "With counts=stage only: one grouped count of every task the same filters select, by the "
+                "same reader's rules, whatever page this is"
+            },
         ),
         "TaskResult": obj(
             {"task": ref("Task"), "private_readers": "s"},
@@ -478,7 +532,28 @@ SCHEMAS.update(
         ),
         "TaskDetail": obj(
             {
-                "task": {"allOf": [ref("Task"), obj({"stage_since": "n"})]},
+                # The task's own read declares its chat and its links here, not on the shared Task: the old app's task
+                # types extend Task with their own spellings of both, which a declaration there would contradict.
+                "task": {
+                    "allOf": [
+                        ref("Task"),
+                        obj(
+                            {
+                                "stage_since": "n",
+                                "conversation_id": {
+                                    "type": ["string", "null"],
+                                    "description": "The task's chat: the conversation its request, comments and bot "
+                                    "replies are in (this read carries its messages). Null for a task with no chat",
+                                },
+                                "links": items(ref("TaskLinkView"))
+                                | {
+                                    "description": "What the task points to, oldest first: pull requests, issues, "
+                                    "docs, pages, checkouts and sessions, each with its whole record"
+                                },
+                            }
+                        ),
+                    ]
+                },
                 "events": "a",
                 "children": "a",
                 # The parent ticket (null: none, or the reader may not read it), with its label and stage
