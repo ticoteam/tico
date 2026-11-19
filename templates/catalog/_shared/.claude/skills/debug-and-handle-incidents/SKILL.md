@@ -147,6 +147,8 @@ meanwhile.
 - Every incident update states what is known from sources. No estimates of impact, no guessed cause, no promised
   fix time. "Cause not yet known" is a complete sentence.
 - An update promised for a time is sent at that time.
+- No public update admits fault or apologises for what the company did. It states facts, impact, what was done and
+  the next update, under the statement rules of `handle-press-and-a-crisis` (see `references/updates.md`).
 - Anything suggesting personal data was exposed, or a security breach: tell the owner at once and send nothing to
   customers until the owner, with legal advice, has approved the wording.
 - A committed or leaked secret is revoked first and investigated second.

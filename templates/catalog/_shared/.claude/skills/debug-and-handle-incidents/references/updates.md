@@ -57,8 +57,17 @@ clear check.
 - Say what they should do, if anything: "You do not need to do anything" or "Please do not retry the payment."
 - If money was taken wrongly or work was lost, say so plainly and say what will be done about it once that is
   decided. Do not offer refunds or credits the owner has not approved.
+- Facts, not fault. Never admit fault and never apologise for what the company did: a public statement can be used
+  as an admission. Sympathy for the disruption, once, is fine. Name the cause in public only in wording the owner has
+  approved after counsel has seen it.
 - No blame, of the team, a teammate, a supplier or the customer.
 - Short. Four to six sentences.
+
+Every public statement during an incident (status page, customer email, in-app notice, social post, a reply to a
+reporter) follows the statement rules of the `handle-press-and-a-crisis` skill: confirmed facts only, the same words
+in every channel, nothing on cause, compensation or legal position before counsel, and fault never. If your role does
+not have that skill, the owner's OK on the wording still applies, and press or social questions go to the teammate
+who has it, on a task.
 
 First update, as an illustration (invented):
 
@@ -68,10 +77,10 @@ anything. Our next update will be at 15:40 UTC."
 
 Final update, as an illustration (invented):
 
-"This is resolved. Between 13:00 and 14:36 UTC today, 11 customers with a paused subscription were charged in error.
-The cause was a payment retry process that did not check for paused subscriptions. It has been fixed, and every
-wrong charge has been refunded. We are sorry. We have added a check that stops this kind of charge and an alarm
-that tells us at once if one is ever made."
+"This is resolved. Between 13:00 and 14:36 UTC today, 11 customers with a paused subscription were charged. No
+charges have been made to paused subscriptions since 14:36. Every one of those charges has been refunded in full;
+refunds reach statements within 5 to 10 working days. You do not need to do anything. We will post a last update
+here at 17:00 UTC tomorrow, once the refunds have settled."
 
 ## When personal data or security is involved
 
