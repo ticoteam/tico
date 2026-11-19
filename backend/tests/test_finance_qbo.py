@@ -271,7 +271,7 @@ def _link() -> hook_relay.Link:
 
 
 def test_claim_stores_the_pair_in_the_vault_and_refresh_rotates_it_before_use(books, monkeypatch):
-    hq = FakeHQ(_tokens("acc-1", "ref-1"), _tokens("acc-2", "ref-2", "2026-10-15T13:30:00Z"))
+    hq = FakeHQ(_tokens("access-1", "ref-1"), _tokens("access-2", "ref-2", "2026-10-15T13:30:00Z"))
     monkeypatch.setattr(hook_relay.Link, "call", hq.as_link_call())
     vault = T._VAULT[0]
     cid = books_link.connect_claim(
@@ -288,13 +288,14 @@ def test_claim_stores_the_pair_in_the_vault_and_refresh_rotates_it_before_use(bo
     with books.read() as c:
         settings = SX.books_settings(c, cid)
         assert T.credential_secret(c, vault, str(settings["refresh"])) == "ref-1"
-        assert "ref-1" not in json.dumps(settings) and "acc-1" not in json.dumps(settings)  # ids, not secrets
-    assert books_link.access_token(books, vault, _link(), cid, "quickbooks", now=AT) == "acc-1"  # not due: no call
+        # Ids, not secrets. Each fake secret has a non-hex letter, so no random uuid id can contain it.
+        assert "ref-1" not in json.dumps(settings) and "access-1" not in json.dumps(settings)
+    assert books_link.access_token(books, vault, _link(), cid, "quickbooks", now=AT) == "access-1"  # not due: no call
     assert hq.calls[0]["base"] == "https://updates.tico.team/v1" and hq.calls[0]["area"] == "finance"
     assert hq.calls[0]["path"] == "oauth/quickbooks/claim" and len(hq.calls) == 1
     with books.read() as c:
         old_refresh = str(SX.books_settings(c, cid)["refresh"])
-    assert books_link.access_token(books, vault, _link(), cid, "quickbooks", now=LATER) == "acc-2"
+    assert books_link.access_token(books, vault, _link(), cid, "quickbooks", now=LATER) == "access-2"
     assert hq.calls[1]["path"] == "oauth/quickbooks/refresh" and hq.calls[1]["body"] == {
         "company_id": "co_acme",
         "refresh_token": "ref-1",
