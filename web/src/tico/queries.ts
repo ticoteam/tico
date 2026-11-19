@@ -20,11 +20,14 @@ export const ticoPowerQuery = queryOptions({
   },
 });
 
-/* Someone turned the Assistant on or off: the server sends every stream a `bots` event naming it (backend/events.py
-   `_bots`). The event's `status` is a status line, not the power, so this reads the power again instead. */
+/* The stream names the Assistant when its status changes. When it comes on, the same endpoint can now open a room
+   for someone who didn't have one yet. */
 onRefetch<{ bot?: string }>('bots', (e) => {
   const slug = queryClient.getQueryData(ticoPowerQuery.queryKey)?.bot ?? 'assistant';
-  return e.bot === slug ? [ticoPowerQuery.queryKey] : [];
+  if (e.bot !== slug) return [];
+  return queryClient.getQueryData(ticoRoomQuery.queryKey)
+    ? [ticoPowerQuery.queryKey]
+    : [ticoPowerQuery.queryKey, ticoRoomQuery.queryKey];
 });
 
 /** Turns Tico on; resolves with its state ('active', or 'planned' when it still needs a computer). */
