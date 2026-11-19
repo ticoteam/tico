@@ -1,0 +1,10 @@
+/* The few tokens the app adds to the mocks' tokens.css (design-fidelity.md 1.2, 8, 9). Loaded after it. Nothing here
+   renames or revalues a mock token. */
+:root{
+  --t-nav-name:15px;                        /* the company and pipeline names at the top of the menu, as in every picture */
+  --page-x:32px;                            /* one page margin, left and right; marks hang into it (aaa-audit-a, Top 1) */
+  --paper:#FFFFFF;                          /* an agent's page that keeps its own look */
+  --lift-tip:0 4px 12px -4px rgba(0,0,0,.35);   /* a tip, as the mock drew it */
+  --dot-shade-sm:rgba(0,0,0,.12);           /* the small Dot's inner shade, as the mock drew it */
+}
+@media (max-width:760px){:root{--page-x:16px}}

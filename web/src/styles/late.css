@@ -1,0 +1,2 @@
+/* "Late" on a task row or a task card, and nothing else (R3). Moved here from the mocks' system/parts.css on 2026-11-19. */
+.pill-warn{color:var(--warn-ink);box-shadow:inset 0 0 0 1px var(--warn-line)}

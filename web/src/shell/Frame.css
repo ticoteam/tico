@@ -1,0 +1,21 @@
+/* The sheets placed by layout(): the mock draws them in a grid, the app places each at the x and width the sizing
+   function gives (from the design's tico/sheets-live.css). Only tokens; no new values. */
+.app-tico.shell-frame{display:block;position:relative;padding:0;overflow:hidden;background:var(--ground)}
+.shell-place{position:absolute;top:var(--gap-pane);bottom:var(--gap-pane);display:flex}
+.shell-place>.pane{flex:1;min-width:0}
+.shell-place.is-over{z-index:var(--z-pop)}
+.shell-place.is-over>.pane{box-shadow:var(--lift-3)}       /* laid over the stretching sheet, or opened over its neighbours for now */
+.shell-place.is-moving{will-change:transform}
+
+/* the folded menu's company mark takes focus (layout.md 10) */
+.nav.is-rail button.co-mark{border:0;padding:0;font:inherit;cursor:pointer}
+
+/* the handle: the gap itself, 16 wide to the pointer; a line shows on hover, darker while dragging */
+.shell-handle{position:absolute;top:calc(var(--gap-pane) + var(--r-pane));bottom:calc(var(--gap-pane) + var(--r-pane));width:16px;z-index:var(--z-stick);cursor:col-resize;touch-action:none}
+.shell-handle::after{content:"";position:absolute;left:7px;top:0;bottom:0;width:2px;background:var(--line-strong);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
+.shell-handle:hover::after,.shell-handle:focus-visible::after{opacity:1;transition-delay:var(--dur-fast)}
+.shell-handle:focus-visible::after{transition-delay:0s}
+.shell-handle.is-drag::after{opacity:1;background:var(--ink-2);transition-delay:0s}
+.shell-handle:focus-visible{outline:var(--focus-ring);outline-offset:-5px}
+body.is-dragging{cursor:col-resize;user-select:none;-webkit-user-select:none}
+body.is-dragging .shell-place{pointer-events:none}

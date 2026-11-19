@@ -1,0 +1,53 @@
+{
+  "name": "tico-web",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.15"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "gen:routes": "tsr generate",
+    "gen:api": "node scripts/gen-api-types.ts",
+    "typecheck": "npm run gen:routes && npm run gen:api && tsc -p tsconfig.json && tsc -p tsconfig.node.json",
+    "lint": "eslint . && stylelint \"src/**/*.css\" && node scripts/check-jade.ts && node scripts/check-copy.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@base-ui/react": "1.9.0",
+    "@livekit/components-react": "2.9.25",
+    "@tanstack/react-query": "5.108.0",
+    "@tanstack/react-router": "1.170.46",
+    "@tanstack/react-virtual": "3.14.26",
+    "livekit-client": "2.24.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "valibot": "1.5.0"
+  },
+  "devDependencies": {
+    "@babel/core": "7.29.13",
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.65.1",
+    "@rolldown/plugin-babel": "0.3.1",
+    "@tanstack/router-cli": "1.168.0",
+    "@tanstack/router-plugin": "1.169.0",
+    "@testing-library/dom": "10.4.2",
+    "@testing-library/react": "16.3.3",
+    "@types/babel__core": "7.20.5",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "babel-plugin-react-compiler": "1.0.0",
+    "eslint": "10.15.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.14.0",
+    "jsdom": "31.0.1",
+    "stylelint": "18.0.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.73.0",
+    "vite": "8.3.8",
+    "vitest": "5.1.1"
+  }
+}

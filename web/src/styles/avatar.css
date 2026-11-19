@@ -1,0 +1,21 @@
+/* Avatars: people are circles, agents rounded squares, each with a faint hue of its own (R5, R19). Moved here from the
+   mocks' system/parts.css on 2026-11-19; .is-bot renamed .is-agent. The only file that may use oklch() and --av-*. */
+.av{--bg:oklch(var(--av-bg) var(--h));--fg:oklch(var(--av-fg) var(--h));display:inline-grid;place-items:center;flex:none;position:relative;background:var(--bg);color:var(--fg);
+  font-weight:var(--w-title);line-height:1;letter-spacing:var(--track-initials);user-select:none}
+.av.is-person{border-radius:50%}
+.av.is-agent{border-radius:var(--r-bot)}
+.av-16{width:var(--av-xs);height:var(--av-xs)}   /* no letters at 16 */
+.av-22{width:var(--av-sm);height:var(--av-sm);font-size:var(--av-sm-t)}
+.av-28{width:var(--av-md);height:var(--av-md);font-size:var(--av-md-t)}
+.av-36{width:var(--av-lg);height:var(--av-lg);font-size:var(--av-lg-t)}
+.av-gap{display:block;flex:none;height:1px}
+/* working now: a quiet ring in ink travels round the avatar. Jade is the Dot's alone. */
+@property --ang{syntax:"<angle>";inherits:false;initial-value:0deg}
+.av.is-live::after{content:"";position:absolute;inset:-3px;border-radius:inherit;padding:1.5px;pointer-events:none;
+  background:conic-gradient(from var(--ang),var(--work-rest) 0 40%,var(--work));
+  /* stylelint-disable-next-line color-no-hex -- mask */
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;
+  animation:work var(--turn) linear infinite}
+.av-16.is-live::after{inset:-2.5px;padding:1.25px}
+.av-36.is-live::after{inset:-4px;padding:2px}
+@keyframes work{to{--ang:360deg}}

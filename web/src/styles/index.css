@@ -1,0 +1,10 @@
+/* Load order: tokens, the app's token additions, the mock's parts, the parts moved to their own files, the shell, and
+   the type steps last so a step class wins over a part's own size. */
+@import "./tokens.css";
+@import "./tokens-app.css";
+@import "./parts.css";
+@import "./dot.css";
+@import "./avatar.css";
+@import "./late.css";
+@import "./shell.css";
+@import "./type.css";

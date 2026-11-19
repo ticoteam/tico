@@ -1,0 +1,7 @@
+node_modules/
+dist/
+# Generated: the route tree (TanStack Router) and the API types (npm run gen:api).
+src/routeTree.gen.ts
+src/api/schema.d.ts
+*.tsbuildinfo
+.tanstack/

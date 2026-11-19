@@ -1,0 +1,76 @@
+/* system/shell.css — the Tico-left shell (system/shell.js). Load after parts.css.
+   Tico | the menu (or a task's list) | a second chat, when open | the page. Desktop only; a phone keeps its own layout.
+   Copied from the mocks on 2026-11-19, then fixed where marked "fixed:". */
+
+:root{--tico-w:300px;--tico-fold:56px;--chat2-w:320px;--side-page-w:360px}
+.app-tico{display:grid;gap:var(--gap-pane);padding:var(--gap-pane);height:100dvh;   /* fixed: the grid the retired .app held */
+  --c1:var(--tico-w);--c2:var(--nav-w);--c3:var(--chat2-w);grid-template-columns:var(--c1) var(--c2) minmax(0,1fr)}
+.app-tico.is-tico-fold{--c1:var(--tico-fold)}
+.app-tico.is-menu-fold{--c2:56px}
+.app-tico.has-list{--c2:var(--tlist-w);--c3:var(--ask-w)}
+.app-tico.has-chat{grid-template-columns:var(--c1) var(--c2) var(--c3) minmax(0,1fr)}
+/* chat.main: the chat is the main thing (an agent's own page), and the page stands beside it as a narrow column */
+.app-tico.has-chat.is-chat-main{grid-template-columns:var(--c1) var(--c2) minmax(0,1fr) var(--side-page-w)}
+.app-tico.has-panel{grid-template-columns:var(--c1) var(--c2) minmax(0,1fr) var(--chat-w)}
+.app-tico.has-chat.has-panel{grid-template-columns:var(--c1) var(--c2) var(--c3) minmax(0,1fr) var(--chat-w)}
+.app-tico>.nav.is-rail{width:auto}
+.app-tico>.nav.is-rail .co-mark{cursor:pointer}
+
+/* Tico's column: the chat sheet's tone, one step up from the menu */
+.tico{--surface:var(--sheet-mid);box-shadow:var(--lift-1)}
+.tico-head{height:var(--bar);display:flex;align-items:center;gap:10px;padding:0 8px 0 14px;flex:none}
+.tico-head b{font-size:var(--t-md);font-weight:var(--w-title)}
+.tico .chat-body{padding:12px 16px}
+.tico .msg-meta time{display:none}
+.tico.is-fold{align-items:center;padding:12px 0}
+.tico-orb{width:40px;height:40px;border:0;background:none;border-radius:var(--r-ctl);display:grid;place-items:center;position:relative;flex:none}
+.tico-orb:hover{background:var(--hover)}
+.tico-orb .slot-n{position:absolute;left:24px;top:-2px}
+.tico.is-fold .grow{flex:1}
+
+/* a second chat */
+.chat-2{box-shadow:var(--lift-1)}
+
+/* what a chat is looking at, and what Tico did: quiet lines */
+.look{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;height:26px;padding:0 8px;border-radius:var(--r-chip);background:var(--well);color:var(--ink-2);font-size:var(--t-xs)}
+.look-ico{flex:none;display:grid;place-items:center;color:var(--muted)}
+.look-text{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}   /* a long name is cut with an ellipsis: the chip never grows past its column */
+.look .ico{width:13px;height:13px}
+.did{display:flex;align-items:center;gap:10px;margin:2px 0;color:var(--muted);font-size:var(--t-sm);min-height:24px}
+.did+.msg,.msg+.did{margin-top:var(--s-3)}
+.did-ico{width:22px;height:22px;display:grid;place-items:center;flex:none}
+.did .ico{width:14px;height:14px}
+.did .av{opacity:.9}
+.did span:last-child{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+
+/* the menu's head and foot in this shell */
+.co-pick{height:var(--ctl);border:0;background:none;border-radius:var(--r-ctl);padding:0 8px 0 6px;margin-left:-6px;display:inline-flex;align-items:center;gap:10px;color:var(--ink);font:inherit;min-width:0}
+.co-pick:hover,.co-pick.is-open{background:var(--hover)}
+.co-pick .co-name{flex:none;font-weight:var(--w-strong)}
+.co-pick .co-mark{flex:none}
+.co-pick>.ico{width:14px;height:14px;color:var(--muted);margin-left:-6px}
+.me-name{display:inline-flex;align-items:center;gap:10px;padding-left:4px;margin-left:0;border-radius:var(--r-ctl)}
+.pg-owner{width:var(--ctl);height:var(--ctl);border:0;background:none;border-radius:var(--r-ctl);display:grid;place-items:center;flex:none}
+.pg-owner:hover{background:var(--hover)}
+.pg-owner.is-on{background:var(--selected)}
+.app-tico .tree-team.is-active{background:var(--selected)}
+/* the folded menu: a count sits clear of its icon */
+.app-tico .nav.is-rail .slot-n{left:12px;top:-6px;min-width:15px;height:15px;line-height:15px;font-size:10px;padding:0 3px}
+.app-tico .nav.is-rail .slot-n.is-flow{left:12px;top:-6px;min-width:16px;height:16px;line-height:16px}
+
+/* a phone keeps its own layout for now: Tico's column and the second chat are not drawn */
+@media (max-width:760px){
+  .app-tico{display:block;padding:0}
+  .app-tico>.tico,.app-tico>.chat-2{display:none}
+}
+
+/* the chosen sub-row of Company or Library */
+.app-tico .nav-kid.is-active{background:var(--selected);color:var(--ink);font-weight:var(--w-strong)}
+
+/* the company pick, open */
+.app-tico .nav-head{position:relative}
+.co-menu{position:absolute;left:10px;top:48px;z-index:6;width:228px}
+.co-menu a small{margin-left:auto;color:var(--muted);font-size:var(--t-xs);white-space:nowrap;display:inline-flex;align-items:center;gap:5px}
+.co-menu .co-mark{width:22px;height:22px;font-size:11px;border-radius:6px;background:var(--well-2);color:var(--ink)}
+.co-menu a.is-on .co-mark{background:var(--ink);color:var(--raised)}
+.co-menu a.is-on>.ico:last-child{margin-left:8px}

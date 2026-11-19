@@ -1,0 +1,408 @@
+/* Copied from the mocks (system/tokens.css) on 2026-11-19. Do not edit by hand: additions go in tokens-app.css.
+   Changed at copy: font paths; the Bricolage face dropped (one family); the red danger tokens dropped (errors are grey). */
+/* system/tokens.css — Sheets. The one token file every mock loads.
+   Part 1 (to the phone rule) is directions/c-mono/tokens.css, every name and value as it was; only the font
+   paths moved. Part 2, "Foundations", names what the styles only implied. It adds names and changes none.
+   The board that shows all of it: system/foundations.html.
+
+   Every colour, type, space, radius, elevation and motion value of the direction, for both themes.
+   style.css names roles only, never a theme.
+
+   TOKEN PLAN
+   Idea      Three floating sheets on a ground, each at its own height, drawn in one grey ramp with no hue.
+             The only colour on a normal day is the Liquid Dot.
+   Colour    True greys. Dark: a near-black ground, sheets lifted one step each (navigation, chat, page).
+             Light: a light grey ground, white page, the other two sheets a breath off white.
+             Jade lives on the Dot alone: Tico, and the small Dot that marks "waits on you". Nothing else is
+             jade: no button, wash, bubble, ring or track.
+             Ink does the work jade used to do. The one filled button per bar is ink (white on dark, near-black
+             on light). Selection is a grey wash. Your own message is a grey one step above its sheet. The focus
+             ring is ink. A stage track is ink up to the current stage and quiet grey after it.
+             "Working now" is a quiet ring in ink that travels round the avatar.
+             "Late" is a thin outline pill with amber text, on a task row or a task card only (.pill-warn). Every other flag
+             is the grey .pill-flag, and an error is said in greys. No red or amber on Company.
+             Avatars keep a faint hue each, so teammates can be told apart at 16px.
+               ground   #E9E9E9 / #0B0B0B     page    #FFFFFF / #1A1A1A     chat      #FBFBFB / #161616
+               nav      #F4F4F4 / #111111     ink     #111111 / #F2F2F2     muted     #5E5E5E / #9C9C9C
+               line     #E4E4E4 / #262626     fill    #111111 / #F0F0F0     amber ink #8A5A10 / #E2B25A
+   Type      One family, Atkinson Hyperlegible Next. Page titles, hall names, large figures and the question that waits on you are heavier, not a second face
+             (its optical size axis does the work: tight and characterful when large). Atkinson Hyperlegible
+             Next for every line of interface text, 14px, unslashed zero.
+             Scale 12 / 13 / 14 / 16 / 20 / 22 / 26. Three weights: 400, 550, 650.
+   Layout    Three sheets on a ground with 8px gaps: navigation (low, almost part of the ground), the page (the
+             highest sheet) and chat (between the two). Inside a sheet nothing is a card: 34px rows, one strong
+             left axis for titles, marks hang in the margin, thin dividers between sections. Two things lift
+             off a sheet: a menu, and the answer that waits on you.
+             A task and Flow are one view of three sheets: a list (the pipeline by stage; its Flow control narrows
+             it to the rows that need your answer) in place
+             of navigation, the task (standing line, title, page tabs, then the open page), and the task's chat
+             with the one answer card above the message box. A page is HTML an agent wrote, shown in an iframe:
+             one that keeps its own look is paper (8px corners, 12px in) on a darker desk; one that takes Tico's
+             colours sits in the sheet under a rule.
+   Identity  People are circles and agents are rounded squares at every size (at 16px a plain colour chip, no letters).
+             Working now = an ink ring travelling round the avatar. The Dot is Tico, and Tico's mark on anything
+             that waits on you.
+   Motion    200 to 240ms, a gentle spring on things a person opened; the Dot and working marks breathe; nothing
+             else moves by itself.
+
+   CHECKS
+   - Height without colour: each sheet has its own tone and its own two-layer shadow (black, never tinted). In
+     dark the tones carry it (0B ground, 11, 16, 1A) with a top highlight; in light the shadows carry it.
+   - Contrast (AA), measured: muted text is 5.2:1 or better on every surface it sits on in both themes (lowest
+     on a chosen row in dark); ink on the filled button is 16:1 or better; amber "Late" text is 5.9:1 on the
+     light page (5.0:1 on a chosen row) and 8.9:1 on the dark page. Faint (about 3:1) is for marks only.
+   - Radius follows hierarchy (14 sheet, 12 lifted card, 8 control, 7 row, 6 chip). No gradient but the Dot's
+     own tonal fall. No uppercase eyebrow labels, no mono for small data, no middle-dot meta. */
+
+@font-face{font-family:"Atkinson Hyperlegible Next";font-style:normal;font-weight:200 800;font-display:block;src:url(/fonts/atkinson-hyperlegible-next.woff2) format("woff2")}
+@font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:100 800;font-display:block;src:url(/fonts/jetbrains-mono.woff2) format("woff2")}
+
+:root{
+  /* type */
+  --font-text:"Atkinson Hyperlegible Next",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-display:"Atkinson Hyperlegible Next",system-ui,sans-serif; /* one family. Titles are the text face, heavier. Kept as its own token so a second face is one line away. */
+  --font-code:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --t-xs:12px;      /* counts, pills, time */
+  --t-sm:13px;      /* secondary text, section names */
+  --t-base:14px;    /* every row, button, field and message */
+  --t-md:16px;      /* a pane's own title */
+  --t-fig:20px;     /* figures and the verdict in a report */
+  --t-lg:22px;      /* figures in a strip */
+  --t-ask:24px;     /* the question that waits on you: the largest text after a title */
+  --t-title:26px;   /* page title */
+  --t-hall:22px;    /* hall names, in plain ink */
+  --w-text:400;--w-strong:550;--w-title:650;
+  --lh-tight:1.2;--lh:1.45;--lh-read:1.55;
+  --track-title:-.018em;--track-hall:-.025em;
+
+  /* space: a 4px grid */
+  --s-1:4px;--s-2:8px;--s-3:12px;--s-4:16px;--s-5:20px;--s-6:24px;--s-8:32px;--s-10:40px;
+  --gap-pane:8px;       /* between sheets, and from sheets to the window edge */
+  --pad-pane:20px;      /* a sheet's inner side padding */
+
+  /* sizes */
+  --row:34px;--ctl:32px;--ctl-sm:28px;--ctl-lg:40px;--bar:60px;   /* ctl-lg: an answer */
+  --nav-w:248px;--chat-w:344px;--rail-w:280px;--list-w:328px;
+  --tlist-w:288px;      /* the list sheet beside an open task */
+  --ask-w:392px;        /* an open task's chat sheet: the answer card needs a name, a pill and two buttons on one line */
+  --bare-w:760px;       /* a task with no pages: the column its title and chat keep */
+  --pad-paper:12px;--r-paper:8px;   /* a page that keeps its own look: the margin round the paper, and its corners */
+  --decide-h:264px;     /* the decision sheet keeps one height, so the answers never move between items */
+  --pad-task:32px;      /* a task page's side padding: its title axis */
+  --proof-w:276px;      /* the proof column of a report */
+  --measure:560px;      /* about 75 characters of 14 to 16px text */
+  --av-xs:16px;--av-sm:22px;--av-md:28px;--av-lg:36px;
+
+  /* shape: radius follows hierarchy */
+  --r-pane:14px;--r-card:12px;--r-ctl:8px;--r-row:7px;--r-chip:6px;--r-pill:999px;
+  --r-bot:30%;                                         /* an agent's avatar: a rounded square */
+  --r-blob:43% 57% 55% 45%/38% 44% 56% 62%;            /* the Dot: a little less than round */
+
+  /* proof pictures: screenshots of the shop's own pages, so the same in both themes (dark only dims them) */
+  --shot-page:#FAFAFA;--shot-ink:#1B1B1B;--shot-muted:#7C7C7C;--shot-line:#E2E2E2;--shot-block:#E6E6E6;--shot-block-2:#CFCFCF;--shot-note:#F0F0F0;
+
+  /* motion */
+  --dur-fast:120ms;--dur:200ms;--dur-slow:240ms;
+  --ease:cubic-bezier(.2,0,0,1);--spring:cubic-bezier(.3,1.35,.5,1);
+  --breathe:2.6s;--turn:1.8s;
+}
+
+:root,[data-theme="light"]{
+  color-scheme:light;
+  --ground:#E9E9E9;        /* the window behind the sheets */
+  --sheet:#FFFFFF;         /* the page sheet, the highest */
+  --sheet-mid:#FBFBFB;     /* the chat sheet, between the two */
+  --sheet-low:#F4F4F4;     /* the navigation sheet, close to the ground */
+  --well:#F3F3F3;          /* a field, a code block: set into a sheet */
+  --well-2:#E9E9E9;        /* the chosen segment's track, a skeleton bar */
+  --hover:#F3F3F3;         /* a row under the pointer */
+  --selected:#EBEBEB;      /* the chosen row: a grey wash */
+  --line:#E4E4E4;          /* dividers */
+  --line-strong:#CECECE;   /* field borders, pipeline lines */
+  --ink:#111111;--ink-2:#3B3B3B;--muted:#5E5E5E;--faint:#878787;
+  --fill:#111111;--fill-hover:#2B2B2B;--on-fill:#FFFFFF;   /* the one filled button per bar */
+  --bubble:#ECECEC;        /* your own message */
+  --track:#DCDCDC;--track-done:#6A6A6A;--track-on:#111111;   /* a stage track: to come, passed, current */
+  --warn-ink:#8A5A10;--warn-line:rgba(138,90,16,.5);   /* late: amber text in a thin outline */
+  --stack:#BDBDBD;--stack-top:#8D8D8D;       /* the Floor's stacks */
+  --raised:#FFFFFF;        /* a lifted card, a menu, the phone's bar */
+  --raised-hover:#EEEEEE;--raised-pressed:#DEDEDE;   /* a raised thing under the pointer, and pressed: one and two steps toward ink (white has no lighter step) */
+  --desk:#F2F2F2;          /* the well a page lies in when it keeps its own look */
+  --btn-raised:#FFFFFF;    /* a plain button on a raised card */
+  --dock-field:#F3F3F3;    /* the message box in the phone's bottom dock */
+  --lift-desk:inset 0 1px 0 rgba(0,0,0,.06);
+  --lift-paper:0 0 0 1px rgba(0,0,0,.07),0 1px 2px rgba(0,0,0,.05),0 8px 18px -10px rgba(0,0,0,.22);
+  --seg-on:#FFFFFF;        /* the chosen segment */
+  --knob:#FFFFFF;
+  --dot:#4F9C71;--dot-hi:#5AA87C;--dot-lo:#468D65;--dot-shadow:rgba(0,0,0,.2);--on-dot:#0B0B0B;   /* the Dot: the only jade */
+  --work:#3B3B3B;--work-rest:rgba(59,59,59,.3);   /* the working ring: its head and its track */
+  --focus:#111111;
+  --av-bg:.925 .042;--av-fg:.37 .09;         /* an avatar: lightness and chroma; the hue is the teammate's */
+  --scrim:rgba(17,17,17,.66);--on-scrim:#FFFFFF;--shot-dim:none;
+  /* elevation: three heights, each two layers, in black */
+  --lift-ctl:0 0 0 1px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.07);
+  --lift-fill:inset 0 1px 0 rgba(255,255,255,.14),0 1px 2px rgba(0,0,0,.24),0 5px 12px -6px rgba(0,0,0,.4);
+  --lift-0:0 0 0 1px rgba(0,0,0,.04);
+  --lift-1:0 0 0 1px rgba(0,0,0,.045),0 1px 2px rgba(0,0,0,.05),0 10px 28px -14px rgba(0,0,0,.16);
+  --lift-2:0 0 0 1px rgba(0,0,0,.055),0 2px 4px rgba(0,0,0,.06),0 16px 36px -12px rgba(0,0,0,.24);
+  --lift-3:0 0 0 1px rgba(0,0,0,.07),0 4px 10px rgba(0,0,0,.08),0 28px 56px -16px rgba(0,0,0,.32);
+}
+[data-theme="dark"]{
+  color-scheme:dark;
+  --ground:#0B0B0B;
+  --sheet:#1A1A1A;
+  --sheet-mid:#161616;
+  --sheet-low:#111111;
+  --well:#222222;
+  --well-2:#2B2B2B;
+  --hover:#212121;
+  --selected:#2A2A2A;
+  --line:#262626;
+  --line-strong:#3A3A3A;
+  --ink:#F2F2F2;--ink-2:#C8C8C8;--muted:#9C9C9C;--faint:#737373;
+  --fill:#F0F0F0;--fill-hover:#FFFFFF;--on-fill:#111111;
+  --bubble:#2C2C2C;
+  --track:#303030;--track-done:#8A8A8A;--track-on:#F2F2F2;
+  --warn-ink:#E2B25A;--warn-line:rgba(226,178,90,.45);
+  --stack:#474747;--stack-top:#6C6C6C;
+  --raised:#242424;
+  --raised-hover:#323232;--raised-pressed:#414141;   /* one and two steps lighter than --raised */
+  --desk:#101010;
+  --btn-raised:#303030;
+  --dock-field:#191919;
+  --lift-desk:inset 0 1px 0 rgba(0,0,0,.55);
+  --lift-paper:0 0 0 1px rgba(0,0,0,.55),0 10px 22px -10px rgba(0,0,0,.9);
+  --seg-on:#383838;
+  --knob:#F2F2F2;
+  --dot:#56A578;--dot-hi:#5FB083;--dot-lo:#4D966C;--dot-shadow:rgba(0,0,0,.5);--on-dot:#0B0B0B;
+  --work:#C8C8C8;--work-rest:rgba(200,200,200,.3);
+  --focus:#F2F2F2;
+  --av-bg:.335 .052;--av-fg:.9 .06;
+  --scrim:rgba(0,0,0,.66);--on-scrim:#FFFFFF;--shot-dim:brightness(.86);
+  --lift-ctl:inset 0 1px 0 rgba(255,255,255,.07),0 0 0 1px rgba(0,0,0,.3);
+  --lift-fill:inset 0 1px 0 rgba(255,255,255,.5),0 1px 2px rgba(0,0,0,.5),0 6px 14px -6px rgba(0,0,0,.7);
+  --lift-0:inset 0 0 0 1px rgba(255,255,255,.03);
+  --lift-1:inset 0 1px 0 rgba(255,255,255,.05),inset 0 0 0 1px rgba(255,255,255,.035),0 12px 32px -14px rgba(0,0,0,.6);
+  --lift-2:inset 0 1px 0 rgba(255,255,255,.075),inset 0 0 0 1px rgba(255,255,255,.05),0 18px 40px -12px rgba(0,0,0,.7);
+  --lift-3:inset 0 1px 0 rgba(255,255,255,.1),inset 0 0 0 1px rgba(255,255,255,.075),0 30px 60px -16px rgba(0,0,0,.85);
+}
+/* a phone: every control is a 44px target */
+@media (max-width:760px){:root{--row:44px;--ctl:44px;--ctl-sm:44px;--ctl-lg:44px;--pad-pane:16px;--pad-task:16px;--t-ask:20px}}
+
+
+/* =====================================================================================================
+   PART 2. FOUNDATIONS
+   Added for Stage 2. New names only: nothing above is renamed or revalued, so a mock repointed to this
+   file does not move by a pixel.
+   ===================================================================================================== */
+
+:root{
+  /* ---------- type ----------
+     Two faces and one for code.
+       --font-display  Atkinson Hyperlegible Next  titles, hall names, figures, the question that waits on you
+       --font-text     Atkinson Hyperlegible Next  every other line, with font-feature-settings:var(--feat-text)
+       --font-code     JetBrains Mono              code only, never small data
+     A step is a font shorthand plus its tracking:
+       font:var(--type-title);letter-spacing:var(--track-title)
+     The font shorthand resets font-feature-settings, so set --feat-text after it on text-face steps.
+     Three weights only: --w-text 400, --w-strong 550, --w-title 650. */
+  --t-micro:11px;                 /* the smallest text: a key cap, a tag on a picture. Never a sentence */
+  --lh-display:1.1;               /* figures and hall names, one line */
+  --lh-title:1.16;                /* a title that may wrap */
+  --lh-ask:1.18;                  /* the question */
+  --lh-meta:1.3;                  /* times, counts, pills */
+  --lh-code:1.6;
+  --track-fig:-.012em;            /* figures */
+  --track-text:0em;               /* the text face is never tracked */
+  --track-initials:.01em;         /* avatar initials */
+  --feat-text:"ss09";             /* Atkinson: unslashed zero */
+
+  /* step            weight           size / line                     face                    px     tracking         used for */
+  --type-title:      var(--w-title)   var(--t-title)/var(--lh-title)  var(--font-display); /* 26/30  --track-title    page title, task title */
+  --type-ask:        var(--w-title)   var(--t-ask)/var(--lh-ask)      var(--font-display); /* 24/28  --track-title    the question (20 on a phone) */
+  --type-hall:       var(--w-title)   var(--t-hall)/var(--lh-display) var(--font-display); /* 22/24  --track-title    hall names on Company */
+  --type-figure-lg:  var(--w-title)   var(--t-lg)/var(--lh-display)   var(--font-display); /* 22/24  --track-fig      the figure on a widget */
+  --type-figure:     var(--w-title)   var(--t-fig)/var(--lh-display)  var(--font-display); /* 20/22  --track-fig      a figure in a page or row */
+  --type-head:       var(--w-title)   var(--t-md)/var(--lh-tight)     var(--font-text);    /* 16/19  --track-text     the name over a conversation, a dialog title */
+  --type-lead:       var(--w-strong)  var(--t-md)/var(--lh-tight)     var(--font-text);    /* 16/19  --track-text     the one line of an empty state */
+  --type-strong:     var(--w-strong)  var(--t-base)/var(--lh)         var(--font-text);    /* 14/20  --track-text     names, row titles, button labels */
+  --type-body:       var(--w-text)    var(--t-base)/var(--lh)         var(--font-text);    /* 14/20  --track-text     interface text */
+  --type-read:       var(--w-text)    var(--t-base)/var(--lh-read)    var(--font-text);    /* 14/22  --track-text     messages and anything longer than two lines */
+  --t-sec:16px;                   /* a section's name: always bigger and heavier than the rows under it */
+  --type-label:      var(--w-title)   var(--t-sec)/var(--lh-tight)    var(--font-text);    /* 16/19  --track-text     stage names, section names */
+  /* the second level: a group's name INSIDE a named section (a live risk under Live, Overdue under Invoices, a segment under
+     Channels, a sub-team under its team, a group in an opened row). 14 at title weight, in --ink: smaller than its section's
+     name, still heavier than its rows. A section's own name, and a group that has no named section over it, stay --type-label. */
+  --type-label-2:    var(--w-title)   var(--t-base)/var(--lh-tight)   var(--font-text);    /* 14/17  --track-text     group names inside a section */
+  --type-small:      var(--w-text)    var(--t-sm)/var(--lh)           var(--font-text);    /* 13/19  --track-text     second lines */
+  --type-meta:       var(--w-text)    var(--t-xs)/var(--lh-meta)      var(--font-text);    /* 12/16  --track-text     times, counts, pills */
+  --type-micro:      var(--w-strong)  var(--t-micro)/var(--lh-meta)   var(--font-text);    /* 11/14  --track-text     key caps, tags on a picture */
+  --type-code:       var(--w-text)    var(--t-xs)/var(--lh-code)      var(--font-code);    /* 12/19  --track-text     code */
+  /* avatar initials: --w-title, --track-initials, line height 1, at the size below for each avatar.
+     A 16 avatar carries no initials: its shape and hue are the whole mark. */
+  --av-sm-t:10px; --av-md-t:11.5px; --av-lg-t:14px;
+
+  /* ---------- spacing ----------
+     One grid, base 4. --s-1 to --s-10 are multiples of 4 and space everything between parts.
+     Half steps (2, 6, 10, 14) exist for the inside of a control only: icon to label, the padding of a pill.
+     Nothing is spaced on an odd number; 1px is a line, not a space. */
+  --s-0:2px;                      /* half: a mark hung beside text */
+  --s-1h:6px;                     /* half: inside a pill, a menu's padding */
+  --s-2h:10px;                    /* half: icon to label in a toast or file chip */
+  --s-3h:14px;                    /* half: the left edge of an answer card */
+  --s-12:48px;                    /* above an empty state */
+  --s-18:72px;                    /* below an empty state */
+
+  /* ---------- radii ----------
+     Named above: --r-pane 14 sheet, --r-card 12 raised card and overlay, --r-ctl 8 control, --r-paper 8 an agent's
+     page in its frame, --r-row 7 row, --r-chip 6 pill and tag, --r-pill 999 bars, tracks, switches, counts,
+     --r-bot 30% an agent's avatar, 50% a person's, --r-blob the Dot. Added: */
+  --r-block:10px;                 /* a block set inside a sheet: code, a picture, a toast */
+  --r-key:4px;                    /* a key cap */
+  --r-bubble:14px 14px 4px 14px;  /* your own message: the corner nearest you is tight */
+  --r-dock:24px;                  /* the phone's floating bar */
+  --r-slot:18px;                  /* a slot inside that bar */
+
+  /* ---------- icons ----------
+     Stroke icons on a 24 grid with 2 units of clear edge, round caps and joins, no fill, colour from the text.
+     Five sizes. The stroke is set per size so a line looks the same thickness at every size
+     (stroke-width is in grid units: line = stroke-width x size / 24). */
+  --ico-grid:24;
+  --ico-line:1.1px;               /* how thick a line looks, every size */
+  --ico-line-bold:1.5px;          /* a check or an arrow that is the whole mark */
+  --ico-xs:12px;  --ico-xs-stroke:2.2;  --ico-xs-stroke-bold:3;    /* a mark inside a line of text */
+  --ico-sm:14px;  --ico-sm-stroke:1.9;  --ico-sm-stroke-bold:2.6;  /* in a tab, a pill, a small control */
+  --ico:16px;     --ico-stroke:1.6;     --ico-stroke-bold:2.2;     /* rows, navigation, buttons */
+  --ico-lg:18px;  --ico-lg-stroke:1.5;  --ico-lg-stroke-bold:2;    /* an icon button */
+  --ico-xl:22px;  --ico-xl-stroke:1.3;  --ico-xl-stroke-bold:1.7;  /* the phone's bar and its icon buttons */
+
+  /* ---------- avatars, controls ----------
+     Avatars: --av-xs 16, --av-sm 22, --av-md 28, --av-lg 36. A person is a circle, an agent is --r-bot.
+     Controls: --ctl-sm 28, --ctl 32, --ctl-lg 40, --row 34, --bar 60. On a phone all four control heights
+     and the row become --tap (the rule above this part does it). */
+  --tap:44px;                     /* the smallest thing a finger is asked to hit */
+  --pill-h:20px;                  /* a pill; never a target on its own */
+  --ctl-pad:12px;                 /* left and right inside a button */
+  --ring-w:1.5px;                 /* the working ring round an avatar */
+  --ring-gap:1.5px;               /* between the avatar and its ring */
+
+  /* ---------- the Dot ----------
+     The only colour. Its jade is --dot, --dot-hi, --dot-lo in each theme; --r-blob is its shape at rest. */
+  --r-blob-2:56% 44% 42% 58%/52% 58% 42% 48%;  /* its shape at the top of a breath */
+  --r-blob-3:47% 53% 60% 40%/44% 40% 60% 56%;  /* its shape on the way back */
+  --breath:1.075;                 /* how much it grows in a breath */
+  --breath-back:.985;             /* and how far it settles under its size on the way back */
+  --breath-turn:9deg;             /* how far it turns in a breath */
+  --breath-turn-back:-6deg;       /* and back past rest */
+  --dot-glint:rgba(255,255,255,.3);
+  --dot-shade:rgba(0,0,0,.14);
+  --lift-knob:0 1px 2px rgba(0,0,0,.25);        /* the knob of a switch */
+
+  /* ---------- focus ----------
+     One ring, in ink, on :focus-visible only. Outside the control by default; inside for rows and
+     anything that touches a sheet's edge. Never removed, never recoloured. */
+  --focus-w:2px;
+  --focus-gap:2px;
+  --focus-gap-in:-2px;
+
+  /* ---------- layers ----------
+     Low to high. A thing takes the layer of its kind, never a number of its own. */
+  --z-page:1;                     /* the page sheet over its neighbours' shadows */
+  --z-stick:2;                    /* a stage name that sticks while its rows scroll */
+  --z-pop:4;                      /* a card that opens in place, inside its sheet */
+  --z-dock:20;                    /* the phone's bar and the answer docked above it */
+  --z-overlay:30;                 /* menus, pickers */
+  --z-scrim:40;                   /* the dim behind a dialog or a phone sheet */
+  --z-dialog:50;                  /* a dialog, a phone sheet */
+  --z-toast:60;
+  --z-tip:70;
+
+  /* ---------- motion ----------
+     Named above: --dur-fast 120ms a colour or fill change; --dur 200ms something small moving or leaving;
+     --dur-slow 240ms something arriving; --ease for anything that settles; --spring for anything that
+     arrives (one small overshoot); --breathe 2.6s the skeleton; --turn 1.8s the working ring.
+     Only transform and opacity move. Colour and shadow may fade. Nothing animates layout. */
+  --ease-in:cubic-bezier(.4,0,1,1);     /* leaving */
+  --ease-arrive:var(--spring);          /* arriving; plain --ease when motion is reduced */
+  --dur-enter:var(--dur-slow);
+  --dur-leave:var(--dur);
+  --dur-arrive:600ms;                   /* the Dot's one pulse when something starts to wait on you */
+  --breathe-dot:4.4s;                   /* the Dot at rest, one breath */
+  --typing:1.3s;                        /* the three dots while a teammate writes */
+  --toast-stay:5s;
+  --move-sm:4px;                        /* how far a thing travels: a tab's content */
+  --move:8px;                           /* a card, the task arriving in the page */
+  --move-lg:16px;                       /* a dialog, a toast */
+  --pop:.96;                            /* the size a card or overlay starts from */
+  --press:.975;                         /* a button while it is held */
+  --pulse:1.16;                         /* the top of the Dot's pulse */
+  --rest:.55;                           /* the low point of a skeleton's breath */
+  --loop:running;                       /* animation-play-state of every loop */
+}
+
+/* Reduced motion. Nothing travels, grows or loops. A change is a --dur-fast fade or instant.
+   Components built on the names below need no rule of their own.
+   data-motion="reduce" forces it on any element, for the board and for checks. */
+@media (prefers-reduced-motion:reduce){
+  :root{--move-sm:0px;--move:0px;--move-lg:0px;--pop:1;--press:1;--pulse:1;--rest:1;--loop:paused;
+    --ease-arrive:var(--ease);--dur-enter:var(--dur-fast);--dur-leave:var(--dur-fast);--dur-arrive:0ms}
+}
+[data-motion="reduce"]{--move-sm:0px;--move:0px;--move-lg:0px;--pop:1;--press:1;--pulse:1;--rest:1;--loop:paused;
+  --ease-arrive:var(--ease);--dur-enter:var(--dur-fast);--dur-leave:var(--dur-fast);--dur-arrive:0ms}
+
+/* ---------- elevation ----------
+   Five heights. Each is a surface and a shadow; both come from the theme, so these sit on every themed element.
+     ground                 --ground                       the desk everything floats on
+     nav      lowest sheet  --sheet-low   + --lift-0       navigation, the task list
+     chat     middle sheet  --sheet-mid   + --lift-1       the conversation
+     page     highest sheet --sheet       + --lift-2       the page, the task
+     card     raised card   --raised      + --lift-2       the answer that waits on you; sits on a sheet
+     overlay                --raised      + --lift-3       menu, picker, toast, dialog; sits over everything
+   Light lifts are a hairline plus a soft drop. Dark lifts are a top highlight, an inner hairline and a
+   deeper drop, because a shadow alone does not read on near-black.
+   Also: --lift-ctl a button, --lift-fill the filled button, --desk + --lift-desk the well an agent's page sits
+   in, --lift-paper that page. */
+:root,[data-theme]{
+  --surface-nav:var(--sheet-low);    --lift-nav:var(--lift-0);
+  --surface-chat:var(--sheet-mid);   --lift-chat:var(--lift-1);
+  --surface-page:var(--sheet);       --lift-page:var(--lift-2);
+  --surface-card:var(--raised);      --lift-card:var(--lift-2);
+  --surface-overlay:var(--raised);   --lift-overlay:var(--lift-3);
+  --focus-ring:var(--focus-w) solid var(--focus);
+  --art:var(--line-strong);          /* what an empty state's drawing is made of; faded for its second and third stroke */
+}
+
+/* ---------- colour by role, with contrast ----------
+   WCAG 2 ratios, computed from the values above and rounded down. Floors: text 4.5, a mark or a ring that
+   carries meaning 3. A column is a surface; a ratio is given only where the colour is really set on it.
+                         nav     chat    page    raised  chosen  well    bubble  
+   LIGHT                 #F4F4F4 #FBFBFB #FFFFFF #FFFFFF #EBEBEB #F3F3F3 #ECECEC 
+   --ink        text     17.1    18.2    18.8    18.8    15.8    17.0    15.9
+   --ink-2      text     10.1    10.8    11.2    11.2     9.3    10.0     9.4
+   --muted      text      5.8     6.2     6.4     6.4     5.4     5.8     5.4
+   --warn-ink   Late      5.3       .     5.9       .     4.9       .       .
+   --work       mark     10.1    10.8    11.2       .       .       .       .
+   --track-done mark      4.9       .     5.4     5.4       .       .       .
+   --dot        mark      3.0     3.2     3.3     3.3     2.7*      .       .
+   --stack-top  mark        .       .     3.3       .       .     2.9*      .
+   --faint      mark      3.2     3.4     3.5     3.5     3.0      .       .
+   --focus      ring     17.1    18.2    18.8    18.8    15.8    17.0    15.9
+   --on-fill on --fill 18.8      --on-dot on --dot 5.9
+
+                         nav     chat    page    raised  chosen  well    bubble  
+   DARK                  #111111 #161616 #1A1A1A #242424 #2A2A2A #222222 #2C2C2C 
+   --ink        text     16.8    16.1    15.5    13.8    12.8    14.2    12.4
+   --ink-2      text     11.2    10.8    10.4     9.2     8.5     9.5     8.3
+   --muted      text      6.8     6.5     6.3     5.6     5.2     5.7     5.0
+   --warn-ink   Late      9.6       .     8.9       .     7.3       .       .
+   --work       mark     11.2    10.8    10.4       .       .       .       .
+   --track-done mark      5.4       .     5.0     4.4       .       .       .
+   --dot        mark      6.3     6.0     5.8     5.2     4.8       .       .
+   --stack-top  mark        .       .     3.3       .       .     3.0       .
+   --faint      mark      3.9     3.8     3.6     3.2     3.0      .       .
+   --focus      ring     16.8    16.1    15.5    13.8    12.8    14.2    12.4
+   --on-fill on --fill 16.5      --on-dot on --dot 6.6
+   * under its floor. --faint was raised from the mocks' #979797 light and #666666 dark so it clears 3 on
+     every surface. Still just under 3 in light: the Dot on a chosen row and --stack-top on a hovered stack.
+   No floor, never the only sign of anything: --line, --line-strong, --track, --stack, --well, --well-2,
+   --hover, --selected, --warn-line (the Late outline; its text carries it), --work-rest, --dot-hi, --dot-lo. */

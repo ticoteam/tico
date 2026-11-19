@@ -1,0 +1,682 @@
+/* system/parts.css — the shell and every shared part of Sheets, in every state. Roles only: every colour, size, radius
+   and motion comes from tokens.css.
+   The first half is lifted from directions/c-mono/style.css as it stood on Wed, Nov 18 (page-only rules for Company
+   and the first-pass task view left behind). The second half, from "New for the system", adds the states and the
+   parts the mocks did not draw. system/parts.html draws every rule here; ?part=<name> shows one part alone.
+   Copied from the mocks on 2026-11-19, then fixed where marked "fixed:" (design-fidelity.md section 8). The Dot's
+   jade rules moved to dot.css, the avatar rules to avatar.css, Late's amber to late.css. */
+
+/* ---------- base ---------- */
+*,*::before,*::after{box-sizing:border-box}
+*{margin:0}
+html,body{height:100%}
+body{background:var(--ground);color:var(--ink);font-family:var(--font-text);font-size:var(--t-base);font-weight:var(--w-text);line-height:var(--lh);font-feature-settings:var(--feat-text);   /* fixed: longhands, the open zero */
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+a{color:inherit;text-decoration:none}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer}
+b{font-weight:var(--w-strong)}
+:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}   /* fixed: the focus tokens */
+.grow{flex:1}
+.only-phone,.ib.only-phone{display:none}
+.ico{width:16px;height:16px;stroke-width:1.6;flex:none;display:block}
+.flip{transform:rotate(180deg)}
+
+/* ---------- the sheets (the grid is .app-tico in shell.css; fixed: the retired .app grids are gone) ---------- */
+.pane{--surface:var(--sheet);border-radius:var(--r-pane);min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;position:relative;background:var(--surface)}
+.nav{--surface:var(--sheet-low);box-shadow:var(--lift-0)}
+.side{--surface:var(--sheet-mid);box-shadow:var(--lift-1)}
+.page{box-shadow:var(--lift-2);z-index:1}
+
+/* ---------- marks: the Dot, avatars, working, stopped, writing ---------- */
+
+.stuck{display:grid;place-items:center;width:18px;height:18px;color:var(--faint)}
+.stuck .ico{width:14px;height:14px;stroke-width:2}
+.typing{display:inline-flex;gap:3px;margin-left:8px;vertical-align:middle}
+.typing i{width:4px;height:4px;border-radius:50%;background:var(--ink-2);animation:typing 1.3s ease-in-out infinite}
+.typing i:nth-child(2){animation-delay:.16s}.typing i:nth-child(3){animation-delay:.32s}
+@keyframes typing{0%,60%,100%{opacity:.3;transform:translateY(0)}30%{opacity:1;transform:translateY(-2px)}}
+
+/* ---------- controls ---------- */
+.ib{width:var(--ctl);height:var(--ctl);border:0;background:none;border-radius:var(--r-ctl);color:var(--muted);display:inline-grid;place-items:center;flex:none;
+  transition:background var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
+.ib .ico{width:18px;height:18px}
+.ib:hover{background:var(--hover);color:var(--ink)}
+.ib:active{background:var(--well-2)}
+.ib-sm{width:var(--ctl-sm);height:var(--ctl-sm)}
+.ib-sm .ico{width:16px;height:16px}
+.ib-quiet{color:var(--faint)}
+.ib-ghost{opacity:0}
+.stage-head:hover .ib-ghost,.ib-ghost:focus-visible{opacity:1}
+
+.btn{height:var(--ctl);padding:0 12px;border:0;border-radius:var(--r-ctl);background:var(--raised);color:var(--ink);font-weight:var(--w-strong);line-height:1;white-space:nowrap;
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;flex:none;box-shadow:var(--lift-ctl);
+  transition:background var(--dur-fast) var(--ease),transform var(--dur) var(--spring),box-shadow var(--dur-fast) var(--ease)}
+.btn .ico{margin-left:-3px;color:var(--muted)}
+.btn:active{transform:scale(.975)}
+.btn-fill{background:var(--fill);color:var(--on-fill);box-shadow:var(--lift-fill)}
+.btn-fill:hover{background:var(--fill-hover)}
+.btn-fill .ico{color:inherit}
+.btn.is-disabled{opacity:.45;pointer-events:none}
+
+.search{height:var(--ctl);width:208px;display:flex;align-items:center;gap:8px;padding:0 10px;border-radius:var(--r-ctl);background:var(--well);color:var(--muted);
+  transition:background var(--dur-fast) var(--ease),box-shadow var(--dur-fast) var(--ease)}
+.search input{flex:1;min-width:0;border:0;outline:0;background:none;color:var(--ink);padding:0}
+.search input::placeholder{color:var(--muted)}
+.search:hover{background:var(--well-2)}
+.search:focus-within{background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--focus)}
+.field{height:var(--ctl);width:208px;display:inline-flex;align-items:center;padding:0 10px;border-radius:var(--r-ctl);background:var(--surface);box-shadow:inset 0 0 0 1px var(--line-strong)}
+.field input{flex:1;min-width:0;border:0;outline:0;background:none;padding:0}
+.seg{display:inline-flex;gap:2px;padding:2px;border-radius:var(--r-ctl);background:var(--well);flex:none}
+.seg button{width:30px;height:calc(var(--ctl) - 4px);border:0;border-radius:var(--r-chip);background:none;color:var(--muted);display:grid;place-items:center;transition:color var(--dur-fast) var(--ease)}
+.seg button:hover{color:var(--ink)}
+.seg .is-on{background:var(--seg-on);color:var(--ink);box-shadow:var(--lift-ctl)}
+.switch{width:36px;height:20px;border-radius:10px;background:var(--line-strong);position:relative;display:inline-block;flex:none;transition:background var(--dur) var(--ease)}
+.switch i{position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:50%;background:var(--knob);box-shadow:var(--lift-knob);transition:transform var(--dur-slow) var(--spring)}
+.switch.is-on{background:var(--fill)}
+.switch.is-on i{background:var(--on-fill)}
+.switch.is-on i{transform:translateX(16px)}
+.pill{height:20px;line-height:20px;padding:0 7px;border-radius:var(--r-chip);font-size:var(--t-xs);color:var(--muted);white-space:nowrap;box-shadow:inset 0 0 0 1px var(--line-strong)}
+/* every other flag (Offline, Stopped, Failed, Signed out, No reply): the plain outline pill, its words one step up in ink-2 */
+.pill-flag{color:var(--ink-2)}
+.count{font-size:var(--t-xs);color:var(--muted);font-variant-numeric:tabular-nums}
+.count-pill{min-width:18px;height:18px;line-height:18px;padding:0 5px;border-radius:9px;background:var(--well-2);color:var(--ink);font-weight:var(--w-strong);text-align:center;display:inline-block}
+.tip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 8px;border-radius:var(--r-chip);background:var(--fill);color:var(--on-fill);font-size:var(--t-xs);white-space:nowrap;
+  box-shadow:var(--lift-tip)}
+.tip b{font-weight:var(--w-strong)}
+
+/* ---------- sidebar ---------- */
+.nav-head{height:var(--bar);display:flex;align-items:center;gap:10px;padding:0 10px 0 16px;flex:none}
+.co-mark{width:24px;height:24px;border-radius:var(--r-row);background:var(--ink);color:var(--surface);display:grid;place-items:center;font-weight:var(--w-title);font-size:var(--t-sm);line-height:1}   /* fixed: weight, size, radius on the scale */
+.co-name{flex:1;font-weight:var(--w-title);font-size:var(--t-nav-name)}
+.nav-scroll{flex:1;min-height:0;overflow:auto;scrollbar-width:none}
+.nav-items{padding:0 8px;display:grid;grid-template-columns:minmax(0,1fr);gap:1px}
+.nav-item{height:var(--ctl);display:flex;align-items:center;gap:10px;padding:0 10px 0 8px;border-radius:var(--r-ctl);color:var(--ink-2);transition:background var(--dur-fast) var(--ease)}
+.nav-item>.ico{width:18px;height:18px;color:var(--muted)}
+.nav-label{flex:1}
+.nav-item:hover,.tree-row:hover,.tree-team:hover,.nav-kid:hover{background:var(--well-2)}
+.nav-item.is-active{background:var(--selected);color:var(--ink);font-weight:var(--w-strong)}
+.nav-item.is-active>.ico{color:var(--ink)}
+.nav-flow{display:inline-flex;align-items:center;gap:6px;color:var(--ink);font-size:var(--t-xs);font-weight:var(--w-strong);font-variant-numeric:tabular-nums}
+.nav-next{font-size:var(--t-xs);color:var(--muted)}
+.nav-chev{color:var(--faint)}
+.nav-chev .ico,.tree-chev .ico{width:14px;height:14px;transition:transform var(--dur) var(--spring)}
+.nav-chev.is-open .ico,.tree-team.is-open .tree-chev .ico{transform:rotate(90deg)}
+.nav-kids{display:grid;gap:1px;padding:1px 0 4px}
+.nav-kid{height:var(--ctl-sm);display:flex;align-items:center;padding:0 10px 0 36px;border-radius:var(--r-row);color:var(--muted);font-size:var(--t-sm)}
+.tree{margin:8px 8px 0;padding:8px 0 12px;border-top:1px solid var(--line);display:grid;grid-template-columns:minmax(0,1fr);gap:1px}
+.tree-head{height:var(--ctl-sm);display:flex;align-items:center;justify-content:space-between;padding:0 2px 0 8px;font-size:var(--t-sm);color:var(--muted)}
+.tree-row,.tree-team{height:30px;display:flex;align-items:center;gap:8px;padding:0 10px 0 8px;border-radius:var(--r-row);transition:background var(--dur-fast) var(--ease)}
+.tree-team{color:var(--ink-2);font-size:var(--t-sm);font-weight:var(--w-strong)}
+.tree-chev{width:var(--av-sm);display:grid;place-items:center;color:var(--faint)}
+.tree-name{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.tree-n{min-width:14px;text-align:right;font-size:var(--t-xs);color:var(--muted);font-variant-numeric:tabular-nums}
+.faces{display:flex;padding-left:4px}
+.faces .av{margin-left:-4px;box-shadow:0 0 0 2px var(--surface)}
+.nav-foot{height:52px;flex:none;display:flex;align-items:center;gap:2px;padding:0 10px 0 8px;border-top:1px solid var(--line)}
+.assistant{flex:1;height:36px;display:flex;align-items:center;gap:10px;padding:0 8px;border-radius:var(--r-ctl);font-weight:var(--w-strong)}
+.assistant:hover{background:var(--well-2)}
+.me{margin-left:6px;display:grid;border-radius:50%}
+
+/* ---------- top bar and rows ---------- */
+.page-head{height:var(--bar);display:flex;align-items:center;gap:8px;padding:0 12px 0 var(--page-x);flex:none}   /* fixed: one page margin */
+h1{font-family:var(--font-display);font-size:var(--t-title);font-weight:var(--w-title);line-height:1;font-feature-settings:var(--feat-text);letter-spacing:var(--track-title);white-space:nowrap}
+.scope-pick{height:var(--ctl);border:0;background:none;border-radius:var(--r-ctl);padding:0 6px 0 10px;margin:3px 0 0 2px;display:inline-flex;align-items:center;gap:4px;color:var(--muted);
+  transition:background var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
+.scope-pick:hover{background:var(--hover);color:var(--ink)}
+.page-body{flex:1;min-height:0;overflow:auto;scrollbar-width:none}
+/* a list that runs past its sheet fades out, it is not cut */
+/* stylelint-disable-next-line color-no-hex -- mask */
+.tasks-body,.task-body,.tl-list,.nav-scroll{-webkit-mask-image:linear-gradient(#000 calc(100% - 28px),transparent);mask-image:linear-gradient(#000 calc(100% - 28px),transparent)}
+
+/* rows: a title, an avatar, an age; state is a mark in the margin */
+.row{height:var(--row);display:grid;align-items:center;border-radius:var(--r-row);padding:0 8px;position:relative;transition:background var(--dur-fast) var(--ease)}
+.row:hover{--surface:var(--hover);background:var(--hover)}
+.row.is-selected{--surface:var(--selected);background:var(--selected)}
+.row:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
+.row-title{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.row-age{text-align:right;color:var(--muted);font-size:var(--t-sm);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* ---------- task rows, empty, skeleton ---------- */
+.tasks-body{padding:0 12px 20px calc(var(--page-x) - var(--s-8))}   /* fixed: task titles stand on --page-x, their mark (8 + 24) hangs in the margin */
+.stage+.stage{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+.stage-head{height:36px;display:flex;align-items:center;gap:8px;padding:0 4px 0 32px;position:sticky;top:0;z-index:2;background:var(--surface)}
+.stage-head.is-stuck{box-shadow:0 1px 0 var(--line)}
+.stage-head h2{font-family:var(--font-text);font-size:var(--t-sec);font-weight:var(--w-title);line-height:var(--lh-tight);color:var(--ink)}
+.stage-n{font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums;position:relative;top:.5px}
+.task{grid-template-columns:24px minmax(0,1fr) auto var(--av-sm) 38px}
+.row-mark{display:flex;align-items:center}
+.row-pills{display:flex;gap:6px;padding:0 14px 0 16px}
+.stage-fold{display:flex;flex-wrap:wrap;align-items:center;gap:4px 18px;min-height:var(--row);margin-top:6px;padding:8px 0 0 32px;border-top:1px solid var(--line);font-size:var(--t-sm);color:var(--muted)}
+.fold-label{color:var(--ink-2);font-weight:var(--w-strong)}
+.stage-fold a:hover{color:var(--ink)}
+
+.tasks-body.is-empty{display:flex;flex-direction:column;-webkit-mask-image:none;mask-image:none}
+.empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:48px 0 72px}
+.empty h2{font-family:var(--font-text);font-size:var(--t-md);font-weight:var(--w-strong);line-height:var(--lh-tight)}
+.empty-art{display:flex;flex-direction:column-reverse;gap:5px;width:56px;margin-bottom:6px}
+.empty-art i{height:9px;border-radius:5px;background:var(--well-2)}
+.empty-art i:nth-child(2){opacity:.75}.empty-art i:nth-child(3){opacity:.5}.empty-art i:nth-child(4){opacity:.28}
+
+.sk{display:block;height:10px;border-radius:5px;background:var(--well-2);animation:rest var(--breathe) ease-in-out infinite}
+.sk-head{height:10px}
+.sk-av{width:var(--av-sm);height:var(--av-sm);border-radius:var(--r-bot)}
+.sk-age{width:20px;justify-self:end}
+.is-skeleton{pointer-events:none}
+@keyframes rest{0%,100%{opacity:1}50%{opacity:.55}}
+
+/* ---------- conversation ---------- */
+.side-head{height:var(--bar);display:flex;align-items:center;gap:10px;padding:0 10px 0 16px;border-bottom:1px solid var(--line);flex:none}
+.side-head b{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.side-head .code{color:var(--muted);font-variant-numeric:tabular-nums}
+.chat-body{flex:1;min-height:0;overflow:auto;scrollbar-width:none;padding:12px 16px;display:flex;flex-direction:column}
+.chat-body>:first-child{margin-top:auto}
+.msg{display:flex;gap:10px;padding-top:14px}
+.msg.is-cont{padding-top:6px}
+.msg.is-big{gap:12px}
+.msg-main{flex:1;min-width:0}
+.msg-meta{display:flex;align-items:baseline;gap:8px;margin-bottom:1px}
+.msg-meta b{font-weight:var(--w-strong);min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.msg p{line-height:var(--lh-read);overflow-wrap:anywhere}
+.msg ul{margin-top:4px;padding-left:18px;display:grid;gap:3px;line-height:var(--lh-read)}
+.msg li::marker{color:var(--faint)}
+.msg.is-live p{color:var(--muted)}
+.msg.is-mine{justify-content:flex-end;align-items:flex-start}
+.msg.is-mine time{margin-top:9px}
+.mine-col{display:flex;flex-direction:column;align-items:flex-end;max-width:84%}
+.bubble{background:var(--bubble);border-radius:14px 14px 4px 14px;padding:7px 12px}
+.msg pre{margin-top:8px;padding:10px 12px;border-radius:10px;background:var(--well);color:var(--ink-2);font-family:var(--font-code);font-size:var(--t-xs);font-weight:var(--w-text);line-height:var(--lh-code);font-feature-settings:normal;overflow:auto;scrollbar-width:none}
+.msg code{font:inherit}
+.file{display:inline-flex;align-items:center;gap:8px;height:36px;margin-top:8px;padding:0 12px 0 10px;border-radius:10px;background:var(--well);transition:background var(--dur-fast) var(--ease)}
+.file:hover{background:var(--well-2)}
+.file .ico{color:var(--muted)}
+.file em{font-style:normal;font-size:var(--t-xs);color:var(--muted)}
+.reacts{display:flex;gap:4px;margin-top:6px}
+.react{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border-radius:12px;background:var(--well);font-size:var(--t-sm);line-height:1}
+.react b{font-weight:var(--w-text);font-size:var(--t-xs);color:var(--muted)}
+.chat-foot{flex:none;padding:4px 12px 12px;display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+.scope{display:inline-flex;align-items:center;gap:2px;height:24px;padding:0 2px 0 8px;border-radius:var(--r-chip);background:var(--well);color:var(--ink-2);font-size:var(--t-xs)}
+.scope button{width:20px;height:20px;border:0;background:none;border-radius:5px;display:grid;place-items:center;color:var(--muted)}
+.scope button:hover{background:var(--well-2);color:var(--ink)}
+.scope .ico{width:12px;height:12px;stroke-width:2}
+.composer{align-self:stretch;min-height:44px;display:flex;align-items:center;gap:2px;padding:0 6px 0 14px;border-radius:var(--r-card);background:var(--well);box-shadow:inset 0 0 0 1px var(--line);
+  transition:box-shadow var(--dur-fast) var(--ease)}
+.composer:hover{box-shadow:inset 0 0 0 1px var(--line-strong)}
+.composer-text{flex:1;min-width:0;color:var(--muted);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.send{width:var(--ctl);height:var(--ctl);border:0;border-radius:var(--r-ctl);background:var(--well-2);color:var(--muted);display:grid;place-items:center;flex:none;margin-left:4px}
+.send.is-ready{background:var(--fill);color:var(--on-fill)}
+
+/* ---------- thread rows and the thread bar ---------- */
+.page-thread{flex-direction:row}
+.tl{width:var(--list-w);flex:none;min-height:0;display:flex;flex-direction:column;border-right:1px solid var(--line)}
+.tl .page-head{padding-right:8px}
+.search-wide{width:auto;margin:0 12px 8px;flex:none}
+.tl-list{flex:1;min-height:0;overflow:auto;scrollbar-width:none;padding:0 8px 12px;display:grid;gap:1px;align-content:start}
+.tl-row{grid-template-columns:var(--av-sm) minmax(0,1fr) auto 24px;column-gap:8px;padding:0 6px 0 12px;color:var(--ink-2)}
+.tl-row .row-title{margin-left:2px}
+.tl-row.is-unread{color:var(--ink)}
+.tl-row.is-unread .row-title{font-weight:var(--w-strong)}
+.tl-row .row-age{font-size:var(--t-xs)}
+.tl-kind{width:var(--av-sm);height:var(--av-sm);display:grid;place-items:center;color:var(--muted)}
+.tl-slot{display:flex;justify-content:flex-end;align-items:center}
+.conv{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
+.conv-head{height:var(--bar);display:flex;align-items:center;gap:4px;padding:0 12px 0 24px;border-bottom:1px solid var(--line);flex:none}
+.conv-head h2{font-family:var(--font-text);font-size:var(--t-md);font-weight:var(--w-title);line-height:var(--lh-tight);min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.conv-head .back{display:none}
+/* stylelint-disable-next-line color-no-hex -- mask */
+.conv-body{flex:1;min-height:0;overflow:auto;scrollbar-width:none;padding:0 24px 12px;-webkit-mask-image:linear-gradient(transparent,#000 24px);mask-image:linear-gradient(transparent,#000 24px)}
+.day{display:flex;align-items:center;gap:12px;margin:20px 0 -2px;font-size:var(--t-xs);color:var(--muted)}
+.day::before,.day::after{content:"";flex:1;height:1px;background:var(--line)}
+.conv-foot{flex:none;padding:4px 20px 16px;display:flex}
+.conv-foot .composer{flex:1}
+.conv .mine-col{max-width:86%}
+
+.rail-body{flex:1;min-height:0;overflow:auto;scrollbar-width:none}
+.rail-sec{padding:14px 16px;border-bottom:1px solid var(--line)}
+.rail-sec:last-child{border-bottom:0}
+.rail-sec h3{font-family:var(--font-text);font-size:var(--t-sec);font-weight:var(--w-title);line-height:var(--lh-tight);color:var(--ink);margin-bottom:10px}
+.track{display:flex;gap:4px;margin:2px 0 10px}
+.track i{flex:1;height:5px;border-radius:3px;background:var(--track)}
+.track .is-done{background:var(--track-done)}
+.track .is-on{background:var(--track-on)}
+.fact{height:30px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.fact>span:first-child{color:var(--muted)}
+.fact-v{display:inline-flex;align-items:center;gap:7px}
+.people{display:flex;gap:8px}
+.rail-row{height:var(--row);display:flex;align-items:center;gap:10px;margin:0 -8px;padding:0 8px;border-radius:var(--r-row);transition:background var(--dur-fast) var(--ease)}
+.rail-row:hover{--surface:var(--hover);background:var(--hover)}
+.rail-row .ico{color:var(--muted)}
+.rail-sec h3+.rail-row{margin-top:-4px}
+
+/* ---------- task view: list, standing line, tabs, frame, answer ---------- */
+.app-task,.app-flow{grid-template-columns:var(--tlist-w) minmax(0,1fr) var(--ask-w)}
+.page-wide{grid-column:2/-1}
+
+/* the list sheet, where navigation was */
+.li-head{height:var(--bar);display:flex;align-items:center;gap:4px;padding:0 10px 0 6px;flex:none}
+.li-pick{height:var(--ctl);border:0;background:none;border-radius:var(--r-ctl);padding:0 6px 0 10px;display:inline-flex;align-items:center;gap:4px;font-weight:var(--w-title);font-size:var(--t-nav-name);
+  transition:background var(--dur-fast) var(--ease)}
+.li-pick .ico{color:var(--muted)}
+.li-pick:hover{background:var(--well-2)}
+/* Flow as one icon: the Dot with a play mark. No word. Off, the count sits beside it. (The Flow mark is in dot.css.) */
+.li-play{height:var(--ctl);min-width:var(--ctl);border:0;background:none;border-radius:var(--r-ctl);padding:0 6px;display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  color:var(--ink-2);font-size:var(--t-sm);transition:background var(--dur-fast) var(--ease)}
+.li-play:hover{background:var(--hover)}
+.li-play.is-on{background:var(--well-2);box-shadow:inset 0 0 0 1px var(--line-strong)}
+.li-play>b{font-weight:var(--w-strong);font-variant-numeric:tabular-nums;padding-right:2px}
+
+.li-run{flex:none;display:flex;align-items:center;gap:2px;height:30px;padding:0 10px 4px 16px;font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.li-run b{color:var(--ink)}
+.li-body{padding:0 8px 28px;display:grid;grid-template-columns:minmax(0,1fr);align-content:start;gap:1px}
+.li-stage{height:34px;display:flex;align-items:flex-end;padding:0 8px 6px;font-size:var(--t-xs);font-weight:var(--w-text);color:var(--muted)}
+.li-stage:first-child{height:22px}
+.li{display:grid;grid-template-columns:14px minmax(0,1fr) auto;column-gap:8px;align-items:start;padding:8px 10px 9px 8px;border-radius:var(--r-row);transition:background var(--dur-fast) var(--ease)}
+.li:hover{background:var(--well-2)}
+.li.is-on{background:var(--selected)}
+.li-mark{height:18px;display:flex;align-items:center;justify-content:center;color:var(--faint)}
+.li-mark .ico{width:13px;height:13px;stroke-width:2.2}
+.li.is-done .li-mark{color:var(--muted)}
+.li-main{min-width:0;display:grid;justify-items:start;gap:6px}
+.li-title{font-size:var(--t-sm);line-height:18px;color:var(--ink-2);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.li.is-on .li-title{color:var(--ink);font-weight:var(--w-strong)}
+.li.is-done .li-title{color:var(--muted)}
+.li-who{display:flex;align-items:center;gap:6px;margin:-2px 0}
+.li-who .row-age{font-size:var(--t-xs);min-width:27px}
+
+/* the task sheet: where it stands, its title, its pages. Nothing else sits above a page. */
+.tv-top,.dock,.doc-tab.tab-chat{display:none}
+.tv-head{flex:none;position:relative;display:flex;flex-direction:column;padding:20px 60px 0 var(--pad-task)}
+.tv-where{display:flex;align-items:center;gap:5px;height:22px;font-size:var(--t-sm);color:var(--muted)}
+.tv-where>.ico{width:12px;height:12px;stroke-width:2;color:var(--faint)}
+.tv-where .av{margin-left:9px}
+.tv-where .row-age{margin-left:2px}
+.tv-where .pill{margin-left:4px}
+.tv-title{margin-top:8px;font-family:var(--font-display);font-size:var(--t-title);font-weight:var(--w-title);line-height:var(--lh-title);font-feature-settings:var(--feat-text);letter-spacing:var(--track-title);white-space:normal;text-wrap:balance;max-width:620px}
+.tv-more{position:absolute;right:12px;top:14px}
+.tv-tabs{flex:none;display:flex;align-items:center;gap:8px;margin-top:10px;padding:0 12px 0 var(--pad-task)}
+.tv-tabs .docs{flex:1}
+.tv-expand{color:var(--faint)}
+
+/* A page is HTML its agent wrote. One that keeps its own look is paper lying in a well; one that takes Tico's colours
+   sits in the sheet with a rule above it. Either way it scrolls inside its frame. */
+.frame{flex:1;min-height:0;display:flex;border-top:1px solid var(--line)}
+.frame iframe{flex:1;min-width:0;width:100%;height:100%;border:0;display:block;background:var(--surface)}
+.frame:not(.is-themed) iframe{background:var(--paper)}   /* fixed: paper is a token */
+.frame.is-inset:not(.is-themed){padding:var(--pad-paper);border-top:0;background:var(--desk);box-shadow:var(--lift-desk)}
+.frame.is-inset:not(.is-themed) iframe{border-radius:var(--r-paper);box-shadow:var(--lift-paper)}
+
+/* no pages yet: the task is its title, where it stands and its chat */
+.tv.is-bare{grid-column:2/-1}
+.tv-col{flex:1;min-height:0;width:100%;max-width:var(--bare-w);margin:0 auto;display:flex;flex-direction:column}
+.tv.is-bare .tv-head{padding-left:16px;padding-right:16px}
+.tv.is-bare .tv-more{position:fixed;right:20px;top:22px}
+/* a short chat starts under the title and reads down from it */
+.tv.is-bare .chat-body{padding-top:14px}
+.tv.is-bare .chat-body>:first-child{margin-top:0}
+
+/* the answer: one slim raised card at the foot of the chat, above the message box */
+.answer{--surface:var(--raised);align-self:stretch;padding:8px 8px 8px 14px;border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-2)}
+.an-row{display:flex;align-items:center;gap:8px;min-height:var(--ctl)}
+.an-name{white-space:nowrap}
+.an-pill{border:0;background:none;margin-left:2px;transition:background var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
+.an-pill:hover{color:var(--ink)}
+.an-pill.is-on{background:var(--well-2);color:var(--ink);box-shadow:inset 0 0 0 1px var(--muted)}
+.an-why{margin:0 6px 8px 0;padding:4px 0 10px;border-bottom:1px solid var(--line);line-height:var(--lh);color:var(--ink-2);font-size:var(--t-sm);text-wrap:pretty}
+.an-why span{display:block;margin-bottom:1px;font-size:var(--t-xs);color:var(--muted)}
+.answer.is-ask{padding:12px}
+.an-q{display:flex;align-items:flex-start;gap:9px;padding:0 2px;font-weight:var(--w-strong);line-height:1.35;text-wrap:balance}
+.an-q .dot{margin-top:3px}
+.answer.is-ask .an-row{margin-top:12px}
+.answer.is-ask .btn{flex:1}
+.answer .btn:not(.btn-fill){background:var(--btn-raised)}
+.answer .btn:not(.btn-fill):hover{background:var(--hover)}
+
+
+/* page tabs: a tick, the Dot, a hollow ring; one row that scrolls */
+.docs{display:flex;gap:2px;margin-left:-10px;min-width:0;overflow-x:auto;scrollbar-width:none}
+.doc-tab{height:40px;display:inline-flex;align-items:center;gap:7px;padding:0 10px;position:relative;flex:none;color:var(--muted);white-space:nowrap;transition:color var(--dur-fast) var(--ease)}
+.doc-tab:hover{color:var(--ink)}
+.doc-tab.is-on{color:var(--ink);font-weight:var(--w-strong)}
+.doc-tab.is-on::after{content:"";position:absolute;left:10px;right:10px;bottom:0;height:2px;border-radius:2px 2px 0 0;background:var(--ink)}
+.doc-tab.is-none{color:var(--faint)}
+.doc-tab .ico{width:14px;height:14px;stroke-width:2.2}
+.hollow{width:9px;height:9px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--line-strong)}
+
+/* ---------- menus and toasts ---------- */
+.menu{width:200px;padding:6px;border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-3)}
+.menu a{height:var(--ctl);display:flex;align-items:center;gap:10px;padding:0 8px;border-radius:var(--r-row)}
+.menu a .ico{color:var(--muted)}
+.menu a:hover{background:var(--hover)}
+.menu hr{border:0;border-top:1px solid var(--line);margin:6px -6px}
+.toast{display:inline-flex;align-items:center;gap:10px;height:40px;padding:0 4px 0 12px;border-radius:10px;background:var(--raised);box-shadow:var(--lift-3)}
+.toast .ico{color:var(--ink);stroke-width:2}
+.toast button{height:var(--ctl);padding:0 10px;margin-left:10px;border:0;background:none;border-radius:var(--r-chip);color:var(--ink);font-weight:var(--w-strong)}
+.toast button:hover{background:var(--hover)}
+
+/* ---------- phone: one sheet, 44px targets, the five-slot bar, the task dock ---------- */
+.bar{display:none}
+@media (max-width:760px){
+  .not-phone{display:none!important}
+  .only-phone,.ib.only-phone{display:inline-grid}
+  body{background:var(--sheet)}
+  .nav,.side{display:none}
+  .page{height:100dvh;border-radius:0;box-shadow:none}
+  .page-head{height:60px;padding:4px 4px 0 16px}
+  h1{font-size:24px}
+  .ib .ico{width:20px;height:20px}
+  .btn{padding:0 14px}
+  .scope-pick{padding:0 4px 0 8px;margin-left:0}
+  .page-body{padding-bottom:88px}
+
+  .tasks-body{padding:0 8px 96px}
+  .stage-head{height:40px;padding-left:8px}
+  .task{height:auto;min-height:var(--row);grid-template-columns:minmax(0,1fr) 20px var(--av-sm) 34px;grid-template-areas:"title mark av age" "pills pills pills pills";padding:9px 8px;row-gap:6px}
+  .task .row-title{grid-area:title;white-space:normal;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;padding-right:10px}
+  .task .row-mark{grid-area:mark;justify-content:flex-start}
+  .task .av{grid-area:av}
+  .task .row-age{grid-area:age}
+  .task .row-pills{grid-area:pills;padding:0}
+  .task .row-pills:empty{display:none}
+  .stage-fold{padding-left:8px}
+
+  .tl{display:none}
+  .conv-head{padding:0 4px;gap:0}
+  .conv-head .back{display:inline-grid}
+  .conv-head h2{margin-left:2px}
+  .conv-body{padding:0 16px 8px}
+  .conv-foot{padding:6px 12px 14px}
+  .conv .mine-col{max-width:86%}
+  .msg pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;padding:10px}
+  .send{width:36px;height:36px}
+  .composer{min-height:48px}
+  .composer .ib{width:36px;height:36px}
+
+
+  /* a task on a phone: one column. Back and the place in the run, the title, where it stands, then one row of tabs
+     where Chat sits beside the pages. The answer is one slim row docked above the bar. */
+  .app-task,.app-flow{display:block}
+  .tv-head{padding:0 16px}
+  .tv-top{display:flex;align-items:center;height:48px;margin:0 40px 0 -12px}
+  .tv-n{margin-left:2px;font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums}
+  .tv-n b{color:var(--ink)}
+  .tv-more{right:4px;top:2px}
+  .tv-title{order:1;margin-top:2px;font-size:20px;line-height:1.2;max-width:none}
+  .tv-where{order:2;margin-top:8px}
+  .tv-tabs{margin-top:2px;padding:0 0 0 16px}
+  .tv-expand{display:none}
+  .doc-tab.tab-chat{display:inline-flex}
+  .doc-tab{height:44px}
+  .frame,.frame.is-inset:not(.is-themed){padding:0;background:none;box-shadow:none;border-top:1px solid var(--line)}
+  .frame.is-inset:not(.is-themed) iframe{border-radius:0;box-shadow:none}
+  .tv-chat{border-top:1px solid var(--line)}
+  /* the bottom of the screen: the answer, and on the Chat tab the message box under it. No main bar here. */
+  .dock,.tv.is-bare .chat-foot{--surface:var(--raised);flex:none;display:flex;flex-direction:column;align-items:stretch;gap:8px;padding:8px 10px calc(8px + max(env(safe-area-inset-bottom),20px));
+    background:var(--raised);border-top:1px solid var(--line)}
+  .dock .answer{padding:0 0 0 8px;border-radius:0;background:none;box-shadow:none}
+  .dock .answer.is-ask{padding:6px 0 0}
+  .dock .an-q{padding:0 8px}
+  .dock .an-why{margin-right:0;padding-right:6px}
+  .dock .composer,.tv.is-bare .chat-foot .composer{background:var(--dock-field)}
+  .tv.is-bare .tv-more{position:absolute;right:4px;top:2px}
+  .tv.is-bare .tv-head{padding:0 16px}
+  .tv.is-bare .chat-body{border-top:1px solid var(--line);margin-top:12px}
+
+  .bar{display:grid;grid-template-columns:repeat(5,1fr);align-items:center;position:fixed;left:10px;right:10px;bottom:10px;height:62px;padding:0 4px;border-radius:24px;z-index:20;
+    background:var(--raised);box-shadow:var(--lift-3)}
+  /* rows fade out before they reach the bar, so none shows in the gap under it */
+  body:has(.bar)::after{content:"";position:fixed;left:0;right:0;bottom:0;height:104px;z-index:19;pointer-events:none;background:linear-gradient(to bottom,transparent,var(--sheet) 58%)}
+  .slot{height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border-radius:18px;color:var(--muted);font-size:var(--t-xs);line-height:1}
+  .slot .ico{width:22px;height:22px}
+  .slot.is-active{color:var(--ink);font-weight:var(--w-strong)}
+  .slot-dot{justify-content:center}
+}
+
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+
+/* ====================================================================================================
+   New for the system: every state, and the parts the mocks did not draw. Same tokens, same grammar:
+   hollow = off or not yet, filled ink = on or chosen, a grey wash = selected, the Dot = waits on you.
+   ==================================================================================================== */
+
+/* ---------- two roles the tokens do not have yet (they belong in tokens.css) ---------- */
+/* Under the pointer on a raised surface: a button, a menu, a toast. --hover is drawn for a sheet, and in the dark theme
+   it is darker than --raised, so on a raised surface it cannot be seen. */
+/* --raised-hover and --raised-pressed are in tokens.css, one value for each theme */
+.btn:hover,.answer .btn:not(.btn-fill):hover,.menu a:hover,.toast button:hover,.sr:hover,.sr.is-on,.date-pick-grid a:hover{background:var(--raised-hover)}
+.btn-fill:hover{background:var(--fill-hover)}
+
+/* ---------- states by class, so a sheet or a test can hold one still: is-hover is-pressed is-focus is-disabled is-busy ---------- */
+/* Focus has three shapes. Something you press: a ring 2px off its edge. A row in a list: the ring inside its edge.
+   Something you type in: the edge itself turns to ink. */
+.ib:focus-visible,.btn:focus-visible,.scope-pick:focus-visible,.li-pick:focus-visible,.li-flow:focus-visible,.pill:focus-visible,.switch:focus-visible,.check:focus-visible .check-box,.radio:focus-visible .radio-box,.seg button:focus-visible,.send:focus-visible,.file:focus-visible,.starter:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
+.nav-item:focus-visible,.nav-kid:focus-visible,.tree-row:focus-visible,.tree-team:focus-visible,.assistant:focus-visible,.row:focus-visible,.li:focus-visible,.doc-tab:focus-visible,.menu a:focus-visible,.sr:focus-visible,.slot:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
+.doc-tab:focus-visible{border-radius:var(--r-chip)}
+.row:hover{--surface:var(--hover);background:var(--hover)}
+.tree-row:hover,.tree-team:hover,.nav-kid:hover,.assistant:hover,.li:hover,.li-pick:hover{background:var(--well-2)}
+.tree-row.is-active{background:var(--selected)}
+.scope-pick:hover{background:var(--hover);color:var(--ink)}
+.doc-tab:hover{color:var(--ink)}
+.file:hover{background:var(--well-2)}
+
+/* ---------- buttons: filled, plain, quiet, icon-only ---------- */
+/* One filled button in a group, and it is the group's last word before ⋯. Labels are a verb, two words at most. */
+.btn:active{background:var(--raised-pressed);transform:scale(.975)}
+.btn-fill:active{background:var(--fill-hover);transform:scale(.975)}
+.btn-quiet{background:none;box-shadow:none;color:var(--ink-2)}
+.btn-quiet:hover{background:var(--hover);color:var(--ink)}
+.btn-quiet:active{background:var(--well-2);color:var(--ink)}
+.ib:active{background:var(--well-2);color:var(--ink)}
+.ib.is-on{background:var(--selected);color:var(--ink)}                     /* a filter that is set, a panel that is open */
+.btn[disabled],.ib[disabled],.ib.is-disabled{opacity:.45;pointer-events:none}
+/* busy: the button keeps its size and its place, the label gives way to a turning ring */
+.btn.is-busy,.ib.is-busy{position:relative;pointer-events:none}
+.btn.is-busy{color:transparent}
+.btn.is-busy>*,.ib.is-busy>*{visibility:hidden}
+.btn.is-busy::after,.ib.is-busy::after{content:"";position:absolute;left:50%;top:50%;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;
+  border:2px solid color-mix(in srgb,var(--ink) 22%,transparent);border-top-color:var(--ink);animation:turn calc(var(--turn)/2) linear infinite}
+.btn-fill.is-busy::after{border-color:color-mix(in srgb,var(--on-fill) 28%,transparent);border-top-color:var(--on-fill)}
+@keyframes turn{to{transform:rotate(360deg)}}
+
+/* ---------- fields: a label over a control. An error is a heavier edge, a mark, and at most four words, in greys: amber is for "Late" alone. ---------- */
+.f{display:grid;gap:var(--s-2);min-width:0;justify-items:start}
+.f-label{font-size:var(--t-sm);font-weight:var(--w-strong);color:var(--ink-2)}
+.f-err{display:flex;align-items:center;gap:var(--s-1);margin-top:-2px;font-size:var(--t-xs);color:var(--ink)}
+.f-err .ico{width:13px;height:13px;stroke-width:2}
+.field{gap:var(--s-2);color:var(--ink);border:0;font:inherit;text-align:left;box-shadow:inset 0 0 0 1px var(--faint);transition:box-shadow var(--dur-fast) var(--ease)}
+.field>.ico{color:var(--muted)}
+.field input,.field textarea{flex:1;min-width:0;width:100%;border:0;outline:0;background:none;padding:0;font:inherit;color:inherit;resize:none}
+.field input::placeholder,.field textarea::placeholder,.field .ph{color:var(--muted)}
+.field:hover{box-shadow:inset 0 0 0 1px var(--muted)}
+.field:focus-within,.field:focus-visible{outline:0;box-shadow:inset 0 0 0 1.5px var(--focus)}
+.field.is-error{box-shadow:inset 0 0 0 1.5px var(--ink-2)}
+.field.is-error>.ico:last-child{color:var(--ink)}
+.field.is-disabled{background:var(--well);box-shadow:none;color:var(--muted);pointer-events:none}
+.field.is-disabled input::placeholder{color:var(--faint)}
+.field.is-wide{width:100%}
+.field.is-area{height:auto;min-height:84px;align-items:flex-start;padding:var(--s-2) 10px;line-height:var(--lh)}
+.field.is-area textarea{min-height:68px;line-height:var(--lh);field-sizing:content}
+.field.is-select{justify-content:space-between;cursor:pointer}
+.field.is-select>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;display:inline-flex;align-items:center;gap:var(--s-2)}
+.field.is-date{width:232px}
+
+.switch{background:none;box-shadow:inset 0 0 0 1.5px var(--faint);cursor:pointer}
+.switch i{left:4px;top:4px;width:12px;height:12px;background:var(--muted);box-shadow:none}
+.switch.is-on{background:var(--fill);box-shadow:none}
+.switch.is-on i{background:var(--on-fill);transform:translateX(16px)}
+.switch.is-disabled,.check.is-disabled,.radio.is-disabled{opacity:.45;pointer-events:none}
+.switch.is-error{box-shadow:inset 0 0 0 1.5px var(--ink-2)}
+/* a switch, a checkbox or a radio is pressed by its whole row */
+.opt{display:flex;align-items:center;gap:10px;min-height:var(--ctl);cursor:pointer}
+.opt>.switch{margin-left:auto}
+.check,.radio{display:inline-flex;align-items:center;gap:var(--s-2);min-height:var(--ctl);cursor:pointer}
+.check-box,.radio-box{width:16px;height:16px;flex:none;display:grid;place-items:center;border-radius:5px;background:var(--surface);color:var(--on-fill);box-shadow:inset 0 0 0 1.5px var(--faint);
+  transition:background var(--dur-fast) var(--ease),box-shadow var(--dur-fast) var(--ease)}
+.radio-box{border-radius:50%}
+.check:hover .check-box,.radio:hover .radio-box{box-shadow:inset 0 0 0 1.5px var(--muted)}
+.check-box .ico{width:12px;height:12px;stroke-width:3;opacity:0}
+.check.is-on .check-box{background:var(--fill);box-shadow:none}
+.check.is-on .check-box .ico{opacity:1}
+.radio.is-on .radio-box{box-shadow:inset 0 0 0 5px var(--fill)}
+.check.is-error .check-box,.radio.is-error .radio-box{box-shadow:inset 0 0 0 1.5px var(--ink-2)}
+
+/* a date: the field, and under it a month and a time */
+.date-pick{--surface:var(--raised);width:248px;padding:var(--s-3);border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-3)}
+.date-pick-head{display:flex;align-items:center;height:var(--ctl-sm);padding-left:var(--s-2);font-weight:var(--w-strong)}
+.date-pick-grid{display:grid;grid-template-columns:repeat(7,1fr);margin-top:var(--s-1);font-variant-numeric:tabular-nums;text-align:center}
+.date-pick-grid span{height:24px;line-height:24px;font-size:var(--t-xs);color:var(--muted)}
+.date-pick-grid a{height:32px;line-height:32px;border-radius:var(--r-chip);font-size:var(--t-sm);color:var(--ink-2)}
+.date-pick-grid a.is-out{color:var(--faint)}
+.date-pick-grid a.is-today{box-shadow:inset 0 0 0 1.5px var(--faint);color:var(--ink)}
+.date-pick-grid a.is-on{background:var(--fill);color:var(--on-fill);font-weight:var(--w-strong);box-shadow:none}
+.date-pick-foot{display:flex;align-items:center;gap:var(--s-2);margin-top:var(--s-2);padding-top:var(--s-3);border-top:1px solid var(--line)}
+.date-pick-foot .field{width:auto;flex:1}
+
+/* ---------- search: one well in the top bar; what it finds opens under it ---------- */
+.search{position:relative}
+.search:focus-visible,.search.is-open{background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--focus)}
+.search>span{display:grid}
+.search .ib{width:20px;height:20px;margin-right:-4px;border-radius:5px}
+.search .ib .ico{width:12px;height:12px;stroke-width:2}
+.search-pop{--surface:var(--raised);position:absolute;z-index:var(--z-overlay);top:calc(100% + 6px);right:0;width:384px;padding:6px;border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-3);color:var(--ink)}
+.sr{height:var(--row);display:grid;grid-template-columns:var(--av-sm) minmax(0,1fr) auto;column-gap:10px;align-items:center;padding:0 var(--s-2);border-radius:var(--r-row);color:var(--ink-2)}
+.sr>span:nth-child(2){min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.sr mark{background:none;color:var(--ink);font-weight:var(--w-strong)}
+.sr .tl-kind{color:var(--muted)}
+.sr-none{padding:var(--s-5) var(--s-2);text-align:center;color:var(--muted)}
+.sr-none b{color:var(--ink)}
+
+/* ---------- sidebar: closed to icons, a 56px strip. The Dot keeps its count. ---------- */
+.nav.is-rail{width:56px}
+.nav.is-rail .nav-head{padding:0;justify-content:center}
+.nav.is-rail .nav-items{padding:0;justify-items:center}
+.nav.is-rail .nav-item{width:40px;padding:0;justify-content:center}
+.nav.is-rail .tree{margin:var(--s-2) var(--s-2) 0;padding:var(--s-3) 0;justify-items:center;gap:var(--s-2)}
+.nav.is-rail .tree-row{width:40px;height:var(--ctl);padding:0;justify-content:center;position:relative}
+.nav.is-rail .tree-row>.dot{position:absolute;right:3px;top:1px;box-shadow:0 0 0 2px var(--surface);border-radius:50%}
+.nav.is-rail .nav-foot{height:auto;flex-direction:column;gap:var(--s-1);padding:var(--s-2) 0 var(--s-3)}
+.nav.is-rail .assistant{flex:none;width:40px;padding:0;justify-content:center}
+.nav.is-rail .me{margin:var(--s-1) 0 0}
+/* a count on an icon: the phone's bar and the closed sidebar use the same one */
+.slot-ico{position:relative;display:grid}
+.slot-n{position:absolute;left:14px;top:-5px;min-width:16px;height:16px;line-height:16px;padding:0 4px;border-radius:8px;background:var(--well-2);color:var(--ink-2);
+  font-style:normal;font-size:11px;font-weight:var(--w-strong);font-variant-numeric:tabular-nums;text-align:center;box-shadow:0 0 0 2px var(--surface)}
+.nav.is-rail .nav-item .slot-ico .ico{width:18px;height:18px;color:var(--muted)}
+.nav.is-rail .nav-item.is-active .slot-ico .ico{color:var(--ink)}
+.nav.is-rail .slot-n{left:11px}
+
+/* ---------- the chat column: closed, empty, a message that did not send ---------- */
+/* closed: a strip with who you were talking to; the count is what came in since */
+.side.is-closed{width:56px;align-items:center}
+.side.is-closed .side-head{padding:0;border-bottom:0;justify-content:center}
+.side.is-closed .side-head .slot-n{left:18px;top:-6px}
+.side.is-closed .ib{margin-top:auto;margin-bottom:var(--s-3)}
+/* empty: who it is, and three things to ask. A starter is a sentence you can send as it stands. */
+.starters{align-self:stretch;margin-top:auto;display:grid;justify-items:start;gap:var(--s-4)}
+.starters ul{list-style:none;padding:0;justify-self:stretch;display:grid;gap:var(--s-1)}
+.starter{width:100%;min-height:var(--ctl-lg);display:flex;align-items:center;justify-content:space-between;gap:var(--s-3);padding:0 var(--s-2) 0 var(--s-3);border:0;border-radius:var(--r-ctl);background:none;
+  box-shadow:inset 0 0 0 1px var(--line-strong);color:var(--ink-2);text-align:left;transition:background var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
+.starter .ico{color:var(--faint)}
+.starter:hover{background:var(--hover);color:var(--ink)}
+.msg.is-failed .bubble{background:none;box-shadow:inset 0 0 0 1px var(--line-strong)}
+.msg-fail{display:flex;align-items:center;gap:var(--s-1);margin-top:var(--s-1);font-size:var(--t-xs);color:var(--ink-2)}
+.msg-fail .ico{width:13px;height:13px;stroke-width:2}
+.msg-fail button{height:20px;margin-left:var(--s-1);padding:0 var(--s-1);border:0;border-radius:var(--r-chip);background:none;color:var(--ink);font-weight:var(--w-strong);position:relative}
+.msg-fail button::before{content:"";position:absolute;inset:-12px -8px}
+.msg-fail button:hover{background:var(--hover)}
+.composer:focus-visible,.composer:focus-within{box-shadow:inset 0 0 0 1.5px var(--focus)}
+.composer.is-typing .composer-text{color:var(--ink)}
+.an-pill:hover{color:var(--ink)}
+
+/* ---------- task view: a page in its frame while it loads, and when it does not arrive ---------- */
+.doc-tab.is-none{color:var(--muted)}            /* was faint: 2.9 to 1 on the sheet. The hollow ring says "not yet". */
+.hollow{box-shadow:inset 0 0 0 1.5px var(--muted)}
+.stuck,.li-mark{color:var(--muted)}             /* a mark that says something is read at 3 to 1 or better */
+.frame-wait{flex:1;min-width:0;padding:var(--s-8);display:grid;align-content:start;gap:var(--s-4);background:var(--surface)}
+.frame.is-inset:not(.is-themed) .frame-wait{border-radius:var(--r-paper);box-shadow:var(--lift-paper)}
+.frame-wait .sk:first-child{height:16px;margin-bottom:var(--s-2)}
+.frame-fail{flex:1;min-width:0;display:grid;place-content:center;justify-items:center;gap:var(--s-3);padding:var(--s-8);color:var(--muted)}
+.frame-fail b{color:var(--ink);font-weight:var(--w-strong)}
+
+/* ---------- rows: a person or an agent ---------- */
+.who{grid-template-columns:var(--av-sm) minmax(0,1fr) 20px 28px;column-gap:10px}
+.who .count{text-align:right}
+
+/* ---------- tables: thin rules, numbers on one axis ---------- */
+.table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.table th,.table td{height:var(--row);padding:0 var(--s-3);text-align:left;white-space:nowrap}
+.table th{font-size:var(--t-sm);font-weight:var(--w-text);color:var(--muted);border-bottom:1px solid var(--line-strong)}
+.table td{border-bottom:1px solid var(--line)}
+.table tbody tr:last-child td{border-bottom:0}
+.table .num{text-align:right}
+.table th button{height:var(--ctl-sm);margin:0 calc(var(--s-2)*-1);padding:0 var(--s-2);border:0;border-radius:var(--r-chip);background:none;color:inherit;font:inherit;display:inline-flex;align-items:center;gap:var(--s-1)}
+.table th button:hover{background:var(--hover);color:var(--ink)}
+.table th button .ico{width:12px;height:12px;stroke-width:2.2}
+.table th.is-sorted{color:var(--ink);font-weight:var(--w-strong)}
+.table tbody tr:hover td,.table tr:hover td{background:var(--hover)}
+.table tr.is-selected td{background:var(--selected)}
+.table td .av{vertical-align:middle;margin-right:var(--s-2)}
+.table .table-empty td{height:136px;text-align:center;color:var(--muted);background:none}
+
+/* ---------- menus ---------- */
+/* A destructive item has no colour of its own. It is the last item, under a rule; its words name the thing; and it
+   never acts at once: it opens a confirm, or it acts and a toast offers Undo. */
+.menu{--surface:var(--raised);display:grid;grid-template-columns:minmax(0,1fr)}
+.menu hr{border-top-color:var(--line-strong)}                 /* --line is lost on a raised surface */
+.menu a.is-on{font-weight:var(--w-strong)}
+.menu a>.ico:last-child:not(:first-child){margin-left:auto;color:var(--ink);stroke-width:2}
+.menu a>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.menu a.is-disabled{opacity:.45;pointer-events:none}
+.menu.is-select{width:208px}
+
+/* ---------- modals ---------- */
+.scrim{position:fixed;inset:0;z-index:var(--z-scrim);display:grid;place-items:center;background:var(--scrim)}
+.modal{--surface:var(--raised);width:400px;max-width:calc(100% - 32px);padding:var(--s-5);border-radius:var(--r-pane);background:var(--raised);box-shadow:var(--lift-3);display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s-4)}
+.modal h2{font-family:var(--font-text);font-size:var(--t-md);font-weight:var(--w-title);line-height:var(--lh-meta);text-wrap:balance}
+.modal h2+p{margin-top:calc(var(--s-2)*-1);color:var(--muted);overflow-wrap:anywhere}
+.modal .field{width:100%}
+.modal-row{display:flex;justify-content:flex-end;gap:var(--s-2);margin-top:var(--s-1)}
+
+/* ---------- toasts: one line, at the foot of the page sheet ---------- */
+.toasts{position:fixed;z-index:var(--z-toast);left:50%;bottom:var(--s-6);transform:translateX(-50%);display:grid;justify-items:center;gap:var(--s-2)}
+.toast{--surface:var(--raised);white-space:nowrap}
+.toast.is-plain{padding-right:var(--s-3)}
+/* a failed or an offline toast keeps the toast's ink mark: no amber */
+
+/* ---------- a sheet that has nothing to show: failed, no access ---------- */
+.empty-ico{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:var(--well);color:var(--muted);margin-bottom:var(--s-1)}
+.empty-ico .ico{width:20px;height:20px}
+.sk-title{width:96px;height:18px;border-radius:6px}
+
+/* ---------- phone ---------- */
+@media (max-width:760px){
+  /* nothing you press is under 44px, even when it is drawn smaller */
+  .send,.composer .ib,.an-pill,.scope button,.search .ib{position:relative}
+  .send::before,.composer .ib::before{content:"";position:absolute;inset:-4px}
+  .send{margin-left:6px}                              /* 44 between the two centres, so the two targets do not share ground */
+  .an-pill::before,.scope button::before,.search .ib::before{content:"";position:absolute;inset:-12px -6px}
+  .check,.radio,.opt{min-height:44px}
+  .field{width:100%}
+  .slot-n{box-shadow:0 0 0 2px var(--raised)}
+  .slot-dot.is-active{background:var(--well-2)}
+  /* a menu is a sheet that comes up from the bottom edge, where the bar was */
+  .scrim{place-items:end stretch}
+  .menu.is-sheet,.modal{position:relative;width:auto;max-width:none;margin:0 10px 10px;border-radius:24px}
+  .menu.is-sheet{padding:var(--s-5) var(--s-2) var(--s-2)}
+  .menu.is-sheet::before,.modal::before{content:"";position:absolute;left:50%;top:var(--s-2);width:36px;height:4px;margin-left:-18px;border-radius:2px;background:var(--line-strong)}
+  .menu.is-sheet a{border-radius:14px;padding:0 var(--s-3);gap:var(--s-3)}
+  .menu.is-sheet hr{margin:6px var(--s-3)}
+  .modal{padding:var(--s-6) var(--s-4) var(--s-4)}
+  .modal-row .btn{flex:1}
+  .btn{border-radius:12px}
+  .file{height:44px}
+  .date-pick{width:auto}
+  .date-pick-grid a{height:44px;line-height:44px}
+  .seg{padding:0}
+  .seg button{width:44px;height:var(--ctl)}
+  /* the mark leads on a phone too, as on a desk and in the task view's list (the mock put it after the title) */
+  .task{grid-template-columns:20px minmax(0,1fr) var(--av-sm) 34px;grid-template-areas:"mark title av age" ". pills pills pills"}
+  .task .row-mark{align-self:start;height:calc(var(--t-base)*1.35)}
+  .toasts{bottom:84px}
+  .toast{height:48px;border-radius:14px}
+}
