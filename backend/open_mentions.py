@@ -74,5 +74,11 @@ SQL = (
 
 def rows(c: sqlite3.Connection, actor: str) -> list[dict[str, Any]]:
     """The open @mentions of `actor`, oldest first, as dicts of SQL's columns. Each reader still checks what the actor may
-    read of each message: this list is the mentions, not the readable ones."""
-    return [dict(r) for r in c.execute(SQL, (actor, actor, actor))]
+    read of each message: this list is the mentions, not the readable ones. Read once per snapshot (read_cache): Home
+    asks it for Needs you and for the rail's attention list; each caller gets its own dicts."""
+    from . import read_cache
+
+    found = read_cache.value(
+        c, ("open_mentions.rows", actor), lambda: tuple(c.execute(SQL, (actor, actor, actor))), True
+    )
+    return [dict(r) for r in found]
