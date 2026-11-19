@@ -1236,15 +1236,14 @@ def needs(
     `own_work` adds one entry (`kind` "task") for each task whose own work is theirs: not Needs you, but the load ask
     ingest weighs before a bot hands a person more (backend/ask_ingest.py).
 
-    `among` narrows the tasks read before any is worked out (it is given the candidates and returns those to keep):
-    Risk asks only about the tasks that carry a risk (backend/risk.py), and working out the rest would double its read."""
+    `among` narrows the tasks worked out (it is given the candidates and returns those to keep): Risk asks only about
+    the tasks that carry a risk (backend/risk.py). The ❓ questions asked of the person are listed whatever it keeps, as
+    they reach the person from outside the candidates."""
     if not is_human(person):
         return []
     found = candidates(conn, person)
     if among is not None:
         found = among(found)
-        if not found:
-            return []
     return _lists(conn, found, person, snoozed=snoozed, own_work=own_work).get(person, [])
 
 

@@ -167,7 +167,8 @@ function liveRestart(): void {
 // own on their page, the open task's and each followed one's anywhere, and none elsewhere. Every open tab was sent every task's change.
 function liveTaskScope(): TaskScope {
   const r = typeof S !== 'undefined' && S.route || '';
-  if (isTasksRoute(r) || r.startsWith('#/meetings')) return {all: true};
+  // Company › Risk too: a task tagged with a risk anywhere becomes one of its matters (risk.ts rkLiveTask).
+  if (isTasksRoute(r) || r.startsWith('#/meetings') || r === '#/risk' || r.startsWith('#/risk/') || r.startsWith('#/risk?')) return {all: true};
   if (r.startsWith('#/task/')) return {task: [decodeURIComponent(String(r.slice(7).split(/[/?]/)[0]))], party: []};
   const chat: string[] = typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.id ? [String(TASK_CHAT.id)] : [];
   const open = [...new Set([...chat, ...LIVE.tasks.keys()])];   // and the tasks a card follows (liveFollowTask)

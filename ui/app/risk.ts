@@ -35,7 +35,6 @@ const rkTaskHref = (id: string): string => '#/task/' + encodeURIComponent(id);
 const rkErr = (e: unknown): string => `<p class="rk-err" data-rk-error>${esc(errorMessage(e, 'Something went wrong.'))}</p>`;
 const rkRules = (on: boolean): string => on ? '<span class="nav-icon rk-rules" role="img" aria-label="Rules" title="Rules">gavel</span>' : '';
 
-// ----------------------------------------------------------------- words
 // Money in minor units: exact on a row ("$19,244.88", "$50,000"), compact for a total ("$182k").
 function rkMoney(amount: number, currency: string | null | undefined, compact = false): string {
   const cur = (currency || 'USD').toUpperCase(), major = amount / 100;
@@ -76,7 +75,6 @@ const rkAmount = (m: RkMatter | null): string => {
   return [money, m.claim || ''].filter(Boolean).join(' ');
 };
 
-// ----------------------------------------------------------------- the page
 function rkShell(tab: RkTab, head: string): string {
   return `<div class="rk" id="rk-root" data-rk-page="${tab}">${head}
     <div class="rk-body"><div class="rk-list" data-rk-body>${skelRows(5)}</div><aside class="rk-side" id="rk-side" aria-label="Matter" hidden></aside></div></div>`;
@@ -88,13 +86,23 @@ function rkStart(tab: RkTab, slug: string): RkPage | null {
   const page: RkPage = {run: ++RK_RUN, tab, slug, risks: [], rows: [], closed: [], detail: null, offs: []};
   RKP = page;
   page.offs.push(liveOn('tasks', (e: {id?: unknown; task_id?: unknown}) => rkLiveTask(page, String(e.id || e.task_id || ''))));
-  page.offs.push(liveOn('needs-list', () => { if (rkLive(page.run)) rkDraw(page); }));
+  // Needs you changed: each task that started or stopped waiting on the viewer has its risks read again (a risk may
+  // turn live or back), and the dots redraw from what the page holds.
+  let waits = rkWaiting();
+  page.offs.push(liveOn('needs-list', () => {
+    if (!rkLive(page.run)) return;
+    const now = rkWaiting();
+    for (const id of new Set([...now, ...waits])) if (now.has(id) !== waits.has(id)) rkLiveTask(page, id);
+    waits = now;
+    rkDraw(page);
+  }));
   return page;
 }
 function rkDrop(): void {
   if (!RKP) return;
   for (const off of RKP.offs) off();
   if (RK_LIVE.timer) clearTimeout(RK_LIVE.timer);
+  RK_LIVE.timer = null;
   RK_LIVE.ids.clear();
   RKP = null;
 }
@@ -120,12 +128,17 @@ async function pageRisk(tab: 'risks' | 'disputes'): Promise<void> {
         get<{matters: RkRow[]}>('/v2/matters?open=true&limit=200', {fresh: true}),
       ]);
       page.risks = risks.risks; page.rows = open.matters;
+      // A live risk shows every open matter: one past the first 200 is read under its own risk.
+      const short = page.risks.filter(r => r.level === 'live' && page.rows.filter(row => row.risks.some(x => x.id === r.id)).length < r.open);
+      const more = await Promise.all(short.map(r => rkAll(`/v2/matters?risk=${encodeURIComponent(r.id)}&open=true`)));
+      for (const row of more.flat()) if (!page.rows.some(x => x.task.id === row.task.id)) page.rows.push(row);
     } else {
+      // Every open dispute, so the count and the total are whole; the latest closed ones under them.
       const [open, closed] = await Promise.all([
-        get<{matters: RkRow[]}>('/v2/matters?kind=dispute&open=true&limit=200', {fresh: true}),
+        rkAll('/v2/matters?kind=dispute&open=true'),
         get<{matters: RkRow[]}>('/v2/matters?kind=dispute&open=false&limit=50', {fresh: true}),
       ]);
-      page.rows = open.matters; page.closed = closed.matters;
+      page.rows = open; page.closed = closed.matters;
     }
   } catch (e) {
     const body = main.querySelector('[data-rk-body]');
@@ -133,6 +146,19 @@ async function pageRisk(tab: 'risks' | 'disputes'): Promise<void> {
     return;
   }
   if (rkLive(page.run)) rkDraw(page);
+}
+
+// Every page of a matter list, up to RK_ALL_MAX rows.
+const RK_ALL_MAX = 2000;
+async function rkAll(path: string): Promise<RkRow[]> {
+  const rows: RkRow[] = [];
+  let offset: number | null = 0;
+  while (offset !== null && rows.length < RK_ALL_MAX) {
+    const page: {matters: RkRow[]; next_offset: number | null} = await get(`${path}&limit=200&offset=${offset}`, {fresh: true});
+    rows.push(...page.matters);
+    offset = page.next_offset;
+  }
+  return rows;
 }
 
 async function pageRiskOne(slug: string): Promise<void> {
@@ -175,7 +201,6 @@ function rkDraw(page: RkPage): void {
   }
 }
 
-// ----------------------------------------------------------------- Risks
 function rkRisksHTML(risks: readonly RkRisk[], open: readonly RkRow[], waiting: Set<string>): string {
   if (!risks.length) return '<div class="empty" data-rk-empty>No risks yet.</div>';
   const under = (r: RkRisk) => open.filter(row => row.risks.some(x => x.id === r.id));
@@ -219,11 +244,11 @@ function rkRowHTML(row: RkRow, waiting: Set<string>, shape: 'cat' | 'one' | 'dis
     <span class="rk-f" data-label="Forum">${esc(m?.forum || '')}</span>${stage}<span class="rk-d" data-label="Next">${esc(rkOpen(row) ? dayWords(t.due_at, {weekday: true}) : '')}</span>${face}${more}</div>`;
 }
 
-// ----------------------------------------------------------------- Disputes
 function rkDisputesHTML(open: readonly RkRow[], closed: readonly RkRow[], waiting: Set<string>): string {
   if (!open.length && !closed.length) return '<div class="empty" data-rk-empty>No disputes.</div>';
   const sums = new Map<string, number>();
-  for (const row of open) if (row.matter?.amount) sums.set(row.matter.currency || 'USD', (sums.get(row.matter.currency || 'USD') || 0) + row.matter.amount);
+  // What the other side claims, as the risks' totals count it (backend/risk.py CLAIMED_SQL): not our own claims.
+  for (const row of open) if (row.matter?.amount && row.matter.side !== 'ours') sums.set(row.matter.currency || 'USD', (sums.get(row.matter.currency || 'USD') || 0) + row.matter.amount);
   const claimed = rkClaimed([...sums].map(([currency, amount]) => ({currency, amount})));
   return `<div class="rk-table" data-rk-disputes>
       <div class="rk-row rk-colh"><span class="rk-mk"></span><span class="rk-tw">${open.length} open</span><span class="rk-k">Risk</span>
@@ -233,7 +258,6 @@ function rkDisputesHTML(open: readonly RkRow[], closed: readonly RkRow[], waitin
     </div>`;
 }
 
-// ----------------------------------------------------------------- one risk
 function rkOneHTML(d: RkDetail, waiting: Set<string>): string {
   const open = d.matters.filter(rkOpen), closed = d.matters.filter(row => !rkOpen(row));
   const claimed = rkClaimed(d.risk.claimed);
@@ -254,7 +278,6 @@ function rkOneHTML(d: RkDetail, waiting: Set<string>): string {
     ${d.risk.markdown ? `<section class="rk-sec rk-text" data-rk-text>${safeMd(d.risk.markdown)}</section>` : ''}`;
 }
 
-// ----------------------------------------------------------------- events
 function rkBind(page: RkPage): void {
   const root = document.getElementById('rk-root');
   if (!root) return;
@@ -293,7 +316,6 @@ document.addEventListener('keydown', ev => {
   if (side && !side.hidden) { ev.preventDefault(); location.hash = rkWith('matter', ''); }
 });
 
-// ----------------------------------------------------------------- live
 // Task events, gathered for a moment: each task's risks are read again (GET /v2/risks?task=), with the matters of the
 // risks it carries now and carried before, and the page redraws from what it holds.
 const RK_LIVE: {ids: Set<string>; timer: ReturnType<typeof setTimeout> | null} = {ids: new Set(), timer: null};
@@ -303,7 +325,7 @@ function rkLiveTask(page: RkPage, id: string): void {
   if (RK_LIVE.timer) return;
   RK_LIVE.timer = setTimeout(() => {
     RK_LIVE.timer = null;
-    const ids = [...RK_LIVE.ids].slice(0, 20);
+    const ids = [...RK_LIVE.ids];
     RK_LIVE.ids.clear();
     void rkPatch(page, ids);
   }, 400);
@@ -317,12 +339,9 @@ async function rkPatch(page: RkPage, ids: readonly string[]): Promise<void> {
     const before = rkShown(page).find(row => row.task.id === id)?.risks.map(r => r.id) || [];
     if (!now.length && !before.length) continue;   // not a matter, then or now
     let row: RkRow | null = null;
-    const home = now[0];
-    if (home) {
-      try {
-        const found = await get<{matters: RkRow[]}>(`/v2/matters?risk=${encodeURIComponent(home.id)}&limit=200`, {fresh: true});
-        row = found.matters.find(x => x.task.id === id) || null;
-      } catch { row = null; }
+    if (now.length) {
+      try { row = (await get<{matters: RkRow[]}>(`/v2/matters?task=${encodeURIComponent(id)}&limit=1`, {fresh: true})).matters[0] || null; }
+      catch { continue; }   // unread: the row stays as it was rather than vanish
     }
     // A risk the task left: its own counts again, read with one matter (the counts are the risk's, not the page's).
     const left: RkRisk[] = [];
@@ -346,7 +365,8 @@ function rkApply(page: RkPage, id: string, row: RkRow | null, risks: readonly Rk
   for (const r of risks) {
     const at = page.risks.findIndex(x => x.id === r.id);
     if (at >= 0) page.risks[at] = r;
-    if (page.detail && page.detail.risk.id === r.id) page.detail.risk = {...r, markdown: page.detail.risk.markdown ?? ''};
+    // The page text and its version stay as read: an edit sends both, so one changed elsewhere meets a conflict.
+    if (page.detail && page.detail.risk.id === r.id) page.detail.risk = {...r, markdown: page.detail.risk.markdown ?? '', version: page.detail.risk.version};
   }
   if (page.tab === 'risks') {
     page.rows = put(page.rows, !!row && rkOpen(row));
@@ -363,7 +383,6 @@ function rkApply(page: RkPage, id: string, row: RkRow | null, risks: readonly Rk
   }
 }
 
-// ----------------------------------------------------------------- the matter's facts (side panel)
 type RkTaskView = {id: string; title?: string; matter?: RkMatter | null};
 async function rkSideSync(): Promise<void> {
   const side = document.getElementById('rk-side'), root = document.getElementById('rk-root');
@@ -392,7 +411,7 @@ async function rkSideSync(): Promise<void> {
   side.querySelector<HTMLElement>('select, input')?.focus({preventScroll: true});
 }
 function rkFormHTML(m: RkMatter | null, close: string): string {
-  const amount = m?.amount ? String(m.amount / 100) : '';
+  const amount = m && m.amount !== null && m.amount !== undefined ? String(m.amount / 100) : '';
   return `<form class="rk-form" data-rk-form novalidate>
       <label><span>Kind</span><select name="kind"><option value="">—</option>${RK_KINDS.map(([k, w]) => `<option value="${k}"${m?.kind === k ? ' selected' : ''}>${w}</option>`).join('')}</select></label>
       <label><span>Party</span><span class="rk-party"><input name="party_q" type="search" autocomplete="off" placeholder="Contacts" aria-label="Party" value="${esc(m?.party?.name || '')}">
@@ -448,9 +467,14 @@ function rkFormBind(side: HTMLElement, tid: string, m: RkMatter | null, run: num
     if (Number.isNaN(amount)) return fail('Amount is a number.');
     if (amount !== null && !/^[A-Z]{3}$/.test(currency)) return fail('Currency is three letters.');
     if (text('party_q') && !text('party')) return fail('Pick a party from Contacts.');
-    const body: Record<string, unknown> = {
-      kind: text('kind') || null, party_entity_id: text('party') || null, amount, currency: amount === null ? null : currency, forum: text('forum') || null,
-    };
+    // Only the facts that changed: a party the viewer may not see reads as none, and saving another fact keeps it.
+    const was = {kind: m?.kind || '', party: m?.party_entity_id || '', amount: m?.amount ?? null, currency: (m?.currency || '').toUpperCase(), forum: m?.forum || ''};
+    const body: Record<string, unknown> = {};
+    if (text('kind') !== was.kind) body['kind'] = text('kind') || null;
+    if (text('party') !== was.party && (text('party') || text('party_q') !== (m?.party?.name || ''))) body['party_entity_id'] = text('party') || null;
+    if (amount !== was.amount || (amount !== null && currency !== was.currency)) { body['amount'] = amount; body['currency'] = amount === null ? null : currency; }
+    if (text('forum') !== was.forum) body['forum'] = text('forum') || null;
+    if (!Object.keys(body).length) { location.hash = rkWith('matter', ''); return; }
     if (m) body['version'] = m.version;
     const go = form.querySelector<HTMLButtonElement>('[type=submit]');
     err.hidden = true;
@@ -467,7 +491,6 @@ function rkFormBind(side: HTMLElement, tid: string, m: RkMatter | null, run: num
   });
 }
 
-// ----------------------------------------------------------------- dialogs
 function rkDialog(title: string, fields: string, save: string, work: (form: FormData) => Promise<void>): void {
   const dlg = document.createElement('dialog');
   dlg.className = 'tmodal rk-dlg';

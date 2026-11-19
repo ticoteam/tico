@@ -112,6 +112,14 @@ def test_six_tagged_matters_count_and_sum_for_their_readers_and_zero_for_anyone_
     rest = get(api, "matters?kind=dispute&open=true&limit=4&offset=4")
     assert len(rest["matters"]) == 2 and rest["next_offset"] is None
     assert get(api, "matters?kind=notice")["matters"] == []
+    # ?task= is one task's row (the Risk page patches it in from a live event); none for a task the reader cannot see.
+    one = get(api, "matters?task=" + ids[2])["matters"]
+    assert [m["task"]["id"] for m in one] == [ids[2]] and one[0]["matter"]["amount"] == 300_000
+    assert get(api, "matters?task=" + ids[2], token="priya-test")["matters"] == []
+    # A fact set alone leaves the others: saving a forum keeps the party.
+    matter(api, ids[2], {"version": one[0]["matter"]["version"], "forum": "Court"})
+    after = get(api, "matters?task=" + ids[2])["matters"][0]["matter"]
+    assert (after["forum"], after["party_entity_id"], after["amount"]) == ("Court", party, 300_000)
     detail = get(api, "risks/" + RISK)
     assert detail["editable"] and len(detail["matters"]) == 6 and detail["risk"]["open"] == 6
     # A finished matter counts as closed and leaves the total.

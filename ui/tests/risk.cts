@@ -10,6 +10,8 @@ const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 
 const go = (page: Page, hash: string) => page.goto(page.url().split('#')[0] + hash);
 const text = async (page: Page, selector: string) => (await page.locator(selector).first().innerText()).replace(/\s+/g, ' ').trim();
+// A row's every column, shown or folded away by a narrow list (the phone, the docked chat).
+const all = async (row: import('playwright').Locator) => (await row.evaluate(el => el.textContent || '')).replace(/\s+/g, ' ');
 
 async function flow(page: Page, tag: string, phone: boolean) {
   await go(page, '#/risk');
@@ -33,8 +35,8 @@ async function flow(page: Page, tag: string, phone: boolean) {
   assert.match(await live.locator('.rk-matter').filter({hasText: 'Murphy'}).innerText(), /AAA/, tag + ': an older one shows its forum');
   // Open and quiet risks: one line each; no icon on a risk with no rules.
   const open = page.locator('[data-rk-level="open"][data-rk-risk="risk:pro-disputes"]');
-  assert.match(await open.innerText(), /Flores/);
-  assert.match(await open.innerText(), /2 open/, tag + ': Dana reads the private dispute too');
+  assert.match(await all(open), /Flores/);
+  assert.match(await all(open), /2 open/, tag + ': Dana reads the private dispute too');
   const quiet = page.locator('[data-rk-level="quiet"][data-rk-risk="risk:trademarks"]');
   assert.match(await quiet.innerText(), /None/);
   assert.equal(await quiet.locator('.rk-rules').count(), 0, tag + ': no rules, no icon');
@@ -47,7 +49,7 @@ async function flow(page: Page, tag: string, phone: boolean) {
   assert.match(await text(page, '#main h1'), /Customer theft claims/);
   const randazzo = matters.locator('.rk-matter').filter({hasText: 'Randazzo'});
   assert.match(await randazzo.innerText(), /\$50,000 jewelry/);
-  if (!phone) assert.match(await randazzo.innerText(), /Demand/);
+  assert.match(await all(randazzo), /Demand/);
   assert.match(await page.locator('.rk-rule').first().innerText(), /Every pro is checked before a first job\./);
   assert.equal(await page.locator('.rk-rule').first().getAttribute('href').then(h => (h || '').startsWith('#/rules?rule=')), true, tag + ': a rule opens on Rules');
 
@@ -56,13 +58,11 @@ async function flow(page: Page, tag: string, phone: boolean) {
   const table = page.locator('[data-rk-disputes]');
   await table.waitFor({timeout: t(20000)});
   assert.match(await text(page, '.rk-colh'), /4 open/);
-  if (!phone) assert.match(await text(page, '.rk-colh'), /\$145k claimed/);
+  assert.match(await all(page.locator('.rk-colh')), /\$145k claimed/);
   const murphy = table.locator('.rk-matter').filter({hasText: 'Murphy'});
   assert.match(await murphy.innerText(), /\$90,400/);
-  if (!phone) {
-    assert.match(await murphy.innerText(), /Customer theft claims/);
-    assert.match(await murphy.innerText(), /AAA/);
-  }
+  assert.match(await all(murphy), /Customer theft claims/);
+  assert.match(await all(murphy), /AAA/);
   assert.equal(await table.locator('.rk-matter').filter({hasText: 'Sealed claim'}).count(), 1, tag + ': Dana reads the private dispute');
 
   // ⋯ opens the matter's facts beside the list (full screen on a phone); a saved forum shows on its row.
@@ -77,7 +77,7 @@ async function flow(page: Page, tag: string, phone: boolean) {
   await form.locator('button[type="submit"]').click();
   await page.locator('#rk-side').waitFor({state: 'hidden', timeout: t(10000)});
   assert.equal(/[?&]matter=/.test(await page.evaluate(() => location.hash)), false, tag + ': saving closes the panel');
-  if (!phone) await page.waitForFunction(f => [...document.querySelectorAll('[data-rk-disputes] .rk-matter')].some(r => r.textContent!.includes('Flores') && r.textContent!.includes(f)), forum, {timeout: t(10000)});
+  await page.waitForFunction(f => [...document.querySelectorAll('[data-rk-disputes] .rk-matter')].some(r => r.textContent!.includes('Flores') && r.textContent!.includes(f)), forum, {timeout: t(10000)});
   // Escape closes the panel too.
   await table.locator('.rk-matter').filter({hasText: 'Murphy'}).locator('[data-rk-matter]').click();
   await form.waitFor({timeout: t(20000)});

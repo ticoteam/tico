@@ -682,11 +682,13 @@ def matters(
     kind: str | None = None,
     open_only: bool | None = None,
     product_ids: list[str] | None = None,
+    task_id: str | None = None,
     limit: Any = LIMIT_DEFAULT,
     offset: Any = 0,
 ) -> Row:
     """One page of matters `who` reads: {matters: [{task, matter, risks}], next_offset}. `product_ids` (product_matter_ids)
-    keeps the matters about one product."""
+    keeps the matters about one product. `task_id` reads one task's row, which the Risk page patches in from a live
+    event."""
     limit, offset = _page(limit, offset)
     if kind is not None and kind not in MATTER_KINDS:
         raise Problem("validation", "kind is one of " + ", ".join(MATTER_KINDS), 422)
@@ -700,6 +702,9 @@ def matters(
     if product_ids is not None:
         where.append(f"m.product_id IN ({','.join('?' * len(product_ids)) or 'NULL'})")
         args.extend(product_ids)
+    if task_id:
+        where.append("t.id=?")
+        args.append(task_id)
     sql = MATTERS_SQL.format(
         matter=", ".join(f"m.{k} AS m_{k}" for k in MATTER_FIELDS),
         visible=_visible_tasks(auth, c, who, ", ".join((*TASK_FIELDS, *MASK_FIELDS))),
@@ -969,11 +974,12 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         open: bool | None = None,
         risk: str | None = None,
         product: str | None = None,
+        task: str | None = None,
         limit: int = LIMIT_DEFAULT,
         offset: int = 0,
     ) -> Any:
         """Tasks carrying a risk that the caller reads, with their facts. `kind=dispute&open=true` is the Disputes tab;
-        `product` (its id, or its key) keeps the matters about that product."""
+        `product` (its id, or its key) keeps the matters about that product. `task` is one task's row."""
         who = reader(request)
         with store.read() as c:
             risk_id = require_risk(c, who, risk)["id"] if risk else None
@@ -986,6 +992,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
                 kind=kind,
                 open_only=open,
                 product_ids=product_ids,
+                task_id=task,
                 limit=limit,
                 offset=offset,
             )
