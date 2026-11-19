@@ -1,6 +1,6 @@
 // Every server call the calendar, meetings and calls make, and every query they read.
-import { queryOptions, type QueryKey } from '@tanstack/react-query';
-import { api } from '@/api/client';
+import { keepPreviousData, queryOptions, type QueryKey } from '@tanstack/react-query';
+import { api, ApiError } from '@/api/client';
 import type {
   Assistant,
   CalendarEvents,
@@ -31,9 +31,6 @@ import type {
   ThreadView,
   CallUpcoming,
   ChangeCall,
-  MeetingTaskLinkBatch,
-  MeetingTaskLinks,
-  MeetingTaskRemoved,
   StartCall,
 } from '@/api/schema';
 import { queryClient, quietRoot, write } from '@/data';
@@ -241,6 +238,8 @@ export const meetingsQuery = (review: Review = 'live', q = '') =>
   queryOptions({
     queryKey: meetKeys.shown(review, q),
     queryFn: ({ signal }) => api.get<MeetingList>(`/api/v2/meetings?review=${review}${q ? `&q=${enc(q)}` : ''}`, { signal }),
+    // new words or another review keep the last list on screen until the answer comes, rather than blanking it
+    placeholderData: keepPreviousData,
   });
 
 /** Calendar events whose title or people match (List's search). */
@@ -248,6 +247,7 @@ export const findEventsQuery = (q: string) =>
   queryOptions({
     queryKey: [...calKeys.all, 'search', q],
     queryFn: ({ signal }) => api.get<CalendarFound>(`/api/v2/calendar/search?q=${enc(q)}`, { signal }),
+    placeholderData: keepPreviousData,
   });
 
 /** Share a meeting the person kept back, put it away, or bring it back. */
@@ -267,28 +267,17 @@ export async function reviewMeeting(
   return m;
 }
 
-/** Share or dismiss several of the person's Pending meetings in one call; they leave Pending at once. */
-export async function reviewMeetings(ids: readonly string[], action: 'approve' | 'dismiss'): Promise<MeetingList> {
-  const gone = new Set(ids);
-  const shown = queryClient.getQueriesData({ queryKey: [...meetKeys.list, 'pending'] }).map(([k]) => k);
-  const r = await write({
-    key: shown.length ? shown : [meetKeys.shown('pending', '')],
-    optimistic: (d: MeetingList | undefined) => {
-      if (!d) return d;
-      const meetings = d.meetings.filter((m) => !gone.has(m.id));
-      return { ...d, meetings, count: Math.max(0, d.count - (d.meetings.length - meetings.length)) };
-    },
-    send: (idempotencyKey) => api.post<MeetingList>('/api/v2/meetings/review', { action: `${action}_all`, ids: [...gone] }, { idempotencyKey }),
-  });
-  void queryClient.invalidateQueries({ queryKey: meetKeys.list });
-  return r;
-}
-
 export const meetingQuery = (id: string) =>
   queryOptions({ queryKey: meetKeys.one(id), queryFn: ({ signal }) => api.get<Meeting>(`/api/v2/meetings/${enc(id)}`, { signal }) });
 
+/** A meeting's tasks and what came of it. Only a shared meeting has them: asked of one still pending, the server
+    answers 409 ("Share this meeting first"), and an answer like that is not asked again. */
 export const itemsQuery = (id: string) =>
-  queryOptions({ queryKey: meetKeys.items(id), queryFn: ({ signal }) => api.get<MeetingItems>(`/api/v2/meetings/${enc(id)}/items`, { signal }) });
+  queryOptions({
+    queryKey: meetKeys.items(id),
+    queryFn: ({ signal }) => api.get<MeetingItems>(`/api/v2/meetings/${enc(id)}/items`, { signal }),
+    retry: (n, e) => n < 1 && !(e instanceof ApiError && e.status === 409),
+  });
 
 export const transcriptQuery = (meetingId: string) =>
   queryOptions({
@@ -346,17 +335,6 @@ export function editItem(meeting: string, item: MeetingItem, text: string): Prom
 
 const mapSection = (d: MeetingItems | undefined, section: MeetingItem['section'], f: (l: MeetingItem[]) => MeetingItem[]) =>
   d && { ...d, sections: { ...d.sections, [section]: f(d.sections[section]) } };
-
-/** An agenda item or a note (doc), a task to make (task). */
-export function addItem(meeting: string, section: MeetingItem['section'], text: string): Promise<MeetingItem> {
-  const tmp = `tmp:${Date.now()}`;
-  return write({
-    key: meetKeys.items(meeting),
-    optimistic: (d: MeetingItems | undefined) => mapSection(d, section, (l) => [...l, { id: tmp, status: 'proposed', text, section }]),
-    send: (idempotencyKey) => api.post<MeetingItem>(`/api/v2/meetings/${enc(meeting)}/items`, { section, text }, { idempotencyKey }),
-    settle: (d: MeetingItems | undefined, it: MeetingItem) => mapSection(d, section, (l) => l.map((x) => (x.id === tmp ? it : x))),
-  });
-}
 
 export function dismissItem(meeting: string, item: MeetingItem): Promise<MeetingItem> {
   return write({
@@ -598,15 +576,6 @@ export interface MeetChat {
   text: string;
 }
 
-const linkedKey = (id: string) => ['meetings', id, 'tasks'] as const;
-
-/** The tasks linked to a shared meeting, first 50. */
-export const linkedTasksQuery = (id: string) =>
-  queryOptions({
-    queryKey: linkedKey(id),
-    queryFn: ({ signal }) => api.get<MeetingTaskLinks>(`/api/v2/meetings/${enc(id)}/tasks?limit=50`, { signal }),
-  });
-
 /** Team (everyone signed in) or private (who was in it, its owner and the company's owner). */
 export function setMeetingPrivate(id: string, hidden: boolean): Promise<MeetingMore> {
   const version = queryClient.getQueryData<Meeting>(meetKeys.one(id))?.version;
@@ -637,26 +606,6 @@ export async function deleteMeeting(id: string): Promise<void> {
   });
   queryClient.removeQueries({ queryKey: meetKeys.one(id) });
   void queryClient.invalidateQueries({ queryKey: calKeys.all });
-}
-
-/** Link a task (its id or number) to the meeting; a task the person cannot read answers 404 and links nothing. */
-export async function linkTask(id: string, task: string): Promise<MeetingTaskLinkBatch> {
-  const r = await write({
-    key: linkedKey(id),
-    optimistic: (d: MeetingTaskLinks | undefined) => d,
-    send: (idempotencyKey) => api.post<MeetingTaskLinkBatch>(`/api/v2/meetings/${enc(id)}/tasks`, { task_ids: [task] }, { idempotencyKey }),
-    settle: (_d: MeetingTaskLinks | undefined, b: MeetingTaskLinkBatch): MeetingTaskLinks => ({ tasks: b.tasks, next_cursor: b.next_cursor }),
-  });
-  if (r.results[0]?.status === 404) throw new Error('not_found: no task you can open by that number or link');
-  return r;
-}
-
-export function unlinkTask(id: string, task: string): Promise<MeetingTaskRemoved> {
-  return write({
-    key: linkedKey(id),
-    optimistic: (d: MeetingTaskLinks | undefined) => d && { ...d, tasks: d.tasks.filter((t) => t.task_id !== task) },
-    send: (idempotencyKey) => api.delete<MeetingTaskRemoved>(`/api/v2/meetings/${enc(id)}/tasks/${enc(task)}`, { idempotencyKey }),
-  });
 }
 
 /* ---------------------------------------------------------------- booked calls: book one, move it, call it off */
@@ -734,8 +683,8 @@ export async function cancelCall(id: string): Promise<Call> {
 
 /* ---------------------------------------------------------------- on the call: the stage, agents, items after it */
 
-/** Show my screen or a Tico file on the call's stage (PUT /v2/calls/{id}/stage); the newest replaces what showed. */
-export async function setStage(id: string, show: { kind: 'screen' } | { kind: 'file'; file_id: string }): Promise<Call> {
+/** Show my screen on the call's stage (PUT /v2/calls/{id}/stage); the newest replaces what showed. */
+export async function setStage(id: string, show: { kind: 'screen' }): Promise<Call> {
   const call = await api.put<Call>(`/api/v2/calls/${enc(id)}/stage`, show);
   queryClient.setQueryData(callKeys.one(id), call);
   return call;
@@ -760,17 +709,6 @@ export async function takeOutAgent(id: string, bot: string): Promise<void> {
   });
   if (call) queryClient.setQueryData(callKeys.one(id), call);
 }
-
-/** Files to show on the stage: the newest, or those the words find (GET /v2/files, /v2/files/search). */
-export const stageFilesQuery = (text: string) =>
-  queryOptions({
-    queryKey: ['calls', 'stage-files', text.trim()] as const,
-    queryFn: async ({ signal }): Promise<{ id: string; title: string }[]> =>
-      text.trim().length > 1
-        ? (await api.get<{ results: { id: string; title: string }[] }>(`/api/v2/files/search?q=${enc(text.trim())}&limit=20`, { signal })).results
-        : (await api.get<{ files: { id: string; title: string }[] }>('/api/v2/files?limit=20', { signal })).files,
-    staleTime: 30_000,
-  });
 
 /** What this viewer did with a call's action items, in this browser only (old call-window.ts cwMade): a task made from
     one (its id), or '' for one hidden. Keyed by the item's owner and title. */

@@ -150,6 +150,12 @@ export const directoryQuery = queryOptions({
 
 const NONE: Actor[] = [];
 
+/** Just the part of the directory a component shows (`(d) => !!d.byId[id]`, a few names): it draws again only when
+    that part changes, not on every agent's status line. Undefined until the directory is read. */
+export function useDirectory<T>(select: (d: Directory) => T): T | undefined {
+  return useQuery({ ...directoryQuery, select }).data;
+}
+
 /** One person or agent by any id form `byId` answers; redraws only when that actor changes. */
 export function useActor(id: string | null | undefined): Actor | undefined {
   const { data } = useQuery({ ...directoryQuery, select: (d) => (id ? d.byId[id] : undefined) });

@@ -9,45 +9,31 @@ import { Empty } from '@/kit/Empty';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
-import { Line, SwitchLine, Verb, Word, act } from './parts';
+import { Line, SwitchLine, Verb, act } from './parts';
 import {
   supportAccessQuery,
   supportLogQuery,
   supportTicketsQuery,
   type ScreeningCaught,
-  type ScreeningTestRun,
   type SupportSession,
 } from './queries';
 
-/* What Security could do in the old app and the first pass left out: what screening caught lately, a test run of the
-   built-in samples, and letting Tico support sign in for a while (ui/support.ts). */
+/* What Security could do in the old app and the first pass left out: what screening caught lately, and letting Tico
+   support sign in for a while (ui/support.ts). */
 
-// ---------------------------------------------------------------- screening: caught lately, and a test run
+// ---------------------------------------------------------------- screening: caught lately
 
 const pct = (n?: number | null) => (n == null ? '' : `${Math.round(n * 100)}%`);
 
-/** The Caught line: how many were held or warned lately; Show opens them. Run test sends the samples through. */
+/** The Caught line: how many were held or warned lately; Show opens them. */
 export function ScreeningMore({ recent }: { recent?: ScreeningCaught[] }) {
   const [showing, setShowing] = useState(false);
-  const [ran, setRan] = useState<ScreeningTestRun | null>(null);
-  const [busy, setBusy] = useState(false);
   const caught = Array.isArray(recent) ? recent : [];
-  const test = async () => {
-    setBusy(true);
-    const r = await run('settings.testScreening', {}, { via: 'click' });
-    setBusy(false);
-    if (!r.ok) return toast(refusal(r, "Couldn't run the test"));
-    setRan(r.out as ScreeningTestRun);
-  };
   return (
     <>
       <Line label="Caught" target="setting:screening-caught">
         {caught.length === 0 ? <span className="fact-dim">None lately</span> : String(caught.length)}
         {caught.length > 0 && <Verb onClick={() => setShowing(true)}>Show</Verb>}
-      </Line>
-      <Line label="Test" target="setting:screening-test">
-        {busy ? <span className="fact-dim">Running</span> : ran ? `Passed ${ran.passed} of ${ran.total}` : <span className="fact-dim">Not run</span>}
-        <Verb onClick={() => void test()}>Run test</Verb>
       </Line>
       <Dialog
         open={showing}
@@ -79,24 +65,6 @@ export function ScreeningMore({ recent }: { recent?: ScreeningCaught[] }) {
             </div>
           ))
         )}
-      </Dialog>
-      <Dialog
-        open={ran != null}
-        onOpenChange={(o) => !o && setRan(null)}
-        title={ran ? `Passed ${ran.passed} of ${ran.total}` : ''}
-        description={ran?.model ? `Read by ${ran.model}` : undefined}
-        actions={
-          <Button variant="primary" onClick={() => setRan(null)}>
-            Done
-          </Button>
-        }
-      >
-        {(ran?.results ?? []).map((t) => (
-          <div key={t.name} className="row g-door" title={t.name}>
-            <span className="row-title">{t.name}</span>
-            <span className="row-cell">{t.ok === false ? <Word>Missed</Word> : [t.action, pct(t.score)].filter(Boolean).join(' · ')}</span>
-          </div>
-        ))}
       </Dialog>
     </>
   );

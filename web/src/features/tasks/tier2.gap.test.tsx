@@ -1,5 +1,5 @@
-// Tier 2 gaps of the Tasks track: Tags (New tag, templates, the release checklist, search) and a tag (its checklist,
-// Edit, Make a tag, More, Filter and New task). Made-up rows only.
+// Tier 2 gaps of the Tasks track: Tags (New tag, search) and a tag (Edit, More, Filter and New task). Made-up rows
+// only.
 import '@/actions';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, type AnyRouter } from '@tanstack/react-router';
@@ -111,38 +111,11 @@ describe('Tags @s3', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'New tag' }));
     const dialog = await screen.findByRole('dialog', { name: 'New tag' });
     fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Launch week' } });
-    fireEvent.change(within(dialog).getByLabelText('Notes'), { target: { value: '- [ ] Ship it' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
     await waitFor(() =>
-      expect(posted('/api/v2/tags')?.body).toEqual({ key: 'launch-week', label: 'Launch week', markdown: '- [ ] Ship it', is_template: false }),
+      expect(posted('/api/v2/tags')?.body).toEqual({ key: 'launch-week', label: 'Launch week', markdown: '', is_template: false }),
     );
     await waitFor(() => expect(router.state.location.pathname).toBe('/tags/t7'));
-  });
-
-  it('starts the release checklist template from "⋯" when there is none, then opens it @s3', async () => {
-    serve((url, method) => {
-      if (url === '/api/v2/tags?is_template=true') return { status: 200, body: { tags: [] } };
-      if (method === 'POST' && url === '/api/v2/tags') return { status: 200, body: { tag: tag('rc', 'release-checklist', { is_template: true }) } };
-      return undefined;
-    });
-    queryClient.setQueryData(tagsQuery.queryKey, [tag('t1', 'bug')]);
-    show(<TagsPage />, '/tags');
-    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Release checklist' }));
-    await waitFor(() => expect(posted('/api/v2/tags')?.body).toMatchObject({ key: 'release-checklist', label: 'release', is_template: true }));
-    expect((posted('/api/v2/tags')?.body as { markdown: string }).markdown).toContain('- [ ] Deploy');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tags/rc'));
-  });
-
-  it('lists the templates under "⋯" › Templates, read only when opened @s3', async () => {
-    serve((url) => (url === '/api/v2/tags?is_template=true' ? { status: 200, body: { tags: [tag('tp', 'onboarding', { is_template: true })] } } : undefined));
-    queryClient.setQueryData(tagsQuery.queryKey, [tag('t1', 'bug')]);
-    show(<TagsPage />, '/tags');
-    await screen.findByRole('table', { name: 'Tags' });
-    expect(sent.some((s) => s.url.includes('is_template=true'))).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Templates' }));
-    expect(await screen.findByRole('menuitem', { name: 'onboarding' })).toBeTruthy();
   });
 
   it('narrows the list to the words in the address, and says when nothing matches @s3', async () => {
@@ -161,26 +134,6 @@ describe('Tags @s3', () => {
 /* ---------------------------------------------------------------- a tag */
 
 describe('A tag @s4', () => {
-  it('shows its notes as a checklist; a tick is saved against its version and shows at once @s4', async () => {
-    let now = tag('t1', 'bug', { markdown: 'Before a release:\n- [ ] Deploy\n- [x] Tell the team' });
-    serve((url, method, body) => {
-      if (method === 'POST' && url === '/api/v2/tags/t1') now = { ...now, version: 2, markdown: (body as { markdown: string }).markdown };
-      if (url.startsWith('/api/v2/tags/t1')) return { status: 200, body: method === 'POST' ? { tag: now } : { tag: now, editable: true, next_offset: null, tasks: [] } };
-      return undefined;
-    });
-    seedTag(now, [task('a', 7, 'Fix the cart')]);
-    show(<TagPage tag="t1" />, '/tags/t1');
-    const notes = await screen.findByRole('region', { name: 'Checklist' });
-    expect(within(notes).getByText('Before a release:')).toBeTruthy();
-    const deploy = within(notes).getByRole('checkbox', { name: 'Deploy' });
-    expect(within(notes).getByRole('checkbox', { name: 'Tell the team' }).getAttribute('aria-checked')).toBe('true');
-    fireEvent.click(deploy);
-    await waitFor(() => expect(within(notes).getByRole('checkbox', { name: 'Deploy' }).getAttribute('aria-checked')).toBe('true'));
-    await waitFor(() =>
-      expect(posted('/api/v2/tags/t1')?.body).toEqual({ version: 1, markdown: 'Before a release:\n- [x] Deploy\n- [x] Tell the team' }),
-    );
-  });
-
   it('edits its name and notes from "⋯" Edit @s4', async () => {
     serve((url, method) => (method === 'POST' && url === '/api/v2/tags/t1' ? { status: 200, body: { tag: tag('t1', 'bug', { label: 'Bugs', version: 2 }) } } : undefined));
     seedTag(tag('t1', 'bug'), [task('a', 7, 'Fix the cart')]);
@@ -192,22 +145,6 @@ describe('A tag @s4', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
     expect(await screen.findByRole('heading', { level: 1, name: 'Bugs' })).toBeTruthy();
     await waitFor(() => expect(posted('/api/v2/tags/t1')?.body).toEqual({ version: 1, label: 'Bugs', markdown: '', metadata: {} }));
-  });
-
-  it('makes a tag from a template, under its own key @s4', async () => {
-    serve((url, method) =>
-      method === 'POST' && url.endsWith('/instances') ? { status: 200, body: { tag: tag('t8', 'release-2030-01-02') } } : undefined,
-    );
-    seedTag(tag('tp', 'release', { is_template: true, markdown: '- [ ] Deploy' }));
-    show(<TagPage tag="tp" />, '/tags/tp');
-    expect(await screen.findByRole('region', { name: 'Template' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Make a tag' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Make a tag' });
-    fireEvent.change(within(dialog).getByLabelText('Key'), { target: { value: 'release-2030-01-02' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
-    await waitFor(() => expect(posted('/api/v2/tags/tp/instances')?.body).toEqual({ key: 'release-2030-01-02', metadata: {} }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tags/t8'));
   });
 
   it('reads the tasks past the first 500 on More @s4', async () => {

@@ -114,9 +114,8 @@ describe('Archive agent @s716', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Archive Ana' }));
     const dialog = await screen.findByRole('alertdialog', { name: 'Archive Ana?' });
-    expect(within(dialog).getByText(/Its open tasks go to Pat Doe/)).toBeTruthy();
+    expect(within(dialog).getByRole('combobox', { name: 'Hand its work to' }).textContent).toContain('Pat Doe');
     await pick(within(dialog).getByRole('combobox'), 'Bo');
-    expect(within(dialog).getByText(/Its open tasks go to Bo/)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
     await waitFor(() => expect(posted('/bots/ana/archive')?.body).toEqual({ successor: '0191-bo', expected_revision: 3 }));
   });
@@ -173,7 +172,7 @@ describe('Agent: Files widget @s614', () => {
   const files = () =>
     serve((url) => {
       if (!url.includes('/bots/ana/files')) return undefined;
-      const narrowed = url.includes('q=') || url.includes('kind=');
+      const narrowed = url.includes('q=');
       const list = narrowed ? [file(9)] : [0, 1, 2, 3].map(file);
       return ok({ bot: '0190-ana', files: list, total: list.length, has_more: false, next_cursor: null });
     });
@@ -188,15 +187,6 @@ describe('Agent: Files widget @s614', () => {
     expect(reads.some((u) => u.includes('/bots/ana/files') && u.includes('q=notes'))).toBe(true);
   });
 
-  it('narrows its files to one kind @s614', async () => {
-    files();
-    show(<TeamWho who="ana" />, '/team/ana');
-    const section = await screen.findByRole('region', { name: 'Files' });
-    fireEvent.click(within(section).getByRole('button', { name: 'Filter' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Images' }));
-    expect(await within(section).findByTitle('note-9.md')).toBeTruthy();
-    expect(reads.some((u) => u.includes('/bots/ana/files') && u.includes('kind=image'))).toBe(true);
-  });
 });
 
 /* ---------------------------------------------------------------- the screen's gate */

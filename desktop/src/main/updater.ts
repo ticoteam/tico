@@ -1,6 +1,8 @@
 // Updates (platforms.md 4.8): GitHub Releases through electron-updater. Checked at launch and every 6 hours,
-// downloaded quietly, installed on quit; "Restart to update" never restarts during a call. Off in development and
-// when TICO_NO_UPDATES is set. An unsigned macOS build cannot install updates; its state reads 'error'.
+// downloaded quietly, installed on quit; "Restart to update" never restarts during a call. Off in development, when
+// TICO_NO_UPDATES is set, and in a build with no feed (no app-update.yml: a local `--dir` build, or any build made
+// without a `publish` setting); then nothing is ever fetched and the state stays 'none'. An unsigned macOS build
+// cannot install updates; its state reads 'error'.
 import { autoUpdater } from 'electron-updater';
 import type { UpdateState } from '../bridge';
 import { log } from './log';
@@ -11,7 +13,7 @@ export class Updater {
   state: UpdateState = { state: 'none' };
 
   constructor(
-    private readonly enabled: boolean,
+    readonly enabled: boolean,
     private readonly callLive: () => boolean,
     private readonly changed: () => void,
   ) {}

@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useActors } from '@/data';
-import { pipelinesQuery } from '@/features/tasks/exports';
+import { pipelinesQuery } from '@/features/tasks/routing';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
@@ -21,7 +21,7 @@ import { RULES, type RuleTab } from './actions';
 import { PartyPick, useNamer } from './CompanyRules';
 import { DuePanel } from './DuePanel';
 import { Face, press, RemoveItem, useConfirmRemove, useName, Verb, Word } from './parts';
-import { holdsQuery, orgRulesQuery, partiesOf, ruleSourcesQuery, stageRulesQuery, teamsQuery, withOf } from './queries';
+import { holdsQuery, orgRulesQuery, partiesOf, ruleSourcesQuery, stageRulesQuery, teamsQuery } from './queries';
 import type { OrgRule, RuleHold, StageRule } from './types';
 import { agentWords, BROKEN, cap, dayWords, STAGE_EVENTS, STAGE_THENS, STAGE_TIMERS, stageParts } from './words';
 
@@ -71,7 +71,6 @@ function OrgView({ id, onClose }: { id: string; onClose: () => void }) {
   if (!r) return <Gone title="Rule" loading={active.isPending} onClose={onClose} />;
   if (editing) return <OrgEditor rule={r} outside={r.kind === 'external'} onDone={() => setEditing(false)} onClose={onClose} />;
   const tmp = r.id.startsWith('tmp:');
-  const withs = withOf(r.with);
   const quote = r.cite && !r.cite.hidden && r.cite.quote ? r.cite : null;
   const dues = r.due ?? [];
   return (
@@ -84,11 +83,9 @@ function OrgView({ id, onClose }: { id: string; onClose: () => void }) {
     >
       <section className="rail-sec">
         <p className="inst t-read">{agentWords(r.text)}</p>
-        {r.description && <p className="row-sub t-read">{r.description}</p>}
         <Facts label="About">
           <LabelValue label="If broken">{r.if_broken === 'escalate' ? `Ask ${reviewer || r.reviewer?.name || 'the manager'}` : brokenWords(r)}</LabelValue>
           <LabelValue label="Who">{partiesOf(r.who).map(name).join(', ')}</LabelValue>
-          {withs.length > 0 && <LabelValue label="With">{withs.map(name).join(', ')}</LabelValue>}
           {r.source?.name && <LabelValue label="From">{r.source.name}</LabelValue>}
           {r.updated_at && <LabelValue label="Changed">{fmtDate(r.updated_at)}</LabelValue>}
         </Facts>
@@ -149,13 +146,11 @@ function OrgEditor({ rule, outside, onDone, onClose }: { rule?: OrgRule; outside
   const actors = useActors();
   const sources = useQuery({ ...ruleSourcesQuery, enabled: outside }).data ?? [];
   const [text, setText] = useState(rule?.text ?? '');
-  const [description, setDescription] = useState(rule?.description ?? '');
   const [broken, setBroken] = useState<'block' | 'escalate' | 'warn'>(rule?.if_broken ?? 'block');
   // under Ask first, nobody picked is the manager above whoever broke it
   const [reviewer, setReviewer] = useState<string>(rule?.reviewer ? `human:${rule.reviewer.id}` : MANAGER);
   // every team, agent and person it names, not only the first
   const [who, setWho] = useState<string[]>(rule ? partiesOf(rule.who) : ['*']);
-  const [withs, setWiths] = useState<string[]>(withOf(rule?.with));
   const [from, setFrom] = useState<string | null>(rule?.source?.id ?? null);
   const [fromName, setFromName] = useState('');
   const [fromKind, setFromKind] = useState<FromKind>('vendor');
@@ -174,8 +169,6 @@ function OrgEditor({ rule, outside, onDone, onClose }: { rule?: OrgRule; outside
       ifBroken: broken,
       ...(broken === 'escalate' && reviewer !== MANAGER ? { reviewer } : {}),
       who,
-      ...(!outside ? { with: withs } : {}),
-      ...(description.trim() || rule?.description ? { description: description.trim() } : {}),
       ...(outside ? { outside: true, ...(from === NEW_FROM ? { newSource: { name: fromName.trim(), kind: fromKind } } : from ? { source: from } : {}) } : {}),
     };
     setBusy(true);
@@ -203,9 +196,7 @@ function OrgEditor({ rule, outside, onDone, onClose }: { rule?: OrgRule; outside
     >
       <section className="rail-sec rr-form">
         <Field label="Rule" area value={text} onValueChange={setText} placeholder="An agent emails a customer for the first time" autoFocus={!rule} />
-        <Field label="Description" area value={description} onValueChange={setDescription} placeholder="Optional" />
         <PartyPick label="Who" value={who} onChange={setWho} />
-        {!outside && <PartyPick label="With" value={withs} onChange={setWiths} everyone={false} />}
         {outside && <Select label="From" options={fromOptions} value={from} onValueChange={setFrom} placeholder="Pick one" />}
         {outside && from === NEW_FROM && (
           <>
@@ -301,7 +292,7 @@ function StageView({ id, onClose }: { id: string; onClose: () => void }) {
         <section className="rail-sec" aria-label={r.then_params?.retire ? 'Suggested retire' : 'Suggested change'}>
           <h3>{r.then_params?.retire ? 'Suggested retire' : 'Suggested change'}</h3>
           {!was ? (
-            <p className="row-sub">The rule it changes is gone</p>
+            <Word>Gone</Word>
           ) : r.then_params?.retire ? (
             <p className="row-sub">{typeof r.then_params.retire === 'string' ? r.then_params.retire : `Takes ${was.name || 'this rule'} out of force`}</p>
           ) : (

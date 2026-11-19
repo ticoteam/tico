@@ -1,8 +1,8 @@
 import { queryOptions, type QueryClient, type QueryKey } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
 import type { NeedsYou, OkPreview, PagePublished, PageShown, PipelineSettingsList, PublishPageBody, TaskDetail, TaskFileList, TaskLinkView, TaskResult } from '@/api/schema';
-import { keys, queryClient, QUIET_STALE_MS, quietRoot, write } from '@/data';
-import type { AccessAudience, FileLibrary, FileSearch, Group, TaskFileResult, TaskFileView } from '@/api/schema';
+import { keys, queryClient, quietRoot, write } from '@/data';
+import type { FileLibrary, FileSearch, TaskFileResult, TaskFileView } from '@/api/schema';
 
 /* One open task: its detail (GET /api/v2/tasks/{tid}, kept current by the stream under keys.tasks.detail), the files
    and pages it shows (under the detail key, re-read when the stream says its files changed), the stages it can move
@@ -123,7 +123,6 @@ export const pipelineStagesQuery = queryOptions({
       name: p.name,
       stages: p.stages.map((s) => ({ id: s.id, name: s.name, side: s.side })),
     })),
-  staleTime: QUIET_STALE_MS,
 });
 
 export interface Waiting {
@@ -147,7 +146,6 @@ export const waitingQuery = queryOptions({
     }
     return out;
   },
-  staleTime: QUIET_STALE_MS,
 });
 
 /* ---------------------------------------------------------------- writes */
@@ -348,11 +346,9 @@ export function dropLink(id: string, link: string) {
 import type { GoalResult, TaskMeeting, TaskMeetings } from '@/api/schema';
 import { meQuery } from '@/data';
 
-/** How closely someone follows a task (backend/task_followers.py). */
-export type FollowLevel = 'live' | 'mentions' | 'digest' | 'muted';
+/** Someone following a task (backend/task_followers.py). */
 export interface Follower {
   actor: string;
-  notify: FollowLevel;
 }
 /** The detail's task as Details reads its facts: its followers (null for a task with no thread of its own) and its
     goal, which the schema's task leaves out. */
@@ -384,7 +380,6 @@ export const taskGoalQuery = (goal: string) =>
   queryOptions({
     queryKey: ['task-goal', goal] as const,
     queryFn: async ({ signal }) => (await api.get<GoalResult>(`/api/v2/goals/${enc(goal)}`, { signal })).goal.title,
-    staleTime: QUIET_STALE_MS,
   });
 
 /** A field edit (POST /api/v2/tasks/{tid}): shown at once, the server's task in its place. */
@@ -432,15 +427,13 @@ export function setTaskReaders(id: string, add: string[], remove: string[]) {
   });
 }
 
-/** Follow, unfollow or set a level: the person themselves, or `actor` (PUT /api/v2/tasks/{tid}/followers). */
+/** Follow or unfollow: the person themselves, or `actor` (PUT /api/v2/tasks/{tid}/followers). */
 type FollowersAnswer = { followers: Follower[] | null };
-export function followTask(id: string, change: { actor?: string; following: boolean; notify?: FollowLevel }) {
+export function followTask(id: string, change: { actor?: string; following: boolean }) {
   const who = change.actor ?? queryClient.getQueryData(meQuery.queryKey)?.id ?? '';
   const shown = (list: Follower[]): Follower[] => {
     const rest = list.filter((f) => f.actor !== who);
-    if (!change.following) return rest;
-    const was = list.find((f) => f.actor === who);
-    return [...rest, { actor: who, notify: change.notify ?? was?.notify ?? 'live' }];
+    return change.following ? [...rest, { actor: who }] : rest;
   };
   return write<FollowersAnswer>({
     key: keys.tasks.detail(id),
@@ -462,20 +455,13 @@ export async function deleteTask(id: string) {
 
 /* ---------------------------------------------------------------- a task's files and pages: add, link, remove, who sees */
 
-/** One of the task's pages with what the reader may do to it (GET /api/v2/pages/{fid}): `can_manage` (who can see it,
-    archive) and `can_delete`. Its frame draws from the same read. */
+/** One of the task's pages with what the reader may do to it (GET /api/v2/pages/{fid}): `can_manage` (archive) and
+    `can_delete`. Its frame draws from the same read. */
 export const pageShownQuery = (task: string, file: string) =>
   queryOptions({
     queryKey: [...keys.tasks.detail(task), 'page', file, 'shown'] as const,
     queryFn: ({ signal }) => api.get<PageShown>(`/api/v2/pages/${enc(file)}`, { signal }),
   });
-
-/** The company's teams, for who can see a page (GET /api/v2/groups). */
-export const pageGroupsQuery = queryOptions({
-  queryKey: ['tasks', 'groups'] as const,
-  queryFn: ({ signal }) => api.get<Group[]>('/api/v2/groups', { signal }),
-  staleTime: QUIET_STALE_MS,
-});
 
 export interface PagePick {
   id: string;
@@ -536,16 +522,6 @@ export async function archivePage(task: string, file: string, archived: boolean)
   });
   await reread(task);
   return r;
-}
-
-/** Who can see a page: null is everyone who can see where it is filed (PATCH /api/v2/pages/{fid} audience). */
-export function setPageAudience(task: string, file: string, audience: AccessAudience | null) {
-  return write<PageShown>({
-    key: shownKey(task, file),
-    optimistic: (cur: PageShown | undefined) => cur && { ...cur, page: { ...cur.page, audience } },
-    send: (idem) => api.patch<PageShown>(`/api/v2/pages/${enc(file)}`, { audience }, { idempotencyKey: idem }),
-    settle: (cur: PageShown | undefined, answer) => (cur ? { ...cur, page: answer.page } : answer),
-  });
 }
 
 /** Delete a page and every version for good (DELETE /api/v2/files/{fid}); the task is read again. */

@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { loadStrategy, strategySearch, StrategyPage } from '@/features/company/exports';
+import { StrategyPage } from '@/features/company/exports';
+import { loadStrategy, strategySearch } from '@/features/company/routing';
 
 export const Route = createFileRoute('/company/strategy')({
   validateSearch: strategySearch,

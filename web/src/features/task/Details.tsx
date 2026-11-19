@@ -207,15 +207,18 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
             {question(t.turn.line) && <small>{question(t.turn.line)}</small>}
           </Kv>
         )}
-        {t.due_at && (
-          <EditKv
+        <EditKv
             k="Due"
             target={`task-due:${t.id}`}
             value={
-              <>
-                <DateText at={t.due_at} />
-                {t.late && <LatePill />}
-              </>
+              t.due_at ? (
+                <>
+                  <DateText at={t.due_at} />
+                  {t.late && <LatePill />}
+                </>
+              ) : (
+                <small>None</small>
+              )
             }
             edit={(done) => (
               <span className="dt-in is-row">
@@ -223,19 +226,20 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
                   label="Due"
                   labelHidden
                   withTime={false}
-                  value={new Date(t.due_at as string)}
+                  value={t.due_at ? new Date(t.due_at) : null}
                   onValueChange={(d) => void saved('task.setDue', { task: t.id, due: day(d) }).then(done)}
                 />
-                <button type="button" className="dt-act" onClick={() => void saved('task.setDue', { task: t.id, due: null }).then(done)}>
-                  Clear
-                </button>
+                {t.due_at && (
+                  <button type="button" className="dt-act" onClick={() => void saved('task.setDue', { task: t.id, due: null }).then(done)}>
+                    Clear
+                  </button>
+                )}
                 <button type="button" className="dt-act" onClick={done}>
                   Cancel
                 </button>
               </span>
             )}
           />
-        )}
       </Section>
 
       {(leave.length > 0 || adding === 'ask') && (

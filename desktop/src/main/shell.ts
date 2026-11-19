@@ -4,16 +4,17 @@ import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BaseWindow, dialog, nativeTheme, screen, session, WebContentsView, type Session, type WebContents } from 'electron';
+import { app, BaseWindow, dialog, nativeImage, nativeTheme, screen, session, WebContentsView, type NativeImage, type Session, type WebContents } from 'electron';
 import type { CallWindowState, CompanyRef } from '../bridge';
-import { appUrl, checkAddress, hostOf } from './address';
-import { anyCallLive, badgeFor } from './badge';
+import { appUrl, checkAddress, hostOf, localSignInUrl } from './address';
+import { anyCallLive, badgeFor, dotBitmap } from './badge';
 import { CallWindow } from './callWindow';
 import * as C from './companies';
 import { guardNavigation, hardenSession, pageWebPreferences } from './contents';
 import { parseDeepLink } from './deeplink';
 import { checkServer, type Health } from './health';
 import { log } from './log';
+import { loadAtStart, viewsToUnload } from './memory';
 import { issuerCookie, type Picks } from './portal';
 import { onOwnOrigin } from './validate';
 import { loadWindowState, MIN_HEIGHT, MIN_WIDTH, restoreFrame, saveWindowState } from './windowState';
@@ -35,6 +36,9 @@ type Entry = {
   failed: boolean;
   /** The page reported it is in a call; it ends with the page (another document, a crash, sign-out). */
   callLive: boolean;
+  /** Its page is loaded (memory.ts: past six companies the one shown longest ago is unloaded until it is shown). */
+  loaded: boolean;
+  shownAt: number;
 };
 
 export type LocalState = { page: 'add'; prefill?: string } | { page: 'unreachable'; companyId: string };
@@ -51,6 +55,9 @@ export type ShellOptions = {
 };
 
 const background = () => (nativeTheme.shouldUseDarkColors ? '#0B0B0B' : '#E9E9E9');
+
+let overlay: NativeImage | null = null;
+const overlayIcon = () => (overlay ??= nativeImage.createFromBitmap(dotBitmap(16), { width: 16, height: 16 }));
 
 export class Shell {
   readonly win: BaseWindow;
@@ -72,7 +79,11 @@ export class Shell {
       notify: (id, state) => this.notifyCall(id, state),
       quitting: () => this.quitting,
     });
-    for (const company of this.file.companies) this.createEntry(company);
+    const first = loadAtStart(
+      this.file.companies.map((c) => c.id),
+      this.file.active,
+    );
+    for (const company of this.file.companies) this.createEntry(company, first.has(company.id));
     const active = this.file.active;
     if (active) this.switchTo(active);
     else this.showLocal({ page: 'add' });
@@ -126,7 +137,10 @@ export class Shell {
       if (process.platform === 'darwin' && !this.quitting) {
         e.preventDefault();
         win.hide();
+        return;
       }
+      // Windows and Linux have no app without its window: closing it quits (the small call window goes too).
+      if (process.platform !== 'darwin' && !this.quitting) app.quit();
     });
     nativeTheme.on('updated', () => win.setBackgroundColor(background()));
     return win;
@@ -184,12 +198,12 @@ export class Shell {
     return wc && !wc.isDestroyed() ? wc : null;
   }
 
-  private createEntry(company: C.Company): Entry {
+  private createEntry(company: C.Company, load = true): Entry {
     const view = new WebContentsView({ webPreferences: pageWebPreferences(company.partition, company.url, this.preloadArgs()) });
     view.setBackgroundColor(background());
     const wc = view.webContents;
     hardenSession(wc.session, company.url, this.opts.userAgent);
-    const entry: Entry = { company, view, needs: 0, signedOut: false, filesOrigin: null, failed: false, callLive: false };
+    const entry: Entry = { company, view, needs: 0, signedOut: false, filesOrigin: null, failed: false, callLive: false, loaded: load, shownAt: 0 };
     guardNavigation(wc, {
       context: () => ({ origin: company.url, others: this.others(company.id), filesOrigin: entry.filesOrigin }),
       switchTo: (id, url) => void this.switchTo(id, url),
@@ -217,7 +231,7 @@ export class Shell {
     this.win.contentView.addChildView(view);
     view.setVisible(false);
     this.layout();
-    void wc.loadURL(company.lastUrl ?? appUrl(company.url)).catch(() => undefined);
+    if (load) void wc.loadURL(company.lastUrl ?? appUrl(company.url)).catch(() => undefined);
     return entry;
   }
 
@@ -251,11 +265,15 @@ export class Shell {
     this.file = C.setActive(this.file, id);
     this.persist();
     for (const e of this.entries.values()) e.view.setVisible(e === entry);
+    entry.shownAt = Date.now();
     const wc = entry.view.webContents;
-    if (url && url !== wc.getURL()) {
+    const to = url && url !== wc.getURL() ? url : entry.loaded ? null : (entry.company.lastUrl ?? appUrl(entry.company.url));
+    if (to) {
       entry.failed = false;
-      void wc.loadURL(url).catch(() => undefined);
+      entry.loaded = true;
+      void wc.loadURL(to).catch(() => undefined);
     }
+    this.unloadExtra();
     if (entry.failed) this.showLocal({ page: 'unreachable', companyId: id });
     else this.hideLocal();
     this.showWindow();
@@ -263,32 +281,55 @@ export class Shell {
     this.changed();
   }
 
-  /** Adds a server (or finds it), its page's session and view, and shows it. `beforeLoad` runs before its first page. */
-  async addOrigin(origin: string, beforeLoad?: (company: C.Company) => Promise<void>, show = true): Promise<C.Company> {
+  /** Past six loaded companies, the one shown longest ago with no call unloads; it loads again where it was when shown. */
+  private unloadExtra(): void {
+    const views = [...this.entries.values()].map((e) => ({
+      id: e.company.id,
+      loaded: e.loaded,
+      shownAt: e.shownAt,
+      inCall: e.callLive || this.call.belongsTo(e.company.id),
+    }));
+    for (const id of viewsToUnload(views, this.file.active)) {
+      const e = this.entries.get(id);
+      if (!e) continue;
+      e.loaded = false;
+      e.failed = false;
+      log('info', `unloaded ${e.company.url} to save memory`);
+      // about:blank is never kept as its last place, so it loads again at the page it was on
+      void e.view.webContents.loadURL('about:blank').catch(() => undefined);
+    }
+  }
+
+  /**
+   * Adds a server (or finds it), its page's session and view, and shows it. `beforeLoad` runs before its first page;
+   * `at` is that first page (a local copy's sign-in link), shown in place of the app's.
+   */
+  async addOrigin(origin: string, beforeLoad?: (company: C.Company) => Promise<void>, show = true, at?: string): Promise<C.Company> {
     const added = C.addCompany(this.file, origin, C.companyId(randomBytes(8).toString('hex')));
     if (!added.existed) {
       this.file = { ...added.file, active: show ? added.file.active : this.file.active };
       this.persist();
       if (beforeLoad) await beforeLoad(added.company);
-      this.createEntry(added.company);
+      this.createEntry(added.company, !(show && at));
       log('info', `added ${origin}`);
     }
-    if (show) this.switchTo(added.company.id);
+    if (show) this.switchTo(added.company.id, at);
     return added.company;
   }
 
-  /** "Use a server address" on the Add company page. */
+  /** "Use a server address" on the Add company page; a local copy's sign-in link adds that copy and signs in. */
   async addServer(text: string): Promise<Health> {
     const address = checkAddress(text);
     if (!address.ok) return address;
+    const signIn = localSignInUrl(text) ?? undefined;
     const existing = C.findByOrigin(this.file, address.origin);
     if (existing) {
-      this.switchTo(existing.id);
+      this.switchTo(existing.id, signIn);
       return { ok: true };
     }
     const health = await checkServer(address.origin);
     if (!health.ok) return health;
-    await this.addOrigin(address.origin);
+    await this.addOrigin(address.origin, undefined, true, signIn);
     return { ok: true };
   }
 
@@ -433,9 +474,10 @@ export class Shell {
   changed(): void {
     for (const [id, e] of this.entries) this.sendToPage(e, 'companies:changed', this.list(id));
     const badge = badgeFor([...this.entries.values()]);
-    if (badge.text !== this.lastBadge) {
+    if (badge.text !== this.lastBadge && !this.win.isDestroyed()) {
       this.lastBadge = badge.text;
       if (process.platform === 'darwin') app.dock?.setBadge(badge.text);
+      else if (process.platform === 'win32') this.win.setOverlayIcon(badge.count ? overlayIcon() : null, badge.count ? `${badge.count} waiting` : '');
       else app.setBadgeCount(badge.count);
     }
     this.opts.changed();

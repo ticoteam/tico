@@ -118,7 +118,9 @@ describe('Payables @s406 @s449', () => {
     );
     const router = show('/company/finance?tab=payables');
     const link = await screen.findByRole('link', { name: 'Acme' });
-    expect(within(link.closest('table')!).getByText('Draft')).toBeTruthy();
+    // A draft waits on whoever may approve it: its group comes first, and the row carries the mark.
+    expect(within(link.closest('table')!).getByText('Waits on you')).toBeTruthy();
+    expect(within(link.closest('tr')!).getByRole('img', { name: 'Waits on you' })).toBeTruthy();
     fireEvent.click(link);
     await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: 'payables', panel: 'bill:b1' }));
     const panel = await screen.findByRole('complementary', { name: 'Acme' });
@@ -259,13 +261,26 @@ describe('Transactions @s405', () => {
     await waitFor(() => expect(posted).toEqual([{ kind: 'journal', payload, dry_run: true }, { kind: 'journal', payload }]));
   });
 
-  it('a transaction opens beside the list at its own address @s475', async () => {
-    serve([['/finance/transactions', { rows: [row('t1', { description: 'Figma', account: 'Software', counterparty: 'Figma Inc' })], next: null }]]);
+  it('a bank row with no line opens in place and is put on one; a row with a line opens nothing @s475', async () => {
+    const { posted } = serve([
+      ['chart?for=journal', { accounts: [{ id: 'acc_soft', name: 'Software', number: '6200', type: 'expense' }] }],
+      [
+        '/finance/transactions',
+        {
+          rows: [row('t1', { description: 'Figma', account: 'Software', account_id: 'acc_soft' }), row('t2', { description: 'Corner Shop', lines: [{ line_id: 'l2', tags: { team: 'ops', budget: 'b9' } }] })],
+          next: null,
+        },
+      ],
+    ]);
     const router = show('/company/finance?tab=transactions');
-    fireEvent.click(await screen.findByRole('link', { name: 'Figma' }));
-    await waitFor(() => expect(router.state.location.search).toMatchObject({ panel: 'tx:t1' }));
-    const panel = await screen.findByRole('complementary', { name: 'Figma' });
-    expect(within(panel).getByText('Figma Inc')).toBeTruthy();
+    expect(await screen.findByText('Figma')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Figma' })).toBeNull();
+    fireEvent.click(screen.getByRole('link', { name: 'Corner Shop' }));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ panel: 'tx:t2' }));
+    expect(screen.queryByRole('complementary')).toBeNull();
+    await pick(await screen.findByRole('combobox', { name: 'Line' }), /Software/);
+    await waitFor(() => expect(posted.at(-1)).toEqual({ kind: 'categorize', payload: { feed_id: 't2', account_id: 'acc_soft', tags: { team: 'ops' } } }));
+    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('panel'));
   });
 });
 
@@ -384,3 +399,34 @@ describe('Money stays the person’s own press @s406 @s407 @s411', () => {
     for (const [id, input] of closed) expect(await run(id, input, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
   });
 });
+
+describe('Finance on a phone, and its owner', () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.layout;
+  });
+
+  it('Payables on a phone are rows under their groups, never a wide table', async () => {
+    document.documentElement.dataset.layout = 'cards';
+    serve([
+      ['status=draft', { bills: [] }],
+      ['/finance/bills', { bills: [doc({ id: 'b1', kind: 'bill', vendor: { name: 'Paper Co' }, total: 5000, remaining: 5000, status: 'open', due_date: '2099-01-01' })], bills_email: '' }],
+    ]);
+    show('/company/finance?tab=payables');
+    const list = await screen.findByRole('list', { name: 'Bills' });
+    expect(within(list).getByRole('link', { name: 'Paper Co' })).toBeTruthy();
+    expect(within(list).getByText('Later')).toBeTruthy();
+    expect(screen.queryByRole('table')).toBeNull();
+  });
+
+  it("Finance Owner's face in the head opens its chat beside the page", async () => {
+    serve([
+      ['/page-owners', { pages: { finance: { bot: 'bot:fo1', choice: 'default' } } }],
+      ['/finance/sources', { groups: [] }],
+    ]);
+    queryClient.setQueryData(['directory'], { actors: [], byId: { 'bot:fo1': { id: 'bot:fo1', kind: 'agent', name: 'Finance Owner' } } });
+    show('/company/finance?tab=sources');
+    const face = await screen.findByRole('link', { name: 'Chat with Finance Owner' });
+    expect(new URL(face.getAttribute('href')!, 'http://x').searchParams.get('chat')).toBe('agent:fo1');
+  });
+});
+

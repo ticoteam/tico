@@ -6,7 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
-import { accessQuery, activityQuery, changelogQuery, directorySyncQuery, humansQuery, type AccessView } from './queries';
+import { accessQuery, changelogQuery, directorySyncQuery, humansQuery, type AccessView } from './queries';
 import { SettingsPage } from './SettingsPage';
 
 vi.mock('@/search', () => ({ SearchDialog: () => null }));
@@ -43,7 +43,6 @@ function show(node: ReactNode, at: string) {
 }
 
 const LIST = { can_add: false, can_review: false, current_version: '0.0.1', drafts: [], next_offset: null, unread_count: 0 };
-const ENTRY = { area: 'tasks', bullets: [], kind: 'activity' as const, shipped_at: '2026-01-02T00:00:00Z' };
 
 beforeAll(() => {
   queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } });
@@ -57,54 +56,14 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-describe('Settings › Changelog', () => {
-  it("an agent's line opens its task's outcome over the page", async () => {
-    serve((url) =>
-      url.startsWith('/api/v2/tasks/t9')
-        ? { status: 200, body: { task: { id: 't9', title: 'Sample task', note: 'It **shipped**.' }, runs: [], children: [] } }
-        : { status: 200, body: {} },
-    );
-    queryClient.setQueryData(changelogQuery.queryKey, { ...LIST, entries: [] });
-    queryClient.setQueryData(activityQuery.queryKey, {
-      ...LIST,
-      entries: [
-        { ...ENTRY, id: 'e1', title: 'Shipped a sample', task_id: 't9' },
-        { ...ENTRY, id: 'e2', title: 'A line with no task' },
-      ],
-    });
-    const router = show(<SettingsPage section="changelog" />, '/settings/changelog');
-    fireEvent.click(await screen.findByRole('button', { name: /Agent activity/ }));
-    expect(await screen.findAllByRole('button', { name: 'View outcome' })).toHaveLength(1);
-    fireEvent.click(screen.getByRole('button', { name: 'View outcome' }));
-    await waitFor(() => expect(router.state.location.search).toEqual({ open: 't9' }));
-  });
-
-  it('the outcome shows the task and its note', async () => {
-    serve((url) =>
-      url.startsWith('/api/v2/tasks/t9')
-        ? { status: 200, body: { task: { id: 't9', title: 'Sample task', note: 'It **shipped**.' }, runs: [], children: [] } }
-        : { status: 200, body: {} },
-    );
-    queryClient.setQueryData(changelogQuery.queryKey, { ...LIST, entries: [] });
-    queryClient.setQueryData(activityQuery.queryKey, { ...LIST, entries: [] });
-    show(<SettingsPage section="changelog" open="t9" />, '/settings/changelog?open=t9');
-    expect(await screen.findByText('Reported task outcome')).toBeTruthy();
-    expect(await screen.findByText('Sample task')).toBeTruthy();
-    expect((await screen.findByText('shipped')).tagName).toBe('B');
-  });
-});
-
 describe('Settings › Changelog, empty', () => {
-  it('is one quiet line in the Changelog section, with Add update in its head and agent activity after', async () => {
+  it('is one quiet line in the Changelog section, with Add update in its head', async () => {
     serve(() => ({ status: 200, body: {} }));
     queryClient.setQueryData(changelogQuery.queryKey, { ...LIST, can_add: true, entries: [] });
-    queryClient.setQueryData(activityQuery.queryKey, { ...LIST, entries: [{ ...ENTRY, id: 'e1', title: 'Shipped a sample' }] });
     show(<SettingsPage section="changelog" />, '/settings/changelog');
     const log = await screen.findByRole('region', { name: 'Changelog' });
     expect(log.querySelector('.stage-head')?.querySelector('[aria-label="Add update"]')).toBeTruthy();
     expect(log.textContent).toContain('No changes yet');
-    const activity = screen.getByRole('region', { name: /Agent activity/ });
-    expect(log.compareDocumentPosition(activity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(document.querySelector('.empty')).toBeNull();
   });
 });
@@ -154,7 +113,6 @@ describe('Settings › People › Directory sync', () => {
     queryClient.setQueryData(directorySyncQuery.queryKey, SYNC);
     show(<SettingsPage section="people" />, '/settings/people');
     fireEvent.click(await screen.findByRole('button', { name: 'Replace token' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Replace' }));
     expect(await screen.findByText('scim-sample-0000')).toBeTruthy();
     // Not in the query cache, not in a toast, not in the address.
     expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => q.state.data))).not.toContain('scim-sample-0000');

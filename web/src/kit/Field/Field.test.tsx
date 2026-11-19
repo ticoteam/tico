@@ -1,7 +1,7 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { Field, Search } from './Field';
+import { Field, Search, SettledSearch } from './Field';
 
 describe('Field', () => {
   it('is named by its label and reports what is typed', () => {
@@ -41,5 +41,26 @@ describe('Search', () => {
     fireEvent.keyDown(box, { key: 'Escape' });
     expect(box.value).toBe('');
     expect(screen.queryByRole('button', { name: 'Clear' })).toBeNull();
+  });
+});
+
+describe('SettledSearch', () => {
+  it('hands on the words once typing pauses, and follows the address when it changes elsewhere', () => {
+    vi.useFakeTimers();
+    const onSettle = vi.fn();
+    const { rerender } = render(<SettledSearch label="Find a thread" value="" onSettle={onSettle} />);
+    const box = screen.getByRole('textbox', { name: 'Find a thread' }) as HTMLInputElement;
+    fireEvent.change(box, { target: { value: 'lau' } });
+    fireEvent.change(box, { target: { value: 'launch ' } });
+    act(() => vi.advanceTimersByTime(249));
+    expect(onSettle).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(1));
+    expect(onSettle).toHaveBeenCalledOnce();
+    expect(onSettle).toHaveBeenCalledWith('launch');
+    rerender(<SettledSearch label="Find a thread" value="budget" onSettle={onSettle} />);
+    expect(box.value).toBe('budget');
+    act(() => vi.advanceTimersByTime(500));
+    expect(onSettle).toHaveBeenCalledOnce();
+    vi.useRealTimers();
   });
 });

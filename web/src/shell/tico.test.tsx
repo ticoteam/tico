@@ -74,4 +74,15 @@ describe('Tico, the first sheet @s212 @s238 @s624 @s1193', () => {
     expect(await within(tico).findByRole('img', { name: 'Tico did not load' })).toBeTruthy();
     expect(screen.getByRole('main', { name: 'Tasks' })).toBeTruthy();
   });
+
+  it('shows message bones while Tico’s chat loads, then the chat', async () => {
+    resize(1440);
+    queryClient.setQueryData(ticoPowerQuery.queryKey, { available: true, bot: 'assistant', can_turn_on: false, state: 'active' });
+    vi.stubGlobal('fetch', () => new Promise(() => {}));
+    const tico = await show('page');
+    expect(await within(tico).findByRole('status', { name: 'Loading Tico' })).toBeTruthy();
+    act(() => queryClient.setQueryData(ticoRoomQuery.queryKey, 'room-2'));
+    expect(await within(tico).findByText('tico chat in room-2')).toBeTruthy();
+    expect(within(tico).queryByRole('status', { name: 'Loading Tico' })).toBeNull();
+  });
 });

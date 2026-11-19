@@ -9,20 +9,21 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
+import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { Table, Th, Tr } from '@/kit/Table';
 import { toast } from '@/kit/Toast';
 import { fmtAge, fmtDate, fmtMoney } from '@/lib';
-import { FiguresStrip, List, PageMore, Record, RecordPanel, Section, SidePanel, type PageTab } from '@/pagekinds';
+import { FiguresStrip, List, PageMore, Record, RecordPanel, Section, SidePanel } from '@/pagekinds';
 import type { Risk, RiskDetail } from '@/api/schema';
 import { Markdown } from '@/kit/Markdown';
-import { Face, Go, NameOf, PanelLink, useDo } from './parts';
+import { Face, Go, NameOf, PageOwner, PanelLink, readState, useDo } from './parts';
 import { fileSearchQuery, partySearchQuery, productsQuery, matterDatesQuery, matterFilesQuery, mattersQuery, riskQuery, risksQuery, waitingTasksQuery, type MatterRow, type RiskDate } from './queries';
 import './company.css';
 
 /* Risk (pages/10-records/records.js riskPage): a List of risks by level, a live one with its open matters under it.
    A risk opens as its own Record (`?risk=<id>`), a matter in the panel (`?panel=matter:<task>`), on the list and on
-   the one risk alike. Disputes is the second tab: every dispute in one table. */
+   the one risk alike. The switch in the head shows Disputes instead: every dispute in one table. */
 
 export interface RiskSearch {
   risk?: string;
@@ -31,10 +32,21 @@ export interface RiskSearch {
 export type RiskView = 'risks' | 'disputes';
 
 const BASE = '/company/risk';
-export const riskTabs: readonly PageTab[] = [
-  { label: 'Risks', to: BASE, target: 'tab:risks' },
-  { label: 'Disputes', to: `${BASE}/disputes`, target: 'tab:disputes' },
-];
+const VIEWS = [
+  { value: 'risks', label: 'Risks' },
+  { value: 'disputes', label: 'Disputes' },
+] as const;
+
+/** Risk's head: the Risks or Disputes switch after the title, then the owner's face. */
+function useHead(view: RiskView) {
+  const show = useDo('risk.view');
+  return {
+    title: 'Risk',
+    path: view === 'disputes' ? `${BASE}/disputes` : BASE,
+    className: 'co',
+    after: <Segmented label="Show" options={VIEWS} value={view} onValueChange={(v) => void show.run({ view: v })} />,
+  };
+}
 const LEVELS: [Risk['level'], string][] = [
   ['live', 'Live'],
   ['open', 'Open'],
@@ -99,7 +111,6 @@ function Risks({ search }: { search: RiskSearch }) {
   const open = useDo('company.openPanel');
   const risks = q.data?.risks ?? [];
   const rows = matters.data?.matters ?? [];
-  const state = q.isPending ? 'loading' : q.isError ? 'fault' : risks.length ? 'ready' : 'empty';
   const add = (
     <Button variant={search.panel ? 'plain' : 'primary'} icon="plus" onClick={() => void open.run({ panel: 'new' })}>
       Add risk
@@ -107,12 +118,14 @@ function Risks({ search }: { search: RiskSearch }) {
   );
   return (
     <List
-      title="Risk"
-      path={BASE}
-      tabs={riskTabs}
-      className="co"
-      actions={add}
-      state={state}
+      {...useHead('risks')}
+      actions={
+        <>
+          <PageOwner page="risk" />
+          {add}
+        </>
+      }
+      state={readState(q, !risks.length)}
       onRetry={() => void q.refetch()}
       empty={{ title: 'No risks yet', action: add }}
       sections={LEVELS.map(([level, name]) => {
@@ -122,7 +135,7 @@ function Risks({ search }: { search: RiskSearch }) {
           <Section key={level} name={name} count={list.length}>
             {level === 'live'
               ? list.map((r) => <LiveRisk key={r.id} risk={r} matters={rows.filter((m) => m.risks.some((x) => x.id === r.id))} selected={search.panel} />)
-              : list.map((r) => <RiskRow key={r.id} risk={r} />)}
+              : list.map((r) => <RiskRow key={r.id} risk={r} matters={rows.filter((m) => m.risks.some((x) => x.id === r.id))} />)}
           </Section>
         );
       })}
@@ -173,14 +186,17 @@ function LiveRisk({ risk: r, matters, selected }: { risk: Risk; matters: MatterR
   );
 }
 
-function RiskRow({ risk: r }: { risk: Risk }) {
+/** An Open risk shows who its open matters are with; a Quiet one its next date and how many it closed. */
+function RiskRow({ risk: r, matters }: { risk: Risk; matters: MatterRow[] }) {
+  const quiet = r.level === 'quiet';
+  const parties = [...new Set(matters.map((m) => m.matter?.party?.name).filter(Boolean))].join(', ');
   return (
-    <Link to={BASE as never} search={{ risk: r.id } as never} className={r.level === 'quiet' ? 'row rk-r is-quiet' : 'row rk-r'} data-target={`risk:${r.id}`}>
+    <Link to={BASE as never} search={{ risk: r.id } as never} className={quiet ? 'row rk-r is-quiet' : 'row rk-r'} data-target={`risk:${r.id}`}>
       <span className="row-mark" />
       <span className="row-title rk-name">{r.label}</span>
-      <span className="rk-what">{r.next_date ? `Next ${fmtDate(r.next_date)}` : ''}</span>
-      <span className="rk-n">{r.open ? `${r.open} open` : ''}</span>
-      <span className="rk-fig">{claimed(r)}</span>
+      <span className="rk-what">{quiet ? (r.next_date ? fmtDate(r.next_date) : '') : parties}</span>
+      <span className="rk-n">{quiet ? (r.closed ? `${r.closed} closed` : 'None') : `${r.open} open`}</span>
+      <span className="rk-fig" />
       <span className="rk-rules">{r.has_rules && <Icon name="rules" />}</span>
     </Link>
   );
@@ -199,18 +215,15 @@ function Disputes({ search }: { search: RiskSearch }) {
   const q = useQuery(mattersQuery('disputes'));
   const waiting = useWaiting();
   const rows = q.data?.matters ?? [];
-  const state = q.isPending ? 'loading' : q.isError ? 'fault' : rows.length ? 'ready' : 'empty';
   const groups: [string, MatterRow[]][] = [
     ['Open', rows.filter((m) => m.task.status === 'open')],
     ['Closed', rows.filter((m) => m.task.status !== 'open')],
   ];
   return (
     <List
-      title="Risk"
-      path={`${BASE}/disputes`}
-      tabs={riskTabs}
-      className="co"
-      state={state}
+      {...useHead('disputes')}
+      actions={<PageOwner page="risk" />}
+      state={readState(q, !rows.length)}
       onRetry={() => void q.refetch()}
       empty={{ title: 'No disputes' }}
       sections={groups
@@ -557,7 +570,6 @@ function OneRisk({ id, panel }: { id: string; panel?: string }) {
   const q = useQuery(riskQuery(id));
   const open = useDo('company.openPanel');
   const d = q.data;
-  const state = q.isPending ? 'loading' : q.isError ? 'fault' : 'ready';
   return (
     <Record
       title={d?.risk.label ?? 'Risk'}
@@ -578,7 +590,7 @@ function OneRisk({ id, panel }: { id: string; panel?: string }) {
           </PageMore>
         )
       }
-      state={state}
+      state={readState(q)}
       onRetry={() => void q.refetch()}
       facts={d && <RiskFacts d={d} />}
       figures={

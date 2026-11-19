@@ -189,7 +189,10 @@ describe('Mail instructions', () => {
     );
     queryClient.setQueryData(mailboxesQuery.queryKey, [{ address: 'help@example.test', agent_instructions: true }]);
     show(<MailPage box="help@example.test" view="instructions" />, '/threads/mail?box=help%40example.test&view=instructions');
-    expect((await screen.findAllByTitle('Instructions')).find((el) => el.tagName === 'A')?.getAttribute('href')).toBe('/threads/mail?box=help%40example.test&view=instructions');
+    // The reading column draws while the list still loads: wait for the row.
+    await waitFor(() =>
+      expect(screen.getAllByTitle('Instructions').find((el) => el.tagName === 'A')?.getAttribute('href')).toBe('/threads/mail?box=help%40example.test&view=instructions'),
+    );
     expect(await screen.findByText('within a day')).toBeTruthy();
   });
 });

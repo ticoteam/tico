@@ -3,22 +3,23 @@ import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { run } from '@/actions';
 import { ApiError } from '@/api/client';
-import { Conversation } from '@/conversation';
+import { Conversation, MessageBones } from '@/conversation';
 import { useActor } from '@/data';
 import { Icon } from '@/kit/Icon';
+import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
 import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
 import { Document, type PageState, type PageTab } from '@/pagekinds';
-import { whoHref } from '@/features/team/exports';
+import { whoHref } from '@/features/team/routing';
 import { Decision } from './Answer';
 import { AddMenu, Details, type Adding } from './Details';
 import type { TaskSearch } from './exports';
 import { FileView } from './FileView';
-import { FlowCover } from './FlowCover';
 import { FlowSteps, FlowTop, MoreMenu, WhereLine } from './Head';
 import { defaultTab, DETAILS, failedToast, tabAddress, tabsOf, type TaskTab } from './model';
-import { Face, FlowMark } from './parts';
+import { FlowMark } from '@/kit/FlowMark';
+import { Face } from './parts';
 import { taskDetailQuery, taskRefQuery, type TaskData } from './queries';
 import { PageView, useVersions, VersionBar } from './Versions';
 import './task.css';
@@ -108,6 +109,10 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   const onAt = (n: number) => setStep({ key, at: n });
   const address = tabAddress(t, on, flow);
   const details = on === DETAILS;
+  // The page alone: the sheets beside it fold (the shell's own keys unfold them).
+  const expand = () => {
+    for (const sheet of ['tico', 'menu', 'list'] as const) void run('shell.fold', { sheet, folded: true }, { via: 'click' });
+  };
   const rename = async (title: string) => {
     const r = await run('task.rename', { task: t.id, title }, { via: 'click' });
     if (!r.ok) toast(failedToast(r));
@@ -140,14 +145,16 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       more={<MoreMenu t={t} flow={flow} />}
       tabs={pageTabs}
       tabsAfter={
-        details && !file ? <AddMenu onAdding={setAdding} /> : versions ? <VersionBar task={t.id} vs={versions} at={at} onAt={onAt} /> : undefined
+        <>
+          {details && !file ? <AddMenu onAdding={setAdding} /> : versions && <VersionBar task={t.id} vs={versions} at={at} onAt={onAt} />}
+          <IconButton icon="expand" label="Expand" size="sm" className="tv-expand" onClick={expand} />
+        </>
       }
       framed
       body={
         <div className="tv-view">
           {body}
           <Decision t={t} flow={flow} dock />
-          {flow && <FlowCover />}
         </div>
       }
     />
@@ -167,7 +174,7 @@ export interface TaskChatProps {
 export function TaskChat({ task, flow = false }: TaskChatProps) {
   const { t } = useTask(task);
   const owner = useActor(t?.owner_id);
-  if (!t) return null;
+  if (!t) return <MessageBones />;
   const name = owner?.name ?? 'Teammate';
   return (
     <>

@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { loadTask, TaskPage, taskSearch } from '@/features/task/exports';
+import { TaskPage } from '@/features/task/exports';
+import { loadTask, taskSearch } from '@/features/task/routing';
 
 /* `/tasks/<pipeline>/<n>`: the task, on the page that waits on the person (or its first). */
 export const Route = createFileRoute('/tasks/$pipeline/$task/')({

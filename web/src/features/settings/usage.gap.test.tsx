@@ -8,11 +8,23 @@ import { run } from '@/actions/run';
 import { queryClient } from '@/data';
 import { agentsQuery } from '@/features/team/exports';
 import { Toasts } from '@/kit/Toast';
-import { Gateway } from './Gateway';
-import { agentUsageQuery, billingQuery, gatewayQuery, historyFor, limitsQuery, taskCapsQuery, usageQuery } from './queries';
+import { agentUsageQuery, billingQuery, historyQuery, limitsQuery, taskCapsQuery, usageQuery } from './queries';
 import { SettingsPage } from './SettingsPage';
-import { UsagePage, usageCsv } from './Usage';
+import { UsagePage } from './Usage';
 
+// jsdom has no layout: the list draws every row, and End stands for reaching its end.
+vi.mock('@/kit/VirtualList', () => ({
+  VirtualList: <T,>({ items, getKey, renderItem, label, onReachEnd }: { items: readonly T[]; getKey: (t: T) => string; renderItem: (t: T, i: number) => ReactNode; label?: string; onReachEnd?: () => void }) => (
+    <div role="list" aria-label={label}>
+      {items.map((t, i) => (
+        <div key={getKey(t)}>{renderItem(t, i)}</div>
+      ))}
+      <button type="button" onClick={onReachEnd}>
+        End
+      </button>
+    </div>
+  ),
+}));
 vi.mock('@/search', () => ({ SearchDialog: () => null }));
 vi.mock('@/tico/dot', () => ({ Dot: () => null, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
@@ -115,109 +127,29 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-describe('History: kinds, older pages, runs and changes', () => {
-  it('the kind filter reads that kind, and its CSV follows @s1080', async () => {
-    serve((url) => (url.includes('kind=decision') ? ok({ items: [{ id: 'h2', at: '2026-11-18T10:00:00Z', actor: 'human:p1', kind: 'decision', subject: 'Ship it' }], names: { 'human:p1': 'Ana Sample' } }) : ok({})));
-    queryClient.setQueryData(historyFor().queryKey, { items: [{ id: 'h1', at: '2026-11-18T09:00:00Z', actor: 'human:p1', kind: 'task', subject: 'Plan the launch', result: 'Done' }], names: { 'human:p1': 'Ana Sample' } });
-    show(<SettingsPage section="history" />, '/settings/history');
-    expect(await screen.findByTitle('Ana Sample, Plan the launch: Done')).toBeTruthy();
-    await pick(screen.getByRole('combobox', { name: 'Kind' }), /^Decisions$/);
-    expect(await screen.findByTitle('Ana Sample, Ship it')).toBeTruthy();
-    expect(read.some((u) => u.startsWith('/api/v2/history?') && u.includes('kind=decision'))).toBe(true);
-    expect(screen.getByRole('link', { name: 'Download CSV' }).getAttribute('href')).toBe('/api/v2/history.csv?kind=decision');
-  });
-
-  it('Show older reads the next page by its cursor @s1080', async () => {
+describe('History: older pages', () => {
+  it('reads the next page by its cursor when the list reaches its end @s1080', async () => {
     serve((url) => (url.includes('before=c1') ? ok({ items: [{ id: 'h0', at: '2026-11-01T09:00:00Z', actor: 'human:p1', kind: 'task', subject: 'Older work' }], names: { 'human:p1': 'Ana Sample' }, next: null }) : ok({})));
-    queryClient.setQueryData(historyFor().queryKey, { items: [{ id: 'h1', at: '2026-11-18T09:00:00Z', actor: 'human:p1', kind: 'task', subject: 'New work', result: '' }], names: { 'human:p1': 'Ana Sample' }, next: 'c1' } as never);
+    queryClient.setQueryData(historyQuery.queryKey, { items: [{ id: 'h1', at: '2026-11-18T09:00:00Z', actor: 'human:p1', kind: 'task', subject: 'New work', result: '' }], names: { 'human:p1': 'Ana Sample' }, next: 'c1' } as never);
     show(<SettingsPage section="history" />, '/settings/history');
-    fireEvent.click(await screen.findByRole('button', { name: 'Show older' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'End' }));
     expect(await screen.findByTitle('Ana Sample, Older work')).toBeTruthy();
     expect(screen.getByTitle('Ana Sample, New work')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Show older' })).toBeNull();
-  });
-
-  it('Runs lists each run with its result and log @s1080', async () => {
-    serve((url) =>
-      url === '/api/runs'
-        ? ok([
-            { id: 'r1', employee: 'builder', state: 'done', exit: 0, finished_at: '2026-11-18T10:00:00Z', cost_usd: 0.42, duration_s: 75 },
-            { id: 'r2', employee: 'builder', state: 'failed', exit: 1, outcome: 'Timed out', finished_at: '2026-11-18T11:00:00Z' },
-          ])
-        : ok({}),
-    );
-    queryClient.setQueryData(historyFor().queryKey, { items: [], names: {} });
-    show(<SettingsPage section="history" />, '/settings/history');
-    fireEvent.click(await screen.findByRole('button', { name: 'Runs' }));
-    expect(await screen.findByTitle('builder, Done')).toBeTruthy();
-    expect(screen.getByTitle('builder, Timed out').className).toContain('is-bad');
-    expect(within(screen.getByTitle('builder, Done')).getByRole('link', { name: 'Log' }).getAttribute('href')).toBe('/api/runs/r1/log');
-  });
-
-  it('Undo sends the reverse against the revision; Tico may undo a model change but not an owners one @s1080', async () => {
-    const change = (id: string, field: string) => ({ id, bot: 'builder', field, actor: 'human:p1', created_at: '2026-11-18T10:00:00Z', can_undo: true });
-    serve((url, method) =>
-      url.startsWith('/api/v2/settings/history?')
-        ? ok({ changes: [change('c1', 'owners'), change('c2', 'model')], next_before: null })
-        : url === '/api/employees'
-          ? ok([AGENT])
-          : method === 'POST'
-            ? ok({ undone: true, bot: 'builder' })
-            : ok({}),
-    );
-    queryClient.setQueryData(historyFor().queryKey, { items: [], names: {} });
-    show(<SettingsPage section="history" />, '/settings/history');
-    fireEvent.click(await screen.findByRole('button', { name: 'Changes' }));
-    const row = await screen.findByTitle('builder · who it works for');
-    fireEvent.click(within(row).getByRole('button', { name: 'Undo' }));
-    await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/settings/history/c1/undo', method: 'POST', body: { expected_revision: 7 } }));
-    expect(await run('settings.undoChange', { change: 'c1' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect(await run('settings.undoChange', { change: 'c2' }, { via: 'tico' })).toMatchObject({ ok: true });
-    expect(sent.map((s) => s.url)).toEqual(['/api/v2/settings/history/c1/undo', '/api/v2/settings/history/c2/undo']);
+    expect(read.filter((u) => u.includes('before=')).length).toBe(1);
   });
 });
 
-describe('Usage › Spend: filters, a custom range, CSV', () => {
-  it('the filter narrows the read by a dimension @s1086', async () => {
-    serve(() => ok({ from: '', to: '', totals: FIG, rows: [], departments: ['Eng', 'Ops'], dimensions: { model: ['haiku', 'opus'] }, dimension_labels: {} }));
+describe('Usage › Spend: a filter', () => {
+  it('the filter narrows the read by a team or a model, nothing else @s1086', async () => {
+    serve(() => ok({ from: '', to: '', totals: FIG, rows: [], departments: ['Eng', 'Ops'], dimensions: { model: ['haiku', 'opus'], harness: ['claude', 'codex'] }, dimension_labels: {} }));
     seedUsage();
     show(<UsagePage search={{}} />, '/company/usage');
     fireEvent.click(await screen.findByRole('button', { name: 'Filter' }));
+    expect(screen.queryByRole('combobox', { name: 'Harness' })).toBeNull();
     await pick(await screen.findByRole('combobox', { name: 'Model' }), /^haiku$/);
     await waitFor(() => expect(read.some((u) => u.includes('model=haiku') && u.includes('group=bot'))).toBe(true));
     expect(await screen.findByRole('button', { name: 'Filter, 1 on', hidden: true })).toBeTruthy();
-  });
-
-  it('Custom shows two days and reads that span @s1086', async () => {
-    serve(() => ok({ from: '', to: '', totals: FIG, rows: [] }));
-    seedUsage();
-    show(<UsagePage search={{}} />, '/company/usage');
-    fireEvent.click(await screen.findByRole('button', { name: 'Custom' }));
-    expect(await screen.findByText('From')).toBeTruthy();
-    expect(screen.getByText('To')).toBeTruthy();
-    await waitFor(() => expect(read.some((u) => /from=\d{4}-\d\d-\d\d&to=\d{4}-\d\d-\d\d/.test(u) && u.includes('group=bot'))).toBe(true));
-  });
-
-  it('Download CSV is in ⋯ and quotes what needs it @s1086', async () => {
-    serve(() => ok({ from: '', to: '', totals: FIG, rows: [] }));
-    const made = vi.fn((_b: Blob) => 'blob:usage');
-    const was = { make: URL.createObjectURL, revoke: URL.revokeObjectURL };
-    URL.createObjectURL = made;
-    URL.revokeObjectURL = vi.fn();
-    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-    try {
-      seedUsage();
-      show(<UsagePage search={{}} />, '/company/usage');
-      fireEvent.click(await screen.findByRole('button', { name: 'More' }));
-      fireEvent.click(await screen.findByRole('menuitem', { name: 'Download CSV' }));
-      await waitFor(() => expect(made).toHaveBeenCalledTimes(1));
-      expect(click).toHaveBeenCalledTimes(1);
-    } finally {
-      click.mockRestore();
-      URL.createObjectURL = was.make;
-      URL.revokeObjectURL = was.revoke;
-    }
-    expect(usageCsv(['bot', 'name'], [{ bot: 'a', name: 'Ann, "B"' }])).toBe('bot,name\na,"Ann, ""B"""\n');
+    expect(screen.queryByRole('button', { name: 'Custom' })).toBeNull();
   });
 });
 
@@ -230,7 +162,7 @@ describe('Usage › Limits: company, teams, Add limit, the panel', () => {
     expect((await screen.findByTitle('Whole company')).getAttribute('href')).toContain('open=pool');
     expect(screen.getByTitle('Product')).toBeTruthy();
     const design = screen.getByTitle('Design').querySelector('.row-title') as HTMLElement;
-    expect(design.style.paddingInlineStart).toBe('14px');
+    expect(design.style.getPropertyValue('--depth')).toBe('1');
     fireEvent.click(screen.getByRole('button', { name: 'Add limit' }));
     const dlg = await screen.findByRole('dialog', { name: 'Add limit' });
     await pick(within(dlg).getByRole('combobox', { name: 'For' }), /^Design/);
@@ -254,6 +186,14 @@ describe('Usage › Limits: company, teams, Add limit, the panel', () => {
       ['/api/v2/usage/limits/builder', { monthly_usd: 5 }],
       [expect.stringContaining('/api/v2/usage/limits'), expect.objectContaining({ monthly_usd: 25 })],
     ]);
+  });
+
+  it('Count plan runs is a switch; Tico may turn it on, never off @s1087', async () => {
+    serve(() => ok({}));
+    seedLimits();
+    expect(await run('usage.countPlanRuns', { on: false }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(await run('usage.countPlanRuns', { on: true }, { via: 'tico' })).toMatchObject({ ok: true });
+    expect(sent.map((x) => [x.url, x.body])).toEqual([['/api/v2/usage/limits', { count_subscription: true }]]);
   });
 
   it('an opened agent shows where its money went, its models and its task caps @s368 @s1087', async () => {
@@ -308,7 +248,7 @@ describe('Usage › Limits: company, teams, Add limit, the panel', () => {
   });
 });
 
-describe('Billing: months, days, statement, credit', () => {
+describe('Billing: months, statement, credit', () => {
   const BILL = {
     state: 'ok',
     month: '2026-11',
@@ -318,43 +258,32 @@ describe('Billing: months, days, statement, credit', () => {
     cloud: { plan: 'Team', access: 'frozen', billing_url: 'https://billing.example.test/pay' },
     credits: [],
     usage: [
-      {
-        period: '2026-11-03',
-        total_micros: 5_000_000,
-        lines: [
-          { product: 'gateway', sku: 'opus-5:in', amount_micros: 3_000_000 },
-          { product: 'gateway', sku: 'opus-5:out', amount_micros: 1_000_000 },
-          { product: 'hosting', amount_micros: 1_000_000 },
-        ],
-      },
+      { period: '2026-11-03', total_micros: 5_000_000 },
       { period: '2026-11-04', total_micros: 2_000_000 },
     ],
     statement: { opening_micros: 10_000_000, credits_by_source: { grant: 5_000_000 }, debits_by_product: { gateway: 4_000_000 }, expired_micros: 0, closing_micros: 11_000_000 },
   };
 
-  it('sums the month, splits a day by product and model, reads its hours, and links the statement and credit @s1081', async () => {
-    serve((url) => (url.startsWith('/api/v2/billing/usage?day=2026-11-03') ? ok({ state: 'ok', hours: [{ period: '2026-11-03T14', total_micros: 5_000_000 }] }) : ok({})));
+  it('sums the month, and links the statement and credit @s1081', async () => {
+    serve(() => ok({}));
     queryClient.setQueryData(billingQuery.queryKey, BILL);
     show(<SettingsPage section="billing" />, '/settings/billing');
     expect(await screen.findByText('$7.00')).toBeTruthy();
     expect(screen.getByText('Out of credit')).toBeTruthy();
-    fireEvent.click(screen.getByTitle('Tue, Nov 3'));
-    expect(await screen.findByTitle('Tico models, opus-5')).toBeTruthy();
-    expect(within(screen.getByTitle('Tico models, opus-5')).getByText('$4.00')).toBeTruthy();
-    expect(screen.getByTitle('Hosting')).toBeTruthy();
-    expect(await screen.findByTitle('2 PM UTC')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Download CSV' }).getAttribute('href')).toBe('/api/v2/billing/statements/2026-11.csv');
     expect(screen.getByRole('link', { name: 'Add credit' }).getAttribute('href')).toBe('https://billing.example.test/pay');
     expect(screen.getByText('Credit, Grant')).toBeTruthy();
   });
 
-  it('another month reads that month @s1081', async () => {
+  it('another month reads that month, its total and its statement @s1081', async () => {
     serve(() => ok({ ...BILL, month: '2026-10', usage: [], statement: { ...BILL.statement, closing_micros: 1 } }));
     queryClient.setQueryData(billingQuery.queryKey, BILL);
     show(<SettingsPage section="billing" />, '/settings/billing');
     await pick(await screen.findByRole('combobox', { name: 'Month' }), /October 2026/);
     await waitFor(() => expect(read).toContain('/api/v2/billing?month=2026-10'));
-    expect(await screen.findByText('No usage this month')).toBeTruthy();
+    const figures = await screen.findByRole('group', { name: 'Billing' });
+    expect(await within(figures).findByText('October 2026', { selector: '.widget-title' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Download CSV' }).getAttribute('href')).toBe('/api/v2/billing/statements/2026-10.csv');
   });
 
   it('a company on its own servers adds credit by talking to us @s1081', async () => {
@@ -364,35 +293,5 @@ describe('Billing: months, days, statement, credit', () => {
     const link = await screen.findByRole('link', { name: 'Add credit' });
     expect(link.getAttribute('href')).toBe('https://book.example.test');
     expect(screen.queryByRole('link', { name: 'Change plan' })).toBeNull();
-  });
-});
-
-describe('Tico Gateway: status, Check now, Clear key, Connect automatically', () => {
-  const GW = { connected: true, url: '', default_url: 'https://gw.example.test', editable: true, preview: 'abc…xyz', revision: 2, working: true, message: 'Key works', auto_off: true };
-
-  it('shows the status and checks now @s710', async () => {
-    serve((url) => (url.endsWith('/gateway/check') ? ok({ ...GW, message: 'Checked just now' }) : ok(GW)));
-    queryClient.setQueryData(gatewayQuery.queryKey, GW);
-    show(<Gateway />, '/settings/models');
-    expect(await screen.findByText('Key works')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Check now' }));
-    await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/providers/gateway/check', method: 'POST' }));
-    expect(await screen.findAllByText('Checked just now')).not.toHaveLength(0);
-  });
-
-  it('Clear key asks first; Connect automatically enrolls; Tico may do neither @s710', async () => {
-    serve(() => ok({ ...GW, connected: false, preview: '' }));
-    queryClient.setQueryData(gatewayQuery.queryKey, GW);
-    show(<Gateway />, '/settings/models');
-    fireEvent.click(await screen.findByRole('button', { name: 'Clear key' }));
-    const dlg = await screen.findByRole('dialog', { name: 'Clear the gateway key?' });
-    expect(sent).toHaveLength(0);
-    fireEvent.click(within(dlg).getByRole('button', { name: 'Clear key' }));
-    await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/providers/gateway', method: 'DELETE' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Connect automatically' }));
-    await waitFor(() => expect(sent[1]).toMatchObject({ url: '/api/v2/providers/gateway/automatic', method: 'POST' }));
-    expect(await run('settings.clearGateway', {}, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect(await run('settings.connectGateway', {}, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect(await run('settings.checkGateway', {}, { via: 'tico' })).toMatchObject({ ok: true });
   });
 });

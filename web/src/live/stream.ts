@@ -8,6 +8,7 @@ import { refetchQuiet } from '@/data/optimistic';
 import { queryClient } from '@/data/query-client';
 import { tabId } from '@/lib/tab';
 import { dropFrame, push, setSink } from './frame';
+import { installNotices } from './notices';
 import { dispatch, installPatchers, resetPatchState } from './patch';
 
 // One EventSource for the whole app on GET /api/v2/events (backend/events.py). Frames are `id: <seq>`,
@@ -342,6 +343,7 @@ export function startLive(): void {
   started = true;
   setStatus('connecting');
   installPatchers();
+  installNotices();
   setSink(dispatch);
   document.addEventListener('visibilitychange', onVisibility);
   window.addEventListener('pageshow', onPageShow);

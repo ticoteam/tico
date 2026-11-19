@@ -41,7 +41,7 @@ describe('PhoneCards', () => {
     render(cards());
     fireEvent.click(screen.getByRole('button', { name: 'Open Tico' }));
     expect(screen.getByRole('dialog', { name: 'Tico' })).toBeTruthy();
-    expect(document.querySelector('.ph')?.getAttribute('data-card')).toBe('tico-half');
+    expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('tico-half');
     window.history.back();
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
@@ -99,5 +99,56 @@ describe('PhoneCards', () => {
     expect(router.state.location.search).toEqual({ chat: 'agent:builder' });
     expect(location.search).toBe('?chat=agent%3Abuilder');
     expect(screen.getByRole('dialog', { name: 'Birch Builder' })).toBeTruthy();
+  });
+});
+
+describe('the lips drawn down by a scroll', () => {
+  const scroller = (height: number) => {
+    const el = screen.getByTestId('scroller');
+    Object.defineProperty(el, 'scrollHeight', { value: height, configurable: true });
+    Object.defineProperty(el, 'clientHeight', { value: 700, configurable: true });
+    return (y: number) => {
+      el.scrollTop = y;
+      fireEvent.scroll(el);
+    };
+  };
+  const drawn = () => document.querySelector<HTMLElement>('.phone')!.style.getPropertyValue('--c');
+
+  it("come back at the page's end, so a thread opened at its newest message keeps the menu's lip whole", async () => {
+    render(<PhoneCards page={<div data-testid="scroller" />} tico={<p>Tico's chat</p>} menu={<p>Menu</p>} />);
+    const to = scroller(2000);
+    to(100);
+    to(200);
+    await waitFor(() => expect(drawn()).toBe('1'));
+    to(1300);
+    await waitFor(() => expect(drawn()).toBe('0'));
+  });
+
+  it('come back on another page, which may be too short to scroll them back', async () => {
+    window.history.replaceState(null, '', '/threads');
+    function Shell() {
+      const r = useRouter();
+      return (
+        <PhoneCards
+          page={
+            <div data-testid="scroller">
+              <button type="button" onClick={() => void r.navigate({ to: '/threads/t1' as never })}>
+                Open thread
+              </button>
+            </div>
+          }
+          tico={<p>Tico's chat</p>}
+          menu={<p>Menu</p>}
+        />
+      );
+    }
+    render(<RouterProvider router={createRouter({ routeTree: createRootRoute({ component: Shell }) })} />);
+    await screen.findByRole('button', { name: 'Open thread' });
+    const to = scroller(5000);
+    to(100);
+    to(200);
+    await waitFor(() => expect(drawn()).toBe('1'));
+    fireEvent.click(screen.getByRole('button', { name: 'Open thread' }));
+    await waitFor(() => expect(drawn()).toBe('0'));
   });
 });

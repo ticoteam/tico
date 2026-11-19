@@ -9,12 +9,11 @@ import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
-import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
 import { List, PageMore, Section, SidePanel, type PageState, type PageTab } from '@/pagekinds';
 import { Foot, trimmed, useGo } from './AddTool';
-import { Face, Find, KindGlyph, OwnerButton, press, Who } from './parts';
+import { Face, Find, KindGlyph, OwnerButton, press, refused, Who } from './parts';
 import { archivedDocsQuery, docsListQuery, docsSearchQuery, IMPORT_MAX, IMPORT_TYPES, sourceDocsQuery, sourcesQuery, type DocHit, type DocRow } from './queries';
 import type { DocSource } from '@/api/schema';
 import type { DocsSearch } from './search';
@@ -99,7 +98,7 @@ function OwnDocs({ search }: { search: DocsSearch }) {
   }
 
   let state: PageState = 'ready';
-  if (docs.isError) state = 'fault';
+  if (docs.isError) state = refused(docs.error);
   else if (!docs.data) state = 'loading';
   else if (!docs.data.docs.length && !hits?.length) state = 'empty';
 
@@ -112,7 +111,7 @@ function OwnDocs({ search }: { search: DocsSearch }) {
       search={<Find label="Search docs" value={search.q} onFind={(q) => void press('docs.list', { q, archived: archived || undefined })} />}
       actions={
         <>
-          <OwnerButton page="docs" phone />
+          <OwnerButton page="docs" />
           <Button variant="primary" icon="plus" onClick={newDoc} data-target="docs:new">
             New doc
           </Button>
@@ -167,7 +166,6 @@ function DocLine({ d, archived }: { d: DocRow; archived: boolean }) {
       <span className="lead" />
       <span className="doc-name">
         <span className="row-title">{d.title}</span>
-        {d.locked && <Pill>Locked</Pill>}
       </span>
       <span className="tie">{under && <span>{under}</span>}</span>
       <Who actor={d.updated_by_id || null} name={d.updated_by_name} />
@@ -219,7 +217,7 @@ function SourcesPage({ panel }: { panel?: string }) {
   const [adding, setAdding] = useState(false);
 
   let state: PageState = 'ready';
-  if (sources.isError) state = 'fault';
+  if (sources.isError) state = refused(sources.error);
   else if (!sources.data) state = 'loading';
   else if (!list.length) state = 'empty';
 
@@ -231,7 +229,7 @@ function SourcesPage({ panel }: { panel?: string }) {
       tabs={tabs(docs.data?.docs.length, sources.data?.sources.length)}
       actions={
         <>
-          <OwnerButton page="docs" phone />
+          <OwnerButton page="docs" />
           <Button variant="primary" icon="plus" onClick={() => setAdding(true)} data-target="sources:new">
             Connect
           </Button>

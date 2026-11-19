@@ -133,6 +133,14 @@ describe('one open task', () => {
     expect(screen.queryByText('Spec approved')).toBeNull();
   });
 
+  it('ends the tab row with Expand; the due date is a Details fact even before one is set', async () => {
+    serve(base);
+    show(<TaskPage task="12" pipeline="p1" tab="details" />, '/tasks/p1/12/details');
+    expect(await screen.findByRole('button', { name: 'Expand' })).toBeTruthy();
+    const due = document.querySelector('[data-target="task-due:t1"]') as HTMLElement;
+    expect(within(due).getByRole('button', { name: 'None' })).toBeTruthy();
+  });
+
   it('inside Flow, keeps the tab in the search @s126', async () => {
     serve(base);
     show(<TaskPage task="12" tab="spec" flow />, '/flow/12?tab=spec');
@@ -199,8 +207,9 @@ describe('one open task', () => {
     });
     show(<TaskPage task="12" pipeline="p1" tab="details" />, '/tasks/p1/12/details');
     fireEvent.click(await screen.findByRole('button', { name: 'Facts' }));
-    // Part of, then Tags: neither is set yet.
-    fireEvent.click((await screen.findAllByRole('button', { name: 'None' }))[1] as HTMLElement);
+    // Tags is not set yet.
+    await screen.findAllByRole('button', { name: 'None' });
+    fireEvent.click(within(document.querySelector('[data-target="task-tags:t1"]') as HTMLElement).getByRole('button', { name: 'None' }));
     const tags = await screen.findByRole('textbox', { name: 'Tags' });
     fireEvent.change(tags, { target: { value: 'bug, checkout, bug' } });
     fireEvent.keyDown(tags, { key: 'Enter' });

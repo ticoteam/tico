@@ -147,7 +147,7 @@ describe('Details: the facts', () => {
     await facts();
     fireEvent.click(await screen.findByRole('button', { name: 'Follow' }));
     await waitFor(() => expect(sent.at(-1)).toEqual({ method: 'PUT', url: '/api/v2/tasks/t1/followers', body: { following: true } }));
-    expect(await screen.findByRole('button', { name: 'Following' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Unfollow' })).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add someone' }));
     const dialog = await screen.findByRole('dialog', { name: 'Add someone' });

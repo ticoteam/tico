@@ -279,6 +279,17 @@ export const productUpdate = defineAction({
   target: ({ product, field }) => ({ kind: 'fact', id: `${product}:${field}` }),
 });
 
+/** Risk as its risks, or as one table of disputes: the switch in Risk's head. */
+export const riskView = defineAction({
+  id: 'risk.view',
+  title: 'Show Risk as risks or as disputes',
+  kind: 'view',
+  input: s.object({ view: s.oneOf(['risks', 'disputes'] as const) }),
+  run: ({ router }, { view }) => go(router, view === 'disputes' ? '/company/risk/disputes' : '/company/risk'),
+  did: ({ view }) => (view === 'disputes' ? 'Showed disputes' : 'Showed risks'),
+  target: () => ({ kind: 'page', id: '/company/risk' }),
+});
+
 export const riskCreate = defineAction({
   id: 'risk.create',
   title: 'Add a risk',
@@ -303,9 +314,6 @@ export const riskUpdate = defineAction({
 
 const versionN = s.number({ int: true, min: 1 });
 const nav = (router: AnyRouter, to: string, search: Record<string, unknown> = {}) => router.navigate({ to, search });
-/** Sets one key of this page's address, keeping the rest. */
-const setSearch = (router: AnyRouter, patch: Record<string, unknown>) =>
-  router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, ...patch }) });
 
 export const strategyOpenVersion = defineAction({
   id: 'strategy.openVersion',
@@ -325,16 +333,6 @@ export const brandOpenVersion = defineAction({
   run: ({ router }, { v }) => nav(router, BRAND, v ? { v } : {}),
   did: ({ v }) => (v ? `Opened v${v}` : 'Opened the latest version'),
   target: () => ({ kind: 'page', id: BRAND }),
-});
-
-/** Strategy or the brand book: mark what changed from the version before, or show the clean page. */
-export const markChanges = defineAction({
-  id: 'strategy.markChanges',
-  title: 'Mark what changed from the version before',
-  kind: 'view',
-  input: s.object({ on: s.boolean() }),
-  run: ({ router }, { on }) => setSearch(router, { compare: on || undefined }),
-  did: ({ on }) => (on ? 'Marked the changes' : 'Cleared the marks'),
 });
 
 export const brandEdit = defineAction({
@@ -528,15 +526,12 @@ import type { Schema } from '@/actions';
 import {
   addMatter,
   addMatterFile,
-  checkCopy,
-  citeInBet,
   decideBrandProposal,
   decideNeed,
   editRisk,
   listValues,
   markDate,
   productsQuery,
-  researchSegment,
   riskQuery,
   setProductList,
   updateProduct as renameProduct,
@@ -679,36 +674,6 @@ export const brandDecide = defineAction({
   run: (_ctx, { proposal, decision }) => decideBrandProposal(proposal, decision),
   did: ({ decision }) => (decision === 'confirm' ? 'Added it to the draft' : 'Declined it'),
   target: () => ({ kind: 'page', id: BRAND }),
-});
-
-/** Copy against the published book: the words it avoids, names spelled wrong, claims it never makes. */
-export const brandCheck = defineAction({
-  id: 'brand.check',
-  title: 'Check copy against the brand book',
-  kind: 'view',
-  input: s.object({ text: s.string({ min: 1, max: 20000 }) }),
-  run: (_ctx, { text }) => checkCopy(text),
-  did: (_i, hits) => (hits?.length ? `${hits.length} to fix` : 'Nothing to fix'),
-});
-
-export const marketResearch = defineAction({
-  id: 'market.research',
-  title: 'Ask the Librarian to research a market segment',
-  kind: 'change',
-  input: s.object({ segment: id, instructions: s.string({ min: 1, max: 4000 }) }),
-  run: (_ctx, { segment, instructions }) => researchSegment(segment, instructions.trim()),
-  did: () => 'Asked the Librarian',
-  target: ({ segment }) => ({ kind: 'segment', id: segment }),
-});
-
-export const marketCite = defineAction({
-  id: 'market.cite',
-  title: 'Cite a market segment in a bet',
-  kind: 'change',
-  input: s.object({ bet: id, segment: id }),
-  run: (_ctx, { bet, segment }) => citeInBet(bet, segment),
-  did: () => 'Cited it',
-  target: ({ segment }) => ({ kind: 'segment', id: segment }),
 });
 
 // ---------------------------------------------------------------- a matter's own facts

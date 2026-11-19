@@ -1,9 +1,15 @@
-import { Link } from '@tanstack/react-router';
+import { useQuery } from '@tanstack/react-query';
+import { Link, useLocation } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { refusal as shared, useAction, type Result } from '@/actions';
+import { ApiError } from '@/api/client';
 import { useActor } from '@/data';
 import { Avatar, type AvatarSize } from '@/kit/Avatar';
+import { OwnerButton } from '@/kit/OwnerButton';
 import { toast, type ToastInput } from '@/kit/Toast';
+import { chatAddress } from '@/lib';
+import type { PageState } from '@/pagekinds';
+import { pageOwnersQuery } from './queries';
 
 /* The small parts Company, Strategy, Products and Risk share, ported from pages/3-company/company.js and
    pages/10-records/records.js. */
@@ -45,6 +51,39 @@ export function PanelLink({ panel, className, title, children, ...rest }: { pane
       {children}
     </Link>
   );
+}
+
+/** A read's page state. A refusal (403) is no access, without Try again; a read paused offline with nothing to show
+    is a fault with Try again, not a skeleton that never ends. */
+export const readState = (q: { isPending: boolean; isError: boolean; error: unknown; fetchStatus: string }, empty = false): PageState =>
+  q.isError
+    ? q.error instanceof ApiError && q.error.status === 403
+      ? 'no-access'
+      : 'fault'
+    : q.isPending
+      ? q.fetchStatus === 'paused'
+        ? 'fault'
+        : 'loading'
+      : empty
+        ? 'empty'
+        : 'ready';
+
+/** The page owner's face in the head (Settings › Page owners): it opens their chat beside the page. Nothing when the
+    page has no owner. */
+export function PageOwner({ page }: { page: 'strategy' | 'goals' | 'products' | 'risk' }) {
+  const bot = useQuery(pageOwnersQuery).data?.[page]?.bot ?? null;
+  const actor = bot && !bot.includes(':') ? `bot:${bot}` : bot;
+  const who = useActor(actor);
+  // `chat` is the shell's, in no route's search schema: built as an address, it keeps the page's own search.
+  const href = useLocation({
+    select: (l) => {
+      const q = new URLSearchParams(l.searchStr);
+      if (actor) q.set('chat', chatAddress(actor, 'agent'));
+      return `${l.pathname}?${q.toString()}`;
+    },
+  });
+  if (!actor) return null;
+  return <OwnerButton name={who?.name ?? 'the owner'} kind="agent" hue={who?.hue} live={who?.working} href={href} target={`chat:${chatAddress(actor, 'agent')}`} />;
 }
 
 /** A refusal's toast: "Couldn't save", then the server's reason. A bare code is never shown, not even made readable. */

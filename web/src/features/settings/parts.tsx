@@ -1,8 +1,14 @@
+import { useQuery } from '@tanstack/react-query';
+import { useLocation } from '@tanstack/react-router';
 import { useSyncExternalStore, type ReactNode } from 'react';
 import { refusal, run } from '@/actions';
+import { useActor } from '@/data';
 import { Icon, type IconName } from '@/kit/Icon';
+import { OwnerButton } from '@/kit/OwnerButton';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
+import { chatAddress } from '@/lib';
+import { pageOwnersQuery } from './queries';
 
 /* The small parts every section shares, ported from pages/8-settings/settings.js: a line (label left, its control
    right), a switch line, a quiet verb, a mark and a word, a thin meter. Each control saves at once: no Save. */
@@ -23,6 +29,9 @@ const onVisibility = (fn: () => void) => {
 export function useVisible(): boolean {
   return useSyncExternalStore(onVisibility, () => document.visibilityState !== 'hidden', () => true);
 }
+
+/** What a section says to a member when its read is for owners and admins (the kind's no-access body). */
+export const NO_ACCESS = { text: 'Owners and admins only.' };
 
 /** The server said this read is for owners and admins. */
 export const isForbidden = (e: unknown) => (e as { status?: number } | null)?.status === 403;
@@ -104,4 +113,22 @@ export function micros(m: number): string {
   const sign = m < 0 ? '-' : '';
   const cents = Math.floor((Math.abs(m) + 5000) / 10000);
   return `${sign}$${Math.floor(cents / 100).toLocaleString('en-US')}.${String(cents % 100).padStart(2, '0')}`;
+}
+
+/** The page owner's face in the head (General › Page owners): it opens their chat beside the page. Nothing when the
+    page has no owner. The same as Company's (features/company/parts.tsx PageOwner); both belong in the kit. */
+export function PageOwner({ page }: { page: string }) {
+  const bot = useQuery(pageOwnersQuery).data?.[page]?.bot ?? null;
+  const actor = bot && !bot.includes(':') ? `bot:${bot}` : bot;
+  const who = useActor(actor);
+  // `chat` is the shell's, in no route's search schema: built as an address, it keeps the page's own search.
+  const href = useLocation({
+    select: (l) => {
+      const q = new URLSearchParams(l.searchStr);
+      if (actor) q.set('chat', chatAddress(actor, 'agent'));
+      return `${l.pathname}?${q.toString()}`;
+    },
+  });
+  if (!actor) return null;
+  return <OwnerButton name={who?.name ?? 'the owner'} kind="agent" hue={who?.hue} live={who?.working} href={href} target={`chat:${chatAddress(actor, 'agent')}`} />;
 }

@@ -1,7 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { filtersOf, pipelinesQuery, pipelineTasksQuery, TasksPage, validateTasksSearch } from '@/features/tasks/exports';
+import { TasksPage } from '@/features/tasks/exports';
+import { filtersOf, pipelinesQuery, pipelineTasksQuery, validateTasksSearch } from '@/features/tasks/routing';
 
-/** One pipeline: `?view=board|list|archived`, its filters and `?panel=pipeline` live in the address. */
+/** One pipeline: `?view=board|list|archived` and its filters live in the address. */
 export const Route = createFileRoute('/tasks/$pipeline/')({
   validateSearch: validateTasksSearch,
   loaderDeps: ({ search }) => ({ ...filtersOf(search), archived: search.view === 'archived' }),

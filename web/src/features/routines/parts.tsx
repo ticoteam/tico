@@ -1,18 +1,24 @@
-import { Link } from '@tanstack/react-router';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { Link, useLocation } from '@tanstack/react-router';
+import { useState, type ReactNode } from 'react';
 import { refusal, run } from '@/actions';
 import { useActor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
-import { Search } from '@/kit/Field';
+import { Empty } from '@/kit/Empty';
+import { SettledSearch } from '@/kit/Field';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon, type IconName } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
-import { useCards } from '@/kit/Popover';
+import { OwnerButton } from '@/kit/OwnerButton';
+import { SkeletonRows } from '@/kit/Skeleton';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
+import { VirtualList } from '@/kit/VirtualList';
+import { chatAddress } from '@/lib';
+import { pageOwnersQuery } from './queries';
 
 /* The pieces Routines, Rules and Listening share, ported from pages/3-company/rules.js: a word, a quiet verb, the rule
    row and its marks, a face for any owner id, and the press that says why a refusal happened. */
@@ -57,6 +63,47 @@ export const actorKey = (id: string | null | undefined): string | undefined => (
 
 /** The person or agent behind an owner id. */
 const useOwner = (id: string | null | undefined) => useActor(actorKey(id));
+
+/** A panel's own read: grey bars while it loads, then what did not load and Try again. Nothing once it has data. */
+export function PanelRead({ q, what }: { q: { isPending: boolean; isError: boolean; refetch: () => unknown }; what: string }) {
+  if (q.isError)
+    return (
+      <Empty icon="alert" title={`${what} did not load`}>
+        <Button variant="quiet" onClick={() => void q.refetch()}>
+          Try again
+        </Button>
+      </Empty>
+    );
+  return q.isPending ? <SkeletonRows rows={4} /> : null;
+}
+
+/** A section's rows; past 100 only what is on screen is drawn, in a scroller of its own. */
+export function Rows<T>({ items, getKey, draw, label }: { items: readonly T[]; getKey: (x: T) => string; draw: (x: T) => ReactNode; label: string }) {
+  if (items.length <= 100) return items.map(draw);
+  return <VirtualList className="rr-long" label={label} items={items} getKey={getKey} estimateSize={34} measure renderItem={draw} />;
+}
+
+/** The page owner's face in the head: it opens their chat beside the page. Nothing when the page has none. Kept on a
+    phone. */
+export function PageOwner({ page }: { page: string }) {
+  const bot = useQuery(pageOwnersQuery).data?.[page]?.bot ?? null;
+  const actor = bot && !bot.includes(':') ? `bot:${bot}` : bot;
+  const who = useActor(actor ?? undefined);
+  // `chat` is the shell's, in no route's search schema: built as an address, it keeps the page's own search.
+  const href = useLocation({
+    select: (l) => {
+      const q = new URLSearchParams(l.searchStr);
+      if (actor) q.set('chat', chatAddress(actor, 'agent'));
+      return `${l.pathname}?${q.toString()}`;
+    },
+  });
+  if (!actor) return null;
+  return (
+    <span className="rr-phone" data-phone>
+      <OwnerButton name={who?.name ?? 'the owner'} kind="agent" hue={who?.hue} live={who?.working} href={href} />
+    </span>
+  );
+}
 
 /** Their face, 22 unless asked; a gap the same size when the directory does not know them. */
 export function Face({ id, size = 22 }: { id: string | null | undefined; size?: 16 | 22 | 28 }) {
@@ -266,20 +313,5 @@ export const RemoveItem = ({ onSelect, disabled }: { onSelect: () => void; disab
 /** The page's search (rules.js head ctl): a button that opens the field on a computer, the field itself on a phone (the
     page kind gives it its own line under the head). The words go to the address a beat after typing stops. */
 export function Find({ label, value, onFind }: { label: string; value: string | undefined; onFind: (q: string | undefined) => void }) {
-  const cards = useCards();
-  const [open, setOpen] = useState(!!value);
-  const [words, setWords] = useState(value ?? '');
-  // Cleared or set from elsewhere (Tico, Back): the field follows the address.
-  const [seen, setSeen] = useState(value);
-  if (seen !== value) {
-    setSeen(value);
-    setWords(value ?? '');
-  }
-  useEffect(() => {
-    if (words.trim() === (value ?? '')) return;
-    const t = setTimeout(() => onFind(words.trim() || undefined), 250);
-    return () => clearTimeout(t);
-  }, [words, value, onFind]);
-  if (!open && !cards) return <IconButton icon="search" label="Search" onClick={() => setOpen(true)} />;
-  return <Search label={label} value={words} onValueChange={setWords} placeholder="Search" autoFocus={!cards} />;
+  return <SettledSearch label={label} value={value ?? ''} onSettle={(q) => onFind(q || undefined)} placeholder="Search" button="Search" />;
 }

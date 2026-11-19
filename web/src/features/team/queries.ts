@@ -17,7 +17,7 @@ import type {
   Task,
   TeammateAccessView,
 } from '@/api/schema';
-import { keys, queryClient, quietRoot, QUIET_STALE_MS, write } from '@/data';
+import { keys, queryClient, quietRoot, write } from '@/data';
 
 // Teammates, teams and computers have no live topic of their own (status lines come through the directory): read
 // again after the person's own writes, on reconnect, and when a page opens on a read older than a minute.
@@ -70,7 +70,6 @@ export interface AgentRow {
 export const agentsQuery = queryOptions({
   queryKey: ['team', 'agents'] as const,
   queryFn: ({ signal }) => api.get<AgentRow[]>('/api/employees', { signal }),
-  staleTime: QUIET_STALE_MS,
 });
 
 /** One agent (GET /api/v2/bots/{slug}): what it is on, why it cannot run, who it reports to. */
@@ -86,13 +85,14 @@ export interface AgentDetail {
   revision?: number;
   status?: { state?: string; focus?: string; task_id?: string | null } | null;
   cant_run?: { cause?: string; fix?: string } | null;
+  /** Where its conversation compacts, in tokens; null follows its model's default. */
+  compact_at?: number | null;
 }
 
 export const agentQuery = (slug: string) =>
   queryOptions({
     queryKey: ['team', 'agent', slug] as const,
     queryFn: ({ signal }) => api.get<AgentDetail>(`/api/v2/bots/${at(slug)}`, { signal }),
-    staleTime: QUIET_STALE_MS,
   });
 
 export interface PauseState {
@@ -105,7 +105,6 @@ export const pauseQuery = (slug: string) =>
   queryOptions({
     queryKey: ['team', 'pause', slug] as const,
     queryFn: ({ signal }) => api.get<PauseState>(`/api/v2/bots/${at(slug)}/pause-state`, { signal }),
-    staleTime: QUIET_STALE_MS,
   });
 
 export interface Instructions {
@@ -118,7 +117,6 @@ export const instructionsQuery = (slug: string) =>
   queryOptions({
     queryKey: ['team', 'instructions', slug] as const,
     queryFn: ({ signal }) => api.get<Instructions>(`/api/v2/bots/${at(slug)}/instructions`, { signal }),
-    staleTime: QUIET_STALE_MS,
   });
 
 export interface Rule {
@@ -163,7 +161,6 @@ export const rulesQuery = (slug: string) =>
         ...(r.external?.rules ?? []).map((x) => line(x, 'outside')),
       ];
     },
-    staleTime: QUIET_STALE_MS,
   });
 
 /** A run: GET /api/runs?bot= answers the agent's newest 200. */
@@ -183,7 +180,6 @@ export const runsQuery = (slug: string) =>
   queryOptions({
     queryKey: ['team', 'runs', slug] as const,
     queryFn: ({ signal }) => api.get<Run[]>(`/api/runs?${q({ bot: slug })}`, { signal }),
-    staleTime: QUIET_STALE_MS,
   });
 
 /** What it learned: its memory's commits (GET .../memory), newest first. */
@@ -191,6 +187,8 @@ export interface Learned {
   sha: string;
   subject: string;
   when: string;
+  /** The task it learned on, when the reader may see it (backend/memory_history.py source). */
+  source?: { task?: string; title?: string } | null;
 }
 
 export const learnedQuery = (slug: string) =>
@@ -198,7 +196,6 @@ export const learnedQuery = (slug: string) =>
     queryKey: ['team', 'learned', slug] as const,
     queryFn: async ({ signal }) =>
       (await api.get<{ updates?: Learned[] }>(`/api/v2/bots/${at(slug)}/memory?include_documents=false`, { signal })).updates ?? [],
-    staleTime: QUIET_STALE_MS,
   });
 
 /** Its memory files (GET .../memory): `memory/decisions.md` is what the Decisions section lists. */
@@ -211,7 +208,6 @@ export const memoryQuery = (slug: string) =>
   queryOptions({
     queryKey: ['team', 'memory', slug] as const,
     queryFn: ({ signal }) => api.get<Memory>(`/api/v2/bots/${at(slug)}/memory?${q({ limit: 1 })}`, { signal }),
-    staleTime: QUIET_STALE_MS,
   });
 
 /** A dream (backend/dream.py): a cleanup task the agent runs over its own memory, with at most one round of questions. */
@@ -229,7 +225,6 @@ export const dreamQuery = (slug: string) =>
       const d = (await api.get<Partial<BotDreamView>>(`/api/v2/bots/${at(slug)}/dream`, { signal })).dream ?? null;
       return d && woken.has(d.task) ? null : d;
     },
-    staleTime: QUIET_STALE_MS,
   });
 
 /** Read the dream again: its task moved on the stream. */
@@ -286,7 +281,6 @@ export const changesQuery = (slug: string) =>
     queryKey: ['team', 'changes', slug] as const,
     queryFn: async ({ signal }) =>
       (await api.get<{ changes?: Change[] }>(`/api/v2/settings/history?${q({ bot: slug })}`, { signal })).changes ?? [],
-    staleTime: QUIET_STALE_MS,
   });
 
 /** Its latest update (GET /api/v2/updates?bot=&limit=1), as the old page's rail showed it. */
@@ -302,7 +296,6 @@ export const latestUpdateQuery = (slug: string) =>
     queryKey: ['team', 'update', slug] as const,
     queryFn: async ({ signal }) =>
       (await api.get<{ updates?: Update[] }>(`/api/v2/updates?${q({ bot: slug, limit: 1 })}`, { signal })).updates?.[0] ?? null,
-    staleTime: QUIET_STALE_MS,
   });
 
 /* ---------------------------------------------------------------- models */
@@ -333,7 +326,6 @@ export interface Models {
 export const modelsQuery = queryOptions({
   queryKey: ['team', 'models'] as const,
   queryFn: ({ signal }) => api.get<Models>('/api/v2/models', { signal }),
-  staleTime: QUIET_STALE_MS,
 });
 
 /* ---------------------------------------------------------------- people, teams, access */
@@ -353,8 +345,32 @@ export interface PersonRow {
 export const peopleQuery = queryOptions({
   queryKey: ['team', 'people'] as const,
   queryFn: async ({ signal }) => (await api.get<{ people?: PersonRow[] }>('/api/humans', { signal })).people ?? [],
-  staleTime: QUIET_STALE_MS,
 });
+
+/** An open seat on the chart (GET /api/humans `seats`): a title nobody fills yet, under a team's group id. */
+export interface Seat {
+  id: string;
+  title: string;
+  team?: string;
+}
+
+export const seatsQuery = queryOptions({
+  queryKey: ['team', 'seats'] as const,
+  queryFn: async ({ signal }) => (await api.get<{ seats?: Seat[] }>('/api/humans', { signal })).seats ?? [],
+});
+
+/** What these agents (slugs) spent this month, in dollars (GET /api/v2/usage, filtered by bots). */
+export const monthSpendQuery = (slugs: readonly string[]) => {
+  const now = new Date();
+  const to = now.toISOString().slice(0, 10);
+  return queryOptions({
+    queryKey: ['team', 'spend', to.slice(0, 7), [...slugs].sort().join(',')] as const,
+    queryFn: async ({ signal }) =>
+      (await api.get<{ totals?: { est_cost_usd?: number | null } }>(`/api/v2/usage?${q({ from: `${to.slice(0, 8)}01`, to, bots: [...slugs].sort().join(',') })}`, { signal }))
+        .totals?.est_cost_usd ?? 0,
+    enabled: slugs.length > 0,
+  });
+};
 
 /** A team (GET /api/v2/groups): its members, the team it sits in, and its lead when one is set. */
 export interface Group {
@@ -372,7 +388,6 @@ export interface Group {
 export const groupsQuery = queryOptions({
   queryKey: ['team', 'groups'] as const,
   queryFn: ({ signal }) => api.get<Group[]>('/api/v2/groups', { signal }),
-  staleTime: QUIET_STALE_MS,
 });
 
 export interface AccessPerson {
@@ -397,7 +412,6 @@ export const accessQuery = queryOptions({
       throw e;
     }
   },
-  staleTime: QUIET_STALE_MS,
 });
 
 export interface Template {
@@ -411,7 +425,6 @@ export const templatesQuery = queryOptions({
   queryKey: ['team', 'templates'] as const,
   queryFn: async ({ signal }) =>
     ((await api.get<{ cards?: Template[] }>('/api/v2/templates', { signal })).cards ?? []).filter((t) => !t.retired),
-  staleTime: QUIET_STALE_MS,
 });
 
 /* ---------------------------------------------------------------- computers */
@@ -456,7 +469,6 @@ export const computersQuery = queryOptions({
   queryKey: ['team', 'computers'] as const,
   queryFn: async ({ signal }) =>
     ((await api.get<{ computers?: Computer[] }>('/api/v2/operations', { signal })).computers ?? []).filter((c) => !c.revoked_at),
-  staleTime: QUIET_STALE_MS,
 });
 
 /** [t, cpu, cpuPeak, mem, memPeak, load, swap, diskFree, activeTurns] every 30 s while performance is on. */
@@ -471,7 +483,6 @@ export const performanceQuery = (id: string) =>
   queryOptions({
     queryKey: ['team', 'performance', id] as const,
     queryFn: ({ signal }) => api.get<Performance>(`/api/v2/computers/${at(id)}/performance?hours=24`, { signal }),
-    staleTime: QUIET_STALE_MS,
   });
 
 /* ---------------------------------------------------------------- chats and tasks */
@@ -547,7 +558,6 @@ export const taskTabsQuery = (slug: string) =>
   queryOptions({
     queryKey: ['team', 'tabs', slug] as const,
     queryFn: ({ signal }) => api.get<TaskTabs>(`/api/v2/bots/${at(slug)}/task-tabs`, { signal }),
-    staleTime: QUIET_STALE_MS,
   });
 
 export const listKey = (tabs: TaskTab[], i: number) => tabs[i]?.builtin ?? `c${i}`;
@@ -614,29 +624,22 @@ export async function saveTabs(slug: string, change: (tabs: TaskTab[]) => TaskTa
 export type AgentFile = BotFileList['files'][number];
 const FILE_PAGE = 20;
 
-/** What narrows its files: words (every one, in the name, text or path) and a Library kind (page, document, image…). */
-export interface FilesNarrow {
-  q?: string;
-  kind?: string;
-}
-
-/** The files it made or keeps, newest first (GET /api/v2/bots/{bot}/files), 20 a page; `narrow` is the server's q and kind. */
-export const agentFilesQuery = (slug: string, narrow: FilesNarrow = {}) =>
+/** The files it made or keeps, newest first (GET /api/v2/bots/{bot}/files), 20 a page; `find` is the server's q (every
+    word, in the name, text or path). */
+export const agentFilesQuery = (slug: string, find = '') =>
   infiniteQueryOptions({
-    queryKey: narrow.q || narrow.kind ? (['team', 'files', slug, { q: narrow.q ?? '', kind: narrow.kind ?? '' }] as const) : (['team', 'files', slug] as const),
+    queryKey: find ? (['team', 'files', slug, { q: find }] as const) : (['team', 'files', slug] as const),
     queryFn: ({ signal, pageParam }) =>
       api.get<BotFileList>(
         `/api/v2/bots/${at(slug)}/files?${q({
           limit: FILE_PAGE,
           ...(pageParam ? { cursor: pageParam } : {}),
-          ...(narrow.q ? { q: narrow.q } : {}),
-          ...(narrow.kind ? { kind: narrow.kind } : {}),
+          ...(find ? { q: find } : {}),
         })}`,
         { signal },
       ),
     initialPageParam: '',
     getNextPageParam: (last) => (last.has_more && last.next_cursor) || undefined,
-    staleTime: QUIET_STALE_MS,
   });
 
 /* ---------------------------------------------------------------- its last run */
@@ -661,7 +664,6 @@ export const lastStopQuery = (slug: string) =>
       const s = out.status;
       return s && (s.state === 'crashed' || s.state === 'idle') ? (s.last_stop ?? null) : null;
     },
-    staleTime: QUIET_STALE_MS,
   });
 
 /** Read it again: its status moved on the stream. */
@@ -719,6 +721,18 @@ export function setAgentModel(slug: string, pick: ModelPick) {
         },
         { idempotencyKey },
       ),
+  });
+}
+
+/** Where its conversation compacts, in tokens (POST /api/v2/bots/{bot}/compact-at); null is its model's default. */
+export const COMPACT_AT = [100000, 150000, 200000, 250000, 300000, 400000, 500000, 600000, 700000, 800000, 900000, 1000000] as const;
+
+export function setCompactAt(slug: string, compactAt: number | null) {
+  return write({
+    key: agentQuery(slug).queryKey,
+    optimistic: (d: AgentDetail | undefined) => d && { ...d, compact_at: compactAt },
+    send: (idempotencyKey) =>
+      api.post(`/api/v2/bots/${at(slug)}/compact-at`, { compact_at: compactAt, expected_revision: revisionOf(slug) }, { idempotencyKey }),
   });
 }
 
@@ -932,7 +946,6 @@ export const teammateAccessQuery = (kind: 'person' | 'team', id: string) =>
         throw e;
       }
     },
-    staleTime: QUIET_STALE_MS,
   });
 
 /** One line for the Access fact: open to everyone, or narrowed. */
@@ -1020,7 +1033,6 @@ export const branchesQuery = (slug: string) =>
         throw e;
       }
     },
-    staleTime: QUIET_STALE_MS,
   });
 
 const copiesAgain = () => {
@@ -1056,7 +1068,6 @@ export interface Profile {
 export const profilesQuery = queryOptions({
   queryKey: ['team', 'profiles'] as const,
   queryFn: async ({ signal }) => (await api.get<{ profiles?: Profile[] }>('/api/v2/profiles', { signal })).profiles ?? [],
-  staleTime: QUIET_STALE_MS,
 });
 
 /** How it takes work. Leaving Custom deletes the wake rules it copied: refused (409 conflict) unless `dropRules`. */
@@ -1168,7 +1179,6 @@ export const slackQuery = (person: string) =>
     queryKey: ['team', 'slack', person] as const,
     queryFn: async ({ signal }) =>
       (await api.get<{ threads?: SlackThread[] | null }>(`/api/v2/humans/${at(person)}/slack`, { signal })).threads ?? [],
-    staleTime: QUIET_STALE_MS,
   });
 
 /** The server keeps no route that writes an agent's instructions: its computer publishes AGENTS.md. A change is a

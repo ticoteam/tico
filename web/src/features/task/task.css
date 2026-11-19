@@ -3,8 +3,7 @@
    The head, tab row and sections are the Document kind's; this is only what the task adds inside them. */
 
 /* ---------- the stage and owner picks in the head ---------- */
-.tv-pick{height:22px;display:inline-flex;align-items:center;gap:var(--s-1);padding:0 var(--s-1);border:0;border-radius:var(--r-chip);background:none;color:inherit;font-family:inherit;font-size:inherit;
-  transition:background var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
+.tv-pick{height:22px;display:inline-flex;align-items:center;gap:var(--s-1);padding:0 var(--s-1);border:0;border-radius:var(--r-chip);background:none;color:inherit;font-family:inherit;font-size:inherit}
 .tv-pick:hover{background:var(--hover);color:var(--ink)}
 .tv-pick .ico{width:12px;height:12px;stroke-width:2;color:var(--faint)}
 .tv-pick .av{margin-left:0}
@@ -27,11 +26,8 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 
 /* the framed body: the open page or Details, then the answer on a phone */
 .tv-view{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;position:relative}
-/* "Getting ready to flow", over a walk's first task for a moment (decide.css .dc-start) */
-.tv-start{position:absolute;inset:0;z-index:var(--z-pop);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s-3h);background:var(--bg);color:var(--muted);pointer-events:none;animation:tv-start .6s ease-in forwards}
-.tv-start p{margin:0}
-@keyframes tv-start{0%,55%{opacity:1}100%{opacity:0}}
-@media (prefers-reduced-motion:reduce){.tv-start{display:none}}
+/* a page's bones while it is read: a heading and lines, as the frame's page would sit */
+.tv-bones{display:grid;align-content:start;gap:var(--s-3);padding:var(--s-6)}
 
 /* ---------- tab marks: approved, waits on you, not yet (parts-kit.js tab) ---------- */
 .doc-tab .dot{margin-right:calc(var(--s-0) * -1)}
@@ -39,12 +35,11 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 
 /* ---------- at the tab row's end: Details' Add, a page's versions and its changes (more.css .tv-ver, .tv-chg) ---------- */
 .tv-ver{height:var(--ctl-sm);border:0;background:none;border-radius:var(--r-ctl);display:inline-flex;align-items:center;gap:calc(var(--s-1) - 1px);flex:none;font-size:var(--t-sm);color:var(--muted);white-space:nowrap;
-  padding:0 var(--s-1) 0 var(--s-2);transition:background var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
+  padding:0 var(--s-1) 0 var(--s-2)}
 .tv-ver .ico{width:14px;height:14px}
 .tv-ver:hover,.tv-ver[aria-expanded="true"]{background:var(--hover);color:var(--ink)}
 .tv-add{padding:0 var(--s-2h) 0 var(--s-1h);gap:var(--s-1);color:var(--ink-2)}
-.tv-chg{height:var(--ctl-sm);border:0;background:none;border-radius:var(--r-ctl);display:inline-flex;align-items:center;flex:none;padding:0 var(--s-2);font-size:var(--t-sm);color:var(--ink-2);white-space:nowrap;
-  transition:background var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
+.tv-chg{height:var(--ctl-sm);border:0;background:none;border-radius:var(--r-ctl);display:inline-flex;align-items:center;flex:none;padding:0 var(--s-2);font-size:var(--t-sm);color:var(--ink-2);white-space:nowrap}
 .tv-chg:hover:not(:disabled){background:var(--hover);color:var(--ink)}
 .tv-chg:disabled{color:var(--muted)}
 .tv-chg.is-on{background:var(--well-2);color:var(--ink);font-weight:var(--w-strong);box-shadow:inset 0 0 0 1px var(--line-strong)}
@@ -54,7 +49,7 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .dt{position:relative;padding:var(--s-2) var(--s-3) var(--s-10) 0}
 
 /* a line with a mark (a criterion, a requirement); it may wrap */
-.dt-line{display:grid;grid-template-columns:24px minmax(0,1fr) var(--av-sm) 38px;align-items:start;min-height:28px;padding:var(--s-1) var(--s-2);border-radius:var(--r-row);transition:background var(--dur-fast) var(--ease)}
+.dt-line{display:grid;grid-template-columns:24px minmax(0,1fr) var(--av-sm) 38px;align-items:start;min-height:28px;padding:var(--s-1) var(--s-2);border-radius:var(--r-row)}
 .dt-line:hover{background:var(--hover)}
 .dt-mark{height:20px;display:flex;align-items:center;color:var(--muted)}
 .dt-mark .ico{width:14px;height:14px;stroke-width:2.2}
@@ -64,7 +59,7 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .dt-end .ico{width:15px;height:15px;stroke-width:1.8}
 
 /* a fact: its name, then its value */
-.dt-kv{display:grid;grid-template-columns:24px 120px minmax(0,1fr);align-items:start;min-height:28px;padding:var(--s-1) var(--s-2);border-radius:var(--r-row);transition:background var(--dur-fast) var(--ease)}
+.dt-kv{display:grid;grid-template-columns:24px 120px minmax(0,1fr);align-items:start;min-height:28px;padding:var(--s-1) var(--s-2);border-radius:var(--r-row)}
 .dt-kv:hover{background:var(--hover)}
 .dt-k{grid-column:2;line-height:20px;color:var(--muted)}
 .dt-v{min-width:0;display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-0) var(--s-2);line-height:20px}
@@ -81,7 +76,7 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .dt-in.is-row{display:flex;align-items:center;gap:var(--s-1)}
 .dt-in .f-err{margin:0 0 var(--s-1) var(--s-2h);gap:var(--s-1h)}
 /* a text button inside a row: Clear, Cancel */
-.dt-act{height:24px;flex:none;padding:0 var(--s-2);border:0;border-radius:var(--r-chip);background:none;color:var(--ink);font-family:inherit;font-size:var(--t-sm);font-weight:var(--w-strong);transition:background var(--dur-fast) var(--ease)}
+.dt-act{height:24px;flex:none;padding:0 var(--s-2);border:0;border-radius:var(--r-chip);background:none;color:var(--ink);font-family:inherit;font-size:var(--t-sm);font-weight:var(--w-strong)}
 .dt-act:hover{background:var(--well-2)}
 /* a new line at a section's end: a task's number, a subtask, a link, an ask */
 .dt-line.is-new{grid-template-columns:24px minmax(0,1fr);align-items:center;padding-right:var(--s-1)}
@@ -129,8 +124,6 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .tv-pages .row{width:100%;border:0;background:none;text-align:left;color:inherit;font:inherit}
 .tv-drop{display:grid;justify-items:center;gap:var(--s-3);padding:var(--s-6) var(--s-4);border:1.5px dashed var(--line-strong);border-radius:var(--r-card)}
 .tv-drop.is-over{background:var(--hover)}
-.tv-who{display:grid;gap:var(--s-2);margin:0;padding:0;border:0;min-width:0}
-.tv-who legend{padding:0;margin-bottom:var(--s-2);font-size:var(--t-sm);color:var(--muted)}
 
 /* ---------- the answer card, over the message box in the task's chat ---------- */
 .an-err{margin:var(--s-2) var(--s-1h) 0 0;font-size:var(--t-sm);line-height:var(--lh);color:var(--ink-2);text-wrap:pretty}
@@ -142,7 +135,6 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
   .dt-kv{grid-template-columns:0 104px minmax(0,1fr);min-height:var(--row);padding:var(--s-3) var(--s-2)}
   .dt .task .row-sub{grid-area:pills;display:flex;align-items:center;gap:var(--s-2)}
   .task.has-stage .row-stage{order:-1}
-  .tv-add{display:none}
   /* in Flow the row over the head holds back and the steps (parts.css .tv-top) */
   .tv.is-flow .pk-head .pk-back,.tv.is-flow .pk-head .pk-acts{display:none}
   .tv-n{display:inline-flex;align-items:center;gap:var(--s-2)}

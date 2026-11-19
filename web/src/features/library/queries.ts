@@ -1,14 +1,16 @@
-import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
+import { infiniteQueryOptions, keepPreviousData, queryOptions } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type {
   ApiTool,
   BotFile,
   DocSourceList,
   DocSourceResult,
+  EmailSendList,
   EmailSendingPolicy,
   ExternalDocResult,
   FileLibrary,
   GitHubApp,
+  Group,
   InboundCompanyConnection,
   InboundInboxes,
   InboundPhoneRequests,
@@ -33,17 +35,21 @@ import type {
   SourceEdit,
   ToolIndex,
   ToolIndexRow,
-  ToolVendor,
+  WebsiteAccountAccessSet,
   WebsiteAccountCreate,
   WebsiteAccountUpdate,
   WebsiteTool,
   WebsiteToolCreate,
   WebsiteToolCreated,
+  EventTypeList,
+  WebhookCreate,
+  WebhookCreated,
   WebhookSends,
   WebhookShown,
+  WebhookUpdate,
 } from '@/api/schema';
 import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
-import type { DocsSearchResults, Group, LibrarianResearch, LibrarianResearchFiled } from '@/api/schema';
+import type { DocsSearchResults } from '@/api/schema';
 
 /* Every Library call. Docs, files, skills, tools and contacts have no live topic (backend/events.py): they are read
    again after the person's own writes, on reconnect, and when a page opens on data older than a minute. Letters have
@@ -68,7 +74,6 @@ const q = (o: Record<string, string | number | boolean | null | undefined>) => {
   return s ? `?${s}` : '';
 };
 const enc = encodeURIComponent;
-const quiet = { staleTime: QUIET_STALE_MS } as const;
 
 // ---------------------------------------------------------------- docs
 
@@ -78,21 +83,18 @@ export type Doc = InternalDoc;
 export const docsListQuery = queryOptions({
   queryKey: ['docs', 'list'],
   queryFn: () => api.get<InternalDocList>('/api/v2/docs?limit=200'),
-  ...quiet,
 });
 
 export const docQuery = (id: string) =>
   queryOptions({
     queryKey: ['docs', 'detail', id],
     queryFn: () => api.get<InternalDocResult>(`/api/v2/docs/${enc(id)}`).then((r) => r.doc),
-    ...quiet,
   });
 
 export const docVersionsQuery = (id: string) =>
   queryOptions({
     queryKey: ['docs', 'versions', id],
     queryFn: () => api.get<InternalDocVersions>(`/api/v2/docs/${enc(id)}/versions`).then((r) => r.versions),
-    ...quiet,
   });
 
 export const docVersionQuery = (id: string, n: number) =>
@@ -107,21 +109,18 @@ export const docVersionQuery = (id: string, n: number) =>
 export const sourcesQuery = queryOptions({
   queryKey: ['docs', 'sources'],
   queryFn: () => api.get<DocSourceList>('/api/v2/doc-sources?limit=100'),
-  ...quiet,
 });
 
 export const sourceDocsQuery = (id: string) =>
   queryOptions({
     queryKey: ['docs', 'source', id],
     queryFn: () => api.get<SourceDocumentList>(`/api/v2/doc-sources/${enc(id)}/documents?limit=200`),
-    ...quiet,
   });
 
 export const externalDocQuery = (id: string) =>
   queryOptions({
     queryKey: ['docs', 'external', id],
     queryFn: () => api.get<ExternalDocResult>(`/api/v2/docs/external/${enc(id)}`).then((r) => r.doc),
-    ...quiet,
   });
 
 export function createDoc(input: { title: string; body: string; path?: string }) {
@@ -181,7 +180,6 @@ export function refreshSource(id: string) {
 export const archivedDocsQuery = queryOptions({
   queryKey: ['docs', 'archived'],
   queryFn: () => api.get<InternalDocList>('/api/v2/docs?archived=true&limit=200'),
-  ...quiet,
 });
 
 /** Archive a doc, or bring one back. `version` is the one shown: the server refuses a stale one. */
@@ -269,7 +267,6 @@ export const filesQuery = (kind: string) =>
     queryFn: ({ pageParam }) => api.get<FileLibrary>(`/api/v2/files${q({ limit: 100, kind, cursor: pageParam })}`),
     initialPageParam: '',
     getNextPageParam: (last) => (last.has_more && last.next_cursor ? last.next_cursor : undefined),
-    ...quiet,
   });
 
 export const fileSearchQuery = (text: string) =>
@@ -277,21 +274,18 @@ export const fileSearchQuery = (text: string) =>
     queryKey: ['files', 'search', text],
     queryFn: ({ signal }) => api.get<{ results: Array<{ id: string; title: string }> }>(`/api/v2/files/search${q({ q: text, limit: 50 })}`, { signal }),
     enabled: text.trim().length > 1,
-    ...quiet,
   });
 
 export const fileQuery = (id: string) =>
   queryOptions({
     queryKey: ['files', 'info', id],
     queryFn: () => api.get<{ file: BotFile }>(`/api/v2/files/${enc(id)}/info`).then((r) => r.file),
-    ...quiet,
   });
 
 export const fileVersionsQuery = (id: string) =>
   queryOptions({
     queryKey: ['files', 'versions', id],
     queryFn: () => api.get<{ versions: FileVersion[] }>(`/api/v2/files/${enc(id)}/versions`).then((r) => r.versions),
-    ...quiet,
   });
 
 /** A text file's words, for the preview. */
@@ -392,26 +386,22 @@ export interface SkillRecent {
 export const skillsQuery = queryOptions({
   queryKey: ['skills', 'list'],
   queryFn: () => api.get<{ skills: SkillRow[] }>('/api/v2/skills').then((r) => r.skills),
-  ...quiet,
 });
 
 export const proposalsQuery = queryOptions({
   queryKey: ['skills', 'proposals'],
   queryFn: () => api.get<{ proposals: Proposal[] }>('/api/v2/skills/proposals?status=pending').then((r) => r.proposals),
-  ...quiet,
 });
 
 export const skillUsageQuery = queryOptions({
   queryKey: ['skills', 'usage'],
   queryFn: () => api.get<{ skills: SkillUse[] }>('/api/v2/skills/usage?days=7').then((r) => r.skills),
-  ...quiet,
 });
 
 export const skillQuery = (name: string) =>
   queryOptions({
     queryKey: ['skills', 'detail', name],
     queryFn: () => api.get<SkillDetail>(`/api/v2/skills/${enc(name)}`),
-    ...quiet,
   });
 
 export const skillTextQuery = (name: string, n: number) =>
@@ -420,13 +410,6 @@ export const skillTextQuery = (name: string, n: number) =>
     queryFn: () => api.get<{ version: SkillVersion & { files: SkillFile[] } }>(`/api/v2/skills/${enc(name)}/versions/${n}`).then((r) => r.version),
     enabled: n > 0,
     staleTime: Infinity,
-  });
-
-export const skillRecentQuery = (name: string) =>
-  queryOptions({
-    queryKey: ['skills', 'recent', name],
-    queryFn: () => api.get<{ recent: SkillRecent[] }>(`/api/v2/skills/${enc(name)}/usage?days=30`).then((r) => r.recent),
-    ...quiet,
   });
 
 /** The reader's company role as Access gives it ('owner', 'admin'); null for anyone Access refuses (a member). */
@@ -440,14 +423,12 @@ export const accessRoleQuery = queryOptions({
       throw e;
     }
   },
-  ...quiet,
 });
 
 export const proposalQuery = (id: string) =>
   queryOptions({
     queryKey: ['skills', 'proposal', id],
     queryFn: () => api.get<ProposalDetail>(`/api/v2/skills/proposals/${enc(id)}`),
-    ...quiet,
   });
 
 const dropProposal = (id: string) => (cur: Proposal[] | undefined) => cur?.filter((p) => p.id !== id);
@@ -471,7 +452,6 @@ export interface InstallTargets {
 export const installTargetsQuery = queryOptions({
   queryKey: ['skills', 'install-targets'],
   queryFn: () => api.get<InstallTargets>('/api/v2/skills/install-targets'),
-  ...quiet,
 });
 
 export type InstallFor = Array<{ target_type: 'Bot' | 'Human'; target_id: string }>;
@@ -535,6 +515,7 @@ export interface Inbox {
   address: string;
   state: string;
   audience?: string;
+  group_id?: string | null;
   used_for?: string | null;
 }
 export interface MailItem {
@@ -549,7 +530,6 @@ export interface MailItem {
 export const toolsQuery = queryOptions({
   queryKey: ['tools', 'index'],
   queryFn: () => api.get<ToolIndex>('/api/v2/tool-index?limit=200'),
-  ...quiet,
 });
 
 /** After GitHub's return: Tools read again, and the index as the server has it now. */
@@ -565,48 +545,30 @@ export const apiToolQuery = (id: string) =>
   queryOptions({
     queryKey: ['tools', 'api', id],
     queryFn: () => api.get<ApiTool>(`/api/v2/api-tools/${enc(id)}`),
-    ...quiet,
   });
 
 export const websiteToolQuery = (id: string) =>
   queryOptions({
     queryKey: ['tools', 'website', id],
     queryFn: () => api.get<WebsiteTool>(`/api/v2/website-tools/${enc(id)}`),
-    ...quiet,
   });
 
 export const mailboxQuery = (id: string) =>
   queryOptions({
     queryKey: ['tools', 'mailbox', id],
     queryFn: () => api.get<MailboxDetail>(`/api/v2/mailboxes/${enc(id)}`),
-    ...quiet,
-  });
-
-export const vendorQuery = (vendor: string) =>
-  queryOptions({
-    queryKey: ['tools', 'vendor', vendor],
-    queryFn: () => api.get<ToolVendor>(`/api/v2/tool-vendors/${enc(vendor)}`),
-    ...quiet,
   });
 
 export const inboxesQuery = queryOptions({
   queryKey: ['tools', 'inboxes'],
   queryFn: () => api.get<InboundInboxes>('/api/v2/inbound/inboxes').then((r) => r.inboxes as unknown as Inbox[]),
-  ...quiet,
 });
 
 export const inboxMessagesQuery = (inbox: string) =>
   queryOptions({
     queryKey: ['tools', 'messages', inbox],
     queryFn: () => api.get<InboundMessages>(`/api/v2/inbound/messages${q({ inbox_ids: inbox, limit: 20 })}`).then((r) => r.messages),
-    ...quiet,
   });
-
-export const mailQuery = queryOptions({
-  queryKey: ['tools', 'postal'],
-  queryFn: () => api.get<{ items: MailItem[] }>('/api/v2/postal/items?limit=20').then((r) => r.items),
-  ...quiet,
-});
 
 /** Letters out: the `letters` topic feeds this key while the page follows it. */
 export const lettersQuery = queryOptions({
@@ -702,8 +664,7 @@ export interface LoginAdd {
   holder?: string;
   all_bots?: boolean;
 }
-export const addWebsite = (site: string, centralOnly: boolean) =>
-  made(api.post<WebsiteToolCreated>('/api/v2/website-tools', { sites: [site], central_only: centralOnly } satisfies WebsiteToolCreate));
+export const addWebsite = (site: string) => made(api.post<WebsiteToolCreated>('/api/v2/website-tools', { sites: [site] } satisfies WebsiteToolCreate));
 export const addAccount = (tool: string, login: LoginAdd) =>
   made(api.post<{ id: string }>(`/api/v2/website-tools/${enc(tool)}/accounts`, login satisfies WebsiteAccountCreate), [['tools', 'website', tool]]);
 /** Only what changed is sent; `totp: null` takes the authenticator off. */
@@ -812,7 +773,6 @@ export const pasteKeys = (tool: string, text: string) =>
 export interface WebsiteChange {
   name?: string;
   sites?: string[];
-  central_only?: boolean;
 }
 export function editWebsite(tool: string, change: WebsiteChange) {
   return andList(
@@ -870,14 +830,12 @@ export const webhookQuery = (id: string) =>
   queryOptions({
     queryKey: ['tools', 'webhook', id],
     queryFn: () => api.get<WebhookShown>(`/api/v2/webhooks/${enc(id)}`),
-    ...quiet,
   });
 
 export const webhookSendsQuery = (id: string) =>
   queryOptions({
     queryKey: ['tools', 'webhook', id, 'sends'],
     queryFn: () => api.get<WebhookSends>(`/api/v2/webhooks/${enc(id)}/sends${q({ limit: 20 })}`).then((r) => r.items),
-    ...quiet,
   });
 
 /** Pause or send again. */
@@ -904,6 +862,376 @@ export function cancelLetter(id: string) {
     send: (idempotencyKey) => api.post(`/api/v2/letters/${enc(id)}/cancel`, {}, { idempotencyKey }),
   });
 }
+
+/* Stored keys, a declared tool, a mailbox, who reads an address, a website's accounts, a webhook's sends, letters and
+   messages. A secret is only ever sent from here, or handed back to the one caller that asked: nothing caches one. */
+
+export interface KeyGrant {
+  id: string;
+  /** 'human:<id>', 'bot:<id>', 'computers' or 'computer:<id>'. */
+  subject: string;
+  can_revoke?: boolean;
+}
+/** A stored credential as GET /api/v2/credentials lists it (backend/credentials.py): never its value. */
+export interface StoredKey {
+  id: string;
+  name: string;
+  username: string;
+  kind: string;
+  env: string;
+  preview?: string;
+  source: string;
+  revision: number;
+  updated_at?: string;
+  stored: boolean;
+  can_reveal?: boolean;
+  can_remove?: boolean;
+  /** The API tool that holds it as a key; null for a key no tool holds. */
+  tool_id?: string | null;
+  last_used_at?: string | null;
+  last_used_by?: string;
+  remove_only?: boolean;
+  grants: KeyGrant[];
+}
+export interface Vault {
+  credentials: StoredKey[];
+  can_manage: boolean;
+  people: { id: string; name: string; email?: string }[];
+  bots: { id: string; slug?: string; name: string }[];
+}
+
+/** Whoever may open the vault; anyone else gets a 403 (the page then says so, and Tools lists no keys). */
+export const vaultQuery = queryOptions({ queryKey: ['tools', 'credentials'], queryFn: () => api.get<Vault>('/api/v2/credentials'), retry: false });
+const onKeys = (f: (keys: StoredKey[]) => StoredKey[]) => (cur: Vault | undefined) => cur && { ...cur, credentials: f(cur.credentials) };
+const onKey = (id: string, f: (k: StoredKey) => StoredKey) => onKeys((keys) => keys.map((k) => (k.id === id ? f(k) : k)));
+
+/** A new value for a stored key. The value goes once and never comes back; the rest of the key is sent as it was. */
+export function rotateKey(key: StoredKey, value: string) {
+  const { name, username, kind, env, source, revision } = key;
+  return andList(
+    write<unknown>({
+      key: vaultQuery.queryKey,
+      optimistic: onKey(key.id, (k) => ({ ...k, stored: true })),
+      send: (idempotencyKey) => api.post(`/api/v2/credentials/${enc(key.id)}`, { name, username, kind, env, source, secret: value, expected_revision: revision }, { idempotencyKey }),
+    }),
+  );
+}
+/** A key a declared tool names but the vault does not hold yet. */
+export const storeKey = (body: { name: string; kind: string; env: string; source: string; secret: string }) =>
+  made(api.post<{ id: string }>('/api/v2/credentials', { ...body, username: '' }), [vaultQuery.queryKey]);
+export const grantKey = (key: string, subject: string) =>
+  write<unknown>({
+    key: vaultQuery.queryKey,
+    optimistic: onKey(key, (k) => ({ ...k, grants: [...k.grants, { id: `tmp:${subject}`, subject }] })),
+    send: (idempotencyKey) => api.post(`/api/v2/credentials/${enc(key)}/grants`, { subject }, { idempotencyKey }),
+  });
+export const revokeKey = (key: string, grant: string) =>
+  write<unknown>({
+    key: vaultQuery.queryKey,
+    optimistic: onKey(key, (k) => ({ ...k, grants: k.grants.filter((g) => g.id !== grant) })),
+    send: (idempotencyKey) => api.post(`/api/v2/credentials/${enc(key)}/grants/${enc(grant)}/revoke`, {}, { idempotencyKey }),
+  });
+export const deleteKey = (key: string) =>
+  andList(
+    write<unknown>({
+      key: vaultQuery.queryKey,
+      optimistic: onKeys((keys) => keys.filter((k) => k.id !== key)),
+      send: (idempotencyKey) => api.delete(`/api/v2/credentials/${enc(key)}`, { idempotencyKey }),
+    }),
+  );
+
+/** A tool an agent declares (GET /api/v2/tools). */
+export interface Service {
+  service: string;
+  title: string;
+  kind: string;
+  summary: string;
+  credentials: string[];
+  aliases?: string[];
+  writes: 'never' | 'approval' | 'allowed';
+  status?: string;
+  bots?: string[];
+  connections?: { bot: string; status?: string; write?: 'never' | 'approval' | 'allowed'; problem?: string; env?: string }[];
+}
+export const servicesQuery = queryOptions({
+  queryKey: ['tools', 'services'],
+  queryFn: () => api.get<{ integrations?: Service[] }>('/api/v2/tools').then((r) => r.integrations ?? []),
+});
+/** What its page says (`body`, markdown). */
+export const servicePageQuery = (service: string) =>
+  queryOptions({ queryKey: ['tools', 'service', service], queryFn: () => api.get<{ body?: string }>(`/api/v2/tools/${enc(service)}`) });
+
+/** Variables a tool names (ACME_API_KEY), from its page and from the entries agents declare. */
+export function envsOf(s: Service): string[] {
+  const out = new Set<string>();
+  for (const t of s.credentials) for (const m of t.match(/\b[A-Z](?:[A-Z0-9_]|<[A-Z]+>){2,}/g) ?? []) out.add(m);
+  for (const c of s.connections ?? []) if (c.env) out.add(c.env);
+  return [...out].filter((e) => e.includes('_') && !e.includes('<'));
+}
+/** The stored keys a declared tool uses: by variable, by name, or by where they came from (ui/app/integrations.ts). */
+export function keysOf(s: Service, keys: StoredKey[]): StoredKey[] {
+  const envs = new Set(envsOf(s));
+  const names = new Set([s.service, s.title, ...(s.aliases ?? [])].map((x) => x.toLowerCase()));
+  return keys.filter((k) => {
+    if (k.env && envs.has(k.env)) return true;
+    const source = k.source.toLowerCase();
+    return names.has(k.name.toLowerCase()) || names.has(source) || source.startsWith(`${s.service}:`) || source.startsWith(`${s.service}/`);
+  });
+}
+
+/** The teams Tools narrows by, and an address's readers pick from. */
+export const teamsQuery = queryOptions({
+  queryKey: ['tools', 'groups'],
+  queryFn: () => api.get<Group[] | { groups?: Group[] }>('/api/v2/groups').then((r) => (Array.isArray(r) ? r : (r.groups ?? []))),
+});
+
+/* A mailbox: each write answers the mailbox as it is now, which takes the place of what was shown. */
+
+type Access = MailboxDetail['accesses'][number];
+const onMailbox = (mailbox: string, f: (d: MailboxDetail) => MailboxDetail, send: (idempotencyKey: string) => Promise<MailboxDetail>) =>
+  andList(write<MailboxDetail>({ key: mailboxQuery(mailbox).queryKey, optimistic: (cur?: MailboxDetail) => cur && f(cur), send, settle: (_cur, d) => d }));
+const onAccesses = (f: (a: Access[]) => Access[]) => (d: MailboxDetail) => ({ ...d, accesses: f(d.accesses) });
+const mb = (mailbox: string) => `/api/v2/mailboxes/${enc(mailbox)}` as const;
+
+export const addMailboxAccess = (mailbox: string, grantee_type: 'person' | 'bot', grantee_id: string, level: 'read' | 'read_write') =>
+  onMailbox(
+    mailbox,
+    (d) => {
+      const name = d.candidates.find((c) => c.id === grantee_id)?.name ?? grantee_id;
+      return { ...onAccesses((a) => [...a, { id: `tmp:${grantee_id}`, grantee_type, grantee_id, level, name, implicit: false } as Access])(d), candidates: d.candidates.filter((c) => c.id !== grantee_id) };
+    },
+    (idempotencyKey) => api.post<MailboxDetail>(`${mb(mailbox)}/accesses`, { grantee_type, grantee_id, level }, { idempotencyKey }),
+  );
+export const setMailboxLevel = (mailbox: string, access: string, level: 'read' | 'read_write') =>
+  onMailbox(mailbox, onAccesses((a) => a.map((x) => (x.id === access ? { ...x, level } : x))), (idempotencyKey) =>
+    api.patch<MailboxDetail>(`${mb(mailbox)}/accesses/${enc(access)}`, { level }, { idempotencyKey }),
+  );
+export const removeMailboxAccess = (mailbox: string, access: string) =>
+  onMailbox(mailbox, onAccesses((a) => a.filter((x) => x.id !== access)), (idempotencyKey) => api.delete<MailboxDetail>(`${mb(mailbox)}/accesses/${enc(access)}`, { idempotencyKey }));
+export const shareMailbox = (mailbox: string) =>
+  onMailbox(mailbox, (d) => ({ ...d, mailbox: { ...d.mailbox, kind: 'shared' } }), (idempotencyKey) => api.post<MailboxDetail>(`${mb(mailbox)}/share`, {}, { idempotencyKey }));
+export const stopMailbox = (mailbox: string) => andList(api.delete<unknown>(mb(mailbox)));
+
+/** Google asked first when the company's key reads it (an admin's check); then the mailbox is read again. */
+export async function checkMailbox(mailbox: string): Promise<{ ok: boolean; text: string }> {
+  const had = queryClient.getQueryData(mailboxQuery(mailbox).queryKey) ?? (await queryClient.fetchQuery(mailboxQuery(mailbox)));
+  let said: { ok?: boolean; message?: string } | null = null;
+  if (had.can_manage && had.mailbox.connection === 'workspace')
+    said = await api.post<{ ok?: boolean; message?: string }>('/api/v2/google/workspace/check', { mailbox: had.mailbox.address });
+  const d = await queryClient.fetchQuery({ ...mailboxQuery(mailbox), staleTime: 0 });
+  if (said) return { ok: !!said.ok, text: said.message || (said.ok ? 'Connected' : 'Not connected') };
+  const failing = !!d.mailbox.sync && !!d.mailbox.sync_error;
+  return { ok: !failing, text: failing ? d.mailbox.sync_error : 'Connected' };
+}
+
+/** Its newest mail, from Gmail, for whoever may read it. */
+export const mailboxMailQuery = (address: string) =>
+  queryOptions({
+    queryKey: ['tools', 'mailbox-mail', address],
+    queryFn: () =>
+      api
+        .get<{ messages?: { id?: string; thread_id?: string | null; subject?: string | null; from_header?: string | null; from_addr?: string | null; epoch?: number | null }[] }>(
+          `/api/v2/mail/messages?mailbox=${enc(address)}&limit=8`,
+        )
+        .then((r) => r.messages ?? []),
+  });
+/** What was sent from it, newest first, a page at a time. */
+export const mailboxSendsQuery = (address: string) =>
+  infiniteQueryOptions({
+    queryKey: ['tools', 'mailbox-sends', address],
+    queryFn: ({ pageParam }) => api.get<EmailSendList>(`/api/v2/email/sends?mailbox=${enc(address)}${pageParam ? `&cursor=${enc(pageParam)}` : ''}`),
+    initialPageParam: '',
+    getNextPageParam: (last) => last.next_cursor || undefined,
+  });
+
+/** Who reads a Tico address or number: the company, or one team (and the teams under it). */
+export const setInboxReaders = (inbox: string, audience: 'company' | 'team', group: string | null) =>
+  write<unknown>({
+    key: inboxesQuery.queryKey,
+    optimistic: (cur: Inbox[] | undefined) => cur?.map((b) => (b.inbox_id === inbox ? { ...b, audience, group_id: group } : b)),
+    send: (idempotencyKey) =>
+      api.put(`/api/v2/inbound/inboxes/${enc(inbox)}/audience`, audience === 'team' ? { audience, group_id: group } : { audience }, { idempotencyKey }),
+  });
+
+/** The inbound connection read again: whether it is set up, its last sync and any error. */
+export async function checkInboxes(): Promise<{ ok: boolean; text: string }> {
+  const r = await api.get<InboundInboxes>('/api/v2/inbound/inboxes');
+  queryClient.setQueryData(inboxesQuery.queryKey, r.inboxes as unknown as Inbox[]);
+  if (!r.configured) return { ok: false, text: 'Not set up' };
+  return r.error ? { ok: false, text: r.error } : { ok: true, text: 'Connected' };
+}
+
+/* A website's accounts. */
+
+type Account = WebsiteTool['accounts'][number];
+const onAccounts = (tool: string, f: (a: Account[]) => Account[], send: (idempotencyKey: string) => Promise<unknown>) =>
+  write<unknown>({ key: websiteToolQuery(tool).queryKey, optimistic: (cur?: WebsiteTool) => cur && { ...cur, accounts: f(cur.accounts) }, send });
+const site = (tool: string) => `/api/v2/website-tools/${enc(tool)}` as const;
+
+export const removeAccount = (tool: string, account: string) =>
+  onAccounts(tool, (list) => list.filter((a) => a.id !== account), (idempotencyKey) => api.delete(`${site(tool)}/accounts/${enc(account)}`, { idempotencyKey }));
+export const deleteWebsite = (tool: string) => andList(api.delete<unknown>(site(tool)));
+/** One shared account given to a person, an agent, a team, or every agent (`bots`), or taken away. A grant shows once the
+    server names it; a removal at once. */
+export const setAccountAccess = (tool: string, account: string, subject: string, on: boolean) =>
+  onAccounts(
+    tool,
+    (list) =>
+      list.map((a) =>
+        a.id !== account ? a : subject === 'bots' ? { ...a, all_bots: on } : on ? a : { ...a, access: a.access.filter((p) => p.subject !== subject) },
+      ),
+    (idempotencyKey) => api.put<WebsiteAccountAccessSet>(`${site(tool)}/accounts/${enc(account)}/access/${enc(subject)}`, { on }, { idempotencyKey }),
+  );
+
+/* An outgoing webhook. */
+
+/** The events a webhook may send: the catalog less the ones only rules see. */
+export const eventTypesQuery = queryOptions({
+  queryKey: ['tools', 'event-types'],
+  queryFn: () => api.get<EventTypeList>('/api/v2/event-types').then((r) => r.items.filter((t) => t.outbound !== false)),
+  staleTime: 60 * 60_000,
+});
+/** A new webhook. Its signing secret is in the answer once and goes back to the caller only (the dialog's state). An
+    agent's call files an approval instead. */
+export async function addWebhook(body: WebhookCreate): Promise<{ id?: string; secret?: string; approval?: boolean }> {
+  const r = await andList(api.post<WebhookCreated & { webhook?: { id: string; secret?: string } }>('/api/v2/webhooks', body, { idempotencyKey: crypto.randomUUID() }));
+  return r.webhook ? { id: r.webhook.id, secret: r.webhook.secret } : { approval: !!r.approval };
+}
+/** Its name, address or events; the revision it was read at, so a change made meanwhile is refused, not overwritten. */
+export const editWebhook = (id: string, change: WebhookUpdate) =>
+  andList(
+    write<unknown>({
+      key: webhookQuery(id).queryKey,
+      optimistic: (cur: WebhookShown | undefined) =>
+        cur && { ...cur, webhook: { ...cur.webhook, ...Object.fromEntries(Object.entries({ name: change.name, url: change.url, events: change.events }).filter(([, v]) => v != null)) } },
+      send: (idempotencyKey) =>
+        api.post(`/api/v2/webhooks/${enc(id)}/update`, { ...change, expected_revision: queryClient.getQueryData(webhookQuery(id).queryKey)?.webhook.revision }, { idempotencyKey }),
+    }),
+  );
+
+/** For good: nothing more is sent, and what waits is canceled. */
+export async function deleteWebhook(id: string) {
+  await andList(api.post<unknown>(`/api/v2/webhooks/${enc(id)}/delete`, {}));
+  queryClient.removeQueries({ queryKey: webhookQuery(id).queryKey });
+}
+/** A new signing secret, handed back once (the old one signs beside it for a day). A replay answers without one: refused. */
+export async function rotateWebhookSecret(id: string): Promise<string> {
+  const r = await api.post<{ webhook?: { secret?: string } }>(`/api/v2/webhooks/${enc(id)}/rotate`, {});
+  void queryClient.invalidateQueries({ queryKey: webhookQuery(id).queryKey, exact: true });
+  const secret = r.webhook?.secret;
+  if (!secret) throw new Error('The new secret was lost on the way');
+  return secret;
+}
+export const retryWebhookSend = (id: string, send: string) =>
+  write<unknown>({
+    key: webhookSendsQuery(id).queryKey,
+    optimistic: (cur: WebhookSends['items'] | undefined) => cur?.map((x) => (x.id === send ? { ...x, state: 'ready' } : x)),
+    send: (idempotencyKey) => api.post(`/api/v2/webhooks/${enc(id)}/sends/${enc(send)}/retry`, {}, { idempotencyKey }),
+  });
+
+/* Letters in, and who may read one address's letters. */
+
+/** A letter that came in, as GET /api/v2/postal/items gives it (a redacted one: only when and its status). */
+export interface LetterIn extends MailItem {
+  provider?: string | null;
+  address?: string | null;
+  address_id?: string | null;
+  file_url?: string | null;
+  task_id?: string | null;
+}
+/** Every letter the reader may see (the old page read 100); each address shows its own. */
+export const lettersInQuery = queryOptions({
+  queryKey: ['tools', 'postal', 'items', 100],
+  queryFn: () => api.get<{ items: LetterIn[] }>('/api/v2/postal/items?limit=100').then((r) => r.items),
+});
+/** A failed letter tried again now (owner or admin). */
+export const retryLetterIn = (item: string) =>
+  write<unknown>({
+    key: lettersInQuery.queryKey,
+    optimistic: (cur: LetterIn[] | undefined) => cur?.map((m) => (m.id === item ? { ...m, status: 'queued' } : m)),
+    send: (idempotencyKey) => api.post(`/api/v2/postal/items/${enc(item)}/retry`, {}, { idempotencyKey }),
+  });
+
+/** Who may read every letter and scan at one address (a Gateway assignment, or an older address by its text). */
+export const addressGrantsQuery = (scope: string) =>
+  queryOptions({
+    queryKey: ['tools', 'postal', 'grants', 'one', scope],
+    queryFn: () => api.get<PostalMailGrants>(`/api/v2/postal/addresses/${enc(scope)}/grants?limit=50`).then((r) => r.grants),
+  });
+export function setAddressGrant(scope: string, type: 'person' | 'bot', who: string, on: boolean) {
+  const path = `/api/v2/postal/addresses/${enc(scope)}/grants/${type}/${enc(who)}` as const;
+  return write<unknown>({
+    key: addressGrantsQuery(scope).queryKey,
+    optimistic: (cur: PostalMailGrants['grants'] | undefined) =>
+      on
+        ? [...(cur ?? []), { id: `tmp:${who}`, address_id: scope, grantee_type: type, grantee_id: who, level: 'read' }]
+        : cur?.filter((g) => !(g.grantee_type === type && g.grantee_id === who)),
+    send: (idempotencyKey) => (on ? api.put(path, { level: 'read' }, { idempotencyKey }) : api.delete(path, { idempotencyKey })),
+  });
+}
+/** The addresses read again now, as the Gateway has them. */
+export const checkAddresses = () => queryClient.fetchQuery({ ...postalAddressesQuery, staleTime: 0 });
+
+/** Letters older than the first page (`lettersQuery`), a page at a time. */
+export const olderLettersQuery = (before: string) =>
+  infiniteQueryOptions({
+    queryKey: ['letters', 'older', before],
+    queryFn: ({ pageParam }) => api.get<LetterOutPage>(`/api/v2/letters${q({ limit: 20, before: pageParam })}`),
+    initialPageParam: before,
+    getNextPageParam: (p) => p.next_before ?? undefined,
+    staleTime: QUIET_STALE_MS,
+  });
+
+/* What came in to every Tico address and number. */
+
+export interface MessageFilter {
+  inboxes?: string[];
+  kind?: 'email' | 'sms';
+  q?: string;
+  has_code?: boolean;
+  spam?: boolean;
+}
+/** One message as the list gives it: never its whole text, never its code. */
+export interface InMessage {
+  message_id: string;
+  inbox_id: string;
+  from?: string;
+  subject?: string;
+  preview?: string;
+  received_at: number;
+  has_code?: boolean;
+  spam?: boolean;
+  retention_removed?: boolean;
+}
+export const allMessagesQuery = (f: MessageFilter) =>
+  infiniteQueryOptions({
+    queryKey: ['tools', 'messages', 'all', f],
+    queryFn: ({ pageParam }) =>
+      api.get<{ messages: InMessage[]; next: number | null }>(
+        `/api/v2/inbound/messages${q({
+          limit: 50,
+          inbox_ids: f.inboxes?.length ? f.inboxes.join(',') : undefined,
+          kind: f.kind,
+          q: f.q?.trim(),
+          has_code: f.has_code ? 'true' : undefined,
+          spam: f.spam ? 'true' : undefined,
+          before: pageParam || undefined,
+        })}`,
+      ),
+    initialPageParam: 0,
+    getNextPageParam: (p) => p.next ?? undefined,
+    // a new filter keeps the last list on screen until its own read lands
+    placeholderData: keepPreviousData,
+  });
+/** The code a message carries, read for the person who asked. Not a query: a code is a secret, never cached. */
+export const readCode = (message: string) => api.get<{ code?: string | null }>(`/api/v2/inbound/messages/${enc(message)}/code`).then((r) => r.code ?? '');
+
+/** From the cache only (the server still decides): what an action's tighten-only check compares with. */
+export const was = {
+  vault: () => queryClient.getQueryData(vaultQuery.queryKey),
+  mailbox: (id: string) => queryClient.getQueryData(mailboxQuery(id).queryKey),
+  inbox: (id: string) => queryClient.getQueryData<Inbox[]>(inboxesQuery.queryKey)?.find((b) => b.inbox_id === id),
+};
 
 // ---------------------------------------------------------------- contacts
 
@@ -950,20 +1278,17 @@ export interface Card extends ContactRow {
 export const typesQuery = queryOptions({
   queryKey: ['contacts', 'types'],
   queryFn: () => api.get<{ types: EntityType[] }>('/api/v2/entities/types').then((r) => r.types),
-  ...quiet,
 });
 
 export const countsQuery = queryOptions({
   queryKey: ['contacts', 'counts'],
   queryFn: () => api.get<{ counts: Array<{ type: string; count: number }> }>('/api/v2/entities/counts').then((r) => r.counts),
-  ...quiet,
 });
 
 export const attributesQuery = (type: string) =>
   queryOptions({
     queryKey: ['contacts', 'type', type],
     queryFn: () => api.get<{ attributes: Attribute[] }>(`/api/v2/entities/types/${enc(type)}`).then((r) => r.attributes),
-    ...quiet,
   });
 
 /** One type's contacts by name, and `link`: only those with that link to us (customer_of...). */
@@ -974,7 +1299,6 @@ export const contactsQuery = (type: string, name: string, link = '') =>
       api.get<{ rows: ContactRow[]; next: string | null }>(`/api/v2/entities/find/${enc(type)}${q({ name, link, after: pageParam, limit: 100, detail: true })}`),
     initialPageParam: '',
     getNextPageParam: (last) => last.next ?? undefined,
-    ...quiet,
   });
 
 /** Search's contacts: one type's, by name, a few rows without their details. */
@@ -982,14 +1306,12 @@ export const contactSearchQuery = (type: string, name: string, limit: number) =>
   queryOptions({
     queryKey: ['contacts', 'search', type, name, limit],
     queryFn: ({ signal }) => api.get<{ rows: ContactRow[] }>(`/api/v2/entities/find/${enc(type)}${q({ name, limit })}`, { signal }),
-    ...quiet,
   });
 
 export const cardQuery = (ref: string) =>
   queryOptions({
     queryKey: ['contacts', 'card', ref],
     queryFn: () => api.get<Card>(`/api/v2/entities/card${q({ ref })}`),
-    ...quiet,
   });
 
 /** A field's past value (backend/entities/store.py history): where it came from, and when it held. */
@@ -1007,7 +1329,6 @@ export const factHistoryQuery = (ref: string, attribute: string) =>
   queryOptions({
     queryKey: ['contacts', 'history', ref, attribute],
     queryFn: () => api.get<{ rows: FactPast[]; next: string | null }>(`/api/v2/entities/history${q({ ref, attribute })}`).then((r) => r.rows),
-    ...quiet,
   });
 
 export interface ContactThread {
@@ -1028,7 +1349,6 @@ export const contactThreadsQuery = (words: string) =>
       return r.hits.filter((h) => !seen.has(h.thread_id) && seen.add(h.thread_id));
     },
     enabled: words.trim().length > 0,
-    ...quiet,
   });
 
 /** A fact saves at once: shown first, taken back if the server refuses it. */
@@ -1093,8 +1413,8 @@ export interface MyGoogle {
   message: string | null;
 }
 
-export const googleQuery = queryOptions({ queryKey: ['tools', 'google'], queryFn: () => api.get<GoogleState>('/api/v2/google'), ...quiet });
-export const myGoogleQuery = queryOptions({ queryKey: ['tools', 'google', 'me'], queryFn: () => api.get<MyGoogle>('/api/v2/mail/google'), ...quiet });
+export const googleQuery = queryOptions({ queryKey: ['tools', 'google'], queryFn: () => api.get<GoogleState>('/api/v2/google') });
+export const myGoogleQuery = queryOptions({ queryKey: ['tools', 'google', 'me'], queryFn: () => api.get<MyGoogle>('/api/v2/mail/google') });
 const googleChanged = () => toolChanged(googleQuery.queryKey);
 
 export const setMailMay = (may: MailMay) =>
@@ -1152,13 +1472,11 @@ export interface SendPolicies {
 export const sendingQuery = queryOptions({
   queryKey: ['tools', 'sending'],
   queryFn: () => api.get<EmailSendingPolicy>('/api/v2/email/sending-policy').then((r) => ({ effective: r.effective as SendPolicy, company: r.company as SendPolicy })),
-  ...quiet,
 });
 export const agentSendingQuery = (bot: string) =>
   queryOptions({
     queryKey: ['tools', 'sending', 'agent', bot],
     queryFn: () => api.get<EmailSendingPolicy>(`/api/v2/bots/${enc(bot)}/email-sending-policy`).then((r) => ({ mode: (r.bot.mode as string | null | undefined) ?? null })),
-    ...quiet,
   });
 
 export const setSending = (change: PolicyUpdate) =>
@@ -1195,7 +1513,6 @@ export interface NumberRequest {
 export const numberRequestsQuery = queryOptions({
   queryKey: ['tools', 'phone-requests'],
   queryFn: () => api.get<InboundPhoneRequests>('/api/v2/inbound/phone-requests').then((r) => r.phone_requests as unknown as NumberRequest[]),
-  ...quiet,
 });
 const requestsChanged = () => Promise.all([toolChanged(numberRequestsQuery.queryKey), queryClient.invalidateQueries({ queryKey: inboxesQuery.queryKey })]);
 export const acceptQuote = (request: string, price_micros: number) =>
@@ -1220,7 +1537,6 @@ export interface PostalOrder {
 export const postalAddressesQuery = queryOptions({
   queryKey: ['tools', 'postal', 'addresses'],
   queryFn: () => api.get<{ addresses?: PostalAddress[]; orders?: PostalOrder[] }>('/api/v2/postal/addresses'),
-  ...quiet,
 });
 
 /** Letters emailed in: PDFs and images sent to this inbox by these senders become letters. */
@@ -1233,7 +1549,6 @@ export interface LetterIntake {
 export const intakeQuery = queryOptions({
   queryKey: ['tools', 'postal', 'intake'],
   queryFn: () => api.get<{ intake?: LetterIntake }>('/api/v2/postal/intake').then((r) => r.intake ?? {}),
-  ...quiet,
 });
 export const setIntake = (inbox_id: string | null, senders: string[]) =>
   write<unknown>({
@@ -1246,7 +1561,6 @@ export const setIntake = (inbox_id: string | null, senders: string[]) =>
 export const letterGrantsQuery = queryOptions({
   queryKey: ['tools', 'postal', 'grants'],
   queryFn: () => api.get<PostalMailGrants>('/api/v2/postal/addresses/all/grants?limit=50').then((r) => r.grants),
-  ...quiet,
 });
 export const setLetterGrant = (type: 'person' | 'bot', who: string, on: boolean) => {
   const path = `/api/v2/postal/addresses/all/grants/${type}/${enc(who)}` as const;
@@ -1256,7 +1570,6 @@ export const setLetterGrant = (type: 'person' | 'bot', who: string, on: boolean)
 export const legalMailQuery = queryOptions({
   queryKey: ['tools', 'postal', 'settings'],
   queryFn: () => api.get<PostalMailSettings>('/api/v2/postal/settings').then((r) => r.settings.legal_bot_id),
-  ...quiet,
 });
 export const setLegalMail = (legal_bot_id: string | null) =>
   write<unknown>({
@@ -1268,7 +1581,6 @@ export const setLegalMail = (legal_bot_id: string | null) =>
 export const lettersSettingsQuery = queryOptions({
   queryKey: ['tools', 'letters', 'settings'],
   queryFn: () => api.get<LettersSettings>('/api/v2/letters/settings'),
-  ...quiet,
 });
 export const setLettersOut = (change: SetLettersSettingsBody) =>
   api.put<LettersSettings>('/api/v2/letters/settings', change).then((r) => queryClient.setQueryData(lettersSettingsQuery.queryKey, r));
@@ -1291,76 +1603,7 @@ export const docsSearchQuery = (words: string) =>
     queryKey: ['docs', 'search', words],
     queryFn: ({ signal }) => api.get<DocsSearchResults>(`/api/v2/docs/search${q({ q: words, limit: 30 })}`, { signal }).then((r) => r.results),
     enabled: /\w/.test(words),
-    ...quiet,
   });
-
-/** The Librarian researches the web and adds what it finds, cited, to a doc or one section of it: one task to it. */
-export const startResearch = (body: LibrarianResearch) =>
-  api.post<LibrarianResearchFiled>('/api/v2/librarian/research', body, { idempotencyKey: crypto.randomUUID() });
-
-/** What Files may be narrowed by, as the address carries it (`agent` is a bot id, `writer` and `linked` actor or target
-    ids, `days` back from now). The server's names: backend/file_library.py listing. */
-export interface FileFilters {
-  kind?: string;
-  role?: string;
-  agent?: string;
-  writer?: string;
-  linked?: string;
-  team?: string;
-  task?: string;
-  days?: number;
-  pinned?: 1;
-  archived?: 1;
-}
-const MORE_FILTERS = ['role', 'agent', 'writer', 'linked', 'team', 'task', 'days', 'pinned', 'archived'] as const;
-
-/** Files by every filter. With the kind alone it is `filesQuery(kind)`'s key, so the route's first read is the page's. */
-export const filesListQuery = (f: FileFilters) => {
-  const rest = Object.fromEntries(MORE_FILTERS.filter((k) => f[k] !== undefined).map((k) => [k, f[k]]));
-  const kind = f.kind ?? '';
-  return infiniteQueryOptions({
-    queryKey: Object.keys(rest).length ? ['files', 'list', kind, rest] : ['files', 'list', kind],
-    queryFn: ({ pageParam }) =>
-      api.get<FileLibrary>(
-        `/api/v2/files${q({
-          limit: 100,
-          kind,
-          role: f.role,
-          bot: f.agent,
-          writer: f.writer,
-          linked: f.linked,
-          team: f.team,
-          task: f.task,
-          since: f.days ? new Date(Date.now() - f.days * 86_400_000).toISOString() : undefined,
-          pinned: f.pinned ? true : undefined,
-          archived: f.archived ? true : undefined,
-          cursor: pageParam,
-        })}`,
-      ),
-    initialPageParam: '',
-    getNextPageParam: (last) => (last.has_more && last.next_cursor ? last.next_cursor : undefined),
-    ...quiet,
-  });
-};
-
-/** The file search with the filters it takes (kind, role, linked, writer); none is `fileSearchQuery`'s key. */
-export const filesFindQuery = (text: string, f: FileFilters) => {
-  const by = { kind: f.kind, role: f.role, linked: f.linked, writer: f.writer };
-  const on = Object.values(by).some(Boolean);
-  return queryOptions({
-    queryKey: on ? ['files', 'search', text, by] : ['files', 'search', text],
-    queryFn: ({ signal }) => api.get<{ results: Array<{ id: string; title: string }> }>(`/api/v2/files/search${q({ q: text, limit: 50, ...by })}`, { signal }),
-    enabled: text.trim().length > 1,
-    ...quiet,
-  });
-};
-
-/** The teams, for the Files filter. */
-export const filesTeamsQuery = queryOptions({
-  queryKey: ['files', 'teams'],
-  queryFn: ({ signal }) => api.get<Group[] | { groups: Group[] }>('/api/v2/groups', { signal }).then((r) => (Array.isArray(r) ? r : r.groups)),
-  ...quiet,
-});
 
 /** A rule that applies to a contact, with the path it comes by (backend/entities/routes.py contacts_rules). */
 export interface ContactRule {
@@ -1375,7 +1618,6 @@ export const contactRulesQuery = (ref: string) =>
   queryOptions({
     queryKey: ['contacts', 'rules', ref],
     queryFn: () => api.get<{ rules?: ContactRule[] }>(`/api/v2/entities/rules${q({ ref })}`).then((r) => r.rules ?? []),
-    ...quiet,
   });
 
 /** Our own company in Contacts and the places it operates in; null while it is not in Contacts (a 404). */
@@ -1391,7 +1633,6 @@ export const usQuery = queryOptions({
       if ((e as { status?: number } | null)?.status === 404) return null;
       throw e;
     }),
-  ...quiet,
 });
 
 /** A place's own words on its card (backend/entities/store.py card), and a link as the card sends it in full. */
@@ -1403,13 +1644,6 @@ export interface PlaceInfo {
 export type CardLink = Card['links'][number] & { link_key?: string; from_entity_id?: string; inverse_name?: string | null };
 
 // ---------------------------------------------------------------- tier-2 gaps: skills (s781 s782 s783 s804), an outside doc (s778)
-
-/** The job functions a skill's SKILL.md may name (clients/skills.py FUNCTIONS); any other value, or none, is `other`. */
-export const SKILL_FUNCTIONS = ['tico', 'legal', 'marketing', 'growth', 'sales', 'customers', 'finance', 'product', 'engineering', 'people', 'operations', 'hardware', 'data', 'security'] as const;
-export const functionGroup = (f: string | null | undefined) => {
-  const w = (f ?? '').trim().toLowerCase();
-  return (SKILL_FUNCTIONS as readonly string[]).includes(w) ? w : 'other';
-};
 
 /** An install as one skill's usage reads it (backend/skill_usage.py coverage): its uses in 30 days, and whether the
     reader may take it off (`removable`: the rights of installing it). */
@@ -1429,7 +1663,6 @@ export const skillDetailUsageQuery = (name: string) =>
       api
         .get<{ recent?: SkillRecent[]; installs?: SkillCoverage[] }>(`/api/v2/skills/${enc(name)}/usage?days=30`)
         .then((r) => ({ recent: r.recent ?? [], installs: r.installs ?? [] })),
-    ...quiet,
   });
 
 /** Take a skill off a teammate: the same rights as installing it (DELETE /api/v2/skills/installs/<id>). */
@@ -1455,55 +1688,6 @@ export function rescreenProposal(id: string) {
     optimistic: (cur: ProposalDetail | undefined) => cur && { ...cur, proposal: { ...cur.proposal, screen_status: 'pending' } },
     send: (idempotencyKey) => api.post(`/api/v2/skills/proposals/${enc(id)}/rescreen`, {}, { idempotencyKey }),
   });
-}
-
-/** The maintenance run's suggestions for admins (backend/skill_suggestions.py): take off an install nobody uses
-    (`remove`), or ask the agent that runs a skill outside the directory to submit it (`promote`). */
-export interface SkillSuggestion {
-  id: string;
-  kind: 'remove' | 'promote';
-  name: string;
-  target: SkillActor | null;
-  uses_30d: number;
-  bots: number;
-}
-/** Skills agents ran in 30 days that the directory does not have (admins; backend/skill_usage.py popular_elsewhere). */
-export interface SkillElsewhere {
-  name: string;
-  uses: number;
-  bots: SkillActor[];
-  bots_count: number;
-}
-export const skillSuggestionsQuery = queryOptions({
-  queryKey: ['skills', 'suggestions'],
-  queryFn: () => api.get<{ suggestions?: SkillSuggestion[] }>('/api/v2/skills/suggestions').then((r) => r.suggestions ?? []),
-  ...quiet,
-});
-export const skillsElsewhereQuery = queryOptions({
-  queryKey: ['skills', 'elsewhere'],
-  queryFn: () => api.get<{ popular_elsewhere?: SkillElsewhere[] | null }>('/api/v2/skills/usage?days=30').then((r) => r.popular_elsewhere ?? []),
-  ...quiet,
-});
-
-const dropSuggestion = (id: string) => (cur: SkillSuggestion[] | undefined) => cur?.filter((x) => x.id !== id);
-
-export function closeSuggestion(id: string, verb: 'remove' | 'dismiss' | 'asked') {
-  return write<unknown>({
-    key: skillSuggestionsQuery.queryKey,
-    optimistic: dropSuggestion(id),
-    send: (idempotencyKey) => api.post(`/api/v2/skills/suggestions/${enc(id)}/${verb}`, {}, { idempotencyKey }),
-  });
-}
-
-/** Ask to submit: the person's own message asks the agent to submit the skill (an admin still approves it), then the
-    suggestion closes. */
-export async function askToSubmit(id: string, name: string, bot: string) {
-  await api.post(
-    '/api/v2/messages',
-    { to: `bot:${bot}`, text: `Please run \`tico skill submit ${name}\` to propose ${name} for the company skills directory.` },
-    { idempotencyKey: crypto.randomUUID() },
-  );
-  return closeSuggestion(id, 'asked');
 }
 
 /** An outside doc as it was read at one commit (`revision`), the one a source's list or a search hit saw. */

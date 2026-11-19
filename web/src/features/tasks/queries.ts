@@ -1,6 +1,5 @@
 import { infiniteQueryOptions, keepPreviousData, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import { ApiError } from '@/api/client';
 import type { TagCreate, TagResult, TagUpdate } from '@/api/schema';
 import type {
   FactoryMap,
@@ -22,7 +21,7 @@ import type {
   TagDetail,
   TagList,
 } from '@/api/schema';
-import { keys, queryClient, quietRoot, QUIET_STALE_MS, write } from '@/data';
+import { keys, queryClient, quietRoot, write } from '@/data';
 import { newId } from '@/lib';
 
 // Pipelines, tags and Flow's list have no live topic of their own: read again after the person's writes, on
@@ -91,7 +90,6 @@ export const pipelinesQuery = queryOptions({
     const r = await api.get<PipelineSettingsList>('/api/v2/pipelines', { signal });
     return (r.pipelines as PipelineRecord[]).filter((p) => !p.retired_at).map(adaptPipeline);
   },
-  staleTime: QUIET_STALE_MS,
 });
 
 /* ---------------------------------------------------------------- one pipeline's open tasks */
@@ -101,7 +99,7 @@ export type TaskItem = Pick<
   Task,
   'id' | 'number' | 'title' | 'status' | 'pipeline_id' | 'stage_id' | 'owner_id' | 'labels' | 'late' | 'turn' | 'updated_at' | 'version'
 > &
-  Partial<Pick<Task, 'stuck' | 'stage_since' | 'snoozed' | 'created_at' | 'due_at' | 'visibility'>>;
+  Partial<Pick<Task, 'stuck' | 'stage_since' | 'snoozed' | 'created_at' | 'due_at' | 'visibility' | 'blocks'>>;
 
 /** The cache's shape for a list: the server's page, kept as is so the stream's patches apply (live/patch.ts). */
 export interface TaskPage {
@@ -452,7 +450,6 @@ export const pipelineSettingsQuery = (pipeline: string) =>
     queryKey: ['pipelines', pipeline, 'settings'] as const,
     queryFn: async ({ signal }) =>
       (await api.get<PipelineSettingsResult>(`/api/v2/pipelines/${encodeURIComponent(pipeline)}`, { signal })).pipeline as PipelineSettingsRecord,
-    staleTime: QUIET_STALE_MS,
   });
 
 /** A stage as the editor holds it: one already saved keeps its id; a new one has none until the save. A field left out
@@ -606,7 +603,6 @@ export const factoryChoicesQuery = queryOptions({
       return null;
     }
   },
-  staleTime: QUIET_STALE_MS,
 });
 
 /* ---------------------------------------------------------------- Flow: what waits on you */
@@ -622,6 +618,38 @@ export interface FlowItem {
   late: boolean;
   stuck: boolean;
   since: string;
+  /** The open tasks it holds up. */
+  blocks?: { number: number | null }[];
+}
+
+/** One of Flow's sections: a pipeline's stage and its tasks that wait on you. */
+export interface FlowGroup {
+  key: string;
+  pipe: string;
+  stage: string;
+  items: FlowItem[];
+}
+
+/** Sections in pipeline order, then stage order: "Engineering › QA". */
+export function flowGroups(items: readonly FlowItem[], pipelines: readonly Pipeline[]): FlowGroup[] {
+  const out = new Map<string, FlowGroup>();
+  const rank = (it: FlowItem) => {
+    const pi = pipelines.findIndex((p) => p.id === it.pipeline_id);
+    const si = pi < 0 ? -1 : (pipelines[pi]?.stages.findIndex((s) => s.id === it.stage_id) ?? -1);
+    return (pi < 0 ? 999 : pi) * 1000 + (si < 0 ? 999 : si);
+  };
+  for (const it of [...items].sort((a, b) => rank(a) - rank(b))) {
+    const key = `${it.pipeline_id}:${it.stage_id}`;
+    let g = out.get(key);
+    if (!g) {
+      const p = pipelines.find((x) => x.id === it.pipeline_id);
+      const s = p?.stages.find((x) => x.id === it.stage_id) ?? (p?.done?.id === it.stage_id ? p?.done : null);
+      g = { key, pipe: p?.name ?? 'Tasks', stage: s?.name ?? 'Open', items: [] };
+      out.set(key, g);
+    }
+    g.items.push(it);
+  }
+  return [...out.values()];
 }
 
 export interface Flow {
@@ -650,11 +678,11 @@ export const flowQuery = queryOptions({
         late: !!t.late,
         stuck: !!t.stuck,
         since: it.since ?? t.stage_since ?? new Date().toISOString(),
+        blocks: t.blocks,
       });
     }
     return { count: items.length, items };
   },
-  staleTime: QUIET_STALE_MS,
 });
 
 /* ---------------------------------------------------------------- tags */
@@ -663,14 +691,12 @@ export const tagsQuery = queryOptions({
   queryKey: ['tags'] as const,
   queryFn: async ({ signal }): Promise<Tag[]> =>
     (await api.get<TagList>('/api/v2/tags?is_template=false', { signal })).tags.filter((t) => !t.is_template),
-  staleTime: QUIET_STALE_MS,
 });
 
 export const tagQuery = (tag: string) =>
   queryOptions({
     queryKey: ['tags', tag] as const,
     queryFn: ({ signal }) => api.get<TagDetail>(`/api/v2/tags/${encodeURIComponent(tag)}`, { signal }),
-    staleTime: QUIET_STALE_MS,
   });
 
 /* ---------------------------------------------------------------- one task let go over another's card */
@@ -778,7 +804,6 @@ export const requestersQuery = (task: string) =>
       ),
     initialPageParam: 0,
     getNextPageParam: (last) => last.next_offset ?? undefined,
-    staleTime: QUIET_STALE_MS,
   });
 
 type RequesterPages = InfiniteData<RequesterList, number>;
@@ -865,14 +890,6 @@ export async function removeRequester(task: string, id: string): Promise<void> {
 
 /* ---------------------------------------------------------------- tags: making and changing them (ui/app/tags.ts) */
 
-/** The templates a tag is made from (`is_template=true`). Read when someone looks for one, not with the Tags list. */
-export const templatesQuery = queryOptions({
-  queryKey: ['tags', { templates: true }] as const,
-  queryFn: async ({ signal }): Promise<Tag[]> =>
-    (await api.get<TagList>('/api/v2/tags?is_template=true', { signal })).tags.filter((t) => t.is_template),
-  staleTime: QUIET_STALE_MS,
-});
-
 const tagsAgain = () => void queryClient.invalidateQueries({ queryKey: ['tags'] });
 
 /** A key as the old form made it from a name: lowercase words joined by hyphens, cut at 40 (hubdb cuts there). */
@@ -885,33 +902,11 @@ export const tagKeyOf = (name: string) =>
     .slice(0, 40)
     .replace(/-+$/, '');
 
-/** A new tag or template (POST /api/v2/tags). */
+/** A new tag (POST /api/v2/tags). */
 export async function createTag(body: TagCreate): Promise<Tag> {
   const { tag } = await api.post<TagResult>('/api/v2/tags', body);
   tagsAgain();
   return tag;
-}
-
-/** A tag made from a template: the template's notes, under its own key (POST /api/v2/tags/{id}/instances). */
-export async function makeTagFrom(template: string, body: Pick<TagCreate, 'key' | 'metadata'>): Promise<Tag> {
-  const { tag } = await api.post<TagResult>(`/api/v2/tags/${encodeURIComponent(template)}/instances`, body);
-  tagsAgain();
-  return tag;
-}
-
-export const RELEASE_KEY = 'release-checklist';
-const RELEASE_NOTES = '- [ ] Run release scripts and migrations\n- [ ] Deploy\n- [ ] Run smoke checks\n- [ ] Tell the team';
-
-/** The release checklist starter: the template when it is there, made when it is not (someone may make it meanwhile). */
-export async function releaseChecklist(): Promise<Tag> {
-  const there = (await queryClient.fetchQuery(templatesQuery)).find((t) => t.key === RELEASE_KEY);
-  if (there) return there;
-  try {
-    return await createTag({ key: RELEASE_KEY, label: 'release', is_template: true, markdown: RELEASE_NOTES });
-  } catch (e) {
-    if (!(e instanceof ApiError && e.code === 'duplicate')) throw e;
-    return (await api.get<TagDetail>(`/api/v2/tags/${RELEASE_KEY}`)).tag;
-  }
 }
 
 /** A tag's name, notes or metadata, against the version on screen (409 when someone changed it): shown at once. */

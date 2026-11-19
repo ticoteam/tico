@@ -12,20 +12,19 @@ import { toast } from '@/kit/Toast';
 import { FilterRow, List, PageMore, Section, type PageTab } from '@/pagekinds';
 import { BUILTINS, ROUTINES, type Builtin, type RoutineState } from './actions';
 import { BuiltinPanel } from './BuiltinPanel';
-import { EndpointDialog, EndpointRow } from './Endpoints';
 import { NewInbox } from './Templates';
-import { Face, Find, press, Word } from './parts';
-import { endpointsQuery, heartbeatQuery, hooksQuery, maintenanceQuery, routinesQuery, systemJobsQuery, type Endpoint, type RunRange, type RunStatus, type RunTrigger } from './queries';
+import { Face, Find, press, Rows, Word } from './parts';
+import { heartbeatQuery, hooksQuery, maintenanceQuery, routinesQuery, systemJobsQuery, type RunRange, type RunStatus } from './queries';
 import { RoutinePanel } from './RoutinePanel';
 import { RunsTab } from './RunsTab';
-import type { Hook, Routine } from './types';
+import type { Hook, Routine, SystemJob } from './types';
 import { HookDialog, WebhookPanel } from './WebhookPanel';
 import { maintenanceWords, startsWords, triggerWords } from './words';
 import './routines.css';
 
 /* Routines (pages/3-company/rules.js routinesScreen, webhooksScreen): a List. Routines in sections by what starts
-   them, then the built-in three; Runs lists every run across them; Webhooks lists incoming webhooks and outgoing
-   endpoints. One routine, a built-in one or a webhook opens in `?panel=`. */
+   them, then the built-in three; Runs lists every run across them; Webhooks lists incoming webhooks (outgoing ones
+   live on Tools). One routine, a built-in one or a webhook opens in `?panel=`. */
 
 export interface RoutinesSearch {
   tab?: 'webhooks' | 'runs';
@@ -33,9 +32,6 @@ export interface RoutinesSearch {
   /** Runs: which runs, and over what time. */
   status?: RunStatus;
   range?: RunRange;
-  /** Runs: what started them, and whose routine. */
-  trigger?: RunTrigger;
-  owner?: string;
   /** Routines: the words searched for, and which state shows. */
   q?: string;
   state?: RoutineState;
@@ -57,18 +53,8 @@ const head = { title: 'Routines', path: ROUTINES, tabs: routinesTabs, className:
 
 export function RoutinesPage({ search }: { search: RoutinesSearch }) {
   if (search.tab === 'runs') {
-    const { status, range, trigger, owner } = search;
-    return (
-      <RunsTab
-        head={head}
-        status={status}
-        range={range}
-        trigger={trigger}
-        owner={owner}
-        panel={search.panel}
-        href={(panel) => routinesHref({ tab: 'runs', status, range, trigger, owner, panel })}
-      />
-    );
+    const { status, range } = search;
+    return <RunsTab head={head} status={status} range={range} panel={search.panel} href={(panel) => routinesHref({ tab: 'runs', status, range, panel })} />;
   }
   return search.tab === 'webhooks' ? <WebhooksTab panel={search.panel} /> : <RoutinesTab panel={search.panel} q={search.q} state={search.state} />;
 }
@@ -108,13 +94,13 @@ function RoutinesTab({ panel, q, state }: { panel?: string; q?: string; state?: 
     ...SECTIONS.map(([t, name]): [string, Routine[]] => [name, routines.filter((r) => r.trigger.type === t)]),
     ['Other', routines.filter((r) => !known.has(r.trigger.type))],
   ];
-  const add = (variant: 'primary' | 'plain') => (
-    <Button variant={variant} onClick={() => void press('routines.new', {})}>
+  const add = (
+    <Button variant="primary" onClick={() => void press('routines.new', {})}>
       Add routine
     </Button>
   );
   // The built-in section keeps the page ready while there are no routines, so the page kind cannot see it is empty:
-  // the empty state's Add is the one filled button then, and the head's draws plain.
+  // with none, the head keeps only "⋯" and the empty state holds Add.
   const none = list.isSuccess && !all.length;
   const [inbox, setInbox] = useState(false);
   return (
@@ -122,17 +108,21 @@ function RoutinesTab({ panel, q, state }: { panel?: string; q?: string; state?: 
       {...head}
       state={list.isPending ? 'loading' : list.isError ? 'fault' : 'ready'}
       onRetry={() => void list.refetch()}
-      search={<Find label="Search routines" value={q} onFind={(words) => listed({ q: words, state })} />}
+      search={!none && <Find label="Search routines" value={q} onFind={(words) => listed({ q: words, state })} />}
       filter={state && <FilterRow filters={[{ label: STATE_WORDS[state], onClear: () => listed({ q }) }]} />}
       actions={
         <>
-          <Menu trigger={<IconButton icon="filter" label="Filter" on={!!state} />}>
-            <MenuItem label="All" on={!state} onSelect={() => listed({ q })} />
-            {(Object.keys(STATE_WORDS) as RoutineState[]).map((k) => (
-              <MenuItem key={k} label={STATE_WORDS[k]} on={k === state} onSelect={() => listed({ q, state: k })} />
-            ))}
-          </Menu>
-          {add(none ? 'plain' : 'primary')}
+          {!none && (
+            <>
+              <Menu trigger={<IconButton icon="filter" label="Filter" on={!!state} data-phone />}>
+                <MenuItem label="All" on={!state} onSelect={() => listed({ q })} />
+                {(Object.keys(STATE_WORDS) as RoutineState[]).map((k) => (
+                  <MenuItem key={k} label={STATE_WORDS[k]} on={k === state} onSelect={() => listed({ q, state: k })} />
+                ))}
+              </Menu>
+              {add}
+            </>
+          )}
           {inbox && <NewInbox onClose={() => setInbox(false)} />}
         </>
       }
@@ -148,15 +138,18 @@ function RoutinesTab({ panel, q, state }: { panel?: string; q?: string; state?: 
               .filter(([, rs]) => rs.length)
               .map(([name, rs]) => (
                 <Section key={name} name={name} count={rs.length} target={`section:${name}`}>
-                  {rs.map((r) => (
-                    <RoutineRow key={r.id} r={r} selected={r.id === open} when={triggerWords(r.trigger, { hook: hookName })} />
-                  ))}
+                  <Rows
+                    label={name}
+                    items={rs}
+                    getKey={(r) => r.id}
+                    draw={(r) => <RoutineRow key={r.id} r={r} selected={r.id === open} when={triggerWords(r.trigger, { hook: hookName })} />}
+                  />
                 </Section>
               ))
           ) : all.length ? (
             <Empty title="No matches" />
           ) : (
-            <Empty title="No routines yet">{add('primary')}</Empty>
+            <Empty title="No routines yet">{add}</Empty>
           )}
           {!state && <BuiltInSection selected={built} q={q} />}
         </>
@@ -192,6 +185,10 @@ function RoutineRow({ r, selected, when }: { r: Routine; selected: boolean; when
   );
 }
 
+/** When the most recent of Tico's own jobs last started. */
+const lastJob = (jobs: SystemJob[] | undefined) =>
+  jobs?.reduce<string | null>((at, j) => (j.last?.started_at && (!at || j.last.started_at > at) ? j.last.started_at : at), null);
+
 /** Maintenance, Heartbeat and System jobs: Tico's own, each with its switch and timing in its panel. One the person
     may not read is left out. */
 function BuiltInSection({ selected, q }: { selected: Builtin | null; q?: string }) {
@@ -201,7 +198,7 @@ function BuiltInSection({ selected, q }: { selected: Builtin | null; q?: string 
   const rows: { id: Builtin; name: string; when: string; at?: string | null; off?: boolean; gone: boolean }[] = [
     { id: 'maintenance', name: 'Maintenance', when: m.data ? maintenanceWords(m.data.settings.schedule) : '', at: m.data?.last_run?.started_at, off: m.data?.settings.paused, gone: m.isError },
     { id: 'heartbeat', name: 'Heartbeat', when: h.data ? `Every ${h.data.interval_s} seconds` : '', at: h.data?.last_beat_at, gone: h.isError },
-    { id: 'system', name: 'System jobs', when: j.data ? `${j.data.length} ${j.data.length === 1 ? 'job' : 'jobs'}` : '', gone: j.isError },
+    { id: 'system', name: 'System jobs', when: j.data ? `${j.data.length} ${j.data.length === 1 ? 'job' : 'jobs'}` : '', at: lastJob(j.data), gone: j.isError },
   ];
   const shown = rows.filter((r) => !r.gone && has(r.name, q));
   if (!shown.length) return null;
@@ -239,11 +236,7 @@ function BuiltInSection({ selected, q }: { selected: Builtin | null; q?: string 
 
 function WebhooksTab({ panel }: { panel?: string }) {
   const hooks = useQuery(hooksQuery);
-  const endpoints = useQuery(endpointsQuery);
   const [adding, setAdding] = useState(false);
-  // the endpoint dialog: a new one, or the one being changed
-  const [endpoint, setEndpoint] = useState<Endpoint | 'new' | null>(null);
-  const out = endpoints.data ?? [];
   // a new webhook's full address, secret included, shown once: this state only, never the cache or the address
   const [made, setMade] = useState<{ hook: string; url: string; signing?: string } | null>(null);
   const list = hooks.data ?? [];
@@ -256,37 +249,21 @@ function WebhooksTab({ panel }: { panel?: string }) {
   return (
     <List
       {...head}
-      state={hooks.isPending ? 'loading' : hooks.isError ? 'fault' : list.length || out.length ? 'ready' : 'empty'}
+      state={hooks.isPending ? 'loading' : hooks.isError ? 'fault' : list.length ? 'ready' : 'empty'}
       onRetry={() => void hooks.refetch()}
       empty={{ title: 'No webhooks yet', action: add }}
       actions={
         <>
-          {add}
+          {list.length > 0 && add}
           {adding && <HookDialog onMade={setMade} onClose={() => setAdding(false)} />}
-          {endpoint && <EndpointDialog endpoint={endpoint === 'new' ? null : endpoint} onClose={() => setEndpoint(null)} />}
         </>
-      }
-      more={
-        <PageMore>
-          <MenuItem label="New outgoing webhook" icon="plus" onSelect={() => setEndpoint('new')} />
-        </PageMore>
       }
       sections={
-        <>
-          <Section name="Incoming" count={list.length} target="section:incoming">
-            {list.map((h) => (
-              <HookRow key={h.id} h={h} selected={h.id === open} />
-            ))}
-          </Section>
-          {(out.length > 0 || endpoints.isError) && (
-            <Section name="Outgoing" count={out.length} target="section:outgoing">
-              {endpoints.isError && <Word>Outgoing webhooks did not load</Word>}
-              {out.map((h) => (
-                <EndpointRow key={h.id} h={h} onEdit={() => setEndpoint(h)} />
-              ))}
-            </Section>
-          )}
-        </>
+        <Section name="Incoming" count={list.length} target="section:incoming">
+          {list.map((h) => (
+            <HookRow key={h.id} h={h} selected={h.id === open} />
+          ))}
+        </Section>
       }
       panel={
         open && (

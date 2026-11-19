@@ -8,6 +8,7 @@ import type { CompanyFloor, MatterRow, ProductList, RiskDetail, RiskList } from 
 import { CompanyPage } from './CompanyPage';
 import { ProductsPage } from './ProductsPage';
 import {
+  accessQuery,
   brandQuery,
   brandVersionQuery,
   floorQuery,
@@ -223,8 +224,15 @@ describe('Org @s309', () => {
     serve(nothing);
     directory(actor('human:lee', 'Lee Park'), actor('human:ana', 'Ana Ruiz'), actor('human:bo', 'Bo Chen'));
     queryClient.setQueryData(groupsQuery.queryKey, [g('sales', 'Sales', { order: 1, people: ['lee', 'ana'], lead: 'person:lee' }), g('east', 'East', { parent: 'sales', order: 2, people: ['bo'] })]);
+    queryClient.setQueryData(accessQuery.queryKey, { you: 'owner', owner: 'lee' });
     show(strategy('org'), '/company/strategy/org');
-    const sales = await screen.findByRole('treeitem', { name: 'Sales' });
+    const sales = await screen.findByRole('region', { name: 'Sales' });
+    // the company's owner (Access names them) is the root, with Tico beside them; Add teammate is the filled button
+    const root = document.querySelector('.oc-root')!;
+    expect(root.querySelector('.oc-me')?.getAttribute('href')).toBe('/team/lee');
+    expect(root.textContent).toContain('Lee Park');
+    expect(within(root as HTMLElement).getByText('Tico')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Add teammate' })).toBeTruthy();
     expect(href(within(sales).getByRole('link', { name: 'Sales lead' }))).toBe('/company/strategy/org?panel=mate:human:lee');
     // the lead heads the team and is not listed again among its teammates
     expect(within(sales).getAllByText('Lee Park')).toHaveLength(1);
@@ -378,7 +386,6 @@ describe('Risk as Disputes @n:re:disputes', () => {
     for (const said of ['Chargebacks', '$412', 'Stripe', 'Evidence']) expect(row.textContent).toContain(said);
     expect(href(within(open).getByText('Refund dispute A'))).toBe('/company/risk/disputes?panel=matter:t1');
     expect(within(screen.getByRole('table', { name: 'Closed disputes' })).getByText('Refund dispute B')).toBeTruthy();
-    const tabs = within(screen.getByRole('navigation', { name: 'Risk pages' })).getAllByRole('link');
-    expect(tabs.map((a) => a.getAttribute('href'))).toEqual(['/company/risk', '/company/risk/disputes']);
+    expect(within(screen.getByRole('group', { name: 'Show' })).getByRole('button', { name: 'Disputes' }).getAttribute('aria-pressed')).toBe('true');
   });
 });

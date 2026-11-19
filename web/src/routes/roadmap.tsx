@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { filtersOf, pipelinesQuery, pipelineTasksQuery, RoadmapPage, roadmapPipeline, shelfQuery, validateRoadmapSearch } from '@/features/tasks/exports';
+import { RoadmapPage } from '@/features/tasks/exports';
+import { filtersOf, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, shelfQuery, validateRoadmapSearch } from '@/features/tasks/routing';
 
 /** Roadmap: the Features pipeline as Now, Next, Later and Shipped. Its filters and `?requesters=<task>` live in the address. */
 export const Route = createFileRoute('/roadmap')({

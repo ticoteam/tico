@@ -126,7 +126,7 @@ describe('Team pages', () => {
     show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');
     await screen.findByText('Write short.');
     expect(screen.getByTitle('Open the instructions').getAttribute('href')).toBe('/team/ana?tab=instructions');
-    expect(screen.getByText('None').closest('a')?.getAttribute('href')).toBe('/team/ana?tab=computer');
+    expect(screen.getByTitle('Open the computer').getAttribute('href')).toBe('/team/ana?tab=computer');
   });
 
   it('opens the model picker over Settings at ?tab=model', async () => {

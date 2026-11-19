@@ -66,7 +66,7 @@ export function ListAndItem({
       <section className="tl" aria-label={listLabel ?? head.title}>
         <FillContext value={headFills({ state, empty, onRetry })}>
           <PageHead {...head} />
-          {state === 'ready' && search}
+          {search}
           {tabs && tabs.length > 0 && <PageTabs tabs={tabs} label={`${head.title} pages`} after={tabsAfter} />}
         </FillContext>
         <StateBody
@@ -85,23 +85,22 @@ export function ListAndItem({
           </div>
         </StateBody>
       </section>
-      {state === 'ready' && (
-        <section className="conv" aria-label={itemLabel}>
-          {itemHead}
-          {conversation ?? (
-            <>
-              <div className="conv-body" data-scroll>
-                <div className="conv-col">{item}</div>
-              </div>
-              {foot && (
-                <footer className="conv-foot">
-                  <div className="conv-col">{foot}</div>
-                </footer>
-              )}
-            </>
-          )}
-        </section>
-      )}
+      {/* In every state, as the mocks draw it: the column stays while the list loads or is empty. */}
+      <section className="conv" aria-label={itemLabel}>
+        {itemHead}
+        {conversation ?? (
+          <>
+            <div className="conv-body" data-scroll>
+              <div className="conv-col">{item}</div>
+            </div>
+            {foot && (
+              <footer className="conv-foot">
+                <div className="conv-col">{foot}</div>
+              </footer>
+            )}
+          </>
+        )}
+      </section>
     </main>
   );
 }

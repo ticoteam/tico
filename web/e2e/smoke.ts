@@ -155,7 +155,7 @@ async function phone(browser: Browser, name: string) {
   const { ctx, page } = await open(browser, true, '/tasks');
   await settle(page, 4000);
   await shot(page, `phone-${name}-rest`);
-  const lip = page.locator('.ph [data-card="tico"], .ph .lip').first();
+  const lip = page.locator('.phone [data-card="tico"], .phone .lip').first();
   check(await lip.count(), 'lips drawn', 'no lips on the phone');
   const histBefore = await page.evaluate(() => history.length);
   const urlBefore = page.url();
@@ -165,7 +165,7 @@ async function phone(browser: Browser, name: string) {
   if (await menuLip.count()) {
     await tapMenu();
     await settle(page, 900);
-    check(await page.locator('.ph[data-card="menu"]').count(), 'a tap on the menu lip raises the menu', `menu not up after a tap (card: ${await page.locator('.ph').getAttribute('data-card')})`);
+    check(await page.locator('.phone[data-card="menu"]').count(), 'a tap on the menu lip raises the menu', `menu not up after a tap (card: ${await page.locator('.phone').getAttribute('data-card')})`);
     await shot(page, `phone-${name}-menu`);
     await page.goBack();
     await settle(page, 900);

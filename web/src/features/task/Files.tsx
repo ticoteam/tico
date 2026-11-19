@@ -3,25 +3,22 @@ import { useLocation, useNavigate } from '@tanstack/react-router';
 import { useRef, useState } from 'react';
 import { run } from '@/actions';
 import type { TaskFileResult } from '@/api/schema';
-import { useActors } from '@/data';
 import { Button } from '@/kit/Button';
-import { Checkbox } from '@/kit/Checkbox';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
-import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { fmtDate } from '@/lib';
 import { DETAILS, failedToast, reasonOf } from './model';
-import { pageGroupsQuery, pagePickQuery, pageShownQuery, taskDetailQuery, taskFilesQuery } from './queries';
+import { pagePickQuery, pageShownQuery, taskDetailQuery, taskFilesQuery } from './queries';
 import type { Versions } from './Versions';
 
 /* What a person does to a task's pages and files beyond reading them (the old app's page view, ui/app/pages.ts, and
-   its Files tab, ui/app/task-pages.ts and task-files.ts): a page's ⋯ (who can see it, what changed, its versions,
-   archive, download, delete), linking a page, and adding a file from disk. */
+   its Files tab, ui/app/task-pages.ts and task-files.ts): a page's ⋯ (what changed, its versions, archive,
+   download, delete), linking a page, and adding a file from disk. */
 
 /** Saves a file the browser already may read (the same address the frame shows). */
 export function download(url: string, name: string) {
@@ -53,7 +50,7 @@ export function PageMenu({ task, vs }: { task: string; vs: Versions }) {
   const file = vs.doc.file_id;
   const shown = useQuery(pageShownQuery(task, file));
   const toDetails = useToDetails();
-  const [open, setOpen] = useState<'who' | 'delete' | null>(null);
+  const [open, setOpen] = useState<'delete' | null>(null);
   const p = shown.data?.page;
   const manage = !!shown.data?.can_manage;
   const name = vs.doc.title || vs.doc.name;
@@ -69,7 +66,6 @@ export function PageMenu({ task, vs }: { task: string; vs: Versions }) {
   return (
     <>
       <Menu trigger={<IconButton icon="more" label="More" size="sm" data-target={`task-page-more:${file}`} />}>
-        {manage && <MenuItem label="Who can see it" icon="lock" meta={p?.audience ? 'Chosen' : 'Everyone'} onSelect={() => setOpen('who')} />}
         {vs.before && (
           <MenuItem label="What’s changed" icon="refresh" on={vs.on} onSelect={() => void run('task.compare', { task, against: vs.on ? null : (vs.before ?? null) }, { via: 'click' })} />
         )}
@@ -95,79 +91,8 @@ export function PageMenu({ task, vs }: { task: string; vs: Versions }) {
           </>
         )}
       </Menu>
-      {open === 'who' && <WhoCanSee task={task} page={file} name={name} onClose={() => setOpen(null)} />}
       {open === 'delete' && <DeletePage task={task} page={file} name={name} onClose={() => setOpen(null)} onDeleted={() => void toDetails()} />}
     </>
-  );
-}
-
-const bare = (id: string) => id.slice(id.indexOf(':') + 1);
-const toggle = (list: string[], id: string, on: boolean) => (on ? [...new Set([...list, id])] : list.filter((x) => x !== id));
-
-/** Who can see a page: everyone who can see the task, or the people, teams and agents chosen. */
-function WhoCanSee({ task, page, name, onClose }: { task: string; page: string; name: string; onClose: () => void }) {
-  const shown = useQuery(pageShownQuery(task, page));
-  const groups = useQuery(pageGroupsQuery);
-  const actors = useActors();
-  const was = shown.data?.page.audience;
-  const [everyone, setEveryone] = useState(!was || !!was.everyone);
-  const [people, setPeople] = useState<string[]>(was?.people ?? []);
-  const [teams, setTeams] = useState<string[]>(was?.teams ?? []);
-  const [agents, setAgents] = useState<string[]>(was?.bots ?? []);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const chosen = people.length + teams.length + agents.length > 0;
-
-  const save = async () => {
-    setBusy(true);
-    setError('');
-    const r = await run('task.pageAudience', { task, page, everyone, people, teams, agents }, { via: 'click' });
-    setBusy(false);
-    if (!r.ok) return setError(reasonOf(r.error));
-    onClose();
-  };
-
-  const group = (label: string, rows: { id: string; name: string }[], on: string[], set: (next: string[]) => void) =>
-    rows.length > 0 && (
-      <fieldset className="tv-who">
-        <legend>{label}</legend>
-        {rows.map((x) => (
-          <Checkbox key={x.id} label={x.name} checked={on.includes(x.id)} onCheckedChange={(c) => set(toggle(on, x.id, c))} />
-        ))}
-      </fieldset>
-    );
-
-  return (
-    <Dialog
-      open
-      onOpenChange={(o) => !o && onClose()}
-      title="Who can see it"
-      description={name}
-      actions={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" busy={busy} disabled={busy || (!everyone && !chosen)} onClick={() => void save()}>
-            Save
-          </Button>
-        </>
-      }
-    >
-      <div className="tv-new">
-        <Switch label="Everyone who can see the task" checked={everyone} onCheckedChange={setEveryone} />
-        {!everyone && (
-          <>
-            {group('People', actors.filter((a) => a.kind === 'person').map((a) => ({ id: bare(a.id), name: a.name })), people, setPeople)}
-            {group('Teams', (groups.data ?? []).map((g) => ({ id: g.id, name: g.name })), teams, setTeams)}
-            {group('Agents', actors.filter((a) => a.kind === 'agent').map((a) => ({ id: bare(a.id), name: a.name })), agents, setAgents)}
-          </>
-        )}
-        {error && (
-          <p className="f-err" role="alert">
-            {error}
-          </p>
-        )}
-      </div>
-    </Dialog>
   );
 }
 
@@ -189,7 +114,6 @@ function DeletePage({ task, page, name, onClose, onDeleted }: { task: string; pa
       alert
       onOpenChange={(o) => !o && onClose()}
       title={`Delete ${name}?`}
-      description="Every version goes for good. This cannot be undone."
       actions={
         <>
           <Button onClick={onClose}>Cancel</Button>

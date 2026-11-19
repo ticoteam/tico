@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Conversation } from '@/conversation';
+import { Conversation, MessageBones } from '@/conversation';
 import { callCard } from '@/features/calls/exports';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
@@ -7,7 +7,6 @@ import { isDm, othersOf } from './model';
 import { useMe, useNameOf, useTitle } from './people';
 import { chatQuery } from './queries';
 import { chatActor } from '@/lib';
-
 
 export interface ChatSheetProps {
   /** The shell's `?chat=`: agent:<slug>, person:<id> or thread:<id>. */
@@ -27,7 +26,7 @@ export function ChatSheet({ chat }: ChatSheetProps) {
         <Button onClick={() => void refetch()}>Try again</Button>
       </Empty>
     );
-  if (!t) return null;
+  if (!t) return <MessageBones />;
   // The face in the head: the agent or person the address names, or the other one in a DM.
   const actor = chatActor(chat) ?? (isDm(t) ? othersOf(t, me)[0] : undefined);
   const name = (actor && nameOf(actor)) || title;

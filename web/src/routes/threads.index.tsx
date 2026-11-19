@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { ThreadsPage, loadThreads, threadsSearch } from '@/features/threads/exports';
+import { ThreadsPage } from '@/features/threads/exports';
+import { loadThreads, threadsSearch } from '@/features/threads/routing';
 
 export const Route = createFileRoute('/threads/')({
   validateSearch: threadsSearch,

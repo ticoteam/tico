@@ -1,8 +1,5 @@
 import { useQueries, useQuery } from '@tanstack/react-query';
-import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
-import { meQuery } from '@/data';
-import { taskDetailQuery } from '@/features/task/exports';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
@@ -10,19 +7,19 @@ import { Field } from '@/kit/Field';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Link as To } from '@/kit/Link';
-import { Markdown } from '@/kit/Markdown';
 import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import { run } from '@/actions/run';
 import { refusal } from '@/actions';
-import { fmtAge, fmtDate } from '@/lib';
+import { fmtDate } from '@/lib';
 import { toast } from '@/kit/Toast';
 import { FiguresStrip, Section } from '@/pagekinds';
+import { StateBody } from '@/pagekinds';
 import { fixHref } from './fixes';
-import { Foot, SwitchLine, Verb, Word, act, isForbidden, micros } from './parts';
-import { activityQuery, billingDayQuery, billingFor, changelogQuery, healthQuery, type BillingLine, type BillingMonth, type HealthFix } from './queries';
+import { Foot, NO_ACCESS, Verb, Word, act, isForbidden, micros } from './parts';
+import { billingFor, changelogQuery, healthQuery, type BillingMonth, type HealthFix } from './queries';
 import type { ChangelogEntry, ChangelogList } from '@/api/schema';
-import { changelogPage, findingsQuery, type HealthCheck, type SetupCheckRow, type StuckAgent } from './queries';
+import { changelogPage, type HealthCheck, type StuckAgent } from './queries';
 
 /* The sections that are mostly read: Billing, History, Health, Changelog. */
 
@@ -37,27 +34,13 @@ const NOT_OK: Record<string, string> = {
 const PRODUCT: Record<string, string> = { gateway: 'Tico models', hosting: 'Hosting', support: 'Support', refund: 'Refunds' };
 const SOURCE: Record<string, string> = { grant: 'Grant', adjustment: 'From Tico', arrangement: 'From Tico', payment: 'Payment', refund_back: 'Payment' };
 
-/* HQ bills by UTC month, day and hour ('2026-11', '2026-11-01', '2026-11-01T14'): read in UTC so a day never shifts. */
-const utc = (key: string) => new Date(`${key.length === 7 ? `${key}-01` : key.slice(0, 10)}T${key.length > 10 ? key.slice(11, 13) : '00'}:00:00Z`);
+/* HQ bills by UTC month and day ('2026-11', '2026-11-01'): read in UTC so a day never shifts. */
+const utc = (key: string) => new Date(`${key.length === 7 ? `${key}-01` : key.slice(0, 10)}T00:00:00Z`);
 const words = (key: string, o: Intl.DateTimeFormatOptions) => (Number.isNaN(utc(key).getTime()) ? key : utc(key).toLocaleDateString('en-US', { timeZone: 'UTC', ...o }));
 const monthWords = (m: string) => words(m, { month: 'long', year: 'numeric' });
 const dayWords = (d: string) => words(d, { weekday: 'short', month: 'short', day: 'numeric' });
-const hourWords = (h: string) => (Number.isNaN(utc(h).getTime()) ? h : `${utc(h).toLocaleTimeString('en-US', { timeZone: 'UTC', hour: 'numeric' })} UTC`);
 /** Only a plain https address is a place to pay (old app cloud-access.ts cloudPayUrl). */
 const payUrl = (u: unknown) => (typeof u === 'string' && /^https:\/\/\S+$/.test(u) ? u : '');
-/** Under a cent says so rather than $0.00. */
-const line$ = (m: number) => (m !== 0 && Math.abs(m) < 10_000 ? (m < 0 ? '-<$0.01' : '<$0.01') : micros(m));
-
-/** A day's or an hour's charges, by product and (for Tico models) model. */
-function split(lines: BillingLine[] = []): [string, number][] {
-  const rows = new Map<string, number>();
-  for (const l of lines) {
-    const model = l.product === 'gateway' ? String(l.sku ?? '').split(':')[0] : (l.sku ?? '');
-    const key = [PRODUCT[l.product] ?? l.product, model].filter(Boolean).join(', ');
-    rows.set(key, (rows.get(key) ?? 0) + l.amount_micros);
-  }
-  return [...rows];
-}
 
 /** The status a figure carries: grace, paused, low, or a cloud company frozen or locked (old billingStatus). */
 function status(b: BillingMonth): string | undefined {
@@ -69,82 +52,11 @@ function status(b: BillingMonth): string | undefined {
   return b.record_only && !b.cloud ? 'Recorded, not charged' : undefined;
 }
 
-function Lines({ lines }: { lines?: BillingLine[] }) {
-  return split(lines).map(([what, m]) => (
-    <div key={what} className="row g-bday is-line" title={what}>
-      <span className="row-title">{what}</span>
-      <span className="row-fig">{line$(m)}</span>
-    </div>
-  ));
-}
-
-/** A day opened: its split, then its hours, read when it opens. */
-function Hours({ day }: { day: string }) {
-  const q = useQuery(billingDayQuery(day));
-  if (q.isError)
-    return (
-      <Foot open>
-        <Verb onClick={() => void q.refetch()}>Try again</Verb>
-      </Foot>
-    );
-  const hours = q.data?.state === 'ok' ? (q.data.hours ?? []) : [];
-  if (!q.data) return null;
-  if (q.data.state !== 'ok') return <p className="u-more">{NOT_OK[q.data.state] ?? "Billing can't be reached"}</p>;
-  return hours.map((h) => (
-    <div key={h.period} className="row g-bday is-line" title={hourWords(h.period)}>
-      <span className="row-title">{hourWords(h.period)}</span>
-      <span className="row-fig">{micros(h.total_micros)}</span>
-    </div>
-  ));
-}
-
-function Days({ b, month, onMonth }: { b: BillingMonth; month: string; onMonth: (m: string) => void }) {
-  const [open, setOpen] = useState('');
-  const months = b.months?.length ? b.months : [b.month];
-  const pick = (
-    <Select
-      label="Month"
-      labelHidden
-      look="quiet"
-      value={month || b.month}
-      options={months.map((m) => ({ value: m, label: monthWords(m) }))}
-      onValueChange={(m) => {
-        setOpen('');
-        onMonth(m);
-      }}
-    />
-  );
-  return (
-    <Section name="By day" count={b.usage.length} actions={pick} target="setting:billing-days">
-      {b.usage.length === 0 ? (
-        <Empty title="No usage this month" />
-      ) : (
-        b.usage.map((d) => {
-          const isOpen = open === d.period;
-          const row = (
-            <button key={d.period} type="button" className="row g-bday" aria-expanded={isOpen} title={dayWords(d.period)} onClick={() => setOpen(isOpen ? '' : d.period)}>
-              <span className="row-title">{dayWords(d.period)}</span>
-              <span className="row-fig is-strong">{micros(d.total_micros)}</span>
-            </button>
-          );
-          return isOpen ? (
-            <div key={d.period} className="open">
-              {row}
-              <Lines lines={d.lines} />
-              <Hours day={d.period} />
-            </div>
-          ) : (
-            row
-          );
-        })
-      )}
-    </Section>
-  );
-}
-
-function Statement({ b }: { b: BillingMonth }) {
+/** The month's statement and its CSV; the month is picked in its head. */
+function Statement({ b, month, onMonth }: { b: BillingMonth; month: string; onMonth: (m: string) => void }) {
   const s = b.statement;
   if (!s) return null;
+  const months = b.months?.length ? b.months : [b.month];
   const lines: [string, number][] = [
     ['Opening balance', s.opening_micros],
     ...Object.entries(s.credits_by_source ?? {}).map(([k, m]): [string, number] => [`Credit, ${SOURCE[k] ?? k}`, m]),
@@ -153,7 +65,20 @@ function Statement({ b }: { b: BillingMonth }) {
     ['Closing balance', s.closing_micros],
   ];
   return (
-    <Section name={`Statement, ${monthWords(b.month)}`} target="setting:statement">
+    <Section
+      name="Statement"
+      target="setting:statement"
+      actions={
+        <Select
+          label="Month"
+          labelHidden
+          look="quiet"
+          value={month || b.month}
+          options={months.map((m) => ({ value: m, label: monthWords(m) }))}
+          onValueChange={onMonth}
+        />
+      }
+    >
       <Facts label="Statement">
         {lines.map(([what, m]) => (
           <LabelValue key={what} label={what} num>
@@ -208,7 +133,12 @@ export function Billing() {
   const b = billing.data as BillingMonth | undefined;
   if (!b) {
     if (!billing.isError) return null;
-    if (isForbidden(billing.error)) return <Empty icon="lock" title="Owners and admins only" />;
+    if (isForbidden(billing.error))
+      return (
+        <StateBody state="no-access" title="Billing" noAccess={NO_ACCESS} skeleton={null}>
+          {null}
+        </StateBody>
+      );
     return (
       <Empty icon="alert" title="Billing did not load">
         <Button onClick={() => void billing.refetch()}>Try again</Button>
@@ -232,7 +162,7 @@ export function Billing() {
         label="Billing"
         figures={[
           { label: 'Balance', value: micros(b.balance_micros), target: 'setting:balance', sub: status(b) },
-          { label: month && month !== b.month ? monthWords(b.month) : 'This month', value: micros(total) },
+          { label: month ? monthWords(b.month) : 'This month', value: micros(total) },
           { label: 'Plan', value: b.cloud?.plan ?? 'Your own servers', sub: b.cloud?.trial_days_left != null ? `${b.cloud.trial_days_left} days of trial left` : undefined },
         ]}
       />
@@ -258,16 +188,12 @@ export function Billing() {
           </>
         )}
       </Section>
-      <Days b={b} month={month} onMonth={setMonth} />
-      <Statement b={b} />
+      <Statement b={b} month={month} onMonth={setMonth} />
       {/* Plans, cards and credit change on the billing page, by the person: links, never an action Tico can take. */}
       <Pay b={b} />
     </>
   );
 }
-
-/* History (log, runs, changes) lives in its own file. */
-export { History } from './HistoryViews';
 
 const SAY: Record<string, string> = { ok: 'Fine', info: 'Note', warn: 'Look', bad: 'Broken' };
 
@@ -347,99 +273,6 @@ function Stuck({ rows }: { rows: StuckAgent[] }) {
   );
 }
 
-/** What Check health still has open: a setup problem BotOps is fixing, or a Tico bug to report to Tico support. */
-function Findings() {
-  const found = useQuery({ ...findingsQuery, retry: false });
-  const me = useQuery(meQuery);
-  const owner = me.data?.role === 'owner';
-  const list = found.data?.findings ?? [];
-  if (!found.data?.findings || (list.length === 0 && !owner)) return null;
-  const botops = found.data.botops;
-  return (
-    <Section name="Findings" count={list.length} target="setting:findings">
-      {owner && (
-        <Facts label="Findings">
-          <SwitchLine
-            label="Report Tico bugs without asking"
-            checked={!!found.data.reports_without_asking}
-            onChange={(on) => void act('settings.reportRule', { on })}
-          />
-        </Facts>
-      )}
-      {list.map((f) => {
-        const setup = f.kind === 'setup';
-        const state = setup
-          ? botops === false
-            ? 'Not fixed: no BotOps agent'
-            : 'Being fixed by BotOps'
-          : f.ticket_id
-            ? 'Reported to Tico support'
-            : f.approval_id
-              ? 'Report waits in Needs you'
-              : 'Tico bug, not reported';
-        const n = Number(f.occurrences) || 1;
-        const seen = `seen ${n.toLocaleString('en-US')} ${n === 1 ? 'time' : 'times'}${f.last_seen_at ? `, last ${fmtAge(f.last_seen_at)}` : ''}`;
-        return (
-          <div key={f.key} className="row g-hl is-bad" title={f.title} data-target={`finding:${f.key}`}>
-            <span className="row-title">{f.title}</span>
-            <span className="row-sub">{`${state}, ${seen}`}</span>
-            <span className="hl-act">
-              {!setup && !f.ticket_id && !f.approval_id && <Verb onClick={() => void act('settings.reportFinding', { key: f.key })}>Report</Verb>}
-              {setup && f.task_id && (
-                <To className="verb" href={`/task/${encodeURIComponent(f.task_id)}`}>
-                  Open task
-                </To>
-              )}
-            </span>
-            <span className="row-state">
-              <Word>{setup ? 'Setup' : 'Bug'}</Word>
-            </span>
-          </div>
-        );
-      })}
-    </Section>
-  );
-}
-
-/** The installer's checks, run by the server against its own address; kept beside the list, not in it. */
-function SetupCheck() {
-  const [busy, setBusy] = useState(false);
-  const [rows, setRows] = useState<SetupCheckRow[] | null>(null);
-  const [head, setHead] = useState('');
-  const check = async () => {
-    setBusy(true);
-    const r = await run('settings.setupCheck', {}, { via: 'click' });
-    setBusy(false);
-    if (!r.ok) return toast(refusal(r, "Couldn't run the checks"));
-    setRows((r.out as { checks?: SetupCheckRow[] } | undefined)?.checks ?? []);
-    setHead(r.did ?? '');
-  };
-  return (
-    <>
-      {rows && (
-        <Section name="Setup check" count={rows.length} summary={head} target="setting:setup-check">
-          {rows.map((c, i) => {
-            const fine = c.status === 'ok' || c.status === 'info';
-            return (
-              <div key={`${c.name}-${i}`} className={fine ? 'row g-hl' : 'row g-hl is-bad'} title={c.name}>
-                <span className="row-title">{c.name}</span>
-                <span className="row-sub">{!fine && c.fix ? `${c.detail} Fix: ${c.fix}` : c.detail}</span>
-                <span className="hl-act" />
-                <span className="row-state">
-                  <Word fine={fine}>{SAY[c.status] ?? c.status}</Word>
-                </span>
-              </div>
-            );
-          })}
-        </Section>
-      )}
-      <Foot>
-        <Verb onClick={() => void (busy ? undefined : check())}>{busy ? 'Checking' : 'Setup check'}</Verb>
-      </Foot>
-    </>
-  );
-}
-
 export function Health() {
   const health = useQuery(healthQuery);
   const h = health.data;
@@ -465,8 +298,6 @@ export function Health() {
         )}
       </Section>
       <Stuck rows={h.stuck ?? []} />
-      <Findings />
-      <SetupCheck />
     </>
   );
 }
@@ -518,58 +349,16 @@ function AddUpdate() {
   );
 }
 
-/** What a task an agent shipped came to: its title and its outcome note, over the changelog (?open=<task id>). */
-function Outcome({ task }: { task: string }) {
-  const navigate = useNavigate();
-  const t = useQuery({ ...taskDetailQuery(task), retry: false });
-  const close = () => void navigate({ to: '/settings/$section', params: { section: 'changelog' }, search: {} });
-  const note = (t.data as { note?: string | null } | undefined)?.note?.trim();
-  return (
-    <Dialog
-      open
-      onOpenChange={(o) => !o && close()}
-      title="Reported task outcome"
-      description={t.data?.title ?? (t.isError ? "Couldn't open the task" : undefined)}
-      actions={
-        <Button variant="quiet" onClick={close}>
-          Close
-        </Button>
-      }
-    >
-      {t.data && <Markdown text={note || 'No outcome recorded.'} compact />}
-    </Dialog>
-  );
-}
-
-/** Lines agents shipped; one that came from a task opens its outcome. */
-function Activity() {
-  const log = useQuery(activityQuery);
-  const entries = log.data?.entries ?? [];
-  if (entries.length === 0) return null;
-  return (
-    <Section name="Agent activity" count={entries.length} defaultOpen={false} target="setting:activity">
-      <ul className="cl-list">
-        {entries.map((e) => (
-          <li key={e.id} className="cl-act">
-            <span>{e.title}</span>
-            {e.task_id && <Verb onClick={() => void run('settings.openOutcome', { task: e.task_id }, { via: 'click' })}>View outcome</Verb>}
-          </li>
-        ))}
-      </ul>
-    </Section>
-  );
-}
-
 /** A version's day: when it was published, else the day it shipped (UTC). */
 const versionDay = (e: ChangelogEntry | undefined) => (e ? fmtDate(e.published_at ?? e.shipped_at?.slice(0, 10)) : '');
 
-export function Changelog({ open }: { open?: string }) {
+export function Changelog() {
   const log = useQuery(changelogQuery);
   if (!log.data) return null;
-  return <Versions first={log.data} open={open} />;
+  return <Versions first={log.data} />;
 }
 
-function Versions({ first, open }: { first: ChangelogList; open?: string }) {
+function Versions({ first }: { first: ChangelogList }) {
   // Load older adds the next page's offset; each page is its own read.
   const [offsets, setOffsets] = useState<number[]>([]);
   const older = useQueries({ queries: offsets.map((o) => changelogPage(o)) });
@@ -611,13 +400,10 @@ function Versions({ first, open }: { first: ChangelogList; open?: string }) {
           <Section
             key={version}
             name={
-              list.some((e) => e.unread) ? (
-                <>
-                  {version} <Pill>New</Pill>
-                </>
-              ) : (
-                version
-              )
+              <>
+                {version}
+                {list.some((e) => e.unread) ? <Pill>New</Pill> : version === first.current_version && i > 0 && <Pill>Yours</Pill>}
+              </>
             }
             label={version}
             count={list.length}
@@ -645,11 +431,11 @@ function Versions({ first, open }: { first: ChangelogList; open?: string }) {
               if (failed) void failed.refetch();
               else setOffsets((o) => (o.includes(next) ? o : [...o, next]));
             }}
-          >{loading ? 'Loading' : 'Load older'}</Verb>
+          >
+            Load older
+          </Verb>
         </Foot>
       )}
-      <Activity />
-      {open && <Outcome task={open} />}
     </>
   );
 }

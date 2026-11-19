@@ -12,6 +12,7 @@ vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: 
 // The conversation itself is tested in its own folder: here, only which one the task's chat opens.
 vi.mock('@/conversation', () => ({
   Conversation: ({ id, title }: { id: string; title: string }) => <section aria-label={`Chat with ${title}`} data-conversation={id} />,
+  MessageBones: () => <div role="status" aria-label="Loading messages" />,
 }));
 
 /* Made-up rows only. */
@@ -74,6 +75,12 @@ describe('a task’s chat', () => {
 });
 
 describe('a task by its number alone', () => {
+  it('shows message bones while the task is read', () => {
+    vi.stubGlobal('fetch', () => new Promise(() => undefined));
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    return screen.findByRole('status', { name: 'Loading messages' });
+  });
+
   it('takes the address over to the task under its pipeline @s1', async () => {
     const router = show(<TaskById task="12" />, '/task/12');
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12'));

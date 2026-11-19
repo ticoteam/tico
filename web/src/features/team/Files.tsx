@@ -5,23 +5,12 @@ import { Ago } from '@/kit/Ago';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { Menu, MenuItem } from '@/kit/Menu';
 import { Section } from '@/pagekinds';
 import { fileName, fileOpen } from './model';
 import { Foot } from './parts';
 import { agentFilesQuery, type AgentFile } from './queries';
 
 const SHORT = 3;
-// Library's own kinds (ui pages-shell LF_KINDS); "All kinds" is none.
-const KINDS = [
-  ['', 'All kinds'],
-  ['page', 'Pages'],
-  ['document', 'Documents'],
-  ['image', 'Images'],
-  ['data', 'Data'],
-  ['media', 'Video and audio'],
-  ['other', 'Other'],
-] as const;
 
 /**
  * The files it made or keeps (ui bot-files.ts): the three newest, then all of them a page at a time. A stored file and
@@ -29,11 +18,10 @@ const KINDS = [
  */
 export function FilesSection({ slug }: { slug: string }) {
   const [find, setFind] = useState('');
-  const [kind, setKind] = useState('');
   const [searching, setSearching] = useState(false);
   const words = find.trim();
-  const narrowed = !!words || !!kind;
-  const q = useInfiniteQuery({ ...agentFilesQuery(slug, { q: words, kind }), placeholderData: keepPreviousData });
+  const narrowed = !!words;
+  const q = useInfiniteQuery({ ...agentFilesQuery(slug, words), placeholderData: keepPreviousData });
   const [all, setAll] = useState(false);
   const files = q.data?.pages.flatMap((p) => p.files ?? []) ?? [];
   const total = q.data?.pages[0]?.total ?? files.length;
@@ -47,20 +35,12 @@ export function FilesSection({ slug }: { slug: string }) {
       count={total}
       target={`files:${slug}`}
       actions={
-        tools && (
-          <>
-            {searching ? (
-              <Field label="Search files" labelHidden placeholder="Search" lead="search" value={find} onValueChange={setFind} autoFocus />
-            ) : (
-              <IconButton icon="search" size="sm" quiet label="Search files" onClick={() => setSearching(true)} />
-            )}
-            <Menu trigger={<IconButton icon="filter" size="sm" quiet on={!!kind} label="Filter" aria-pressed={!!kind} />}>
-              {KINDS.map(([value, label]) => (
-                <MenuItem key={value} label={label} on={kind === value} onSelect={() => setKind(value)} />
-              ))}
-            </Menu>
-          </>
-        )
+        tools &&
+        (searching ? (
+          <Field label="Search files" labelHidden placeholder="Search" lead="search" value={find} onValueChange={setFind} autoFocus />
+        ) : (
+          <IconButton icon="search" size="sm" quiet label="Search files" onClick={() => setSearching(true)} />
+        ))
       }
     >
       {shown.map((f) => (

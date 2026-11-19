@@ -12,16 +12,17 @@ import { Field, Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
+import { FoldButton } from '@/kit/SectionHead';
 import { Select } from '@/kit/Select';
+import { SkeletonRows } from '@/kit/Skeleton';
 import { Tabs } from '@/kit/Tabs';
 import { toast } from '@/kit/Toast';
 import { SidePanel } from '@/pagekinds';
 import { EventDialog } from './EventDialog';
-import { clock, dl, isLive, joinOf, kindWords, lengthWords, minutes, parseDay, running } from './model';
+import { clock, dl, isLive, joinOf, kindWords, lengthWords, minIn, minutes, parseDay, running } from './model';
 import { joinNow, LiveMark, press, refsOf, useNameOf } from './parts';
 import {
   itemsQuery,
-  linkedTasksQuery,
   meetingQuery,
   transcriptQuery,
   upcomingCallsQuery,
@@ -98,32 +99,29 @@ export function EventPanel({
             <LiveMark />
             <b>On now</b>
             <span className="grow" />
-            <span className="row-age">{Math.max(0, Math.round((now.getTime() - s.getTime()) / 60_000))} min in</span>
+            <span className="row-age">{minIn(s, now)}</span>
           </div>
           <Button className="btn-wide" icon="call" onClick={(e) => joinNow(o, e)}>
             Join
           </Button>
         </section>
       )}
-      <section className="rail-sec">
-        <h3>When</h3>
+      <RailSec name="When">
         <Fact k="Day" v={dl(day)} />
         {!o.all_day && <Fact k="Time" v={`${clock(minutes(s))}${o.end ? ` to ${clock(minutes(new Date(o.end)))}` : ''}`} />}
         {!o.all_day && o.end && <Fact k="Length" v={lengthWords((new Date(o.end).getTime() - s.getTime()) / 60_000)} />}
         <Fact k="Repeats" v={o.recurring ? 'Yes' : 'No'} />
         <Fact k="Kind" v={kindWords(o)} />
-      </section>
+      </RailSec>
       {refs.length > 0 && (
-        <section className="rail-sec">
-          <h3>Who</h3>
+        <RailSec name="Who">
           {refs.map((r) => (
             <Guest key={r} actor={r} />
           ))}
-        </section>
+        </RailSec>
       )}
       {(o.links.thread || o.links.meeting || o.links.task || o.links.automation || o.open_url) && (
-        <section className="rail-sec">
-          <h3>About</h3>
+        <RailSec name="About">
           {o.links.thread && (
             <Link to="/threads/$thread" params={{ thread: o.links.thread }} className="rail-row call-rail">
               <Icon name="threads" />
@@ -155,7 +153,7 @@ export function EventPanel({
               <span>{o.home === 'google' ? 'Open in Google Calendar' : 'Open'}</span>
             </a>
           )}
-        </section>
+        </RailSec>
       )}
       {booked ? <EventDialog open={editing} onOpenChange={setEditing} call={booked} /> : <EventDialog open={editing} onOpenChange={setEditing} event={o} />}
       {booked && (
@@ -206,6 +204,19 @@ export function EventPanel({
   );
 }
 
+/** A side panel's section whose name folds it (t-calendar-event). */
+function RailSec({ name, children }: { name: string; children: ReactNode }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <section className="rail-sec">
+      <h3>
+        <FoldButton name={name} open={open} onToggle={() => setOpen(!open)} />
+      </h3>
+      {open && children}
+    </section>
+  );
+}
+
 function Fact({ k, v }: { k: string; v: string }) {
   return (
     <div className="fact">
@@ -226,35 +237,20 @@ function Guest({ actor }: { actor: string }) {
   );
 }
 
-/* ---------------------------------------------------------------- a meeting: its agenda, notes, summary and tasks */
+/* ---------------------------------------------------------------- a meeting: its notes, summary and tasks */
 
 export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void }) {
   useFollow({ meeting: id });
   const m = useQuery(meetingQuery(id));
-  const items = useQuery(itemsQuery(id));
-  const linked = useQuery({ ...linkedTasksQuery(id), enabled: !!m.data });
+  // a meeting still to be shared has no tasks yet; the server refuses to list them
+  const items = useQuery({ ...itemsQuery(id), enabled: m.data?.review_state === 'live' });
   const liveId = m.data?.live_meeting_id ?? '';
   const chat = useQuery({ ...transcriptQuery(liveId), enabled: !!liveId, select: (d: LiveTranscript) => (d as LiveTranscript & { chat?: MeetChat[] }).chat ?? [] });
   const [tab, setTab] = useState<'summary' | 'transcript' | 'chat'>('summary');
   const [deleting, setDeleting] = useState(false);
-  const [text, setText] = useState('');
-  const [ref, setRef] = useState('');
   const summary = m.data?.outcome?.summary;
   const lines = Array.isArray(summary) ? summary : summary ? summary.split('\n').filter((l) => l.trim()) : [];
-  const made = m.data?.outcome?.tasks ?? [];
-  const doc = items.data?.sections.doc ?? [];
   const todo = items.data?.sections.task ?? [];
-  const add = () => {
-    const t = text.trim();
-    if (!t) return;
-    setText('');
-    void press('calls.addItem', { meeting: id, section: 'doc', text: t });
-  };
-  const link = async () => {
-    const t = ref.trim();
-    if (!t) return;
-    if (await press('calls.linkTask', { meeting: id, task: t })) setRef('');
-  };
   if (m.isError)
     return (
       <SidePanel title="Meeting" target={`meeting:${id}`} onClose={onClose}>
@@ -274,8 +270,6 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
     ...(talk.length ? [{ value: 'chat' as const, label: 'Chat' }] : []),
   ];
   const on = tabs.some((t) => t.value === tab) ? tab : 'summary';
-  const madeIds = new Set(made.map((t) => t.id));
-  const links = (linked.data?.tasks ?? []).filter((t) => !madeIds.has(t.task_id));
   return (
     <SidePanel
       title={mm?.title ?? ''}
@@ -290,11 +284,12 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
       )}
       {on === 'transcript' && mm && <Said rows={said} what="transcript" />}
       {on === 'chat' && <Said rows={talk.map((c) => ({ who: c.actor ?? c.role ?? '', actor: !!c.actor, time: c.at_ms == null ? '' : running(c.at_ms / 1000), text: c.text }))} what="chat" />}
+      {m.isPending && <SkeletonRows rows={5} />}
       {on === 'summary' && (
         <>
           {(state === 'pending' || state === 'dismissed') && (
             <section className="rail-sec">
-              <p className="mv-notes">{state === 'pending' ? 'Only you see this' : 'Dismissed'}</p>
+              {state === 'dismissed' && <p className="mv-notes">Dismissed</p>}
               {state === 'pending' && mm ? (
                 <ShareBox m={mm} />
               ) : (
@@ -313,90 +308,26 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
               {mm.sent?.bot && <SentTo bot={mm.sent.bot} />}
             </section>
           )}
-          {mm?.media_url?.startsWith('https:') && (
-            <section className="rail-sec">
-              <h3>Recording</h3>
-              <Recording src={mm.media_url} />
-            </section>
-          )}
           {lines.length > 0 && (
-            <section className="rail-sec">
-              <h3>Summary</h3>
+            <RailSec name="Summary">
               <ul className="mv-list">
                 {lines.map((l, i) => (
                   <li key={i}>{l}</li>
                 ))}
               </ul>
-            </section>
+            </RailSec>
           )}
-          <section className="rail-sec">
-            <h3>Agenda</h3>
-            {doc.length > 0 && (
-              <ul className="acts">
-                {doc.map((it) => (
-                  <Item key={it.id} meeting={id} it={it} canEdit={canEdit} />
-                ))}
-              </ul>
-            )}
-            <form
-              className="mv-add"
-              onSubmit={(e) => {
-                e.preventDefault();
-                add();
-              }}
-            >
-              <Field label="Add to the agenda" labelHidden placeholder="Add to the agenda" value={text} onValueChange={setText} lead="plus" />
-            </form>
-          </section>
           {todo.length > 0 && (
-            <section className="rail-sec">
-              <h3>Action items</h3>
+            <RailSec name="Action items">
               <ul className="acts">
                 {todo.map((it) => (
                   <Item key={it.id} meeting={id} it={it} task canPush={!!items.data?.can_push} canEdit={canEdit} />
                 ))}
               </ul>
-            </section>
-          )}
-          {(made.length > 0 || links.length > 0 || (canEdit && state === 'live')) && (
-            <section className="rail-sec">
-              <h3>Tasks</h3>
-              {made.map((t) => (
-                <Link key={t.id} to="/task/$task" params={{ task: t.id }} className="rail-row call-rail">
-                  <Icon name="tasks" />
-                  <span>{t.title}</span>
-                </Link>
-              ))}
-              {links.length > 0 && (
-                <ul className="acts">
-                  {links.map((t) => (
-                    <li key={t.task_id} className="act">
-                      <span />
-                      <Link to="/task/$task" params={{ task: t.task_id }} className="act-text">
-                        {t.title}
-                      </Link>
-                      <span />
-                      {canEdit ? <IconButton icon="close" label="Unlink" size="sm" quiet onClick={() => void press('calls.unlinkTask', { meeting: id, task: t.task_id })} /> : <span />}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {canEdit && state === 'live' && (
-                <form
-                  className="mv-add"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void link();
-                  }}
-                >
-                  <Field label="Link a task" labelHidden placeholder="Link a task" value={ref} onValueChange={setRef} lead="link" />
-                </form>
-              )}
-            </section>
+            </RailSec>
           )}
           {mm && (mm.can_edit || mm.note || mm.notes) && (
-            <section className="rail-sec">
-              <h3>Notes</h3>
+            <RailSec name="Notes">
               {mm.can_edit ? <Notes m={mm} /> : mm.note && <p className="mv-notes">{mm.note}</p>}
               {mm.notes && (
                 <div className="mv-notes">
@@ -408,7 +339,12 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
                     ))}
                 </div>
               )}
-            </section>
+            </RailSec>
+          )}
+          {mm?.media_url?.startsWith('https:') && (
+            <RailSec name="Recording">
+              <Recording src={mm.media_url} />
+            </RailSec>
           )}
         </>
       )}

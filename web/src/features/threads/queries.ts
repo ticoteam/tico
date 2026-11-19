@@ -1,4 +1,4 @@
-import { infiniteQueryOptions, queryOptions, type InfiniteData } from '@tanstack/react-query';
+import { infiniteQueryOptions, keepPreviousData, queryOptions, type InfiniteData } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import { sendMessage, timelineQuery, type ChatMessage } from '@/conversation';
 import { keys, queryClient, quietRoot, write } from '@/data';
@@ -150,17 +150,6 @@ export function archiveThread(id: string, archived: boolean) {
   });
 }
 
-/** Muted is the follow level `muted` (the old app's Off); unmuting goes back to `live`. */
-export function muteThread(id: string, muted: boolean) {
-  const notify = muted ? 'muted' : 'live';
-  const p = patchRow(id, (t) => ({ ...t, me: { ...t.me, following: true, notify } }));
-  return write({
-    key: [threadKeys.list, threadKeys.view(id)],
-    optimistic: (d: ThreadList | Thread | undefined) => (d && 'pages' in d ? p.list(d) : p.view(d)),
-    send: (idempotencyKey) => api.put(`/api/v2/threads/${enc(id)}/follow`, { notify }, { idempotencyKey }),
-  });
-}
-
 export async function addPeople(id: string, actors: string[]) {
   const view = threadKeys.view(id);
   await write({
@@ -236,6 +225,10 @@ export interface Mailbox {
   agent_bot?: string | boolean | null;
   /** Set when an agent works this mailbox from written instructions. */
   agent_instructions?: string | boolean | null;
+  /** What the person may do here (backend mailbox_access.may). */
+  may?: { send?: boolean; organize?: boolean; draft?: boolean };
+  /** Which Google credential the server reads this mailbox with; 'none': nothing can until someone connects it. */
+  connection?: 'workspace' | 'personal' | 'none';
 }
 
 export const mailboxesQuery = queryOptions({
@@ -243,22 +236,57 @@ export const mailboxesQuery = queryOptions({
   queryFn: async ({ signal }) => (await api.get<{ mailboxes: Mailbox[] }>('/api/v2/mail/mailboxes', { signal })).mailboxes,
 });
 
-export const mailListQuery = (box: string) =>
-  infiniteQueryOptions({
-    queryKey: mailKeys.list(box),
-    queryFn: ({ pageParam, signal }) =>
-      api.get<{ messages: Letter[]; next_cursor?: string | null }>(`/api/v2/mail/messages${qs({ mailbox: box, limit: PAGE, cursor: pageParam })}`, { signal }),
-    initialPageParam: null as string | null,
-    getNextPageParam: (last) => last.next_cursor ?? undefined,
-    enabled: !!box,
-  });
-
 export const letterQuery = (box: string, id: string) =>
   queryOptions({
     queryKey: mailKeys.letter(box, id),
     queryFn: async ({ signal }) =>
       (await api.get<{ messages: Letter[] }>(`/api/v2/mail/threads/${enc(id)}${qs({ mailbox: box })}`, { signal })).messages,
   });
+
+/** A reply in a mail thread: Gmail drafts it in the thread, then the send gate sends that draft (its undo window and
+    any OK it needs are the gate's). Nothing shows before: the thread is read again after, as mail is after every write. */
+export function replyMail(box: string, thread: string, body: string) {
+  return write({
+    key: mailKeys.letter(box, thread),
+    optimistic: (d: Letter[] | undefined) => d,
+    send: async (idempotencyKey) => {
+      const d = await api.post<{ draft: string; thread?: string }>('/api/v2/mail/drafts', { mailbox: box, body, reply_to: thread }, { idempotencyKey });
+      return api.post<{ send: unknown }>('/api/v2/email/sends', { mailbox: box, draft_id: d.draft, thread_id: d.thread || thread }, { idempotencyKey: `${idempotencyKey}:send` });
+    },
+  });
+}
+
+type MailList = InfiniteData<{ messages: Letter[] }>;
+/** Every loaded list of this mailbox (each search is its own). */
+const mailLists = (box: string) => {
+  const found = queryClient.getQueriesData({ queryKey: mailKeys.list(box) }).map(([k]) => k);
+  return found.length ? found : [mailKeys.list(box)];
+};
+const organize = (box: string, action: string, ids: string[], idempotencyKey: string) =>
+  api.post('/api/v2/mail/messages/organize', { mailbox: box, action, ids }, { idempotencyKey });
+
+/** Archive a mail thread (Gmail takes it out of the inbox; nothing is deleted): its row leaves the list at once. */
+export function archiveMail(box: string, thread: string, letters: string[]) {
+  return write({
+    key: mailLists(box),
+    optimistic: (d: MailList | undefined) =>
+      d && { ...d, pages: d.pages.map((p) => ({ ...p, messages: p.messages.filter((l) => l.thread_id !== thread) })) },
+    send: (idempotencyKey) => organize(box, 'archive', letters, idempotencyKey),
+  });
+}
+
+/** Mark a mail thread unread again: its newest letter. */
+export function markMailUnread(box: string, letter: string) {
+  return write({
+    key: mailLists(box),
+    optimistic: (d: MailList | undefined) =>
+      d && {
+        ...d,
+        pages: d.pages.map((p) => ({ ...p, messages: p.messages.map((l) => (l.msg_id === letter ? { ...l, labels: [...(l.labels ?? []), 'UNREAD'] } : l)) })),
+      },
+    send: (idempotencyKey) => organize(box, 'mark_unread', [letter], idempotencyKey),
+  });
+}
 
 /* ---------------------------------------------------------------- texts (Messaging) */
 
@@ -269,6 +297,21 @@ export const textListQuery = infiniteQueryOptions({
   initialPageParam: null as number | null,
   getNextPageParam: (last) => last.next ?? undefined,
 });
+
+/** One contact's texts, newest first, a page at a time (the server's `from` matches a part; the page keeps only theirs). */
+export const contactTextsQuery = (from: string) =>
+  infiniteQueryOptions({
+    queryKey: [...textKeys.list, from] as const,
+    queryFn: async ({ pageParam, signal }) => {
+      const page = await api.get<{ messages: Text[]; next?: number | null }>(
+        `/api/v2/inbound/messages${qs({ kind: 'sms', from, limit: PAGE, before: pageParam })}`,
+        { signal },
+      );
+      return { ...page, messages: page.messages.filter((t) => t.from === from) };
+    },
+    initialPageParam: null as number | null,
+    getNextPageParam: (last) => last.next ?? undefined,
+  });
 
 export const textQuery = (id: string) =>
   queryOptions({
@@ -457,6 +500,8 @@ export const browseQuery = (q: string) =>
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.next_cursor ?? undefined,
     staleTime: 30_000,
+    // new words keep the last rows on screen until the answer comes, rather than a skeleton per key press
+    placeholderData: keepPreviousData,
   });
 
 /** Archived threads the viewer manages. */
@@ -575,16 +620,6 @@ export function addViewer(bot: string) {
   });
 }
 
-/** Whether the agents that read the person's chat with Tico also read what Tico has learned about them. */
-export function includeLearned(on: boolean) {
-  return write({
-    key: learnedKeys.viewers,
-    optimistic: (d: Viewers | undefined) => d && { ...d, include_learned: on },
-    send: (idempotencyKey) => api.put<Viewers>('/api/v2/assistant/viewers/learned', { include_learned: on }, { idempotencyKey }),
-    settle: (_d: Viewers | undefined, answer) => answer,
-  });
-}
-
 export function removeViewer(bot: string) {
   return write({
     key: learnedKeys.viewers,
@@ -594,26 +629,14 @@ export function removeViewer(bot: string) {
   });
 }
 
-/* ---------------------------------------------------------------- finding mail (search, label, attachments) */
+/* ---------------------------------------------------------------- the Mail list, or the mail with some words in it */
 
-/** What the Mail list is narrowed to, as the address holds it. The server turns these into one Gmail query. */
-export interface MailFind {
-  q?: string;
-  /** A Gmail label id ("UNREAD", "STARRED", ...). */
-  label?: string;
-  /** Only mail with an attachment. */
-  attach?: boolean;
-}
-
-/** The Mail list, narrowed. While a new narrowing loads, the rows already shown stay (the search field keeps focus). */
-export const mailFindQuery = (box: string, find: MailFind) =>
+/** While new words load, the rows already shown stay (the search field keeps focus). */
+export const mailFindQuery = (box: string, q?: string) =>
   infiniteQueryOptions({
-    queryKey: [...mailKeys.list(box), { q: find.q ?? '', label: find.label ?? '', attach: !!find.attach }] as const,
+    queryKey: [...mailKeys.list(box), { q: q ?? '' }] as const,
     queryFn: ({ pageParam, signal }) =>
-      api.get<{ messages: Letter[]; next_cursor?: string | null }>(
-        `/api/v2/mail/messages${qs({ mailbox: box, q: find.q, label: find.label, has_attachment: find.attach ? 'true' : undefined, limit: PAGE, cursor: pageParam })}`,
-        { signal },
-      ),
+      api.get<{ messages: Letter[]; next_cursor?: string | null }>(`/api/v2/mail/messages${qs({ mailbox: box, q, limit: PAGE, cursor: pageParam })}`, { signal }),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.next_cursor ?? undefined,
     // Only within one mailbox: another mailbox's rows never stand in for this one's.

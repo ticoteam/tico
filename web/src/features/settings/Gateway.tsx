@@ -5,78 +5,30 @@ import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
-import { Facts } from '@/kit/LabelValue';
 import { toast } from '@/kit/Toast';
-import { Section } from '@/pagekinds';
 import { useDestination } from './Destination';
 import { Line, Verb, Word } from './parts';
 import { gatewayQuery, type GatewayStatus, type GatewayView } from './queries';
 
-/* Models › Tico Gateway (old app settings-providers.ts gatewayHTML): the owner's key and the Gateway's address. The key
+/* Models › When a plan runs out › the Tico Gateway's key (old app settings-providers.ts gatewayHTML), as lines. The key
    is typed once, sent, and never shown again; only its preview comes back. A new address while a key is saved is held
    by the server and asked here (Keep or Clear). Set by the server's environment, it is not shown. */
 
-export function Gateway() {
+export function GatewayLines() {
   const me = useQuery(meQuery);
   const owner = me.data?.role === 'owner';
   const gw = useQuery({ ...gatewayQuery, enabled: owner, retry: false });
   const [editing, setEditing] = useState(false);
-  const [clearing, setClearing] = useState(false);
-  const [busy, setBusy] = useState('');
   const v = gw.data as GatewayStatus | undefined;
   if (!owner || !v?.editable) return null;
-  const press = async (id: string, failed: string) => {
-    setBusy(id);
-    const r = await run(id, {}, { via: 'click' });
-    setBusy('');
-    toast(r.ok ? { text: r.did ?? 'Done' } : refusal(r, failed));
-    return r.ok;
-  };
-  const status = v.message || (v.working ? 'Working' : v.connected ? 'Not checked' : 'Not connected');
   return (
-    <Section name="Tico Gateway" target="setting:gateway">
-      <Facts label="Tico Gateway">
-        <Line label="Status">
-          <Word fine={v.working === true}>{status}</Word>
-          <Verb onClick={() => void (busy || press('settings.checkGateway', "Couldn't check"))}>Check now</Verb>
-        </Line>
-        <Line label="Key">
-          {v.preview || (v.connected ? 'Saved' : 'None')}
-          <Verb onClick={() => setEditing(true)}>Change</Verb>
-          {(v.preview || v.connected) && <Verb onClick={() => setClearing(true)}>Clear key</Verb>}
-          {v.auto_off && (
-            <Verb onClick={() => void (busy || press('settings.connectGateway', "Couldn't connect"))}>
-              Connect automatically
-            </Verb>
-          )}
-        </Line>
-        <Line label="Address">{v.url || v.default_url}</Line>
-      </Facts>
+    <>
+      <Line label="Gateway key" target="setting:gateway">
+        {v.connected && v.working === false ? <Word>{v.message || 'Not working'}</Word> : v.preview || (v.connected ? 'Saved' : 'None')}
+        <Verb onClick={() => setEditing(true)}>Change</Verb>
+      </Line>
       {editing && <GatewayDialog v={v} onClose={() => setEditing(false)} />}
-      {clearing && (
-        <Dialog
-          open
-          onOpenChange={(o) => !o && setClearing(false)}
-          title="Clear the gateway key?"
-          actions={
-            <>
-              <Button variant="quiet" onClick={() => setClearing(false)}>
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                busy={busy === 'settings.clearGateway'}
-                onClick={() => void press('settings.clearGateway', "Couldn't clear").then((ok) => ok && setClearing(false))}
-              >
-                Clear key
-              </Button>
-            </>
-          }
-        >
-          <p>Agents on Tico models stop until a key is saved again.</p>
-        </Dialog>
-      )}
-    </Section>
+    </>
   );
 }
 

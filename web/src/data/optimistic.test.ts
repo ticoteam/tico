@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/api/client';
 import { clearHeld, connectionChanged, heldCount } from './held';
-import { NeedsConnection, quietRoot, write } from './optimistic';
+import { NeedsConnection, QUIET_STALE_MS, quietRoot, write } from './optimistic';
 import { queryClient } from './query-client';
 
 afterEach(() => {
@@ -55,6 +55,7 @@ describe('write', () => {
     queryClient.setQueryData(['goals', 'list'], { goals: [] });
     await write({ key: ['goals', 'list'], optimistic: (d: object) => d, send: () => Promise.resolve({}) });
     expect(queryClient.getQueryState(['goals', 'list'])?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryDefaults(['goals', 'list']).staleTime).toBe(QUIET_STALE_MS);
   });
 
   it('refuses a change that cannot wait while offline, and shows nothing', async () => {

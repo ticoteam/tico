@@ -73,15 +73,6 @@ export function rangeWords(view: CalView, day: Date): string {
   return `${md(r.from)} to ${md(addDays(r.to, -1))}`;
 }
 
-/** The phone's short range: "Nov 16 – 22", "Nov 30 – Dec 2", "Nov 2026", "Nov 18". */
-export function shortRange(view: CalView, day: Date): string {
-  if (view === 'day') return md(day);
-  if (view === 'month') return `${MONTHS[day.getMonth()]} ${day.getFullYear()}`;
-  const r = rangeOf(view, day);
-  const last = addDays(r.to, -1);
-  return `${md(r.from)} – ${last.getMonth() === r.from.getMonth() ? last.getDate() : md(last)}`;
-}
-
 /** "Today", "Tomorrow", "Yesterday", else "Wed, Nov 18". */
 export function dayName(d: Date, today: Date): string {
   const off = Math.round(
@@ -219,6 +210,12 @@ export function hoursFor(placed: readonly Placed[], view: CalView): [number, num
   }
   return [h0, Math.min(24, h1)];
 }
+
+/** "12 min in": how long a call that is on has run. */
+export const minIn = (start: Date, now: Date) => `${Math.max(0, Math.round((now.getTime() - start.getTime()) / 60_000))} min in`;
+
+/** A meeting's summary was written: the server sends lines, or one text. */
+export const hasSummary = (summary: unknown) => (Array.isArray(summary) ? summary.length > 0 : !!summary);
 
 /** On now: a meeting whose time holds `now`. */
 export const isLive = (o: CalendarOccurrence, now: Date) => o.kind === 'event' && !o.all_day && new Date(o.start) <= now && now < new Date(o.end);

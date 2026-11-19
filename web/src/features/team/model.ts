@@ -126,8 +126,10 @@ export interface HistLine {
   live?: boolean;
   dur?: string;
   cost?: number;
-  /** A run's task. */
+  /** A run's task, or the task something was learned on. */
   task?: string;
+  /** Where it was learned: that task's title. */
+  from?: string;
 }
 
 /** "8m", "1h 12m". */
@@ -170,7 +172,8 @@ export function historyOf(runs: readonly Run[], learned: readonly Learned[], cha
     });
   }
   for (const c of changes) out.push({ key: `set:${c.id}`, kind: 'set', title: FIELD[c.field] ?? 'Settings changed', at: c.created_at });
-  for (const l of learned) out.push({ key: `learn:${l.sha}`, kind: 'learn', title: l.subject, at: l.when });
+  for (const l of learned)
+    out.push({ key: `learn:${l.sha}`, kind: 'learn', title: l.subject, at: l.when, task: l.source?.task, from: l.source?.title });
   return out.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
 }
 

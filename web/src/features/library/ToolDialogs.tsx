@@ -1,7 +1,9 @@
+import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { refusal, run } from '@/actions';
-import type { ApiTool, ApiToolSettings } from '@/api/schema';
+import type { ApiTool, ApiToolSettings, Webhook } from '@/api/schema';
 import { Button } from '@/kit/Button';
+import { Checkbox } from '@/kit/Checkbox';
 import { DatePick } from '@/kit/DatePick';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
@@ -14,7 +16,7 @@ import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { Foot, SCHEMES, trimmed, useGo, type Scheme } from './AddTool';
 import { More, press } from './parts';
-import { readMessage, type Inbox, type PasteItem } from './queries';
+import { eventTypesQuery, readMessage, type Inbox, type PasteItem } from './queries';
 
 /* The dialogs an open tool raises (the old app's tools-api, tools-website and inboxes dialogs). A secret shown here
    lives in this dialog's state only: never the query cache, a toast, a log line or the address. Closing drops it. */
@@ -520,6 +522,109 @@ export function MailingAddressDialog({ onClose }: { onClose: () => void }) {
       />
       <Select label="State" options={[...STATES]} value={state} onValueChange={setState} />
       <Field label="Company name" value={company} onValueChange={setCompany} autoFocus />
+    </Dialog>
+  );
+}
+
+/* ---------------------------------------------------------------- asking first */
+
+/** "Are you sure": for what cannot be undone. */
+export function Confirm({ title, description, label, onGo, onClose }: { title: string; description?: string; label: string; onGo: () => Promise<boolean>; onClose: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true);
+    const ok = await onGo();
+    setBusy(false);
+    if (ok) onClose();
+  };
+  return <Dialog open alert onOpenChange={(o) => !o && onClose()} title={title} description={description} actions={<Foot onClose={onClose} label={label} busy={busy} ready onGo={() => void go()} />} />;
+}
+
+/** An outgoing webhook's new signing secret: asks first, then shows it once, in this dialog's state. Closing drops it. */
+export function NewSecretDialog({ webhook, onClose }: { webhook: string; onClose: () => void }) {
+  const [secret, setSecret] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const make = async () => {
+    setBusy(true);
+    const r = await run('tools.newWebhookSecret', { webhook }, { via: 'click' });
+    setBusy(false);
+    if (r.ok && typeof r.out === 'string') setSecret(r.out);
+    else toast(refusal(r, 'No new secret'));
+  };
+  if (secret === null)
+    return (
+      <Dialog
+        open
+        alert
+        onOpenChange={(o) => !o && onClose()}
+        title="Make a new signing secret?"
+        description="The old one keeps working for a day."
+        actions={<Foot onClose={onClose} label="Make" busy={busy} ready onGo={() => void make()} />}
+      />
+    );
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()} title="Signing secret" description="Shown once." className="connect" actions={<Button onClick={onClose}>Done</Button>}>
+      <Secret label="Signing secret" value={secret} onHide={onClose} />
+    </Dialog>
+  );
+}
+
+/** A new outgoing webhook (its signing secret then shows once, here), or one's name, address and events. */
+export function WebhookDialog({ hook, onClose }: { hook?: Webhook; onClose: () => void }) {
+  const types = useQuery(eventTypesQuery).data ?? [];
+  const [name, setName] = useState(hook?.name ?? '');
+  const [url, setUrl] = useState(hook?.url ?? '');
+  const [events, setEvents] = useState<string[]>(hook?.events ?? []);
+  const [secret, setSecret] = useState<string | null>(null);
+  const [busy, go] = useGo(onClose);
+  const [adding, setAdding] = useState(false);
+  const ready = !!name.trim() && /^https?:\/\/\S+$/i.test(url.trim()) && events.length > 0;
+  const add = async () => {
+    setAdding(true);
+    const r = await run('tools.addWebhook', { name: name.trim(), url: url.trim(), events }, { via: 'click' });
+    setAdding(false);
+    const out = r.out as { secret?: string } | undefined;
+    if (!r.ok) toast(refusal(r, 'Not added'));
+    else if (out?.secret) setSecret(out.secret);
+    else onClose();
+  };
+  const save = () =>
+    hook &&
+    void go(
+      'tools.editWebhook',
+      {
+        webhook: hook.id,
+        name: name.trim() !== hook.name ? name.trim() : undefined,
+        url: url.trim() !== hook.url ? url.trim() : undefined,
+        events: events.join() !== hook.events.join() ? events : undefined,
+      },
+      'Not saved',
+    );
+  if (secret !== null)
+    return (
+      <Dialog open onOpenChange={(o) => !o && onClose()} title="Signing secret" description="Copy it now. It is not shown again." className="connect" actions={<Button onClick={onClose}>Done</Button>}>
+        <Secret label="Signing secret" value={secret} onHide={onClose} />
+      </Dialog>
+    );
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={hook ? 'Edit webhook' : 'Add webhook'}
+      actions={<Foot onClose={onClose} label={hook ? 'Save' : 'Add'} busy={busy || adding} ready={ready} onGo={hook ? save : () => void add()} />}
+    >
+      <Field label="Name" value={name} onValueChange={setName} placeholder="Order feed" autoFocus />
+      <Field label="Address" type="url" value={url} onValueChange={setUrl} placeholder="https://hooks.example.com/tico" autoComplete="off" />
+      <div className="connect-dev" role="group" aria-label="Events">
+        {types.map((t) => (
+          <Checkbox
+            key={t.name}
+            label={t.label}
+            checked={events.includes(t.name)}
+            onCheckedChange={(on) => setEvents(on ? [...events, t.name] : events.filter((x) => x !== t.name))}
+          />
+        ))}
+      </div>
     </Dialog>
   );
 }

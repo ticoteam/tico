@@ -1,5 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
 import { useActors } from '@/data';
 import { Button } from '@/kit/Button';
@@ -8,17 +7,17 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
-import { FoldButton } from '@/kit/SectionHead';
 import { Table, Th, Tr } from '@/kit/Table';
-import { List, RecordPanel, SidePanel } from '@/pagekinds';
+import { List, RecordPanel, Section, SidePanel } from '@/pagekinds';
 import type { Product } from '@/api/schema';
 import type { PRODUCT_FIELDS } from './actions';
-import { Face, Go, PanelLink, useDo } from './parts';
-import { productMattersQuery, productsQuery, repositoriesQuery, type ProductListField } from './queries';
+import { Face, Go, PageOwner, PanelLink, readState, useDo } from './parts';
+import { productsQuery, repositoriesQuery, type ProductListField } from './queries';
 import './company.css';
 
 /* Products (pages/10-records/records.js productsPage): a List whose one table names every product; a row opens its
-   record in the panel (`?panel=<key>`), and each fact there is a quiet pick that saves at once. */
+   record in the panel (`?panel=<key>`), and each fact there is a quiet pick that saves at once. The Dot on a product
+   that waits on you is left out: the server says nothing of it per product. */
 
 export interface ProductsSearch {
   panel?: string;
@@ -54,7 +53,6 @@ export function ProductsPage({ search }: { search: ProductsSearch }) {
   const products = q.data?.products ?? [];
   const panel = search.panel;
   const shown = panel && panel !== 'new' ? products.find((p) => p.key === panel) : undefined;
-  const state = q.isPending ? 'loading' : q.isError ? 'fault' : products.length ? 'ready' : 'empty';
   const add = (
     <Button variant={panel ? 'plain' : 'primary'} icon="plus" onClick={() => void open.run({ panel: 'new' })}>
       Add product
@@ -65,8 +63,13 @@ export function ProductsPage({ search }: { search: ProductsSearch }) {
       title="Products"
       path="/company/products"
       className="co"
-      actions={add}
-      state={state}
+      actions={
+        <>
+          <PageOwner page="products" />
+          {add}
+        </>
+      }
+      state={readState(q, !products.length)}
       onRetry={() => void q.refetch()}
       empty={{ title: 'No products yet', action: add }}
       sections={
@@ -114,7 +117,6 @@ function ProductRecord({ p }: { p: Product }) {
   const remove = useDo('products.removeFrom');
   const [naming, setNaming] = useState<string | null>(null);
   const actors = useActors();
-  const matters = useQuery(productMattersQuery(p.key)).data ?? [];
   const off = (field: ProductListField, value: string, name: string) => (
     <IconButton icon="close" label={`Remove ${name}`} size="sm" quiet onClick={() => void remove.run({ product: p.key, field, value })} />
   );
@@ -212,27 +214,6 @@ function ProductRecord({ p }: { p: Product }) {
               </div>
             ))}
           </RecSec>
-          <RecSec name="Risks" n={p.risks.length}>
-            {p.risks.map((r) => (
-              <Link key={r.id} to={'/company/risk' as never} search={{ risk: r.id } as never} className="row lk">
-                <Icon name="rules" />
-                <span className="row-title">{r.label}</span>
-              </Link>
-            ))}
-          </RecSec>
-          <RecSec name="Matters" n={matters.length}>
-            {matters.map((m) => (
-              <Go
-                key={m.task.id}
-                to={m.task.pipeline_id && m.task.number != null ? `/tasks/${encodeURIComponent(m.task.pipeline_id)}/${m.task.number}` : `/task/${encodeURIComponent(m.task.id)}`}
-                className={m.task.status === 'open' ? 'row lk' : 'row lk is-quiet'}
-              >
-                <Icon name="tasks" />
-                <span className="row-title">{m.task.title || m.task.label || m.task.id}</span>
-                <span className="lk-meta">{m.task.status === 'open' ? (m.task.stage ?? '') : 'Closed'}</span>
-              </Go>
-            ))}
-          </RecSec>
         </>
       }
     />
@@ -275,24 +256,14 @@ function AddTo({ add, onDone }: { add: Adds; onDone: () => void }) {
   );
 }
 
-/** A record's section: its name, a count, its rows and, for a list one adds to, the quiet +; folds. An empty one is
-    left out unless it takes additions. */
-function RecSec({ name, n, add, children }: { name: string; n: number; add?: Adds; children: ReactNode }) {
-  const [open, setOpen] = useState(true);
+/** A record's section (the kit's `Section`, which folds): its rows and the quiet + that adds one in place. */
+function RecSec({ name, n, add, children }: { name: string; n: number; add: Adds; children: ReactNode }) {
   const [adding, setAdding] = useState(false);
-  if (!n && !add) return null;
   return (
-    <section className={open ? 'rail-sec' : 'rail-sec is-shut'} aria-label={name}>
-      <div className="rec-head">
-        <h3 className="sec-name">
-          <FoldButton name={name} count={n} open={open} onToggle={() => setOpen(!open)} />
-        </h3>
-        <span className="grow" />
-        {add && <IconButton icon="plus" label={add.label} size="sm" quiet onClick={() => setAdding(true)} />}
-      </div>
-      {add && adding && <AddTo add={add} onDone={() => setAdding(false)} />}
-      {open && n > 0 && children}
-    </section>
+    <Section name={name} count={n} actions={<IconButton icon="plus" label={add.label} size="sm" quiet onClick={() => setAdding(true)} />}>
+      {adding && <AddTo add={add} onDone={() => setAdding(false)} />}
+      {children}
+    </Section>
   );
 }
 

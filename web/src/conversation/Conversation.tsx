@@ -2,13 +2,16 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { toast } from '@/kit/Toast';
 import { meQuery, useActor, type Actor } from '@/data';
+import { Button } from '@/kit/Button';
 import { DidLine } from '@/kit/DidLine';
+import { Empty } from '@/kit/Empty';
 import { Link } from '@/kit/Link';
 import { useFollow } from '@/live';
 import { Icon, type IconName } from '@/kit/Icon';
 import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
 import { SheetHead } from '@/shell';
 import { dot, type DotState } from '@/tico/dot';
+import { MessageBones } from './Bones';
 import { Composer } from './Composer';
 import { dayKey, dayLabel } from './dates';
 import { canRate } from './Feedback';
@@ -255,6 +258,17 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
     />
   );
 
+  // Bones while the first page loads; a read that failed says so with Try again (the box stays).
+  const body = timeline.isPending ? (
+    <MessageBones />
+  ) : timeline.isError && !timeline.data ? (
+    <Empty icon="alert" title="This chat did not load">
+      <Button onClick={() => void timeline.refetch()}>Try again</Button>
+    </Empty>
+  ) : (
+    list
+  );
+
   const look: ReactNode =
     (variant === 'tico' || variant === 'side') && at?.title ? (
       <span className="look">
@@ -277,7 +291,7 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
   if (variant === 'page')
     return (
       <div className="tv-col chat-page">
-        {list}
+        {body}
         {footer}
       </div>
     );
@@ -292,14 +306,14 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
           title={mateHref ? <Link className="head-name" href={mateHref}>{name}</Link> : name}
           lead={mateHref ? <Link className="head-face" href={mateHref} tabIndex={-1} aria-hidden>{face}</Link> : face}
         />
-        {list}
+        {body}
         {footer}
       </>
     );
   }
   return (
     <>
-      {list}
+      {body}
       {footer}
     </>
   );

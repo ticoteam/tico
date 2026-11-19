@@ -1,24 +1,30 @@
 import { useEffect, useState } from 'react';
 import { refusal, run } from '@/actions';
 import { desktopApp, useCallWindow, type UpdateState } from '@/desktop';
-import { isCallActive, useCall } from '@/features/calls/exports';
+import { isCallActive, useCall } from '@/features/calls/routing';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
 import { Line, SwitchLine, Verb, useVisible } from './parts';
 
-/* General › Desktop app: only inside the desktop app (a browser has no bridge and shows none of it). Its version, its
-   update (restarting is refused while a call is on), its log, and whether it opens at login: this computer's own. */
+/* General › Tico (t-settings-general): the version this company runs. Inside the desktop app (a browser has no bridge)
+   also its update (restarting is refused while a call is on) and whether it opens at login: this computer's own. */
 
 const WORD: Record<UpdateState['state'], string> = { none: 'Up to date', downloading: 'Downloading', ready: 'Ready', error: 'Update failed' };
 const AFTER_CALL = 'Restart after the call ends';
 
-export function DesktopRows() {
-  const app = desktopApp();
-  return app ? <Desktop version={app.version} /> : null;
+export function TicoSection({ version }: { version?: string }) {
+  return (
+    <Section name="Tico" target="setting:tico">
+      <Facts label="Tico">
+        <LabelValue label="Version">{version}</LabelValue>
+        {desktopApp() && <Desktop />}
+      </Facts>
+    </Section>
+  );
 }
 
-function Desktop({ version }: { version: string }) {
+function Desktop() {
   const visible = useVisible();
   const call = useCall();
   const away = useCallWindow();
@@ -53,10 +59,6 @@ function Desktop({ version }: { version: string }) {
     const r = await run('settings.restartToUpdate', {}, { via: 'click' });
     if (!r.ok) setRefused(/call is live/i.test(r.error ?? '') ? AFTER_CALL : "Couldn't restart");
   };
-  const showLog = async () => {
-    const r = await run('settings.showLog', {}, { via: 'click' });
-    if (!r.ok) toast(refusal(r, "Couldn't open the log"));
-  };
   const setOpenAtLogin = async (want: boolean) => {
     setLogin(want);
     const r = await run('settings.openAtLogin', { on: want }, { via: 'click' });
@@ -68,9 +70,7 @@ function Desktop({ version }: { version: string }) {
   };
 
   return (
-    <Section name="Desktop app" target="setting:desktop">
-      <Facts label="Desktop app">
-        <LabelValue label="Version">{version}</LabelValue>
+    <>
         <Line label="Updates" target="setting:updates">
           {update ? WORD[update.state] : ''}
           {update?.state === 'ready' && <Verb onClick={() => void restart()}>Restart to update</Verb>}
@@ -80,11 +80,7 @@ function Desktop({ version }: { version: string }) {
             </span>
           )}
         </Line>
-        <Line label="Log" target="setting:log">
-          <Verb onClick={() => void showLog()}>Show log</Verb>
-        </Line>
         {login !== null && <SwitchLine label="Open at login" target="setting:open-at-login" checked={login} onChange={(on) => void setOpenAtLogin(on)} />}
-      </Facts>
-    </Section>
+    </>
   );
 }

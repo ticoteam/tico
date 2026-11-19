@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { run } from '@/actions/run';
 import { directoryQuery } from '@/data';
-import { agentsQuery, computersQuery as teamComputers, whoHref } from '@/features/team/exports';
+import { agentsQuery, computersQuery as teamComputers, whoHref } from '@/features/team/routing';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';

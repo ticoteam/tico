@@ -1,6 +1,6 @@
 import { defineAction, run, s } from '@/actions';
 import { directoryQuery, meQuery } from '@/data';
-import { teamSlug } from '@/features/team/exports';
+import { teamSlug } from '@/features/team/routing';
 import { companiesBridge } from './companies';
 import { desktop, openCallWindow } from '@/desktop';
 

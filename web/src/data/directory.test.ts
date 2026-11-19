@@ -3,7 +3,7 @@ import { act, renderHook } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { GetOrgResponse } from '@/api/schema';
-import { buildDirectory, useActor, withStatus, type Directory } from './directory';
+import { buildDirectory, useActor, useDirectory, withStatus, type Directory } from './directory';
 import { keys } from './keys';
 import { queryClient } from './query-client';
 
@@ -67,6 +67,26 @@ describe('directory', () => {
       { wrapper },
     );
     expect(result.current?.name).toBe('Dana Whit');
+    const before = renders;
+    act(() => {
+      queryClient.setQueryData(keys.directory(), (d: Directory | undefined) => d && withStatus(d, 'builder', null));
+    });
+    expect(renders).toBe(before);
+  });
+
+  it('draws a selected part again only when that part changes', () => {
+    queryClient.setQueryData(keys.directory(), dir());
+    const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client: queryClient }, children);
+    let renders = 0;
+    const select = (d: Directory) => !!d.byId['bot:builder'];
+    const { result } = renderHook(
+      () => {
+        renders++;
+        return useDirectory(select);
+      },
+      { wrapper },
+    );
+    expect(result.current).toBe(true);
     const before = renders;
     act(() => {
       queryClient.setQueryData(keys.directory(), (d: Directory | undefined) => d && withStatus(d, 'builder', null));

@@ -7,10 +7,10 @@ import { Switch } from '@/kit/Switch';
 import { fmtDate } from '@/lib';
 import { SidePanel } from '@/pagekinds';
 import type { Builtin } from './actions';
-import { HeadSwitch, press, Verb, Word } from './parts';
+import { HeadSwitch, PanelRead, press, Verb, Word } from './parts';
 import { heartbeatQuery, maintenanceQuery, maintenanceRunsQuery, systemJobsQuery } from './queries';
 import type { JobPreset, SystemJob } from './types';
-import { agentWords, heartbeatChoices, MAINTENANCE_EVERY, type MaintenanceEvery } from './words';
+import { agentWords, heartbeatChoices, MAINTENANCE_EVERY, timeChoices, type MaintenanceEvery } from './words';
 
 /* Maintenance, Heartbeat and System jobs, each as a panel (rules.js builtinPanel): when it runs, its steps or jobs, and
    its last runs. Each keeps its switch; one the person may not change shows it, greyed. */
@@ -36,7 +36,7 @@ function MaintenancePanel({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       actions={d && <HeadSwitch label={d.settings.paused ? 'Paused' : 'On'} checked={!d.settings.paused} disabled={!can} onChange={(on) => void press('routines.setMaintenance', { paused: !on })} />}
     >
-      {m.isError && <Word>Maintenance did not load</Word>}
+      <PanelRead q={m} what="Maintenance" />
       {d && (
         <>
           <section className="rail-sec">
@@ -99,7 +99,7 @@ function HeartbeatPanel({ onClose }: { onClose: () => void }) {
   const d = h.data;
   return (
     <SidePanel className="rr" title="Heartbeat" target="routine:heartbeat" onClose={onClose}>
-      {h.isError && <Word>Heartbeat did not load</Word>}
+      <PanelRead q={h} what="Heartbeat" />
       {d && (
         <>
           <section className="rail-sec">
@@ -172,7 +172,8 @@ function SystemPanel({ onClose }: { onClose: () => void }) {
     .sort((a, b) => Date.parse(b.last?.started_at ?? '') - Date.parse(a.last?.started_at ?? ''));
   return (
     <SidePanel className="rr" title="System jobs" target="routine:system" onClose={onClose}>
-      {j.isError && <Word>System jobs did not load</Word>}
+      <PanelRead q={j} what="System jobs" />
+      {jobs.length > 0 && (
       <section className="rail-sec">
         <h3>Jobs</h3>
         {jobs.map((job) => (
@@ -201,6 +202,7 @@ function SystemPanel({ onClose }: { onClose: () => void }) {
           </div>
         ))}
       </section>
+      )}
       {runs.length > 0 && (
         <section className="rail-sec">
           <h3>Last runs</h3>
@@ -223,13 +225,6 @@ function SystemPanel({ onClose }: { onClose: () => void }) {
 
 /** Daily is "Daily at" (Learnings: "Nightly at") with its time beside it (settings-recurring.ts systemRoutineScheduleHTML). */
 const presetLabel = (job: SystemJob, p: { key: JobPreset; label: string }) => (p.key === 'daily' ? (job.key === 'learnings' ? 'Nightly at' : 'Daily at') : agentWords(p.label));
-
-/** The day's half hours, and the saved time when it is between them. */
-const timesWith = (at: string | null | undefined) => {
-  const all = Array.from({ length: 48 }, (_, n) => `${String(Math.floor(n / 2)).padStart(2, '0')}:${n % 2 ? '30' : '00'}`);
-  if (at && !all.includes(at)) all.push(at);
-  return all.sort().map((t) => ({ value: t, label: t }));
-};
 
 /** When a job runs: its words, or for one with presets the person may change, a quiet preset pick and the daily time. */
 function JobWhen({ job }: { job: SystemJob }) {
@@ -256,7 +251,7 @@ function JobWhen({ job }: { job: SystemJob }) {
           label={`${name} time`}
           labelHidden
           look="quiet"
-          options={timesWith(job.at)}
+          options={timeChoices(job.at ?? '09:00')}
           value={job.at ?? null}
           onValueChange={(at) => void press('routines.setJobSchedule', { job: job.key, at })}
         />

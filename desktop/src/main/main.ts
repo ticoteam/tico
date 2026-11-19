@@ -7,6 +7,7 @@ import { app } from 'electron';
 import { checkAddress } from './address';
 import { cleanUserAgent } from './badge';
 import * as C from './companies';
+import { attachContextMenu } from './contents';
 import { deepLinkFromArgv } from './deeplink';
 import { registerIpc } from './ipc';
 import { log, openLog } from './log';
@@ -21,6 +22,8 @@ if (process.env.TICO_USER_DATA) app.setPath('userData', path.resolve(process.env
 else if (!app.isPackaged) app.setPath('userData', path.join(app.getPath('appData'), 'Tico Dev'));
 
 app.enableSandbox();
+// Windows ties notifications and the taskbar to this id; the installer's shortcut carries the same (appId).
+if (process.platform === 'win32') app.setAppUserModelId('team.tico.desktop');
 
 let shell: Shell | null = null;
 const pending: string[] = [];
@@ -69,7 +72,10 @@ function start(): void {
     else log('warn', `TICO_SERVER is not used: ${address.error}`);
   }
 
-  const updater = new Updater(app.isPackaged && !process.env.TICO_NO_UPDATES, () => shell?.callLive ?? false, () =>
+  // The feed is the app-update.yml electron-builder writes from `publish`; without it updates stay off.
+  const feed = app.isPackaged && fs.existsSync(path.join(process.resourcesPath, 'app-update.yml'));
+  if (app.isPackaged && !feed) log('info', 'updates off: this build has no update feed');
+  const updater = new Updater(feed && !process.env.TICO_NO_UPDATES, () => shell?.callLive ?? false, () =>
     log('info', `update ${updater.state.state} ${updater.state.version ?? ''}`),
   );
   const portal = portalOrigin(process.env.TICO_PORTAL_URL);
@@ -112,6 +118,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('web-contents-created', (_e, wc) => {
     wc.on('will-attach-webview', (e) => e.preventDefault());
     wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+    attachContextMenu(wc);
   });
   app.on('before-quit', () => shell?.setQuitting());
   app.on('activate', () => shell?.showWindow());

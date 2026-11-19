@@ -10,7 +10,7 @@ import { GroupRow, Table } from '@/kit/Table';
 import { List, Section, SidePanel } from '@/pagekinds';
 import { lineBudget, LineBudgetDialog } from './Budgets';
 import { useCaps } from './caps';
-import { FIN, useFinanceHead } from './head';
+import { FIN, FinanceOwner, useFinanceHead } from './head';
 import { budgetDay, cash, colLabel, monShort, nowCol, paceOf, pnlRange, rangeLabel, statement, stepRange, valueAt, type Period, type StatementRow } from './model';
 import { ActLink, Meter, Pfig, Prow, readState, usePhone, usePress, useViewAs } from './parts';
 import { budgetsQuery, lineQuery, pnlQuery, type LineDetail, type Pnl } from './queries';
@@ -53,8 +53,11 @@ export function PnlPage({ search }: { search: FinanceSearch }) {
       }
       actions={
         <>
-          <Segmented label="Period" options={PERIODS} value={period} onValueChange={(v) => void press('finance.setPeriod', { period: v })} />
+          <span data-phone>
+            <Segmented label="Period" options={PERIODS} value={period} onValueChange={(v) => void press('finance.setPeriod', { period: v })} />
+          </span>
           <Segmented label="Basis" options={BASES} value={basis} onValueChange={(v) => void press('finance.setBasis', { basis: v })} />
+          <FinanceOwner />
         </>
       }
       sections={q.data && (phone ? <PhoneStatement pnl={q.data} open={lineId} /> : <Statement pnl={q.data} open={lineId} />)}
@@ -260,13 +263,6 @@ function LinePanel({ pnl, account }: { pnl: Pnl; account: string }) {
             <Prow key={g.key} name={nameOf(g.label, g.key)} sub={prevBy.has(g.key) ? `${prevName} ${cash(prevBy.get(g.key))}` : ''} fig={cash(g.amount)} />
           ))}
         </Section>
-        {!!now.data?.paid_by?.length && (
-          <Section name="Paid by" count={now.data.paid_by.length}>
-            {now.data.paid_by.map((p) => (
-              <Prow key={`${p.kind}:${p.name}`} name={p.name} fig={cash(p.amount)} />
-            ))}
-          </Section>
-        )}
         <Section name="Latest">
           {(now.data?.entries ?? []).map((e) => (
             <Prow key={`${e.entry_id}:${e.line_id}`} name={e.vendor_name || e.description || ''} sub={fmtDate(e.date)} fig={cash(e.amount, true)} />

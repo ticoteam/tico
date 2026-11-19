@@ -15,9 +15,15 @@ import {
 } from './queries';
 import type { SectionId } from './sections';
 
-/** For the route's loader: the section's read before the first paint. Never throws: a 403 or a fault is the page's to say. */
+/** For the route's loader: the section's read before the first paint. Never throws: a 403 or a fault is the page's to say.
+    A section read before draws from the cache at once; one gone stale (the quiet reads) is read again behind it. */
 export const loadSection = (qc: QueryClient, section: SectionId) =>
-  qc.prefetchQuery(mainQuery(section) as FetchQueryOptions<unknown, Error, unknown, readonly unknown[]>);
+  qc
+    .ensureQueryData({ ...(mainQuery(section) as FetchQueryOptions<unknown, Error, unknown, readonly unknown[]>), revalidateIfStale: true })
+    .then(
+      () => undefined,
+      () => undefined,
+    );
 
 /** The one read a section cannot draw without: the route loads it first, and its state is the page's state. */
 export function mainQuery(section: SectionId) {

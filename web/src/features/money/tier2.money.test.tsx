@@ -89,18 +89,6 @@ afterEach(() => {
 
 // ---------------------------------------------------------------- Finance
 
-describe('View as @s456', () => {
-  it('the owner picks a teammate from Access and the address reads as them', async () => {
-    serve([['/finance/access', ACCESS]]);
-    const router = show('finance', '/company/finance?tab=access');
-    fireEvent.click(await screen.findByRole('button', { name: 'View as' }));
-    const dialog = await screen.findByRole('dialog', { name: 'View as' });
-    expect(within(dialog).getByRole('combobox', { name: 'Teammate' }).textContent).toContain('Sam');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'View' }));
-    await waitFor(() => expect((router.state.location.search as { as?: string }).as).toBe('human:sam'));
-  });
-});
-
 describe('Attribution rule @s459', () => {
   it('a new rule names a vendor and its split, and is saved', async () => {
     serve([

@@ -8,7 +8,6 @@ import { run } from '@/actions/run';
 import { queryClient } from '@/data';
 import { agentsQuery, computersQuery as teamComputers } from '@/features/team/exports';
 import { Toasts } from '@/kit/Toast';
-import { providerName } from './Agents';
 import { botAccessQuery, botsQuery, computersQuery, limitsQuery, modelsQuery, providersQuery, subscriptionsQuery } from './queries';
 import { SettingsPage, hitHref } from './SettingsPage';
 
@@ -351,12 +350,6 @@ describe('Settings › Agents on a phone', () => {
     expect(screen.getByRole('menuitem', { name: /Tasks/ })).toBeTruthy();
     fireEvent.click(screen.getByRole('menuitem', { name: /Limit/ }));
     expect(await screen.findByRole('spinbutton', { name: 'Dollars a month' })).toBeTruthy();
-  });
-
-  it('providers read in their own spelling', () => {
-    expect(providerName('openai')).toBe('OpenAI');
-    expect(providerName('xai')).toBe('xAI');
-    expect(providerName('newco')).toBe('Newco');
   });
 });
 

@@ -8,20 +8,23 @@ import { Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { Link as To } from '@/kit/Link';
 import { Section, Settings } from '@/pagekinds';
-import { Agents, Computers, Models } from './Agents';
-import { Billing, Changelog, CheckNow, Health, History } from './Records';
+import { StateBody } from '@/pagekinds';
+import { AddComputer, Agents, Computers, Models } from './Agents';
+import { Billing, Changelog, CheckNow, Health } from './Records';
+import { History, type HistoryWho } from './HistoryViews';
 import { Account, General, People, Security } from './Basics';
 import { Contacts, Tasks } from './Catalog';
+import { AddPersonButton } from './People';
 import { mainQuery } from './main';
-import { isForbidden } from './parts';
+import { NO_ACCESS, isForbidden } from './parts';
 import { accessQuery, settingsCatalogQuery, type SettingHit } from './queries';
-import { NAV, type SectionId } from './sections';
+import { NAV, sectionName, type SectionId } from './sections';
 import './settings.css';
 
 /* Settings (kind: Settings). The section list on the left, the open section on the right; every control saves as it
    changes. The address holds the section, an opened row (?open=) and History's filter (?who=). */
 
-const BODY: Record<SectionId, (p: { open?: string; who?: string }) => ReactNode> = {
+const BODY: Record<SectionId, (p: { open?: string; who?: HistoryWho }) => ReactNode> = {
   general: () => <General />,
   people: ({ open }) => <People open={open} />,
   agents: ({ open }) => <Agents open={open} />,
@@ -34,7 +37,15 @@ const BODY: Record<SectionId, (p: { open?: string; who?: string }) => ReactNode>
   billing: () => <Billing />,
   history: ({ who }) => <History who={who} />,
   health: () => <Health />,
-  changelog: ({ open }) => <Changelog open={open} />,
+  changelog: () => <Changelog />,
+};
+
+/** A section's one head button. */
+const HEAD: Partial<Record<SectionId, ReactNode>> = {
+  people: <AddPersonButton />,
+  agents: <AddAgentButton />,
+  computers: <AddComputer />,
+  health: <CheckNow />,
 };
 
 function Nav({ current }: { current: SectionId }) {
@@ -92,8 +103,6 @@ const CARD: Record<string, [SectionId, string]> = {
   'settings-gateway-card': ['models', 'setting:gateway'],
   'wh-gateway': ['models', 'setting:gateway'],
   'settings-defaults': ['models', 'setting:defaults'],
-  'settings-privacy': ['general', 'setting:privacy'],
-  'settings-storage': ['general', 'setting:storage'],
   'settings-company': ['general', 'setting:company'],
   'settings-team': ['general', 'setting:reports'],
   'set-repos': ['general', 'setting:repositories'],
@@ -198,7 +207,7 @@ function useSettled(value: string, ms = 200): string {
 }
 
 /** `list`: the plain /settings address. A phone shows the section list there; a wide screen shows the first section. */
-export function SettingsPage({ section, open, who, list = false }: { section: SectionId; open?: string; who?: string; list?: boolean }) {
+export function SettingsPage({ section, open, who, list = false }: { section: SectionId; open?: string; who?: HistoryWho; list?: boolean }) {
   const me = useQuery(meQuery);
   // The union of each section's options: one read, typed loosely here because only its state is used.
   const main = useQuery(mainQuery(section) as UseQueryOptions<unknown, Error, unknown, readonly unknown[]>);
@@ -236,7 +245,7 @@ export function SettingsPage({ section, open, who, list = false }: { section: Se
       className="set-page"
       open={!list || searching}
       nav={<Nav current={section} />}
-      actions={!searching && (section === 'agents' ? <AddAgentButton /> : section === 'health' && !forbidden && <CheckNow />)}
+      actions={!searching && !forbidden && HEAD[section]}
       search={
         <div onKeyDown={keys}>
           <Search
@@ -260,7 +269,10 @@ export function SettingsPage({ section, open, who, list = false }: { section: Se
             </div>
           ) : null
         ) : forbidden ? (
-          <Empty icon="lock" title="Owners and admins only" />
+          // The kind's own no-access body, inside the section: the section list stays beside it.
+          <StateBody state="no-access" title={sectionName(section)} noAccess={NO_ACCESS} skeleton={null}>
+            {null}
+          </StateBody>
         ) : (
           <Body open={open} who={who} />
         )

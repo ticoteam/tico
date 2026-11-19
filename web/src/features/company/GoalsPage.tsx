@@ -1,11 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { useState, type ReactNode } from 'react';
-import { useActor, useActors } from '@/data';
+import { useState, type CSSProperties, type ReactNode } from 'react';
+import { configQuery, useActor, useActors } from '@/data';
 import { Button } from '@/kit/Button';
 import { LineChart } from '@/kit/Chart';
 import { DatePick } from '@/kit/DatePick';
-import { Field } from '@/kit/Field';
+import { Field, Search } from '@/kit/Field';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
@@ -13,8 +13,8 @@ import { Menu, MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import { fmtAge, fmtDate } from '@/lib';
-import { List, SidePanel, type PageTab } from '@/pagekinds';
-import { amount, Face, Go, NameOf, PanelLink, Trend, useDo } from './parts';
+import { List, RecordPanel, Section, SidePanel, type PageTab } from '@/pagekinds';
+import { amount, Face, Go, NameOf, PageOwner, PanelLink, readState, Trend, useDo } from './parts';
 import {
   goalNeedsQuery,
   goalQuery,
@@ -31,8 +31,8 @@ import {
 } from './queries';
 import type { Kpi, KpiDetail, KpiReadingView } from '@/api/schema';
 
-/* Goals (pages/3-company/company.js goalsBody): a List of the goal tree, a goal sits under the goal it feeds and each
-   KPI is a quiet line under its goal's title. A goal, a KPI, and the KPI and goal forms open in the panel:
+/* Goals (pages/3-company/company.js goalsBody): a List of the goal tree, the company's top goal as its headline; a
+   goal sits under the goal it feeds and each KPI is a quiet line under its goal's title. A goal, a KPI, and the KPI and goal forms open in the panel:
    `?panel=goal:<id>`, `kpi:<id>`, `kpi-new:<goal>`, `kpi-edit:<kpi>`, `kpi-place:<kpi>`, `goal-new`. */
 
 export interface GoalsSearch {
@@ -48,12 +48,15 @@ export function GoalsPage({ head, search }: { head: Head; search: GoalsSearch })
   const q = useQuery(goalsTreeQuery);
   const needs = useQuery(goalNeedsQuery).data ?? [];
   const open = useDo('company.openPanel');
+  const [find, setFind] = useState('');
   const goals = q.data?.goals ?? [];
   const panel = search.panel ?? '';
   const at = panel.indexOf(':');
   const kind = at < 0 ? panel : panel.slice(0, at);
   const ref = panel.slice(at + 1);
-  const state = q.isPending ? 'loading' : q.isError ? 'fault' : goals.length || needs.length ? 'ready' : 'empty';
+  const top = topGoal(goals);
+  const words = find.trim().toLowerCase();
+  const shown = words ? goals.filter((g) => [g.title, ...g.kpis.map((k) => k.name)].some((t) => t.toLowerCase().includes(words))) : goals;
   const add = (
     <Button variant={panel ? 'plain' : 'primary'} icon="plus" onClick={() => void open.run({ panel: 'goal-new' })}>
       Add goal
@@ -62,14 +65,21 @@ export function GoalsPage({ head, search }: { head: Head; search: GoalsSearch })
   return (
     <List
       {...head}
-      actions={add}
-      state={state}
+      search={<Search label="Search goals" placeholder="Search" value={find} onValueChange={setFind} />}
+      actions={
+        <>
+          {add}
+          <PageOwner page="goals" />
+        </>
+      }
+      state={readState(q, !goals.length && !needs.length)}
       onRetry={() => void q.refetch()}
       empty={{ title: 'No goals yet', action: add }}
       sections={
         <>
           <NeedsLine open={panel === 'needs'} />
-          <GoalTreeView goals={goals} waiting={waiting(q.data?.proposals)} selected={kind === 'goal' ? ref : null} />
+          {top && !words && <TopGoal g={top} />}
+          <GoalTreeView goals={shown} top={words ? undefined : top?.id} waiting={waiting(q.data?.proposals)} selected={kind === 'goal' ? ref : null} />
         </>
       }
       panel={
@@ -97,18 +107,27 @@ export function GoalsPage({ head, search }: { head: Head; search: GoalsSearch })
 
 type Placed = { goal: TreeGoal; depth: number; last: boolean };
 
-/** Goals in tree order: each under the goal it feeds, in rank order. */
-export function placeGoals(goals: readonly TreeGoal[]): Placed[] {
+const byRank = (a: TreeGoal, b: TreeGoal) => (a.rank ?? 1e9) - (b.rank ?? 1e9) || a.created_at.localeCompare(b.created_at);
+
+/** The company's own first goal, at the top of the tree: the page's headline (company.js goalLead). */
+export function topGoal(goals: readonly TreeGoal[]): TreeGoal | undefined {
+  const first = goals.filter((g) => !g.parent_id || !goals.some((x) => x.id === g.parent_id)).sort(byRank)[0];
+  return first?.owner_id === 'company' ? first : undefined;
+}
+
+/** Goals in tree order: each under the goal it feeds, in rank order. The headline (`top`) is left out and the goals
+    that feed it start the tree. */
+export function placeGoals(goals: readonly TreeGoal[], top?: string): Placed[] {
   const ids = new Set(goals.map((g) => g.id));
   const kids = new Map<string | null, TreeGoal[]>();
   for (const g of goals) {
-    const p = g.parent_id && ids.has(g.parent_id) ? g.parent_id : null;
+    if (g.id === top) continue;
+    const p = g.parent_id && ids.has(g.parent_id) && g.parent_id !== top ? g.parent_id : null;
     kids.set(p, [...(kids.get(p) ?? []), g]);
   }
-  const rank = (a: TreeGoal, b: TreeGoal) => (a.rank ?? 1e9) - (b.rank ?? 1e9) || a.created_at.localeCompare(b.created_at);
   const out: Placed[] = [];
   const walk = (p: string | null, depth: number) => {
-    const list = [...(kids.get(p) ?? [])].sort(rank);
+    const list = [...(kids.get(p) ?? [])].sort(byRank);
     list.forEach((g, i) => {
       out.push({ goal: g, depth, last: i === list.length - 1 });
       walk(g.id, depth + 1);
@@ -118,14 +137,44 @@ export function placeGoals(goals: readonly TreeGoal[]): Placed[] {
   return out;
 }
 
-function GoalTreeView({ goals, waiting: mine, selected }: { goals: readonly TreeGoal[]; waiting: readonly Proposal[]; selected: string | null }) {
+/** The headline: the company's name, its top goal, and its first KPI's reading of the target on a thin meter. */
+function TopGoal({ g }: { g: TreeGoal }) {
+  const company = useQuery(configQuery).data?.company_name;
+  const k = g.kpis[0];
+  const now = k?.latest?.value;
+  const target = k?.link?.target;
+  const pct = now != null && target ? Math.min(100, Math.max(0, (now / target) * 100)) : null;
+  return (
+    <PanelLink panel={`goal:${g.id}`} className="goal-lead" data-target={`goal:${g.id}`}>
+      <span className="goal-name">
+        {company && <span className="goal-co">{company}</span>}
+        <span className="goal-title">{g.title}</span>
+      </span>
+      {k && now != null && (
+        <span className="goal-fig">
+          <span>
+            <b>{amount(now, k.unit)}</b>
+            {target != null && `of ${amount(target, k.unit)}`}
+          </span>
+          {pct != null && (
+            <span className="meter" style={{ '--pct': `${pct}%` } as CSSProperties}>
+              <i />
+            </span>
+          )}
+        </span>
+      )}
+    </PanelLink>
+  );
+}
+
+function GoalTreeView({ goals, top, waiting: mine, selected }: { goals: readonly TreeGoal[]; top?: string; waiting: readonly Proposal[]; selected: string | null }) {
   const needs = new Set(mine.map((p) => p.goal_id));
   return (
-    <div className="gt" role="tree" aria-label="Goals">
-      {placeGoals(goals).map(({ goal: g, depth, last }) => {
+    <div className="gt" aria-label="Goals">
+      {placeGoals(goals, top).map(({ goal: g, depth, last }) => {
         const more = g.kpis.length - KPIS_SHOWN;
         return (
-          <div key={g.id} className={g.id === selected ? 'gt-row is-selected' : 'gt-row'} role="treeitem" aria-level={depth + 1} aria-selected={g.id === selected}>
+          <div key={g.id} className={g.id === selected ? 'gt-row is-selected' : 'gt-row'}>
             <span className="gt-g">{depth > 0 && <i className={last ? 'e' : 't'} />}</span>
             {g.owner_id === 'company' ? <span className="av-none" /> : <Face id={g.owner_id} />}
             <div className="gt-main">
@@ -144,12 +193,6 @@ function GoalTreeView({ goals, waiting: mine, selected }: { goals: readonly Tree
               {more > 0 && (
                 <PanelLink panel={`goal:${g.id}`} className="gk gk-more">
                   {more} more
-                </PanelLink>
-              )}
-              {!g.id.startsWith('tmp:') && (
-                <PanelLink panel={`kpi-new:${g.id}`} className="gk gk-add">
-                  <Icon name="plus" />
-                  Add KPI
                 </PanelLink>
               )}
             </div>
@@ -183,6 +226,8 @@ function useOwners() {
   ];
 }
 
+/** A goal opened (company.js goal panel): its owner in the head, its title and flag, what it feeds, then its KPIs and
+    check-ins as sections that fold. Rename and a new owner are under the panel's ⋯, Mark done too; Archive is the foot. */
 function GoalPanel({ gid }: { gid: string }) {
   const tree = useQuery(goalsTreeQuery);
   const detail = useQuery({ ...goalQuery(gid), enabled: !gid.startsWith('tmp:') });
@@ -190,9 +235,10 @@ function GoalPanel({ gid }: { gid: string }) {
   const update = useDo('goals.update');
   const shut = useDo('goals.close');
   const owners = useOwners();
-  const [renaming, setRenaming] = useState<string | null>(null);
+  const [editing, setEditing] = useState<{ title: string } | 'owner' | null>(null);
   const fromTree = tree.data?.goals.find((g) => g.id === gid);
   const g = fromTree ?? detail.data?.goal;
+  const ownerName = useActor(g?.owner_id)?.name;
   if (!g) return null;
   const kpis = fromTree?.kpis ?? detail.data?.goal.kpis ?? [];
   const parent = tree.data?.goals.find((x) => x.id === g.parent_id);
@@ -204,126 +250,140 @@ function GoalPanel({ gid }: { gid: string }) {
   const done = async (status: 'done' | 'dropped') => {
     if (await shut.run({ goal: gid, status })) void close.run({});
   };
-  const rename = async () => {
-    const title = renaming?.trim();
-    setRenaming(null);
-    if (title && title !== g.title) await update.run({ goal: gid, title });
+  const rename = async (title: string) => {
+    setEditing(null);
+    if (title.trim() && title.trim() !== g.title) await update.run({ goal: gid, title: title.trim() });
   };
+  const company = g.owner_id === 'company';
   return (
-    <SidePanel
-      title={g.title}
+    <RecordPanel
+      title={company ? 'Company' : (ownerName ?? 'Goal')}
       target={`goal:${gid}`}
-      lead={g.owner_id !== 'company' && <Face id={g.owner_id} size={28} />}
-      actions={<IconButton icon="edit" label="Rename" quiet size="sm" onClick={() => setRenaming(g.title)} />}
+      lead={!company && <Face id={g.owner_id} size={28} />}
+      actions={
+        <Menu trigger={<IconButton icon="more" label="More" quiet size="sm" />}>
+          <MenuItem label="Rename" onSelect={() => setEditing({ title: g.title })} />
+          <MenuItem label="Change owner" onSelect={() => setEditing('owner')} />
+          <MenuItem label="Mark done" onSelect={() => void done('done')} />
+        </Menu>
+      }
       onClose={() => void close.run({})}
       foot={
+        <Button variant="quiet" busy={shut.pending} onClick={() => void done('dropped')}>
+          Archive
+        </Button>
+      }
+      facts={
+        <div className="rec-flds">
+          {editing && typeof editing === 'object' ? (
+            <form
+              className="kf-rename"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void rename(editing.title);
+              }}
+            >
+              <Field label="Title" labelHidden value={editing.title} onValueChange={(title) => setEditing({ title })} autoFocus />
+            </form>
+          ) : (
+            <h2 className="pnl-title">
+              {g.title}
+              {flag(g.status) && <Pill flag>{flag(g.status)}</Pill>}
+            </h2>
+          )}
+          {editing === 'owner' && (
+            <div className="fact">
+              <span>Owner</span>
+              <span className="fact-v">
+                <Select
+                  label="Owner"
+                  labelHidden
+                  look="quiet"
+                  options={owners}
+                  value={g.owner_id}
+                  onValueChange={(owner) => {
+                    setEditing(null);
+                    void update.run({ goal: gid, owner });
+                  }}
+                />
+              </span>
+            </div>
+          )}
+          {parent && (
+            <div className="fact">
+              <span>Feeds</span>
+              <span className="fact-v">
+                <PanelLink panel={`goal:${parent.id}`} className="fact-clip">
+                  {parent.owner_id !== 'company' && <Face id={parent.owner_id} />}
+                  <span>{parent.title}</span>
+                </PanelLink>
+              </span>
+            </div>
+          )}
+          {onGoal.map((p) => (
+            <ProposalCardView key={p.id} p={p} />
+          ))}
+        </div>
+      }
+      sections={
         <>
-          <Button onClick={() => void done('done')} busy={shut.pending}>
-            Mark done
-          </Button>
-          <Button variant="quiet" onClick={() => void done('dropped')}>
-            Archive
-          </Button>
+          <Section name="KPIs" count={kpis.length + newKpis.length} target={`goal:${gid}:kpis`}>
+            {kpis.map((k) => (
+              <KpiWithAsks key={k.id} asks={onKpi(k.id)}>
+                <PanelLink panel={`kpi:${k.id}`} className="kr" data-target={`kpi:${k.id}`}>
+                  <span className="kr-name">
+                    {onKpi(k.id).length > 0 && <FlowMark size={10} />}
+                    {k.name}
+                    {flag(k.status) && <Pill flag>{flag(k.status)}</Pill>}
+                  </span>
+                  <KpiFig k={k} className="gt-fig" />
+                  {k.latest ? (
+                    <From r={k.latest} when={fmtAge(k.latest.measured_at ?? k.latest.created_at ?? k.latest.period_end)} />
+                  ) : (
+                    <span className="kr-src">
+                      <Face id={k.owner_id} size={16} />
+                      <span>
+                        <NameOf id={k.owner_id} />
+                      </span>
+                    </span>
+                  )}
+                  <span className="kr-by">{k.link?.deadline ? `by ${fmtDate(k.link.deadline)}` : ''}</span>
+                </PanelLink>
+              </KpiWithAsks>
+            ))}
+            {newKpis.map((p) => (
+              <KpiWithAsks key={p.id} asks={[p]}>
+                <div className="kr">
+                  <span className="kr-name">
+                    <FlowMark size={10} />
+                    {card(p).measure?.name}
+                  </span>
+                  <span className="gt-fig">{card(p).target_label}</span>
+                  <span className="kr-src" />
+                  <span className="kr-by">
+                    <Pill flag>Proposed</Pill>
+                  </span>
+                </div>
+              </KpiWithAsks>
+            ))}
+            <PanelLink panel={`kpi-new:${gid}`} className="kr-add">
+              <Icon name="plus" />
+              Add KPI
+            </PanelLink>
+          </Section>
+          {checkins.length > 0 && (
+            <Section name="Check-ins" count={checkins.length} target={`goal:${gid}:checkins`}>
+              {checkins.map((c, i) => (
+                <div key={i} className="checkin">
+                  <span className="row-age">{fmtDate(c.created_at)}</span>
+                  <p>{c.body}</p>
+                </div>
+              ))}
+            </Section>
+          )}
         </>
       }
-    >
-      <section className="rail-sec">
-        {renaming != null && (
-          <form
-            className="kf-rename"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void rename();
-            }}
-          >
-            <Field label="Title" labelHidden value={renaming} onValueChange={setRenaming} autoFocus />
-          </form>
-        )}
-        {flag(g.status) && (
-          <div className="pnl-fig">
-            <Pill flag>{flag(g.status)}</Pill>
-          </div>
-        )}
-        <div className="fact">
-          <span>Owner</span>
-          <span className="fact-v">
-            <Select label="Owner" labelHidden look="quiet" options={owners} value={g.owner_id} onValueChange={(owner) => void update.run({ goal: gid, owner })} />
-          </span>
-        </div>
-        {onGoal.map((p) => (
-          <ProposalCardView key={p.id} p={p} />
-        ))}
-        {parent && (
-          <div className="fact">
-            <span>Feeds</span>
-            <span className="fact-v">
-              <PanelLink panel={`goal:${parent.id}`} className="fact-clip">
-                {parent.owner_id !== 'company' && <Face id={parent.owner_id} />}
-                <span>{parent.title}</span>
-              </PanelLink>
-            </span>
-          </div>
-        )}
-      </section>
-      <section className="rail-sec" aria-label="KPIs">
-        <h3>
-          KPIs<span>{kpis.length + newKpis.length || ''}</span>
-        </h3>
-        {kpis.map((k) => (
-          <KpiWithAsks key={k.id} asks={onKpi(k.id)}>
-            <PanelLink panel={`kpi:${k.id}`} className="kr" data-target={`kpi:${k.id}`}>
-              <span className="kr-name">
-                {onKpi(k.id).length > 0 && <FlowMark size={10} />}
-                {k.name}
-                {flag(k.status) && <Pill flag>{flag(k.status)}</Pill>}
-              </span>
-              <KpiFig k={k} className="gt-fig" />
-              {k.latest ? (
-                <From r={k.latest} when={fmtAge(k.latest.measured_at ?? k.latest.created_at ?? k.latest.period_end)} />
-              ) : (
-                <span className="kr-src">
-                  <Face id={k.owner_id} size={16} />
-                  <span>
-                    <NameOf id={k.owner_id} />
-                  </span>
-                </span>
-              )}
-              <span className="kr-by">{k.link?.deadline ? `by ${fmtDate(k.link.deadline)}` : ''}</span>
-            </PanelLink>
-          </KpiWithAsks>
-        ))}
-        {newKpis.map((p) => (
-          <KpiWithAsks key={p.id} asks={[p]}>
-            <div className="kr">
-              <span className="kr-name">
-                <FlowMark size={10} />
-                {card(p).measure?.name}
-              </span>
-              <span className="gt-fig">{card(p).target_label}</span>
-              <span className="kr-src" />
-              <span className="kr-by">
-                <Pill flag>Proposed</Pill>
-              </span>
-            </div>
-          </KpiWithAsks>
-        ))}
-        <PanelLink panel={`kpi-new:${gid}`} className="kr-add">
-          <Icon name="plus" />
-          Add KPI
-        </PanelLink>
-      </section>
-      {checkins.length > 0 && (
-        <section className="rail-sec" aria-label="Check-ins">
-          <h3>Check-ins</h3>
-          {checkins.map((c, i) => (
-            <div key={i} className="checkin">
-              <span className="row-age">{fmtDate(c.created_at)}</span>
-              <p>{c.body}</p>
-            </div>
-          ))}
-        </section>
-      )}
-    </SidePanel>
+    />
   );
 }
 
@@ -407,7 +467,8 @@ function ProposalCardView({ p }: { p: Proposal }) {
         <Button disabled={decide.pending} onClick={() => answer('reject')}>
           {a.no}
         </Button>
-        <Button variant="primary" disabled={decide.pending} onClick={() => answer('confirm')}>
+        {/* plain: a goal can hold several proposals, and a sheet has one filled button */}
+        <Button disabled={decide.pending} onClick={() => answer('confirm')}>
           {a.yes}
         </Button>
       </div>
@@ -900,7 +961,7 @@ function NeedItem({ n }: { n: GoalNeed }) {
                 ))}
               </ul>
             )}
-            <Button variant={o.pick ? 'primary' : 'plain'} disabled={answer.pending} onClick={() => say('confirm', i)}>
+            <Button disabled={answer.pending} onClick={() => say('confirm', i)}>
               {options.length > 1 ? `Approve ${i + 1}` : 'Approve'}
             </Button>
           </div>
@@ -942,7 +1003,7 @@ function NeedItem({ n }: { n: GoalNeed }) {
           <Button disabled={answer.pending} onClick={() => say('reject')}>
             Reject
           </Button>
-          <Button variant="primary" disabled={answer.pending} onClick={() => say('confirm')}>
+          <Button disabled={answer.pending} onClick={() => say('confirm')}>
             Accept
           </Button>
         </div>

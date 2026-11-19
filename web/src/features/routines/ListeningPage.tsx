@@ -15,11 +15,11 @@ import { MenuItem } from '@/kit/Menu';
 import { fmtDate } from '@/lib';
 import { List, PageMore, Record as RecordPage, Section, type PageTab } from '@/pagekinds';
 import { LISTENING } from './actions';
-import { Face, Find, HeadSwitch, press, pressOut, RemoveItem, RuleRow, useConfirmRemove, Verb, Word } from './parts';
+import { Face, Find, HeadSwitch, PageOwner, press, pressOut, RemoveItem, Rows, RuleRow, useConfirmRemove, Verb, Word } from './parts';
 import { matchesQuery, runsQuery, sourcesQuery, watchesQuery, watchQuery } from './queries';
 import { runLink } from './RoutinePanel';
 import type { ListenSource, Match, Routine, WatchSource } from './types';
-import { agentWords, cap, limitsWords, timeChoices } from './words';
+import { agentWords, cap, limitsWords } from './words';
 import './routines.css';
 
 /* Listening (rules.js listeningScreen, watchScreen): the watches as a List; one watch as a Record with two tabs, its
@@ -73,6 +73,7 @@ function Watches({ q }: { q?: string }) {
       search={<Find label="Search watches" value={q} onFind={(words) => void press('listening.list', { q: words })} />}
       actions={
         <>
+          <PageOwner page="listening" />
           {add}
           <AddWatch open={adding} onOpenChange={setAdding} />
         </>
@@ -149,6 +150,7 @@ function AddWatch({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boo
 function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: string }) {
   const one = useQuery(watchQuery(id));
   const listed = useQuery(watchesQuery).data?.find((w) => w.id === id);
+  const matches = useQuery({ ...matchesQuery(id), enabled: tab !== 'sources' });
   const w = one.data ?? listed;
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -169,12 +171,19 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
     return <RecordPage {...head} state={one.isPending ? 'loading' : 'fault'} onRetry={() => void one.refetch()} />;
   }
   const on = isOn(w);
+  const found = matches.data ?? [];
   return (
     <RecordPage
       {...head}
+      state={tab === 'sources' ? 'ready' : matches.isPending ? 'loading' : matches.isError ? 'fault' : found.length ? 'ready' : 'empty'}
+      onRetry={() => void matches.refetch()}
+      empty={{ title: 'No matches yet' }}
       actions={
         <>
-          <HeadSwitch label={on ? 'On' : 'Paused'} checked={on} disabled={tmp} onChange={(next) => void press(next ? 'listening.resume' : 'listening.pause', { watch: id })} />
+          <PageOwner page="listening" />
+          <span className="rr-phone" data-phone>
+            <HeadSwitch label={on ? 'On' : 'Paused'} checked={on} disabled={tmp} onChange={(next) => void press(next ? 'listening.resume' : 'listening.pause', { watch: id })} />
+          </span>
           <Button variant="primary" onClick={() => setAdding(true)}>
             Add source
           </Button>
@@ -189,7 +198,7 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
           <RemoveItem disabled={tmp} onSelect={() => remove.confirm(w.name || 'this watch', () => void press('listening.remove', { watch: id }))} />
         </PageMore>
       }
-      sections={tab === 'sources' ? <Sources w={w} /> : <Matches id={id} open={match} />}
+      sections={tab === 'sources' ? <Sources w={w} /> : <Matches id={id} list={found} open={match} />}
     />
   );
 }
@@ -202,22 +211,12 @@ function dayOf(iso: string): 'Today' | 'Yesterday' | 'Earlier' {
   return t >= start.getTime() ? 'Today' : t >= start.getTime() - DAY ? 'Yesterday' : 'Earlier';
 }
 
-function Matches({ id, open }: { id: string; open?: string }) {
-  const q = useQuery(matchesQuery(id));
-  const list = q.data ?? [];
-  if (q.isError) return <Word>Matches did not load</Word>;
-  if (q.isPending) return null;
-  if (!list.length) {
-    return (
-      <Section name="Matches" count={0}>
-        <p className="row-sub rr-none">No matches yet</p>
-      </Section>
-    );
-  }
+/** The watch's matches by day; the page draws loading, fault and none. */
+function Matches({ id, list, open }: { id: string; list: Match[]; open?: string }) {
   const groups = (['Today', 'Yesterday', 'Earlier'] as const).map((d) => [d, list.filter((m) => dayOf(m.posted_at ?? m.created_at) === d)] as const).filter(([, ms]) => ms.length);
   return groups.map(([d, ms]) => (
     <Section key={d} name={d} count={ms.length} target={`section:${d}`}>
-      {ms.map((m) => (m.id === open ? <MatchOpen key={m.id} watch={id} m={m} /> : <MatchRow key={m.id} watch={id} m={m} />))}
+      <Rows label={d} items={ms} getKey={(m) => m.id} draw={(m) => (m.id === open ? <MatchOpen key={m.id} watch={id} m={m} /> : <MatchRow key={m.id} watch={id} m={m} />)} />
     </Section>
   ));
 }
@@ -411,29 +410,17 @@ function AddSource({ watch, open, onOpenChange }: { watch: string; open: boolean
   );
 }
 
-const UNITS = [
-  { value: 'hour', label: 'Hour' },
-  { value: 'day', label: 'Day' },
-  { value: 'week', label: 'Week' },
-  { value: 'month', label: 'Month' },
-] as const;
-type Unit = (typeof UNITS)[number]['value'];
 type KeepRule = { do: 'keep' | 'drop'; tag: string; text: string };
 
-/** A watch's name and what it keeps: its keep and drop sentences, how many it sends each hour, day, week or month,
-   and when a day's batch goes (listening.ts lstFields). Duplicates are always removed. */
+/** A watch's name and what it keeps: its keep and drop sentences (listening.ts lstFields). Duplicates are always
+   removed. */
 function WatchSettings({ w, onClose }: { w: Routine; onClose: () => void }) {
   const t = w.trigger;
   const [name, setName] = useState(w.name ?? '');
   const [rules, setRules] = useState<KeepRule[]>((t.rules ?? []).map((r) => ({ do: r.do === 'drop' ? 'drop' : 'keep', tag: r.tag ?? '', text: r.text })));
-  const [limits, setLimits] = useState<{ count: string; per: Unit }[]>((t.limits ?? [{ count: 10, per: 'day' }]).map((l) => ({ count: String(l.count), per: (UNITS.find((u) => u.value === l.per)?.value ?? 'day') as Unit })));
-  const [at, setAt] = useState(t.at ?? '08:00');
   const [busy, setBusy] = useState(false);
-  const hourly = limits.some((l) => l.per === 'hour');
-  const badLimit = limits.some((l) => !(Number.isInteger(Number(l.count)) && Number(l.count) >= 1 && Number(l.count) <= 100));
-  const ready = !!name.trim() && !!limits.length && !badLimit && rules.every((r) => r.text.trim() && (r.do === 'drop' || r.tag.trim()));
+  const ready = !!name.trim() && rules.every((r) => r.text.trim() && (r.do === 'drop' || r.tag.trim()));
   const setRule = (i: number, patch: Partial<KeepRule>) => setRules(rules.map((r, j) => (j === i ? { ...r, ...patch } : r)));
-  const setLimit = (i: number, patch: Partial<{ count: string; per: Unit }>) => setLimits(limits.map((l, j) => (j === i ? { ...l, ...patch } : l)));
   const save = async () => {
     if (!ready) return;
     setBusy(true);
@@ -441,8 +428,6 @@ function WatchSettings({ w, onClose }: { w: Routine; onClose: () => void }) {
       watch: w.id,
       name: name.trim(),
       rules: rules.map((r) => (r.do === 'drop' ? { do: 'drop', text: r.text.trim() } : { do: 'keep', tag: r.tag.trim(), text: r.text.trim() })),
-      limits: limits.map((l) => ({ count: Number(l.count), per: l.per })),
-      ...(hourly ? {} : { at }),
     });
     setBusy(false);
     if (ok) onClose();
@@ -488,28 +473,6 @@ function WatchSettings({ w, onClose }: { w: Routine; onClose: () => void }) {
             </div>
           ))}
         </fieldset>
-        <fieldset className="rr-list">
-          <legend>
-            Rate limits
-            {limits.length < UNITS.length && (
-              <Verb onClick={() => setLimits([...limits, { count: '10', per: UNITS.find((u) => !limits.some((l) => l.per === u.value))?.value ?? 'day' }])}>Add limit</Verb>
-            )}
-          </legend>
-          {limits.map((l, i) => (
-            <div key={i} className="rr-line" role="group" aria-label={`Limit ${i + 1}`}>
-              <Field label="How many" labelHidden type="number" value={l.count} onValueChange={(v) => setLimit(i, { count: v })} />
-              <Select
-                label="Each"
-                labelHidden
-                options={UNITS.filter((u) => u.value === l.per || !limits.some((x) => x.per === u.value))}
-                value={l.per}
-                onValueChange={(v: Unit) => setLimit(i, { per: v })}
-              />
-              {limits.length > 1 && <IconButton icon="close" label="Remove limit" size="sm" quiet onClick={() => setLimits(limits.filter((_, j) => j !== i))} />}
-            </div>
-          ))}
-        </fieldset>
-        {!hourly && <Select label="At" options={timeChoices(at)} value={at} onValueChange={setAt} />}
       </div>
     </Dialog>
   );

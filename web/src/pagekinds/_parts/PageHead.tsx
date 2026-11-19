@@ -1,8 +1,9 @@
 import { Link, type LinkProps } from '@tanstack/react-router';
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { useSheet } from '@/shell';
+import { showPageName } from '@/tico/pageName';
 import type { HeadProps } from '@/pagekinds/types';
 import { EditableTitle } from './EditableTitle';
 
@@ -20,6 +21,8 @@ export function PageHead({ title, path, crumb, lead, after, actions, search, mor
   const big = size === 'large' ? 't-figure' : undefined;
   const back = crumb?.at(-1);
   const [renaming, setRenaming] = useState(false);
+  // a name that arrives after the route drew (its data came later, a rename) reaches the tab title and Tico's chip
+  useEffect(() => showPageName(title), [title]);
   const trail = crumb && crumb.length > 0 && (
     <nav className={sub ? 'pk-crumb' : 'tv-where pk-crumb'} aria-label="Breadcrumb">
       {crumb.map((c, i) => (

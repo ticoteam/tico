@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { directoryQuery } from '@/data';
-import { groupsQuery, TeamWho, validateTeamSearch } from '@/features/team/exports';
+import { TeamWho } from '@/features/team/exports';
+import { groupsQuery, validateTeamSearch } from '@/features/team/routing';
 
 /* `/team/<who>`: an agent (slug), a person (id) or a team (its name, slugified). Tabs are `?tab=`, Add teammate `?add=`. */
 export const Route = createFileRoute('/team/$who')({

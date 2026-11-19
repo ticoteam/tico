@@ -54,8 +54,8 @@
    - Radius follows hierarchy (14 sheet, 12 lifted card, 8 control, 7 row, 6 chip). No gradient but the Dot's
      own tonal fall. No uppercase eyebrow labels, no mono for small data, no middle-dot meta. */
 
-@font-face{font-family:"Atkinson Hyperlegible Next";font-style:normal;font-weight:200 800;font-display:block;src:url(/fonts/atkinson-hyperlegible-next.woff2) format("woff2")}
-@font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:100 800;font-display:block;src:url(/fonts/jetbrains-mono.woff2) format("woff2")}
+@font-face{font-family:"Atkinson Hyperlegible Next";font-style:normal;font-weight:200 800;font-display:swap;src:url(/fonts/atkinson-hyperlegible-next.woff2) format("woff2")}
+@font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:100 800;font-display:swap;src:url(/fonts/jetbrains-mono.woff2) format("woff2")}
 
 :root{
   /* type */

@@ -6,7 +6,6 @@ import { meQuery, useActor, useActors } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
-import { DatePick } from '@/kit/DatePick';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
@@ -15,10 +14,11 @@ import { LatePill } from '@/kit/Pill';
 import { toast } from '@/kit/Toast';
 import { Select } from '@/kit/Select';
 import { PageMore } from '@/pagekinds';
-import { pipelinesQuery } from '@/features/tasks/exports';
-import { whoHref } from '@/features/team/exports';
+import { pipelinesQuery } from '@/features/tasks/routing';
+import { whoHref } from '@/features/team/routing';
 import { earlierStages, failedToast, reasonOf, refusalOf, tabAddress, type Refusal } from './model';
-import { Face, FlowMark, Go, Mark } from './parts';
+import { FlowMark } from '@/kit/FlowMark';
+import { Face, Go, Mark } from './parts';
 import { pipelineStagesQuery, waitingQuery, type TaskData } from './queries';
 
 /* The head's controls: the where line (pipeline › stage pick, owner pick, time in the stage, Late), Flow's previous
@@ -243,20 +243,17 @@ export function FlowTop({ t }: { t: TaskData }) {
   );
 }
 
-type Asking = 'due' | 'tags' | 'move' | 'reopen' | 'delete' | null;
+type Asking = 'move' | 'reopen' | 'delete' | null;
 
-/** "⋯": due, tags, done; in Flow, Give to and Move back, after which Flow goes on to the next task. Then the old task
-    window's rest (ui/app/task-props.ts): watch the agent's session, copy the link, move to another pipeline, the
-    Human, reopen with a reason, delete. Reopen and Delete ask first. */
+/** "⋯": snooze, done (the due date and tags edit in Details); in Flow, Give to and Move back, after which Flow goes on to the next task. Then the old task
+    window's rest (ui/app/task-props.ts): watch the agent's session, copy the link, move to another pipeline,
+    reopen with a reason, delete. Reopen and Delete ask first. */
 export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
   const [asking, setAsking] = useState<Asking>(null);
-  const [due, setDue] = useState<Date | null>(null);
-  const [tags, setTags] = useState('');
   const [why, setWhy] = useState('');
   const [to, setTo] = useState<{ pipeline: string; name: string; stage: string | null } | null>(null);
   const navigate = useNavigate();
   const owner = useActor(t.owner_id);
-  const people = useActors().filter((a) => a.kind === 'person');
   const me = useQuery(meQuery).data?.id;
   const pipelines = useQuery(pipelinesQuery).data ?? [];
   const others = pipelines.filter((p) => p.id !== t.pipeline_id);
@@ -271,8 +268,6 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
   const open = (what: Exclude<Asking, null>) => {
     setError('');
     setWhy('');
-    setDue(t.due_at ? new Date(t.due_at) : null);
-    setTags(t.labels.join(', '));
     setAsking(what);
   };
   const press = async (id: string, input: object) => {
@@ -291,7 +286,6 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
     if (r.ok) order.next();
     else failed(r);
   };
-  const day = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   const close = () => setAsking(null);
   const copyLink = async () => {
     try {
@@ -304,10 +298,6 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
   const moveTo = (pipeline: string, name: string) => {
     open('move');
     setTo({ pipeline, name, stage: null });
-  };
-  const setHuman = async (human: string | null) => {
-    const r = await run('task.setHuman', { task: t.id, human }, { via: 'click' });
-    if (!r.ok) failed(r);
   };
   const cancel = <Button onClick={close}>Cancel</Button>;
 
@@ -329,8 +319,6 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
             <MenuRule />
           </>
         )}
-        <MenuItem label="Due date" icon="calendar" onSelect={() => open('due')} />
-        <MenuItem label="Tags" icon="rules" onSelect={() => open('tags')} />
         {t.status === 'open' && (
           <>
             {t.snoozed ? (
@@ -360,19 +348,6 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
             {others.map((p) => (
               <MenuItem key={p.id} label={p.name} onSelect={() => moveTo(p.id, p.name)} />
             ))}
-          </MenuSub>
-        )}
-        {people.length > 0 && (
-          <MenuSub label="Human" icon="people">
-            {people.map((a) => (
-              <MenuItem key={a.id} label={a.name} on={a.id === t.human_id} onSelect={() => void setHuman(a.id)} />
-            ))}
-            {t.human_id && (
-              <>
-                <MenuRule />
-                <MenuItem label="None" onSelect={() => void setHuman(null)} />
-              </>
-            )}
           </MenuSub>
         )}
         {t.status !== 'open' && <MenuItem label="Reopen" icon="refresh" onSelect={() => open('reopen')} />}
@@ -435,7 +410,6 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
         alert
         onOpenChange={(o) => !o && close()}
         title={`Delete “${t.title}”?`}
-        description="It goes to the trash, from which it can be restored."
         actions={
           <>
             {cancel}
@@ -448,39 +422,6 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
         {error && <p className="an-err">{error}</p>}
       </Dialog>
 
-      <Dialog
-        open={asking === 'due'}
-        onOpenChange={(o) => !o && close()}
-        title="Due date"
-        actions={
-          <>
-            {t.due_at && <Button onClick={() => void press('task.setDue', { due: null })}>Clear</Button>}
-            {cancel}
-            <Button variant="primary" busy={busy} disabled={!due || busy} onClick={() => due && void press('task.setDue', { due: day(due) })}>
-              Save
-            </Button>
-          </>
-        }
-      >
-        <DatePick label="Due" labelHidden withTime={false} value={due} onValueChange={setDue} error={!!error} />
-        {error && <p className="an-err">{error}</p>}
-      </Dialog>
-
-      <Dialog
-        open={asking === 'tags'}
-        onOpenChange={(o) => !o && close()}
-        title="Tags"
-        actions={
-          <>
-            {cancel}
-            <Button variant="primary" busy={busy} disabled={busy} onClick={() => void press('task.tag', { labels: tagsOf(tags) })}>
-              Save
-            </Button>
-          </>
-        }
-      >
-        <Field label="Tags" labelHidden wide autoFocus placeholder="bug, checkout" value={tags} onValueChange={setTags} error={error || undefined} />
-      </Dialog>
     </>
   );
 }

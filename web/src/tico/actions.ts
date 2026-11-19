@@ -1,7 +1,6 @@
 import { defineAction, run, s } from '@/actions';
 import { sendMessage, ticoRoomQuery } from '@/conversation';
 import { meQuery, queryClient } from '@/data';
-import { readEarlier } from './earlier';
 import { pageName } from './pageName';
 import { ticoPowerQuery, turnOnTico } from './queries';
 
@@ -37,32 +36,5 @@ export const turnOn = defineAction({
   can: (ctx) => ctx.queryClient.getQueryData(ticoPowerQuery.queryKey)?.can_turn_on !== false,
   run: () => turnOnTico(),
   did: (_input, state) => (state === 'active' ? 'Turned on Tico' : 'Tico needs a computer'),
-  target: () => ({ kind: 'sheet', id: 'tico' }),
-});
-
-/* The owner's earlier chats (the old Assistant page's "Earlier chats"): one opens in Tico's sheet, read only, and Back
-   returns to Tico's own chat. Reading is a view, so Tico may open them too. */
-export const openEarlier = defineAction({
-  id: 'tico.openEarlier',
-  title: 'Read an earlier chat',
-  kind: 'view',
-  input: s.object({ room: s.string({ min: 1, max: 200, what: "an earlier chat's id" }) }),
-  run: async (ctx, { room }) => {
-    const power = await queryClient.ensureQueryData(ticoPowerQuery);
-    if (power.earlier?.room_id !== room) throw Object.assign(new Error('That earlier chat is not yours'), { code: 'not_found' });
-    await run('shell.fold', { sheet: 'tico', folded: false }, { via: ctx.via });
-    readEarlier(room);
-  },
-  did: () => 'Opened the earlier chat',
-  target: () => ({ kind: 'sheet', id: 'tico' }),
-});
-
-export const closeEarlier = defineAction({
-  id: 'tico.closeEarlier',
-  title: "Back to Tico's chat",
-  kind: 'view',
-  input: s.object({}),
-  run: () => readEarlier(null),
-  did: () => "Back to Tico's chat",
   target: () => ({ kind: 'sheet', id: 'tico' }),
 });

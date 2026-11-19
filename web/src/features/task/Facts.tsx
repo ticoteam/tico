@@ -13,12 +13,12 @@ import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
 import { goalLink } from '@/features/company/exports';
-import { pipelinesQuery, roadmapPipeline } from '@/features/tasks/exports';
+import { pipelinesQuery, roadmapPipeline } from '@/features/tasks/routing';
 import { EditKv, Inline, Kv, PickKv, saved } from './Fact';
 import { ActorItems } from './Head';
 import { failedToast, reasonOf } from './model';
 import { Face, Go, NameOf } from './parts';
-import { taskGoalQuery, taskMeetingsQuery, visibleOf, type FollowLevel, type TaskData, type TaskFacts, type Visible } from './queries';
+import { taskGoalQuery, taskMeetingsQuery, visibleOf, type TaskData, type TaskFacts, type Visible } from './queries';
 
 /* The facts the old task window had (ui/app/task-props.ts) that Details draws as rows (more.js dKv): Size, Human,
    Developer, Goal, Roadmap, People, Visible to, Followers, the public text; and the Meetings section. Each value edits
@@ -47,7 +47,7 @@ function PeopleItems({ current, onPick }: { current: string | null | undefined; 
   );
 }
 
-/** A face that opens a short menu (take them off, how closely they follow). */
+/** A face that opens a short menu (take them off). */
 function FaceMenu({ id, label, children }: { id: string; label: string; children: ReactNode }) {
   return (
     <Menu
@@ -280,14 +280,7 @@ function VisibleFact({ t }: { t: TaskData }) {
   );
 }
 
-const LEVELS: [FollowLevel, string][] = [
-  ['live', 'Everything'],
-  ['mentions', 'Mentions'],
-  ['digest', 'Digest'],
-  ['muted', 'Muted'],
-];
-
-function FollowersFact({ t, followers }: { t: TaskData; followers: { actor: string; notify: FollowLevel }[] }) {
+function FollowersFact({ t, followers }: { t: TaskData; followers: { actor: string }[] }) {
   const nameOf = useNames();
   const me = useQuery(meQuery).data?.id;
   const mine = followers.find((f) => f.actor === me);
@@ -307,26 +300,9 @@ function FollowersFact({ t, followers }: { t: TaskData; followers: { actor: stri
             ),
           )}
         </span>
-        {mine ? (
-          <Menu
-            align="start"
-            trigger={
-              <button type="button" className="dt-act">
-                Following
-              </button>
-            }
-          >
-            {LEVELS.map(([level, label]) => (
-              <MenuItem key={level} label={label} on={mine.notify === level} onSelect={() => follow({ following: true, notify: level })} />
-            ))}
-            <MenuRule />
-            <MenuItem label="Unfollow" icon="close" onSelect={() => follow({ following: false })} />
-          </Menu>
-        ) : (
-          <button type="button" className="dt-act" onClick={() => follow({ following: true })}>
-            Follow
-          </button>
-        )}
+        <button type="button" className="dt-act" onClick={() => follow({ following: !mine })}>
+          {mine ? 'Unfollow' : 'Follow'}
+        </button>
         <Menu align="start" trigger={<IconButton icon="plus" label="Add a follower" size="sm" quiet />}>
           <ActorItems current={null} onPick={(id) => follow({ actor: id, following: true })} />
         </Menu>

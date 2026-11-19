@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import type { Call } from '@/api/schema';
 import { useActors } from '@/data';
@@ -6,16 +5,14 @@ import { FilePreview } from '@/features/library/exports';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
-import { Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuSub } from '@/kit/Menu';
 import { Face, press, useNameOf, type InCall } from './parts';
-import { stageFilesQuery } from './queries';
 import { attachScreen, canShare, type CallState } from './session';
 
-/* What a call does beyond mute and leave (old thread-call-live.ts callBarDraw, call-window.ts cwPop): share a screen or
-   show a Tico file, bring an agent in, and End for whoever started it. */
+/* What a call does beyond mute and leave (old thread-call-live.ts callBarDraw, call-window.ts cwPop): share a screen,
+   bring an agent in, and End for whoever started it. */
 
 /** The starter's: End the call for everyone, asked first. */
 export function EndCall({ room, open, onOpenChange }: { room: string; open: boolean; onOpenChange: (o: boolean) => void }) {
@@ -69,67 +66,25 @@ export function BarMore({ room, c, me }: { room: string; c: Call | undefined; me
   );
 }
 
-/** The window's Share (calls.js full window): the screen, where the browser can send one; a Tico file; stop. */
+/** The window's Share (calls.js full window): the screen, where the browser can send one; stop. */
 export function ShareControl({ room, c, s, me }: { room: string; c: Call | undefined; s: CallState; me: string | undefined }) {
-  const [picking, setPicking] = useState(false);
   const stage = c?.stage;
   const stoppable = s.sharing || (!!stage && (stage.by === (s.me ?? me) || c?.connector === (s.me ?? me)));
   const word = s.sharing ? 'Sharing' : 'Share';
   return (
-    <>
-      <Menu
-        align="start"
-        side="top"
-        trigger={
-          <button type="button" className="cc" aria-label={word} title={word}>
-            <Icon name="share" />
-            <span className="cc-l">{word}</span>
-          </button>
-        }
-      >
-        {canShare() && !s.sharing && <MenuItem label="Screen" icon="share" onSelect={() => void press('calls.share', { id: room, on: true })} />}
-        <MenuItem label="Show a Tico file" icon="file" onSelect={() => setPicking(true)} />
-        {stoppable && <MenuItem label="Stop sharing" icon="close" onSelect={() => void press('calls.stopShow', { id: room })} />}
-      </Menu>
-      <FilePick room={room} open={picking} onOpenChange={setPicking} />
-    </>
-  );
-}
-
-/** Find a file or page; the pick shows on the stage for everyone. */
-function FilePick({ room, open, onOpenChange }: { room: string; open: boolean; onOpenChange: (o: boolean) => void }) {
-  const [q, setQ] = useState('');
-  const files = useQuery({ ...stageFilesQuery(q), enabled: open });
-  const list = files.data ?? [];
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange} title="Show a Tico file">
-      <div className="stage-files">
-        <Search label="Find a file" value={q} onValueChange={setQ} placeholder="Find a file or page" wide autoFocus />
-        {files.isError ? (
-          <Empty title="Files did not load" icon="alert">
-            <Button onClick={() => void files.refetch()}>Try again</Button>
-          </Empty>
-        ) : files.isSuccess && !list.length ? (
-          <Empty title="No files" />
-        ) : (
-          list.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              className="rail-row call-rail"
-              onClick={() => {
-                onOpenChange(false);
-                setQ('');
-                void press('calls.showFile', { id: room, file: f.id });
-              }}
-            >
-              <Icon name="file" />
-              <span>{f.title}</span>
-            </button>
-          ))
-        )}
-      </div>
-    </Dialog>
+    <Menu
+      align="start"
+      side="top"
+      trigger={
+        <button type="button" className="cc" aria-label={word} title={word}>
+          <Icon name="share" />
+          <span className="cc-l">{word}</span>
+        </button>
+      }
+    >
+      {canShare() && !s.sharing && <MenuItem label="Screen" icon="share" onSelect={() => void press('calls.share', { id: room, on: true })} />}
+      {stoppable && <MenuItem label="Stop sharing" icon="close" onSelect={() => void press('calls.stopShow', { id: room })} />}
+    </Menu>
   );
 }
 

@@ -1,35 +1,29 @@
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useInfiniteQuery, useQueries, useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { ApiError } from '@/api/client';
+import { clock, Composer, dayKey, dayLabel, MessageBones, stamp } from '@/conversation';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Count } from '@/kit/Count';
 import { Empty } from '@/kit/Empty';
-import { Search } from '@/kit/Field';
+import { Search, SettledSearch } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Markdown } from '@/kit/Markdown';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
-import { Select } from '@/kit/Select';
 import { VirtualList } from '@/kit/VirtualList';
-import { FilterRow, ItemHead, ListAndItem, type FilterChip } from '@/pagekinds';
-import { MAIL_LABELS } from './actions';
+import { ItemHead, ListAndItem, PageMore } from '@/pagekinds';
 import { letterAt, letterRows, letterUnread, senderName, type Letter, type LetterRow, type Text } from './model';
-import { press } from './people';
-import { letterQuery, mailboxesQuery, mailFindQuery, mailInstructionsQuery, textListQuery, textQuery, type MailFind } from './queries';
-import { NewButton, threadTabs } from './ThreadsPage';
+import { ChatWith, press, useMe } from './people';
+import { contactTextsQuery, letterQuery, mailboxesQuery, mailFindQuery, mailInstructionsQuery, textListQuery, textQuery, type Mailbox } from './queries';
+import { NewButton, useThreadTabs } from './ThreadsPage';
 import './threads.css';
 
-const TABS = threadTabs('/threads');
 const q = (params: Record<string, string>) => `?${new URLSearchParams(params).toString()}`;
-/** The narrowing as address params, so an opened mail keeps the list it was picked from. */
-const findParams = (f: MailFind): Record<string, string> => ({
-  ...(f.q ? { q: f.q } : {}),
-  ...(f.label ? { label: f.label } : {}),
-  ...(f.attach ? { attach: 'true' } : {}),
-});
+const DRAFT = 'DRAFT';
 
 export interface MailPageProps {
   /** The mailbox read; the first one when left out. */
@@ -40,39 +34,39 @@ export interface MailPageProps {
   view?: 'instructions';
   /** The words searched for (`?q=`). */
   q?: string;
-  /** Only mail with this Gmail label (`?label=`). */
-  label?: string;
-  /** Only mail with an attachment (`?attach=`). */
-  attach?: boolean;
 }
 
-/** Mail: the company's mailboxes, a row per conversation, the open one in full. Read only. */
-export function MailPage({ box, open, view, q: words, label, attach }: MailPageProps) {
+/** Mail: the company's mailboxes, a row per conversation, the open one in full with a reply box. */
+export function MailPage({ box, open, view, q: words }: MailPageProps) {
+  const tabs = useThreadTabs('/threads');
   const boxes = useQuery(mailboxesQuery);
   const current = box ?? boxes.data?.[0]?.address ?? '';
-  const agent = !!boxes.data?.find((b) => b.address === current)?.agent_instructions;
+  const mailbox = boxes.data?.find((b) => b.address === current);
+  const agent = !!mailbox?.agent_instructions;
   const reading = view === 'instructions' && agent;
-  const find: MailFind = { q: words, label, attach };
-  const narrowed = !!(words || label || attach);
-  const list = useInfiniteQuery(mailFindQuery(current, find));
+  const narrowed = !!words;
+  // Nothing can read a mailbox until someone connects Google for it: ask for nothing, show the way there.
+  const cut = mailbox?.connection === 'none';
+  const list = useInfiniteQuery(mailFindQuery(cut ? '' : current, words));
   const rows = letterRows(list.data?.pages.flatMap((p) => p.messages) ?? []);
-  const keep = findParams(find);
-  const narrow = (patch: MailFind) => void press('mail.find', { box, q: words, label, attach, ...patch });
-  const chips: FilterChip[] = [
-    ...(label ? [{ label: labelName(label) || label, onClear: () => narrow({ label: undefined }) }] : []),
-    ...(attach ? [{ label: 'Has attachment', onClear: () => narrow({ attach: undefined }) }] : []),
-  ];
-  const choices = (boxes.data ?? []).map((b) => ({ value: b.address, label: b.name || b.address }));
-  // With more than one mailbox an empty one stays a list: the pick (only shown on a ready list) leads to the others.
-  const pick = choices.length > 1;
+  // An opened mail keeps the words it was found by.
+  const keep: Record<string, string> = words ? { q: words } : {};
+  // With more than one mailbox an empty one stays a list: the filter in the head leads to the others.
+  const pick = (boxes.data?.length ?? 0) > 1;
+  const none = boxes.data?.length === 0;
+  const unconnected = cut || (list.error instanceof ApiError && list.error.code === 'not_connected');
   const state =
-    boxes.isPending || (!!current && list.isPending)
+    boxes.isPending || (!!current && list.isPending && !unconnected)
       ? 'loading'
-      : boxes.isError || list.isError
+      : boxes.isError
         ? 'fault'
-        : rows.length === 0 && !open && !agent && !pick && !narrowed
+        : none || unconnected
           ? 'empty'
-          : 'ready';
+          : list.isError
+            ? 'fault'
+            : rows.length === 0 && !open && !agent && !pick && !narrowed
+              ? 'empty'
+              : 'ready';
   const more = () => {
     if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
   };
@@ -83,28 +77,18 @@ export function MailPage({ box, open, view, q: words, label, attach }: MailPageP
       className="is-mail"
       actions={
         <>
-          <Menu trigger={<IconButton icon="filter" label="Filter" on={!!label || !!attach} data-phone />}>
-            <MenuItem label="Any label" on={!label} onSelect={() => narrow({ label: undefined })} />
-            {MAIL_LABELS.map((l) => (
-              <MenuItem key={l.id} label={l.name} on={label === l.id} onSelect={() => narrow({ label: l.id })} />
-            ))}
-            <MenuItem label="Has attachment" on={!!attach} onSelect={() => narrow({ attach: !attach || undefined })} />
-          </Menu>
+          {pick && (
+            <Menu trigger={<IconButton icon="filter" label="Mailbox" />}>
+              {boxes.data?.map((b) => (
+                <MenuItem key={b.address} label={b.name || b.address} on={b.address === current} onSelect={() => void press('mail.pickBox', { box: b.address })} />
+              ))}
+            </Menu>
+          )}
           <NewButton />
         </>
       }
-      search={
-        <>
-          <FindMail value={words ?? ''} onFind={(next) => narrow({ q: next || undefined })} />
-          <FilterRow filters={chips} />
-          {pick && (
-            <div className="ml-box">
-              <Select label="Mailbox" labelHidden options={choices} value={current} onValueChange={(v) => void press('mail.pickBox', { box: v })} />
-            </div>
-          )}
-        </>
-      }
-      tabs={TABS}
+      search={<SettledSearch label="Find mail" placeholder="Find mail" value={words ?? ''} onSettle={(next) => void press('mail.find', { box, q: next || undefined })} wide />}
+      tabs={tabs}
       listLabel="Mail"
       list={
         <>
@@ -139,7 +123,14 @@ export function MailPage({ box, open, view, q: words, label, attach }: MailPageP
       }
       open={!!open || !!reading}
       state={state}
-      empty={{ title: boxes.data?.length === 0 ? 'No mailboxes yet' : 'No mail' }}
+      empty={
+        none || unconnected
+          ? {
+              title: unconnected ? 'Mail is not connected' : 'No mail yet',
+              action: <Button onClick={() => void press('tools.open', { tool: 'mailbox' })}>Connect mail</Button>,
+            }
+          : { title: 'No mail' }
+      }
       onRetry={() => void (boxes.isError ? boxes.refetch() : list.refetch())}
       {...(reading
         ? {
@@ -147,58 +138,23 @@ export function MailPage({ box, open, view, q: words, label, attach }: MailPageP
             item: <Instructions box={current} />,
             itemLabel: 'Instructions',
           }
-        : open && current
-          ? { itemHead: <LetterHead box={current} id={open} />, item: <LetterBody box={current} id={open} />, itemLabel: 'Mail' }
+        : open && mailbox
+          ? {
+              itemHead: <LetterHead box={mailbox} id={open} />,
+              item: <LetterBody box={current} id={open} />,
+              foot: mailbox.may?.send !== false && <Reply box={current} id={open} />,
+              itemLabel: 'Mail',
+            }
           : {})}
     />
   );
 }
 
-/** The search field, a step behind the typing: the address (and the server) hear the words once they settle. */
-function FindMail({ value, onFind }: { value: string; onFind: (q: string) => void }) {
-  const [words, setWords] = useState(value);
-  // Cleared or set from elsewhere (Tico, Back): the field follows the address.
-  const [seen, setSeen] = useState(value);
-  if (seen !== value) {
-    setSeen(value);
-    setWords(value);
-  }
-  useEffect(() => {
-    const next = words.trim();
-    if (next === value) return;
-    const t = setTimeout(() => onFind(next), SEARCH_WAIT_MS);
-    return () => clearTimeout(t);
-  }, [words, value, onFind]);
-  return <Search label="Find mail" placeholder="Find mail" value={words} onValueChange={setWords} wide />;
-}
-
-const SEARCH_WAIT_MS = 250;
-
-// How a label reads as a pill (old mail.ts MAIL_LABEL); Gmail's categories say nothing a person would look for.
-const LABEL_NAMES: Record<string, string> = {
-  INBOX: 'Inbox',
-  UNREAD: 'Unread',
-  STARRED: 'Starred',
-  SENT: 'Sent',
-  IMPORTANT: 'Important',
-  DRAFT: 'Drafts',
-  SPAM: 'Spam',
-  TRASH: 'Trash',
-};
-function labelName(label: string): string {
-  if (LABEL_NAMES[label]) return LABEL_NAMES[label];
-  if (label.startsWith('CATEGORY_')) return '';
-  return label.startsWith('hub/') ? label.slice(4) : label;
-}
-/** A row's pills: what stands out. Inbox is on nearly every mail, and an unread row is already in bold. */
-const rowLabels = (labels: readonly string[] | undefined) =>
-  (labels ?? []).filter((l) => l !== 'INBOX' && l !== 'UNREAD').map(labelName).filter(Boolean);
 
 function MailRow({ r, box, keep, selected }: { r: LetterRow; box: string; keep: Record<string, string>; selected: boolean }) {
   const l = r.letter;
   const from = senderName(l);
   const subject = l.subject || '(no subject)';
-  const pills = rowLabels(l.labels);
   return (
     <Row
       className="ml-row"
@@ -213,14 +169,7 @@ function MailRow({ r, box, keep, selected }: { r: LetterRow; box: string; keep: 
         <span className="ml-from">{from}</span>
         {r.count > 1 && <Count n={r.count} label={`${r.count} letters`} />}
         <span className="ml-sub">{subject}</span>
-        {(pills.length > 0 || l.has_attachment) && (
-          <span className="ml-pills">
-            {pills.map((p) => (
-              <Pill key={p}>{p}</Pill>
-            ))}
-            {l.has_attachment && <Pill>Attachment</Pill>}
-          </span>
-        )}
+        {l.has_attachment && <Icon name="attach" label="Attachment" />}
       </span>
       <Ago at={letterAt(l)} className="row-age" />
       <span className="ml-mark" />
@@ -230,23 +179,42 @@ function MailRow({ r, box, keep, selected }: { r: LetterRow; box: string; keep: 
 
 const BACK = { to: '/threads/mail', label: 'Mail' };
 
-function LetterHead({ box, id }: { box: string; id: string }) {
-  const { data } = useQuery(letterQuery(box, id));
-  const first = data?.[0];
+/** The open mail's head: who wrote first and their address, the mailbox's agent, Archive and ⋯. */
+function LetterHead({ box, id }: { box: Mailbox; id: string }) {
+  const { data } = useQuery(letterQuery(box.address, id));
+  const first = data?.find((l) => !l.labels?.includes(DRAFT));
+  const last = data?.at(-1);
   const from = first ? senderName(first) : 'Mail';
+  const organize = box.may?.organize !== false;
   return (
     <ItemHead
       title={from}
       target={`letter:${id}`}
       back={BACK}
-      lead={first ? <Avatar kind="person" name={from} className="is-out" size={22} /> : undefined}
+      lead={first ? <Avatar kind="person" name={from} className="is-out" size={28} /> : undefined}
+      actions={
+        <>
+          {first?.from_addr && first.from_addr !== from && <span className="lt-addr">{first.from_addr}</span>}
+          {typeof box.agent_bot === 'string' && <ChatWith actor={`bot:${box.agent_bot}`} />}
+          {organize && data && (
+            <IconButton icon="archive" label="Archive" onClick={() => void press('mail.archive', { box: box.address, letter: id, ids: data.map((l) => l.msg_id) })} />
+          )}
+        </>
+      }
+      more={
+        organize && last ? (
+          <PageMore>
+            <MenuItem label="Mark unread" icon="updates" onSelect={() => void press('mail.markUnread', { box: box.address, letter: last.msg_id })} />
+          </PageMore>
+        ) : undefined
+      }
     />
   );
 }
 
 function LetterBody({ box, id }: { box: string; id: string }) {
   const { data, isPending, isError, refetch } = useQuery(letterQuery(box, id));
-  if (isPending) return null;
+  if (isPending) return <MessageBones label="Loading mail" className="lt-bones" />;
   if (isError)
     return (
       <Empty icon="alert" title="This mail did not load">
@@ -268,10 +236,29 @@ function LetterBody({ box, id }: { box: string; id: string }) {
   );
 }
 
+/** The reply box under an open mail: what is typed is drafted in the thread and sent through the send gate. */
+function Reply({ box, id }: { box: string; id: string }) {
+  const me = useMe();
+  const { data } = useQuery(letterQuery(box, id));
+  const to = data?.find((l) => !l.labels?.includes(DRAFT) && l.from_addr !== box);
+  if (!me) return null;
+  const name = to ? senderName(to) : 'this mail';
+  return (
+    <Composer
+      id={`mail:${id}`}
+      me={me}
+      to={name}
+      label={`Reply to ${name}`}
+      attach={false}
+      onSend={(text) => void press('mail.reply', { box, letter: id, text })}
+    />
+  );
+}
+
 /** What the mailbox's agent works from; written in the agent's own files, so read only here. */
 function Instructions({ box }: { box: string }) {
   const { data, isPending, isError, refetch } = useQuery(mailInstructionsQuery(box));
-  if (isPending) return null;
+  if (isPending) return <MessageBones label="Loading instructions" className="lt-bones" />;
   if (isError)
     return (
       <Empty icon="alert" title="The instructions did not load">
@@ -286,17 +273,27 @@ function Instructions({ box }: { box: string }) {
   );
 }
 
+const size = (n: number) => (n >= 1_048_576 ? `${(n / 1_048_576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+
 function LetterPart({ l }: { l: Letter }) {
   const from = senderName(l);
+  const draft = l.labels?.includes(DRAFT);
   return (
-    <article className="lt">
+    <article className={draft ? 'lt is-draft' : 'lt'}>
       <div className="msg-meta">
         <Avatar kind="person" name={from} className="is-out" decorative />
         <b>{from}</b>
         {!!l.to?.length && <span className="lt-to">to {l.to.join(', ')}</span>}
-        <Ago at={letterAt(l)} />
+        {draft ? <Pill>Draft</Pill> : <time dateTime={new Date(letterAt(l)).toISOString()}>{stamp(letterAt(l))}</time>}
       </div>
       <div className="lt-body">{l.body ?? l.snippet}</div>
+      {l.attachments?.map((f, i) => (
+        <span key={`${f.name}:${i}`} className="file">
+          <Icon name="file" />
+          <span>{f.name}</span>
+          {!!f.size && <em>{size(f.size)}</em>}
+        </span>
+      ))}
     </article>
   );
 }
@@ -304,36 +301,44 @@ function LetterPart({ l }: { l: Letter }) {
 /* ---------------------------------------------------------------- Messaging */
 
 export interface MessagingPageProps {
-  /** The open text's id. */
+  /** The open contact: who the texts came from. */
   open?: string;
 }
 
-/** Messaging: texts the company's numbers received, newest first, the open one in full. Read only. */
+/** Messaging: one row per contact who texted the company's numbers, newest first; the open one as a chat. Read only:
+    the server receives texts and sends none. */
 export function MessagingPage({ open }: MessagingPageProps) {
+  const tabs = useThreadTabs('/threads');
   const list = useInfiniteQuery(textListQuery);
-  const rows = list.data?.pages.flatMap((p) => p.messages) ?? [];
-  const state = list.isPending ? 'loading' : list.isError ? 'fault' : rows.length === 0 && !open ? 'empty' : 'ready';
+  const [words, setWords] = useState('');
+  const contacts = contactsOf(list.data?.pages.flatMap((p) => p.messages) ?? []);
+  const shown = words.trim() ? contacts.filter((c) => (c.from ?? '').toLowerCase().includes(words.trim().toLowerCase())) : contacts;
+  const state = list.isPending ? 'loading' : list.isError ? 'fault' : contacts.length === 0 && !open ? 'empty' : 'ready';
   const more = () => {
     if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
   };
-  const shown = rows.find((r) => r.message_id === open);
   return (
     <ListAndItem
       title="Threads"
       path="/threads/messaging"
       actions={<NewButton />}
-      tabs={TABS}
+      search={<Search label="Find a conversation" placeholder="Find a conversation" value={words} onValueChange={setWords} wide />}
+      tabs={tabs}
       listLabel="Messaging"
       list={
-        <VirtualList
-          className="tl-vl"
-          label="Messaging"
-          items={rows}
-          getKey={(r) => r.message_id}
-          estimateSize={35}
-          onReachEnd={more}
-          renderItem={(r) => <TextRow t={r} selected={r.message_id === open} />}
-        />
+        shown.length === 0 && words.trim() ? (
+          <Empty icon="search" title="No matches" />
+        ) : (
+          <VirtualList
+            className="tl-vl"
+            label="Messaging"
+            items={shown}
+            getKey={(t) => t.from ?? t.message_id}
+            estimateSize={35}
+            onReachEnd={more}
+            renderItem={(t) => <ContactRow t={t} selected={t.from === open} />}
+          />
+        )
       }
       open={!!open}
       state={state}
@@ -341,46 +346,82 @@ export function MessagingPage({ open }: MessagingPageProps) {
       onRetry={() => void list.refetch()}
       {...(open
         ? {
-            itemHead: <ItemHead title={shown?.from || 'Text'} target={`text:${open}`} back={{ to: '/threads/messaging', label: 'Messaging' }} />,
-            item: <TextBody id={open} at={shown?.received_at} from={shown?.from} />,
-            itemLabel: 'Text',
+            itemHead: (
+              <ItemHead
+                title={open}
+                target={`contact:${open}`}
+                back={{ to: '/threads/messaging', label: 'Messaging' }}
+                lead={<Avatar kind="person" name={open} className="is-out" size={28} />}
+              />
+            ),
+            item: <Texts from={open} />,
+            itemLabel: open,
           }
         : {})}
     />
   );
 }
 
-function TextRow({ t, selected }: { t: Text; selected: boolean }) {
+/** The newest text from each contact, newest first. */
+function contactsOf(texts: Text[]): Text[] {
+  const by = new Map<string, Text>();
+  for (const t of texts) if (!by.has(t.from ?? '')) by.set(t.from ?? '', t);
+  return [...by.values()];
+}
+
+function ContactRow({ t, selected }: { t: Text; selected: boolean }) {
   const from = t.from || 'Unknown';
   return (
-    <Row className="ml-row" title={`${from}: ${t.preview ?? ''}`} href={`/threads/messaging${q({ open: t.message_id })}`} selected={selected} target={`text:${t.message_id}`}>
+    <Row className="tl-row" title={from} href={`/threads/messaging${q({ open: from })}`} selected={selected} target={`contact:${from}`}>
       <Avatar kind="person" name={from} className="is-out" decorative />
-      <span className="ml-main">
-        <span className="ml-from">{from}</span>
-        <span className="ml-sub">{t.preview}</span>
-      </span>
+      <span className="row-title">{from}</span>
       <Ago at={t.received_at} className="row-age" />
-      <span className="ml-mark" />
+      <span className="tl-slot" />
     </Row>
   );
 }
 
-function TextBody({ id, at, from }: { id: string; at?: string; from?: string }) {
-  const { data, isPending, isError, refetch } = useQuery(textQuery(id));
-  if (isPending) return null;
-  if (isError)
+/** One contact's texts, oldest first, with a break at each day; each text in full. */
+function Texts({ from }: { from: string }) {
+  const list = useInfiniteQuery(contactTextsQuery(from));
+  const texts = (list.data?.pages.flatMap((p) => p.messages) ?? []).reverse();
+  const full = useQueries({ queries: texts.map((t) => textQuery(t.message_id)) });
+  if (list.isPending) return <MessageBones label="Loading texts" className="lt-bones" />;
+  if (list.isError)
     return (
-      <Empty icon="alert" title="This text did not load">
-        <Button onClick={() => void refetch()}>Try again</Button>
+      <Empty icon="alert" title="These texts did not load">
+        <Button onClick={() => void list.refetch()}>Try again</Button>
       </Empty>
     );
   return (
-    <article className="lt">
-      <div className="msg-meta">
-        <b>{from || 'Unknown'}</b>
-        {at && <Ago at={at} />}
-      </div>
-      <div className="lt-body">{data.text}</div>
-    </article>
+    <div className="mg-list">
+      {list.hasNextPage && (
+        <Button onClick={() => void list.fetchNextPage()} busy={list.isFetchingNextPage}>
+          Older texts
+        </Button>
+      )}
+      {texts.map((t, i) => {
+        const brk = i === 0 || dayKey(t.received_at) !== dayKey(texts[i - 1]?.received_at);
+        return (
+          <div key={t.message_id}>
+            {brk && (
+              <div className="day">
+                <span>{dayLabel(t.received_at)}</span>
+              </div>
+            )}
+            <div className="msg">
+              <Avatar kind="person" name={from} className="is-out" size={28} decorative />
+              <div className="msg-main">
+                <div className="msg-meta">
+                  <b>{from}</b>
+                  <time dateTime={t.received_at}>{clock(t.received_at)}</time>
+                </div>
+                <p className="lt-body">{full[i]?.data?.text ?? t.preview}</p>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }

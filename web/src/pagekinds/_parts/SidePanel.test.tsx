@@ -17,6 +17,11 @@ describe('SidePanel', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it('shows a count after the name', () => {
+    render(<SidePanel title="QA" count={6} onClose={() => {}}>Tasks</SidePanel>);
+    expect(screen.getByRole('complementary', { name: 'QA' }).querySelector('.side-head .count')?.textContent).toBe('6');
+  });
+
   it('is a page pushed over the page on a phone: its back arrow closes it', () => {
     document.documentElement.dataset.layout = 'cards';
     const onClose = vi.fn();

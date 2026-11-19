@@ -16,12 +16,12 @@ import { Link } from '@/kit/Link';
 import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
-import { Document, FilterRow, List, PageMore, Section, type PageState } from '@/pagekinds';
+import { Document, List, PageMore, Section, type PageState } from '@/pagekinds';
 import { Markdown } from '@/kit/Markdown';
 import { Menu, MenuItem, MenuSub } from '@/kit/Menu';
 import { Foot, useGo } from './AddTool';
 import { forgetHelperCode, heldHelperCode } from './helperCode';
-import { Face, Find, OwnerButton, press, when, Who } from './parts';
+import { Face, Find, OwnerButton, press, refused, when, Who } from './parts';
 import {
   accessRoleQuery,
   installTargetsQuery,
@@ -31,13 +31,8 @@ import {
   skillsQuery,
   skillTextQuery,
   skillUsageQuery,
-  functionGroup,
   skillDetailUsageQuery,
-  skillsElsewhereQuery,
-  skillSuggestionsQuery,
-  SKILL_FUNCTIONS,
   type SkillCoverage,
-  type SkillSuggestion,
   type Proposal,
   type SkillActor,
   type SkillFile,
@@ -102,14 +97,11 @@ function SkillsList({ search }: { search: SkillsSearch }) {
   const used = new Map((usage.data ?? []).map((u) => [u.name, u]));
   const byName = new Map((skills.data ?? []).map((s) => [s.name, s]));
   const pending = (asks.data ?? []).filter(match);
-  const found = (skills.data ?? []).filter(match);
-  const fn = search.function;
-  const rows = fn ? found.filter((s) => inFunction(s, fn)) : found;
+  const rows = search.waiting ? [] : (skills.data ?? []).filter(match);
   const [making, setMaking] = useState(false);
-  const decider = useDecider();
 
   let state: PageState = 'ready';
-  if (skills.isError) state = 'fault';
+  if (skills.isError) state = refused(skills.error);
   else if (!skills.data) state = 'loading';
   else if (!skills.data.length && !asks.data?.length) state = 'empty';
 
@@ -118,12 +110,14 @@ function SkillsList({ search }: { search: SkillsSearch }) {
       title="Skills"
       path="/library/skills"
       className="lib"
-      search={<Find label="Search skills" value={search.q} onFind={(q) => void press(fn ? 'skills.filter' : 'skills.list', fn ? { q, function: fn } : { q })} />}
-      filter={fn && <FilterRow filters={[{ label: fnLabel(fn), onClear: () => void press('skills.filter', { q: search.q }) }]} />}
+      search={<Find label="Search skills" value={search.q} onFind={(q) => void press('skills.list', { q, waiting: !!search.waiting || undefined })} />}
       actions={
         <>
-          <FunctionFilter rows={found} on={fn} q={search.q} />
-          <OwnerButton page="skills" phone />
+          <Menu trigger={<IconButton icon="filter" label="Filter" on={!!search.waiting} data-phone />}>
+            <MenuItem label="All skills" on={!search.waiting} onSelect={() => void press('skills.list', { q: search.q })} />
+            <MenuItem label="Waiting" on={!!search.waiting} onSelect={() => void press('skills.list', { q: search.q, waiting: true })} />
+          </Menu>
+          <OwnerButton page="skills" />
           <Button variant="primary" icon="plus" onClick={() => setMaking(true)} data-target="skills:new">
             New skill
           </Button>
@@ -157,104 +151,12 @@ function SkillsList({ search }: { search: SkillsSearch }) {
                 <SkillLine key={s.name} s={s} use={used.get(s.name)} />
               ))}
             </section>
-            {decider && <ForAdmins />}
           </>
         ) : (
           <Empty title="Nothing matches" />
         )
       }
     />
-  );
-}
-
-/* ---------------------------------------------------------------- the function filter (old skills.ts skillsFilterMenu) */
-
-/** A row's job function as SKILL.md names it (backend/skills.py skills_list). */
-const fnOf = (s: SkillRow) => (s as SkillRow & { function?: string | null }).function;
-const fnLabel = (f: string) => f.charAt(0).toUpperCase() + f.slice(1);
-/** A known function or Other by the row's group; any other value only the rows that name it (as the API does). */
-function inFunction(s: SkillRow, fn: string) {
-  if (fn === 'other' || (SKILL_FUNCTIONS as readonly string[]).includes(fn)) return functionGroup(fnOf(s)) === fn;
-  return (fnOf(s) ?? '').trim().toLowerCase() === fn;
-}
-
-/** The head's Filter: All, then each function the searched rows have, with its count. Choosing it again takes it off. */
-function FunctionFilter({ rows, on, q }: { rows: SkillRow[]; on: string | undefined; q: string | undefined }) {
-  const counts = new Map<string, number>();
-  for (const s of rows) counts.set(functionGroup(fnOf(s)), (counts.get(functionGroup(fnOf(s))) ?? 0) + 1);
-  const shown = [...SKILL_FUNCTIONS, 'other'].filter((f) => counts.get(f) || f === on);
-  const pick = (f: string | undefined) => void press('skills.filter', { function: f, q }, 'Not filtered');
-  return (
-    <Menu trigger={<IconButton icon="filter" label="Filter" on={!!on} data-target="skills:filter" data-phone />}>
-      <MenuItem label="All" on={!on} onSelect={() => pick(undefined)} />
-      {shown.map((f) => (
-        <MenuItem key={f} label={fnLabel(f)} meta={String(counts.get(f) ?? 0)} on={on === f} onSelect={() => pick(on === f ? undefined : f)} />
-      ))}
-    </Menu>
-  );
-}
-
-/* ---------------------------------------------------------------- an admin's Suggestions and Not in directory */
-
-/** Below the list, for an owner or admin (old skills.ts skillsIdeasHTML, skillsElsewhereHTML). */
-function ForAdmins() {
-  const ideas = useQuery(skillSuggestionsQuery).data ?? [];
-  const elsewhere = useQuery(skillsElsewhereQuery).data ?? [];
-  return (
-    <>
-      {ideas.length > 0 && (
-        <Section name="Suggestions" count={ideas.length}>
-          {ideas.map((x) => (
-            <Idea key={x.id} x={x} />
-          ))}
-        </Section>
-      )}
-      {elsewhere.length > 0 && (
-        <Section name="Not in directory" count={elsewhere.length}>
-          {elsewhere.map((r) => (
-            <Row key={r.name} className="lrow skillrow" title={r.name} target={`skill-elsewhere:${r.name}`}>
-              <span className="lead" />
-              <span className="skill-name">
-                <span className="row-title">{r.name}</span>
-              </span>
-              <span className="row-ctx" />
-              <Stack on={r.bots} total={r.bots_count} />
-              <span className="row-fig">{r.uses}</span>
-              <span className="row-age" />
-            </Row>
-          ))}
-        </Section>
-      )}
-    </>
-  );
-}
-
-/** One suggestion: Remove (an install nobody used in 30 days) or Ask to submit (a skill agents run that the directory
-    lacks), and Dismiss, in its ⋯. */
-function Idea({ x }: { x: SkillSuggestion }) {
-  const [removing, setRemoving] = useState(false);
-  const who = x.target?.name ?? 'Teammate';
-  const agent = x.target?.type === 'Bot' ? x.target.id : null;
-  return (
-    <Row className="lrow skillrow" title={x.name} target={`suggestion:${x.id}`}>
-      <span className="lead" />
-      <span className="skill-name">
-        <span className="row-title">{x.name}</span>
-        <span className="skill-does">{x.kind === 'remove' ? `Not used in 30 days by ${who}` : `Not in the directory, run by ${who}`}</span>
-      </span>
-      <span className="row-ctx" />
-      <span className="avs">{x.target && <Face actor={actorOf(x.target)} name={x.target.name} />}</span>
-      <span className="row-fig">{x.kind === 'promote' ? x.uses_30d : ''}</span>
-      <Menu trigger={<IconButton icon="more" label={`More on ${x.name}`} size="sm" />}>
-        {x.kind === 'remove' ? (
-          <MenuItem label="Remove" onSelect={() => setRemoving(true)} />
-        ) : (
-          agent && <MenuItem label="Ask to submit" onSelect={() => void press('skills.askSubmit', { suggestion: x.id, skill: x.name, agent }, 'Not asked')} />
-        )}
-        <MenuItem label="Dismiss" onSelect={() => void press('skills.dismissSuggestion', { suggestion: x.id }, 'Not dismissed')} />
-      </Menu>
-      {removing && <RemoveDialog who={who} id="skills.removeUnused" input={{ suggestion: x.id }} onClose={() => setRemoving(false)} />}
-    </Row>
   );
 }
 
@@ -266,7 +168,6 @@ function RemoveDialog({ who, id, input, onClose }: { who: string; id: string; in
       open
       onOpenChange={(o) => !o && onClose()}
       title={`Remove from ${who}`}
-      description="It leaves on the next session."
       actions={<Foot onClose={onClose} label="Remove" busy={busy} ready onGo={() => void go(id, input, 'Not removed')} />}
     />
   );
@@ -371,10 +272,7 @@ export function mainText(files: SkillFile[]): string {
   return (main?.content ?? '').replace(/^---\n[\s\S]*?\n---\n?/, '');
 }
 
-function stateOf(q: { isError: boolean; error: unknown; data: unknown }): PageState {
-  if (q.isError) return (q.error as { status?: number } | null)?.status === 403 ? 'no-access' : 'fault';
-  return q.data ? 'ready' : 'loading';
-}
+const stateOf = (q: { isError: boolean; error: unknown; data: unknown }): PageState => (q.isError ? refused(q.error) : q.data ? 'ready' : 'loading');
 
 function SkillPage({ name }: { name: string }) {
   const d = useQuery(skillQuery(name));
@@ -401,12 +299,7 @@ function SkillPage({ name }: { name: string }) {
       className="lib"
       actions={
         <>
-          <OwnerButton page="skills" phone />
-          {latest && (
-            <Button variant={d.data?.installs.length ? 'plain' : 'primary'} onClick={() => setInstalling(true)} data-target={`skill-install:${name}`}>
-              Install
-            </Button>
-          )}
+          <OwnerButton page="skills" />
           {installing && <InstallDialog name={name} versions={d.data?.versions ?? []} onClose={() => setInstalling(false)} />}
           {removing && (
             <RemoveDialog who={removing.who} id="skills.removeInstall" input={{ skill: name, install: removing.id }} onClose={() => setRemoving(null)} />
@@ -415,6 +308,7 @@ function SkillPage({ name }: { name: string }) {
       }
       more={
         <PageMore target={`skill-more:${name}`}>
+          {latest && <MenuItem label="Install" onSelect={() => setInstalling(true)} />}
           {removable.length > 0 && (
             <MenuSub label="Remove from">
               {removable.map((i) => (
@@ -458,8 +352,7 @@ function SkillPage({ name }: { name: string }) {
               {latest?.approved_at && <LabelValue label="Changed">{when(latest.approved_at)}</LabelValue>}
             </Facts>
             {d.data.installs.length > 0 && (
-              <>
-                <h3 className="sp-h t-label">Has it</h3>
+              <Section name="Has it" count={d.data.installs.length}>
                 {d.data.installs.map((i) => (
                   <span key={i.id} className="sp-who">
                     <Face actor={actorOf(i.target)} name={i.target.name} />
@@ -467,11 +360,10 @@ function SkillPage({ name }: { name: string }) {
                     <em>{coverage.get(i.id)?.uses_30d ?? ''}</em>
                   </span>
                 ))}
-              </>
+              </Section>
             )}
             {recent.length > 0 && (
-              <>
-                <h3 className="sp-h t-label">Recent runs</h3>
+              <Section name="Recent runs">
                 {recent.map((r, n) => {
                   const href = r.task_id ? `/task/${r.task_id}` : r.thread_id ? `/threads/${r.thread_id}` : undefined;
                   const inner = (
@@ -493,11 +385,10 @@ function SkillPage({ name }: { name: string }) {
                     </span>
                   );
                 })}
-              </>
+              </Section>
             )}
             {d.data.versions.length > 1 && (
-              <>
-                <h3 className="sp-h t-label">Versions</h3>
+              <Section name="Versions" count={d.data.versions.length}>
                 {d.data.versions.map((v) => (
                   <span key={v.number} className="sp-who">
                     <Face actor={v.approved_by_id} />
@@ -505,7 +396,7 @@ function SkillPage({ name }: { name: string }) {
                     <em>{when(v.approved_at)}</em>
                   </span>
                 ))}
-              </>
+              </Section>
             )}
           </div>
         )
@@ -602,7 +493,7 @@ function ProposalPage({ id }: { id: string }) {
       path={`/library/skills?proposal=${id}`}
       crumb={CRUMB}
       className="lib"
-      actions={<OwnerButton page="skills" phone />}
+      actions={<OwnerButton page="skills" />}
       more={
         <PageMore target={`proposal-more:${id}`}>
           {open && (decider || mine) && (

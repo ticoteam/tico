@@ -1,2 +1,2 @@
-export { Field, Search } from './Field';
-export type { FieldProps, SearchProps } from './Field';
+export { Field, Search, SettledSearch } from './Field';
+export type { FieldProps, SearchProps, SettledSearchProps } from './Field';

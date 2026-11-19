@@ -80,6 +80,27 @@ export function isPageUrl(raw: string, origin: string): boolean {
   return !/^\/(api|auth)(\/|$)/.test(path);
 }
 
+/** A local copy's token sign-in (backend: `GET /api/v2/local-signin?token=…&next=…`), its only way in. */
+const LOCAL_SIGNIN_PATH = '/api/v2/local-signin';
+
+/**
+ * A local copy's sign-in link: plain http on this computer (loopback) at exactly LOCAL_SIGNIN_PATH, with its query.
+ * The one /api/ address the app may open for someone (a tico:// link, a link pasted into Add company); never for a
+ * server that is not on this computer. Returns the link to load, or null. The token is in it: never log it.
+ */
+export function localSignInUrl(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'http:' || !isLoopback(url.hostname) || url.username || url.password) return null;
+  if (url.pathname !== LOCAL_SIGNIN_PATH || !url.searchParams.get('token')) return null;
+  url.hash = '';
+  return url.href;
+}
+
 export function hostOf(origin: string): string {
   try {
     return new URL(origin).host;

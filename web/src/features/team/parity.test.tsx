@@ -177,9 +177,7 @@ describe('Copies of an agent', () => {
     serve((url) => (url.includes('/bots/ana-pat/branches') ? family([mine]) : undefined));
     show(<TeamWho who="ana-pat" tab="settings" />, '/team/ana-pat?tab=settings');
     expect(await screen.findByRole('link', { name: /Ana/ })).toBeTruthy();
-    fireEvent.click(await screen.findByRole('button', { name: /Status/ }));
     await pick('Status', 'Paused');
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(sent.find((s) => s.url.includes('/bots/ana-pat/definition'))?.body).toEqual({ status: 'paused', expected_revision: 4 }));
   });
 
@@ -193,9 +191,7 @@ describe('Copies of an agent', () => {
       return undefined;
     });
     show(<TeamWho who="ana-pat" tab="settings" />, '/team/ana-pat?tab=settings');
-    fireEvent.click(await screen.findByRole('button', { name: /Profile/ }));
     await pick('Profile', 'Doer');
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Leave Custom' }));
     await waitFor(() => expect(sent.filter((s) => s.url.includes('/profile')).map((s) => s.body)).toEqual([
       { profile: 'doer', expected_revision: 4 },

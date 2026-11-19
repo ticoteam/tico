@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fixHref } from './fixes';
 import { installCommands, runnerName } from './install';
-import { historyFilter } from './queries';
 
 describe('health fixes', () => {
   it("take the new app's address, keep outside pages, and drop a page with no new address", () => {
@@ -33,13 +32,5 @@ describe('add computer', () => {
     expect(win?.line).toContain("-Url https://here.test -Code 'code1' -Label 'Ana''s PC'");
     const [local] = installCommands({ local: true }, 'http://127.0.0.1:8777', 'server', 'code1', 'This computer');
     expect(local?.line).toContain('--url http://server:8765 --server-network tico_default');
-  });
-});
-
-describe('history filter', () => {
-  it("is the server's bot or person filter", () => {
-    expect(historyFilter('bot:builder')).toBe('?bot=builder');
-    expect(historyFilter('human:p2')).toBe('?person=p2');
-    expect(historyFilter(undefined)).toBe('');
   });
 });

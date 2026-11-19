@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { ThreadsPage, loadThreads, threadsSearch } from '@/features/threads/exports';
+import { ThreadsPage } from '@/features/threads/exports';
+import { loadThreads, threadsSearch } from '@/features/threads/routing';
 
 /* One thread. New message, Catch up, Mail and Messaging have routes of their own, which win over this one. */
 export const Route = createFileRoute('/threads/$thread')({

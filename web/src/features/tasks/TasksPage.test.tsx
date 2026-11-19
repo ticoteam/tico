@@ -8,6 +8,7 @@ import { keys, queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { FlowPage } from './FlowPage';
 import { listParams, pipelinesQuery, type Pipeline, type TaskItem } from './queries';
+import { PipelinePage } from './PipelinePage';
 import { TasksPage } from './TasksPage';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -139,12 +140,47 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     expect(await screen.findByText('Needs a review first')).toBeTruthy();
   });
 
-  it('says so when the pipeline has nothing open, offering New task', async () => {
+  it('says so when the pipeline has nothing open, offering New task, and keeps every stage head', async () => {
     serve(() => ({ status: 200, body: {} }));
     seed([]);
     show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
     expect(await screen.findByRole('heading', { name: 'Nothing in Engineering' })).toBeTruthy();
     expect(screen.getAllByRole('button', { name: 'New task' }).length).toBeGreaterThan(0);
+    expect(screen.getByRole('region', { name: 'Inbox' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Doing' })).toBeTruthy();
+  });
+
+  it('the empty list keeps the stages folded on one line under the line and New task', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    seed([]);
+    show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
+    expect(await screen.findByRole('heading', { name: 'Nothing in Engineering' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /Inbox/ }).closest('.stage-line')).toBeTruthy();
+  });
+
+  it('a card and a row say which tasks they block', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    seed([task('a1', 7, 'Fix the export', 's1', { blocks: [{ id: 'b1', number: 613, label: 'E613' }, { id: 'b2', number: 633, label: null }] })]);
+    show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+    expect(within(await screen.findByTitle('Fix the export')).getByText('Blocks E613, #633')).toBeTruthy();
+  });
+
+  it("a phone's head keeps Flow and \"⋯\"; New task, Search, Filter and the other view are in the \"⋯\"", async () => {
+    document.documentElement.dataset.layout = 'cards';
+    try {
+      serve(() => ({ status: 200, body: {} }));
+      seed([task('a1', 7, 'Fix the export', 's1')]);
+      show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+      expect((await screen.findByRole('link', { name: 'Flow' })).hasAttribute('data-phone')).toBe(true);
+      expect(screen.queryByRole('textbox', { name: 'Search tasks' })).toBeNull();
+      fireEvent.click(document.querySelector('[data-target="tasks:more"]') as HTMLElement);
+      for (const name of ['New task', 'Search', 'List', 'Archived', 'Select']) expect(await screen.findByRole('menuitem', { name })).toBeTruthy();
+      expect(screen.getByText('Filter')).toBeTruthy();
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Search' }));
+      expect(await screen.findByRole('textbox', { name: 'Search tasks' })).toBeTruthy();
+    } finally {
+      delete document.documentElement.dataset.layout;
+    }
   });
 
   it('names the page and offers Try again when the read fails', async () => {
@@ -341,7 +377,7 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
       return { status: 200, body: {} };
     });
     seed(rows());
-    show(<TasksPage pipeline="eng" search={{ panel: 'pipeline' }} />, '/tasks/eng?panel=pipeline');
+    show(<PipelinePage pipeline="eng" fresh={false} />, '/tasks/eng/edit');
     fireEvent.click(await screen.findByRole('button', { name: 'More, Doing' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove stage' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -370,7 +406,7 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
       return { status: 200, body: {} };
     });
     seed(rows());
-    show(<TasksPage pipeline="eng" search={{ panel: 'pipeline' }} />, '/tasks/eng?panel=pipeline');
+    show(<PipelinePage pipeline="eng" fresh={false} />, '/tasks/eng/edit');
     const open = await screen.findByRole('button', { name: 'Rules, Doing' });
     expect(open.getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(open);
@@ -408,7 +444,7 @@ describe('Flow @s5 @s112', () => {
   it('names the page and offers Try again when the read fails', async () => {
     serve(() => ({ status: 500, body: { error: { code: 'down', detail: 'down' } } }));
     show(<FlowPage />, '/flow');
-    expect(await screen.findByRole('heading', { name: 'Flow did not load' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Tasks did not load' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 });

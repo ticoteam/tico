@@ -17,12 +17,14 @@ import { toast } from '@/kit/Toast';
 import type { MotionChoice } from '@/motion';
 import { Section } from '@/pagekinds';
 import { THEME_KEY, usePref, type Theme } from '@/prefs';
-import { Privacy, Repositories, Storage, TeamIcon } from './Company';
+import { Repositories, TeamIcon } from './Company';
+import { CompanyName } from './CompanyName';
 import { AllTokens, EXPIRES } from './CompanyTokens';
-import { DesktopRows } from './Desktop';
-import { AddPerson, Joining, LeftPeople, SignInLine } from './People';
+import { TicoSection } from './Desktop';
+import { NoticeSwitch } from './Notices';
+import { Joining, LeftPeople } from './People';
 import { ScreeningMore, SupportAccess } from './SecurityMore';
-import { Foot, Line, SwitchLine, Verb, Word, act } from './parts';
+import { Foot, Line, SwitchLine, Verb, act } from './parts';
 import {
   accessQuery,
   supportAccessQuery,
@@ -60,20 +62,26 @@ export function General() {
     <>
       <Section name="Company" target="setting:company">
         <Facts label="Company">
-          <LabelValue label="Name">{c?.company_name}</LabelValue>
-          <LabelValue label="Owner">{c?.owner_email}</LabelValue>
-          <LabelValue label="Version">{c?.version}</LabelValue>
+          {access.data?.you === 'owner' && c ? <CompanyName name={c.company_name} /> : <LabelValue label="Name">{c?.company_name}</LabelValue>}
           {access.data && <TeamIcon owner={access.data.you === 'owner'} />}
-          {access.data && (
-            <SwitchLine
-              label="Agents send reports to Tico support"
-              target="setting:reports"
-              checked={access.data.rules.bot_reports_direct !== false}
-              onChange={(on) => void act('settings.reportsDirect', { on })}
-            />
+          {c?.public_url && (
+            <Line label="Address">
+              <code className="fs-code">{c.public_url.replace(/^https?:\/\//, '')}</code>
+            </Line>
           )}
         </Facts>
       </Section>
+      {access.data && (
+        <Section name="Agents" target="setting:reports">
+          <Facts label="Agents">
+            <SwitchLine
+              label="Reports to Tico support"
+              checked={access.data.rules.bot_reports_direct !== false}
+              onChange={(on) => void act('settings.reportsDirect', { on })}
+            />
+          </Facts>
+        </Section>
+      )}
       {pages.length > 0 && (
         <Section name="Page owners" count={pages.length}>
           <Facts label="Page owners">
@@ -101,10 +109,8 @@ export function General() {
           </Facts>
         </Section>
       )}
-      {access.data?.you === 'owner' && <Privacy />}
-      {access.data?.you === 'owner' && <Storage />}
       {access.data && <Repositories admin={access.data.you === 'owner' || access.data.you === 'admin'} owner={access.data.you === 'owner'} />}
-      <DesktopRows />
+      <TicoSection version={c?.version} />
     </>
   );
 }
@@ -201,7 +207,7 @@ function EmailDialog({ p, onClose }: { p: AccessPerson; onClose: () => void }) {
   );
 }
 
-function PersonOpen({ p, mayEdit, youOwn, ownerName, mine }: { p: AccessPerson; mayEdit: boolean; youOwn: boolean; ownerName: string; mine: boolean }) {
+function PersonOpen({ p, mayEdit, youOwn, ownerName }: { p: AccessPerson; mayEdit: boolean; youOwn: boolean; ownerName: string }) {
   const [confirm, setConfirm] = useState(false);
   const [handing, setHanding] = useState<'owner' | 'email' | null>(null);
   // Only the owner sees these: hand the company over, or change their own sign-in address.
@@ -230,7 +236,7 @@ function PersonOpen({ p, mayEdit, youOwn, ownerName, mine }: { p: AccessPerson; 
             (ROLE[p.owner ? 'owner' : p.role] ?? p.role)
           )}
         </Line>
-        {mayEdit && !p.owner && !mine ? <SignInLine p={p} /> : <LabelValue label="Signs in">{p.sign_in ? 'Yes' : 'Not yet'}</LabelValue>}
+        <LabelValue label="Signs in">{p.sign_in ? 'Yes' : 'Not yet'}</LabelValue>
       </Facts>
       {((mayEdit && !p.owner) || mayHand || myEmail) && (
         <Foot open>
@@ -276,17 +282,15 @@ function PersonOpen({ p, mayEdit, youOwn, ownerName, mine }: { p: AccessPerson; 
 
 export function People({ open }: { open?: string }) {
   const access = useQuery(accessQuery);
-  const me = useQuery(meQuery);
   const v = access.data as AccessFull | undefined;
   if (!v || !Array.isArray(v.people)) return null;
   const people = v.people.filter((p) => !p.left);
-  const myId = me.data ? bare(me.data.id) : '';
   // `you` is the reader's company role; only owners and admins read this at all.
   const mayEdit = v.you === 'owner' || v.you === 'admin';
   const owner = v.people.find((p) => p.owner);
   return (
     <>
-    <Section name="People" count={people.length} actions={mayEdit ? <AddPerson v={v} /> : undefined}>
+    <Section name="People" count={people.length}>
       {people.length === 0 ? (
         <Empty title="No one yet" />
       ) : (
@@ -296,7 +300,7 @@ export function People({ open }: { open?: string }) {
             <span>Name</span>
             <span>Email</span>
             <span>Role</span>
-            <span>Signs in</span>
+            <span />
           </div>
           {people.map((p) => {
             const row = (
@@ -314,13 +318,13 @@ export function People({ open }: { open?: string }) {
                 <span className="row-title">{p.name}</span>
                 <span className="row-sub">{p.email}</span>
                 <span className="row-cell">{ROLE[p.owner ? 'owner' : p.role] ?? p.role}</span>
-                <span className="row-age">{p.sign_in ? 'Yes' : 'Invited'}</span>
+                <span className="row-age">{p.sign_in ? '' : 'Invited'}</span>
               </Link>
             );
             return open === p.id ? (
               <div key={p.id} className="open">
                 {row}
-                <PersonOpen p={p} mayEdit={mayEdit} youOwn={v.you === 'owner'} ownerName={owner?.name ?? 'yourself'} mine={p.id === myId} />
+                <PersonOpen p={p} mayEdit={mayEdit} youOwn={v.you === 'owner'} ownerName={owner?.name ?? 'yourself'} />
               </div>
             ) : (
               row
@@ -338,29 +342,16 @@ export function People({ open }: { open?: string }) {
 
 // ---------------------------------------------------------------- directory sync (owner): people from Google, Entra or SCIM
 
+/* Not drawn yet (s812 todo): kept at its least. Where people come from, the source's key, SCIM's address and token,
+   and Sync now, which shows what would change before it applies. Filters, the schedule and the leave limit keep the
+   server's values. */
+
 const SOURCES = [
   { value: '', label: 'Off' },
   { value: 'google', label: 'Google Workspace' },
   { value: 'entra', label: 'Microsoft Entra ID' },
   { value: 'scim', label: 'SCIM' },
 ] as const;
-
-const EVERY: Record<number, string> = { 0: 'By hand', 60: 'Every hour', 360: 'Every 6 hours', 1440: 'Every day' };
-
-const PLAN_LINES = [
-  ['adds', 'Join'],
-  ['updates', 'Change'],
-  ['restores', 'Come back'],
-  ['leaves', 'Leave'],
-  ['protected', 'Kept'],
-  ['skipped', 'Skipped'],
-] as const;
-
-const toLines = (text: string) =>
-  text
-    .split('\n')
-    .map((x) => x.trim())
-    .filter(Boolean);
 
 /** The fields a source's key needs; all of them, or none is sent. */
 const KEY_FIELDS: Record<'google' | 'entra', [keyof DirectoryCredentials, string, 'area' | 'email' | 'text' | 'password'][]> = {
@@ -377,12 +368,107 @@ const KEY_FIELDS: Record<'google' | 'entra', [keyof DirectoryCredentials, string
 
 function DirectorySync() {
   const sync = useQuery({ ...directorySyncQuery, retry: false });
+  return sync.data ? <SyncForm key={sync.data.revision} v={sync.data} /> : null;
+}
+
+function SyncForm({ v }: { v: DirectoryView }) {
+  const [source, setSource] = useState<DirectorySource>(v.source);
+  const [cred, setCred] = useState<DirectoryCredentials>({});
   // A new SCIM token is shown once: it lives here, in this component's state, and nowhere else.
   const [token, setToken] = useState<string | null>(null);
-  if (!sync.data) return null;
+  const [preview, setPreview] = useState<DirectoryPreview | null>(null);
+  const [reviewed, setReviewed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const keyed = source === 'google' || source === 'entra' ? source : null;
+  const asking = keyed && !v.credentials[keyed]?.configured ? KEY_FIELDS[keyed] : [];
+  const typed = asking.every(([k]) => (cred[k] ?? '').trim());
+
+  const save = async (to: DirectorySource) => {
+    setBusy(true);
+    const r = await run(
+      'settings.saveDirectory',
+      {
+        source: to,
+        interval: v.interval_minutes,
+        massLeave: v.mass_leave_limit,
+        groups: v.filter.groups,
+        orgUnits: v.filter.org_units,
+        domains: v.filter.domains,
+        ...(asking.length && to ? { credentials: Object.fromEntries(asking.map(([k]) => [k, (cred[k] ?? '').trim()])) } : {}),
+      },
+      { via: 'click' },
+    );
+    setBusy(false);
+    toast(r.ok ? { text: r.did ?? 'Saved', kind: 'done' } : refusal(r, "Couldn't save"));
+  };
+  // A source that needs a key saves once the key is typed; the others save as they are picked.
+  const pick = (to: DirectorySource) => {
+    setSource(to);
+    const needsKey = (to === 'google' || to === 'entra') && !v.credentials[to]?.configured;
+    if (!needsKey) void save(to);
+  };
+  const makeToken = async () => {
+    const r = await run('settings.scimToken', {}, { via: 'click' });
+    const made = r.ok ? (r.out as { token?: string } | undefined)?.token : undefined;
+    if (made) setToken(made);
+    else toast(refusal(r, "Couldn't make a token"));
+  };
+  const look = async () => {
+    const r = await run('settings.previewDirectory', {}, { via: 'click' });
+    if (!r.ok) return toast(refusal(r, "Couldn't read the directory"));
+    setReviewed(false);
+    setPreview(r.out as DirectoryPreview);
+  };
+  const p = preview?.plan;
+  const needs = !!(preview?.needs_confirmation.first || preview?.needs_confirmation.mass_leave);
+  const any = !!p && (p.adds.length || p.updates.length || p.restores.length || p.leaves.length) > 0;
+  const apply = async () => {
+    if (!p) return;
+    setBusy(true);
+    const r = await run('settings.syncDirectory', { plan: p.hash, confirm: needs && reviewed }, { via: 'click' });
+    setBusy(false);
+    if (!r.ok) return toast(refusal(r, "Couldn't sync"));
+    toast({ text: r.did ?? 'Synced', kind: 'done' });
+    if ((r.out as DirectorySynced | undefined)?.applied) setPreview(null);
+  };
+  const last = v.last.at ? `${v.last.ok === false ? 'Failed' : 'Synced'}, ${new Date(v.last.at).toLocaleString('en-US')}` : 'Never';
   return (
-    <>
-      <SyncForm key={sync.data.revision} v={sync.data} onToken={setToken} />
+    <Section name="Directory sync" defaultOpen={!!v.source} target="setting:directory-sync">
+      <Facts label="Directory sync">
+        <Line label="People from">
+          <Select label="People from" labelHidden look="quiet" value={source} options={SOURCES} onValueChange={(x) => pick(x as DirectorySource)} />
+        </Line>
+        {source === 'scim' && v.scim.url && <Line label="Address">{v.scim.url}</Line>}
+        {source === 'scim' && (
+          <Line label="Token">
+            <Verb onClick={() => void makeToken()}>{v.scim.enabled ? 'Replace token' : 'Make token'}</Verb>
+          </Line>
+        )}
+        {v.source && (
+          <Line label="Last sync">
+            {last}
+            <Verb onClick={() => void look()}>Sync now</Verb>
+          </Line>
+        )}
+      </Facts>
+      {asking.length > 0 && (
+        <div className="set-add set-dir">
+          {asking.map(([k, label, kind]) => (
+            <Field
+              key={k}
+              label={label}
+              value={cred[k] ?? ''}
+              onValueChange={(x) => setCred((c) => ({ ...c, [k]: x }))}
+              area={kind === 'area'}
+              type={kind === 'area' ? undefined : kind}
+              autoComplete="off"
+            />
+          ))}
+          <Button busy={busy} disabled={!typed} onClick={() => void save(source)}>
+            Save key
+          </Button>
+        </div>
+      )}
       <Dialog
         open={token != null}
         onOpenChange={(o) => !o && setToken(null)}
@@ -396,217 +482,26 @@ function DirectorySync() {
       >
         <code className="fs-code">{token}</code>
       </Dialog>
-    </>
-  );
-}
-
-function SyncForm({ v, onToken }: { v: DirectoryView; onToken: (token: string) => void }) {
-  const [source, setSource] = useState<DirectorySource>(v.source);
-  const [every, setEvery] = useState(String(v.interval_minutes));
-  const [massLeave, setMassLeave] = useState(String(v.mass_leave_limit));
-  const [groups, setGroups] = useState(v.filter.groups.join('\n'));
-  const [orgUnits, setOrgUnits] = useState(v.filter.org_units.join('\n'));
-  const [domains, setDomains] = useState(v.filter.domains.join('\n'));
-  const [cred, setCred] = useState<DirectoryCredentials>({});
-  const [replacing, setReplacing] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [lostKey, setLostKey] = useState(false);
-  const [newToken, setNewToken] = useState(false);
-  const [preview, setPreview] = useState<DirectoryPreview | null>(null);
-  const [reviewed, setReviewed] = useState(false);
-  const keyed = source === 'google' || source === 'entra' ? source : null;
-  const saved = keyed ? v.credentials[keyed] : undefined;
-  const asking = keyed && (!saved?.configured || replacing) ? KEY_FIELDS[keyed] : [];
-  const typed = asking.length > 0 && asking.every(([k]) => (cred[k] ?? '').trim());
-  const limit = Number(massLeave);
-  const bad = !Number.isInteger(limit) || limit < 0;
-  const intervals = [...new Set([0, 60, 360, 1440, v.interval_minutes])].map((m) => ({ value: String(m), label: EVERY[m] ?? `Every ${m} min` }));
-
-  const save = async (replaceLostKey = false, off = false) => {
-    setBusy(true);
-    const r = await run(
-      'settings.saveDirectory',
-      {
-        source: off ? '' : source,
-        interval: Number(every),
-        massLeave: limit,
-        groups: toLines(groups),
-        orgUnits: toLines(orgUnits),
-        domains: toLines(domains),
-        ...(typed && !off ? { credentials: Object.fromEntries(asking.map(([k]) => [k, (cred[k] ?? '').trim()])) } : {}),
-        ...(replaceLostKey ? { replaceLostKey: true } : {}),
-      },
-      { via: 'click' },
-    );
-    setBusy(false);
-    if (!r.ok && r.error === 'github_key_missing') return setLostKey(true);
-    toast(r.ok ? { text: r.did ?? 'Saved', kind: 'done' } : refusal(r, "Couldn't save"));
-  };
-
-  const makeToken = async () => {
-    setNewToken(false);
-    const r = await run('settings.scimToken', {}, { via: 'click' });
-    const made = r.ok ? (r.out as { token?: string } | undefined)?.token : undefined;
-    if (made) onToken(made);
-    else toast(refusal(r, "Couldn't make a token"));
-  };
-
-  const look = async () => {
-    setBusy(true);
-    const r = await run('settings.previewDirectory', {}, { via: 'click' });
-    setBusy(false);
-    if (!r.ok) return toast(refusal(r, "Couldn't read the directory"));
-    setReviewed(false);
-    setPreview(r.out as DirectoryPreview);
-  };
-
-  const p = preview?.plan;
-  const needs = !!(preview?.needs_confirmation.first || preview?.needs_confirmation.mass_leave);
-  const any = !!p && (['adds', 'updates', 'restores', 'leaves'] as const).some((k) => p[k].length > 0);
-  const apply = async () => {
-    if (!p) return;
-    setBusy(true);
-    const r = await run('settings.syncDirectory', { plan: p.hash, confirm: needs && reviewed }, { via: 'click' });
-    setBusy(false);
-    if (!r.ok) return toast(refusal(r, "Couldn't sync"));
-    toast({ text: r.did ?? 'Synced', kind: 'done' });
-    if ((r.out as DirectorySynced | undefined)?.applied) setPreview(null);
-  };
-
-  const last = v.last.at ? `${v.last.ok === false ? 'Failed' : v.last.held ? 'Held for a check' : 'Synced'}, ${new Date(v.last.at).toLocaleString('en-US')}` : 'Never';
-  return (
-    <Section name="Directory sync" defaultOpen={!!v.source} target="setting:directory-sync">
-      <div className="set-add set-dir">
-        <Select label="Sync people from" value={source} options={SOURCES} onValueChange={(s) => setSource(s as DirectorySource)} />
-      </div>
-      <Facts label="Directory sync">
-        {saved?.configured && !replacing && (
-          <Line label="Key">
-            {saved.hint || 'Saved'}
-            <Verb onClick={() => setReplacing(true)}>Replace key</Verb>
-          </Line>
-        )}
-        {source === 'scim' && (
-          <>
-            <Line label="Address">{v.scim.url ?? ''}</Line>
-            <Line label="Token">
-              {v.scim.enabled ? 'Made' : 'None'}
-              <Verb onClick={() => (v.scim.enabled ? setNewToken(true) : void makeToken())}>{v.scim.enabled ? 'Replace token' : 'Make token'}</Verb>
-            </Line>
-          </>
-        )}
-        {v.source && <Line label="Last sync">{v.last.ok === false && v.last.error ? `${last}: ${v.last.error}` : last}</Line>}
-      </Facts>
-      <div className="set-add set-dir">
-          {asking.map(([k, label, kind]) => (
-            <Field
-              key={k}
-              label={label}
-              value={cred[k] ?? ''}
-              onValueChange={(x) => setCred((c) => ({ ...c, [k]: x }))}
-              area={kind === 'area'}
-              type={kind === 'area' ? undefined : kind}
-              autoComplete="off"
-            />
-          ))}
-          {keyed && <Field label="Groups, one a line" value={groups} onValueChange={setGroups} area />}
-          {keyed === 'google' && <Field label="Org units, one a line" value={orgUnits} onValueChange={setOrgUnits} area />}
-          {keyed && <Field label="Domains, one a line" value={domains} onValueChange={setDomains} area />}
-          {source && <Select label="Sync" value={every} options={intervals} onValueChange={setEvery} />}
-          {source && (
-            <Field
-              label="Ask first if more than this many leave"
-              type="number"
-              value={massLeave}
-              onValueChange={setMassLeave}
-              error={bad ? 'Not a number' : undefined}
-            />
-          )}
-      </div>
-      <Foot>
-        <Button variant="primary" busy={busy} disabled={bad || (asking.length > 0 && !typed && !saved?.configured)} onClick={() => void save()}>
-          Save
-        </Button>
-        {v.source && <Verb onClick={() => void look()}>Sync now</Verb>}
-        {v.source && <Verb onClick={() => void save(false, true)}>Stop syncing</Verb>}
-      </Foot>
-      <Dialog
-        open={newToken}
-        onOpenChange={setNewToken}
-        alert
-        title="Replace the directory token?"
-        description="The directory stops syncing until it has the new one."
-        actions={
-          <>
-            <Button variant="quiet" onClick={() => setNewToken(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" onClick={() => void makeToken()}>
-              Replace
-            </Button>
-          </>
-        }
-      />
-      <Dialog
-        open={lostKey}
-        onOpenChange={setLostKey}
-        alert
-        title="Replace the lost key?"
-        description="The key that opens the saved GitHub App and directory keys is lost. Replacing it removes them all; you enter them again."
-        actions={
-          <>
-            <Button variant="quiet" onClick={() => setLostKey(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => {
-                setLostKey(false);
-                void save(true);
-              }}
-            >
-              Replace
-            </Button>
-          </>
-        }
-      />
-      {preview && p && (
+      {p && (
         <Dialog
           open
           onOpenChange={(o) => !o && setPreview(null)}
           title="Sync now"
-          description="Nothing changes until you apply it."
+          description={`${p.adds.length} join, ${p.updates.length} change, ${p.restores.length} come back, ${p.leaves.length} leave.`}
           actions={
             <>
               <Button variant="quiet" onClick={() => setPreview(null)}>
                 Cancel
               </Button>
               <Button variant="primary" busy={busy} disabled={!any || (needs && !reviewed)} onClick={() => void apply()}>
-                {any ? 'Apply' : 'Nothing to apply'}
+                Apply
               </Button>
             </>
           }
         >
-          <div className="set-add">
-            <Facts label="What changes">
-              {PLAN_LINES.map(([k, label]) => (
-                <LabelValue key={k} label={label}>
-                  {String(p[k].length)}
-                </LabelValue>
-              ))}
-            </Facts>
-            {p.leaves.length > 0 && (
-              // who loses their sign-in is the part to check by name
-              <p className="fact-dim set-leaves">
-                {p.leaves.slice(0, 20).map((r) => r.email).join(', ')}
-                {p.leaves.length > 20 ? ` and ${p.leaves.length - 20} more` : ''}
-              </p>
-            )}
-            {preview.needs_confirmation.mass_leave && (
-              <Word icon="alert">{`More than ${preview.mass_leave_limit} would leave`}</Word>
-            )}
-            {needs && <Checkbox label="I checked this list" checked={reviewed} onCheckedChange={setReviewed} />}
-          </div>
+          {/* who loses their sign-in is the part to check by name */}
+          {p.leaves.length > 0 && <p className="fact-dim set-leaves">{p.leaves.map((r) => r.email).join(', ')}</p>}
+          {needs && <Checkbox label="I checked this list" checked={reviewed} onCheckedChange={setReviewed} />}
         </Dialog>
       )}
     </Section>
@@ -788,6 +683,7 @@ export function Account() {
               onChange={(on) => void act('settings.notify', { field: 'email_digest', on })}
             />
           )}
+          {mine && <NoticeSwitch on={mine.notify_browser === true} />}
         </Facts>
         <Foot>
           <Verb onClick={() => void run('settings.signOut', {}, { via: 'click' })}>Sign out</Verb>
@@ -826,8 +722,8 @@ const MODES: { value: ScreenMode; label: string }[] = [
   { value: 'warn', label: 'Warn' },
   { value: 'hold', label: 'Hold' },
 ];
-
-const DOORS: Record<string, string> = { webhook: 'Webhooks', mail: 'Email', idea: 'Ideas', watcher: 'Watchers', document: 'Documents', slack: 'Slack' };
+// Email can warn but not hold (old app ui/app/settings-release.ts screeningHTML).
+const MAIL_MODES = MODES.filter((m) => m.value !== 'hold');
 
 export function Security() {
   const screening = useQuery(screeningQuery);
@@ -835,36 +731,39 @@ export function Security() {
   const letIn = useQuery({ ...supportAccessQuery, retry: false });
   const v = screening.data as ScreeningFull | undefined;
   if (!v) return null;
-  const doors = Object.keys(v.modes);
+  // One choice for every door but mail, which has its own.
+  const others = Object.keys(v.modes).filter((d) => d !== 'mail');
   return (
     <>
       <Section name="Screening" target="setting:screening">
         <Facts label="Screening">
           <SwitchLine
-            label="Known patterns"
+            label="Patterns"
             target="setting:detector-patterns"
             checked={v.layers.patterns}
             onChange={(on) => void act('settings.setDetector', { detector: 'patterns', on })}
           />
           <SwitchLine
-            label="A model reads each one"
+            label="Decision model"
             target="setting:detector-model"
             checked={v.layers.model}
             onChange={(on) => void act('settings.setDetector', { detector: 'model', on })}
           />
-          {doors.map((door) => (
-            <Line key={door} label={v.sources.find((s) => s.id === door)?.name ?? DOORS[door] ?? door} target={`setting:screen-${door}`}>
-              <Select
-                label={`${DOORS[door] ?? door} screening`}
-                labelHidden
-                look="quiet"
-                value={v.modes[door] ?? 'off'}
-                onValueChange={(mode) => void act('settings.setScreening', { door, mode })}
-                // Email can warn but not hold (old app ui/app/settings-release.ts screeningHTML).
-                options={door === 'mail' ? MODES.filter((m) => m.value !== 'hold') : MODES}
+          {others.length > 0 && (
+            <Line label="When caught" target="setting:screen-doors">
+              <Segmented
+                label="When caught"
+                options={MODES}
+                value={v.modes[others[0]!] ?? 'off'}
+                onValueChange={(mode) => others.forEach((door) => void act('settings.setScreening', { door, mode }))}
               />
             </Line>
-          ))}
+          )}
+          {'mail' in v.modes && (
+            <Line label="In mail" target="setting:screen-mail">
+              <Segmented label="In mail" options={MAIL_MODES} value={v.modes.mail ?? 'off'} onValueChange={(mode) => void act('settings.setScreening', { door: 'mail', mode })} />
+            </Line>
+          )}
           <ScreeningMore recent={v.recent} />
         </Facts>
       </Section>
@@ -874,7 +773,7 @@ export function Security() {
             <SupportAccess />
             {support.data?.available && (
               <SwitchLine
-                label="Let Tico support reach your cloud computers"
+                label="Reaches computers"
                 checked={support.data.on === true}
                 onChange={(on) => void act('settings.setSupport', { on })}
               />

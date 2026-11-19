@@ -1,72 +1,57 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { refusal, run } from '@/actions';
-import type { AccessAudience, Group, ToolIndexRow, WebsiteTool } from '@/api/schema';
+import type { Group, ToolIndexRow } from '@/api/schema';
 import { directoryQuery, type Directory } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
-import { Field } from '@/kit/Field';
+import { Field, Search } from '@/kit/Field';
+import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { Facts, LabelValue } from '@/kit/LabelValue';
+import { LabelValue, Facts } from '@/kit/LabelValue';
 import { Markdown } from '@/kit/Markdown';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
-import { Segmented } from '@/kit/Segmented';
-import { Select } from '@/kit/Select';
-import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
-import { PageMore, Section } from '@/pagekinds';
+import { FilterRow, PageMore, type FilterChip } from '@/pagekinds';
 import { Foot, useGo } from './AddTool';
 import { Face, Held, More, press, when } from './parts';
-import { inboxesQuery, mailboxQuery, type Inbox } from './queries';
-import { RevealDialog } from './ToolDialogs';
 import {
+  allMessagesQuery,
   envsOf,
+  inboxesQuery,
+  inboxMessagesQuery,
   keysOf,
   mailboxMailQuery,
+  mailboxQuery,
   mailboxSendsQuery,
   servicePageQuery,
   servicesQuery,
-  slackLinksQuery,
   teamsQuery,
-  threadPicksQuery,
   vaultQuery,
-  type SeenList,
+  webhookQuery,
+  webhookSendsQuery,
+  type InMessage,
+  type MessageFilter,
   type StoredKey,
   type Vault,
-} from './toolKeys';
-import { bad, Code, KIND, LEVEL, Shell, stateOf, toolHref, Who } from './ToolShell';
-import { MayDo, SendingSection } from './ToolSettings';
+} from './queries';
+import { Confirm, EditInboxDialog, MessageDialog, NewSecretDialog, ReleaseDialog, RevealDialog, WebhookDialog } from './ToolDialogs';
+import { MayFacts, NumberRequests, SharedInboxDialog, useGoogle, useSending } from './ToolSettings';
+import { AddSomeone, bad, Code, KIND, ToolPage, toolHref, useAdmin, UseRow, WhoRow } from './ToolShell';
 
-/* The Tools gap rows' parts: a stored key no tool holds (s788 s909), a declared tool's own page (s787), Slack's linked
-   threads, a mailbox you can change (s866), who reads a Tico address (s867), a website's accounts (s865), who sees a
-   tool (s926) and Tools' Who has access filter (s908). A secret is typed into a dialog's state and only sent. */
+/* The kinds of tool beyond an API and a website, each on the one tool page: a stored key no tool holds, a tool an
+   agent declares, a mailbox, Email itself, a Tico address or number, phone numbers asked for, an outgoing webhook;
+   and Messages, what came in to every address. Plus the Tools list's Who has access filter. */
 
-/** "Are you sure": for what cannot be undone. */
-export function Confirm({ title, description, label, onGo, onClose }: { title: string; description?: string; label: string; onGo: () => Promise<boolean>; onClose: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const go = async () => {
-    setBusy(true);
-    const ok = await onGo();
-    setBusy(false);
-    if (ok) onClose();
-  };
-  return (
-    <Dialog
-      open
-      alert
-      onOpenChange={(o) => !o && onClose()}
-      title={title}
-      description={description}
-      actions={<Foot onClose={onClose} label={label} busy={busy} ready onGo={() => void go()} />}
-    />
-  );
+/** A press whose answer is a line to show (a check): the line, or why it failed. */
+async function check(id: string, input: unknown) {
+  const r = await run(id, input, { via: 'click' });
+  const out = r.out as { ok: boolean; text: string } | undefined;
+  toast(r.ok && out ? { text: out.text, kind: out.ok ? 'done' : 'failed' } : refusal(r, 'Not checked'));
 }
-
-/** An add menu's trigger. */
-const addTrigger = <IconButton icon="plus" label="Add someone" size="sm" />;
 
 /* ---------------------------------------------------------------- a stored key no tool holds */
 
@@ -87,111 +72,93 @@ export function KeyView({ cid }: { cid: string }) {
   const vault = q.data;
   const k = vault?.credentials.find((c) => c.id === cid);
   const [dialog, setDialog] = useState<'rotate' | 'reveal' | 'delete' | null>(null);
-  const state = stateOf(q);
-  if (state !== 'ready' || !k)
-    return (
-      <Shell name="Key" kind="key" state={state} onRetry={() => void q.refetch()} target={`tool:key:${cid}`}>
-        <Empty title="No key here" />
-      </Shell>
-    );
   const manage = !!vault?.can_manage;
-  const removable = k.can_remove ?? manage;
-  const taken = new Set(k.grants.map((g) => g.subject));
+  const taken = new Set(k?.grants.map((g) => g.subject));
   const adds = [
-    ...(vault?.people ?? []).map((p) => ({ subject: `human:${p.id}`, name: p.name || p.email || p.id })),
-    ...(vault?.bots ?? []).map((b) => ({ subject: `bot:${b.id}`, name: b.name })),
-  ].filter((x) => !taken.has(x.subject));
+    ...(vault?.people ?? []).map((p) => ({ id: `human:${p.id}`, name: p.name || p.email || p.id })),
+    ...(vault?.bots ?? []).map((b) => ({ id: `bot:${b.id}`, name: b.name })),
+  ].filter((x) => !taken.has(x.id));
   return (
-    <Shell
-      name={k.name}
+    <ToolPage
+      name={k?.name ?? 'Key'}
       kind="key"
-      lock={k.stored}
-      problem={k.stored ? null : 'No value'}
-      target={`tool:key:${k.id}`}
+      kindWord={k && (KEY_KIND[k.kind] ?? k.kind)}
+      lock={k?.stored}
+      problem={k && !k.stored ? 'No value' : null}
+      q={{ ...q, data: vault && (k ?? null) }}
+      target={`tool:key:${cid}`}
+      bare={!k}
       more={
-        <PageMore>
-          {manage && <MenuItem label={k.stored ? 'Rotate' : 'Set value'} onSelect={() => setDialog('rotate')} />}
-          {k.stored && k.can_reveal && <MenuItem label="Show key" onSelect={() => setDialog('reveal')} />}
-          {removable && (
-            <>
-              <MenuRule />
-              <MenuItem label="Delete key" onSelect={() => setDialog('delete')} />
-            </>
-          )}
-        </PageMore>
+        k && (
+          <PageMore>
+            {manage && <MenuItem label={k.stored ? 'Rotate' : 'Set value'} onSelect={() => setDialog('rotate')} />}
+            {k.stored && k.can_reveal && <MenuItem label="Show key" onSelect={() => setDialog('reveal')} />}
+            {(k.can_remove ?? manage) && (
+              <>
+                <MenuRule />
+                <MenuItem label="Delete key" onSelect={() => setDialog('delete')} />
+              </>
+            )}
+          </PageMore>
+        )
       }
-    >
-      <Section name="What it is">
-        <Facts>
-          <LabelValue label="Kind">{KEY_KIND[k.kind] ?? k.kind}</LabelValue>
-          {k.username && <LabelValue label="Username">{k.username}</LabelValue>}
-          {k.env && (
-            <LabelValue label="Variable">
-              <Code>{k.env}</Code>
+      about={
+        k && (
+          <>
+            {k.username && <LabelValue label="Username">{k.username}</LabelValue>}
+            {k.env && (
+              <LabelValue label="Variable">
+                <Code>{k.env}</Code>
+              </LabelValue>
+            )}
+            {k.source && <LabelValue label="From">{k.source}</LabelValue>}
+          </>
+        )
+      }
+      connects={
+        k && (
+          <Facts>
+            <LabelValue label="Value">
+              {k.stored ? (
+                <>
+                  <Code>{k.preview || '••••••••'}</Code> <Held />
+                </>
+              ) : (
+                'Not set'
+              )}
             </LabelValue>
-          )}
-          {k.source && <LabelValue label="From">{k.source}</LabelValue>}
-        </Facts>
-      </Section>
-      <Section name="How it connects" target={`tool-connect:key:${k.id}`}>
-        <Facts>
-          <LabelValue label="Value">
-            {k.stored ? (
-              <>
-                <Code>{k.preview || '••••••••'}</Code> <Held />
-              </>
-            ) : (
-              'Not set'
-            )}
-          </LabelValue>
-          {k.updated_at && <LabelValue label="Changed">{when(k.updated_at)}</LabelValue>}
-          <LabelValue label="Last used">
-            {k.last_used_at ? (
-              <>
-                {k.last_used_by && <Face actor={`bot:${k.last_used_by}`} />}
-                {when(k.last_used_at)}
-              </>
-            ) : (
-              'Never'
-            )}
-          </LabelValue>
-        </Facts>
-      </Section>
-      <Section
-        name="Who may use it"
-        count={k.grants.length || undefined}
-        target={`tool-who:key:${k.id}`}
-        actions={
-          manage &&
-          !k.remove_only &&
-          adds.length > 0 && (
-            <Menu trigger={addTrigger}>
-              {adds.map((x) => (
-                <MenuItem key={x.subject} label={x.name} onSelect={() => void press('tools.grantKey', { credential: k.id, subject: x.subject }, 'Not added')} />
-              ))}
-            </Menu>
-          )
-        }
-      >
-        {k.grants.map((g) => {
-          const name = subjectName(g.subject, vault, dir);
-          return (
-            <Who
-              key={g.id}
-              actor={/^(human|bot):/.test(g.subject) ? g.subject : null}
-              name={name}
-              right={
-                g.can_revoke && (
-                  <IconButton icon="close" label={`Remove ${name}`} size="sm" onClick={() => void press('tools.revokeKey', { credential: k.id, grant: g.id }, 'Not removed')} />
-                )
-              }
-            />
-          );
-        })}
-      </Section>
-      {dialog === 'rotate' && <RotateDialog k={k} onClose={() => setDialog(null)} />}
-      {dialog === 'reveal' && <RevealDialog credential={k.id} title={k.name} onClose={() => setDialog(null)} />}
-      {dialog === 'delete' && (
+            {k.updated_at && <LabelValue label="Changed">{when(k.updated_at)}</LabelValue>}
+            <LabelValue label="Last used">
+              {k.last_used_at ? (
+                <>
+                  {k.last_used_by && <Face actor={`bot:${k.last_used_by}`} />}
+                  {when(k.last_used_at)}
+                </>
+              ) : (
+                'Never'
+              )}
+            </LabelValue>
+          </Facts>
+        )
+      }
+      who={k?.grants.map((g) => {
+        const name = subjectName(g.subject, vault, dir);
+        return (
+          <WhoRow
+            key={g.id}
+            actor={/^(human|bot):/.test(g.subject) ? g.subject : null}
+            name={name}
+            onRemove={g.can_revoke ? () => void press('tools.revokeKey', { credential: cid, grant: g.id }, 'Not removed') : undefined}
+          />
+        );
+      })}
+      whoCount={k?.grants.length || undefined}
+      whoActions={manage && !k?.remove_only && <AddSomeone choices={adds} onPick={(subject) => void press('tools.grantKey', { credential: cid, subject }, 'Not added')} />}
+    >
+      {!k && <Empty title="No key here" />}
+      {k && dialog === 'rotate' && <RotateDialog k={k} onClose={() => setDialog(null)} />}
+      {k && dialog === 'reveal' && <RevealDialog credential={k.id} title={k.name} onClose={() => setDialog(null)} />}
+      {k && dialog === 'delete' && (
         <Confirm
           title={`Delete ${k.name}?`}
           description="Everyone it is given to loses it. This cannot be undone."
@@ -200,51 +167,29 @@ export function KeyView({ cid }: { cid: string }) {
           onClose={() => setDialog(null)}
         />
       )}
-    </Shell>
+    </ToolPage>
   );
 }
 
-/** A new value, typed here and only sent (a password keeps its spaces). */
-function RotateDialog({ k, onClose }: { k: StoredKey; onClose: () => void }) {
+/** A new value, typed here and only sent (a password keeps its spaces). Also a key a declared tool names that the vault
+    does not hold yet (`env`). */
+function RotateDialog({ k, env, onClose }: { k?: StoredKey; env?: { env: string; name: string; service: string }; onClose: () => void }) {
   const [value, setValue] = useState('');
   const [busy, go] = useGo(onClose);
-  const sent = k.kind === 'password' ? value : value.trim();
+  const save = () =>
+    k
+      ? void go('tools.rotateKey', { credential: k.id, value: k.kind === 'password' ? value : value.trim() }, 'Not saved')
+      : env && void go('tools.storeKey', { name: env.name, env: env.env, source: env.service, kind: /TOKEN/.test(env.env) ? 'token' : 'api_key', value: value.trim() }, 'Not added');
+  const title = k ? (k.stored ? `Rotate ${k.name}` : `Set ${k.name}`) : `Add ${env?.env ?? ''}`;
   return (
     <Dialog
       open
       onOpenChange={(o) => !o && onClose()}
-      title={k.stored ? `Rotate ${k.name}` : `Set ${k.name}`}
+      title={title}
       className="connect"
-      actions={
-        <Foot onClose={onClose} label={k.stored ? 'Rotate' : 'Save'} busy={busy} ready={!!value.trim()} onGo={() => void go('tools.rotateKey', { credential: k.id, value: sent }, 'Not saved')} />
-      }
+      actions={<Foot onClose={onClose} label={k ? (k.stored ? 'Rotate' : 'Save') : 'Add'} busy={busy} ready={!!value.trim()} onGo={save} />}
     >
-      <Field label="New value" type="password" value={value} onValueChange={setValue} autoComplete="off" autoFocus wide />
-    </Dialog>
-  );
-}
-
-/** A key a declared tool names that the vault does not hold yet. */
-function StoreKeyDialog({ env, name, service, onClose }: { env: string; name: string; service: string; onClose: () => void }) {
-  const [value, setValue] = useState('');
-  const [busy, go] = useGo(onClose);
-  return (
-    <Dialog
-      open
-      onOpenChange={(o) => !o && onClose()}
-      title={`Add ${env}`}
-      className="connect"
-      actions={
-        <Foot
-          onClose={onClose}
-          label="Add"
-          busy={busy}
-          ready={!!value.trim()}
-          onGo={() => void go('tools.storeKey', { name, env, source: service, kind: /TOKEN/.test(env) ? 'token' : 'api_key', value: value.trim() }, 'Not added')}
-        />
-      }
-    >
-      <Field label="Key" type="password" value={value} onValueChange={setValue} autoComplete="off" autoFocus wide />
+      <Field label={k ? 'New value' : 'Key'} type="password" value={value} onValueChange={setValue} autoComplete="off" autoFocus wide />
     </Dialog>
   );
 }
@@ -262,10 +207,10 @@ export function ServiceView({ row }: { row: ToolIndexRow }) {
   const dir = useQuery(directoryQuery).data;
   const [storing, setStoring] = useState<string | null>(null);
   const s = list.data?.find((x) => x.service === service);
-  const removed = s?.status === 'removed';
-  const keys = s && !removed ? keysOf(s, vault?.credentials ?? []) : [];
+  const live = s && s.status !== 'removed' ? s : undefined;
+  const keys = live ? keysOf(live, vault?.credentials ?? []) : [];
   const held = new Set(keys.map((k) => k.env).filter(Boolean));
-  const missing = s && !removed ? envsOf(s).filter((e) => !held.has(e)) : [];
+  const missing = live ? envsOf(live).filter((e) => !held.has(e)) : [];
   // Who has it: each agent at its highest level (with any problem its computer reported), then people a key is given to.
   const agents = new Map<string, { level: string; problem: string }>();
   for (const c of s?.connections ?? []) {
@@ -275,148 +220,83 @@ export function ServiceView({ row }: { row: ToolIndexRow }) {
     else if (c.problem && !had.problem) had.problem = c.problem;
   }
   for (const b of s?.bots ?? []) if (!agents.has(b)) agents.set(b, { level: s?.writes ?? 'never', problem: '' });
-  const people = new Set<string>();
-  for (const k of keys) for (const g of k.grants) if (g.subject.startsWith('human:')) people.add(g.subject);
+  const people = new Set(keys.flatMap((k) => k.grants.map((g) => g.subject)).filter((x) => x.startsWith('human:')));
   const body = page.data?.body?.trim();
   return (
-    <Shell name={s?.title || row.name} kind={row.kind} problem={bad(row)} state={stateOf(list)} onRetry={() => void list.refetch()} target={`tool:${row.id}`}>
-      <Section name="What it is">
-        <Facts>
-          <LabelValue label="Kind">{KIND[row.kind] ?? row.kind}</LabelValue>
-          {(s?.summary || row.detail) && <LabelValue label="About">{s?.summary || row.detail}</LabelValue>}
-        </Facts>
-      </Section>
-      <Section name="How it connects" target={`tool-connect:${row.id}`}>
-        <Facts>
-          {row.way && <LabelValue label="Through">{row.way}</LabelValue>}
-          <LabelValue label="State">{row.status.text}</LabelValue>
-        </Facts>
-        {keys.map((k) => (
-          <Row key={k.id} className="row arow" title={k.name} href={toolHref(`key:${k.id}`)} target={`tool:key:${k.id}`}>
-            <span className="row-title">
-              {k.name} {k.env && <Code>{k.env}</Code>}
-            </span>
-            {k.stored ? <Held /> : <Pill>No value</Pill>}
-            {k.last_used_at ? <Ago at={k.last_used_at} className="row-age" /> : <span className="row-age" />}
-          </Row>
-        ))}
-        {missing.map((env) => {
-          const conns = (s?.connections ?? []).filter((c) => c.env === env);
-          const word = conns.some((c) => c.problem) ? 'Missing' : conns.some((c) => c.status === 'ready') ? 'On computer' : 'Not set';
-          return (
-            <div key={env} className="row arow" title={env}>
+    <ToolPage
+      name={s?.title || row.name}
+      kind={row.kind}
+      row={row}
+      problem={bad(row)}
+      q={list}
+      target={`tool:${row.id}`}
+      about={(s?.summary || row.detail) && <LabelValue label="About">{s?.summary || row.detail}</LabelValue>}
+      connects={
+        <>
+          <Facts>
+            {row.way && <LabelValue label="Through">{row.way}</LabelValue>}
+            <LabelValue label="State">{row.status.text}</LabelValue>
+          </Facts>
+          {keys.map((k) => (
+            <Row key={k.id} className="row arow" title={k.name} href={toolHref(`key:${k.id}`)} target={`tool:key:${k.id}`}>
               <span className="row-title">
-                <Code>{env}</Code>
+                {k.name} {k.env && <Code>{k.env}</Code>}
               </span>
-              <span className="arow-w">{word}</span>
-              {vault?.can_manage && <IconButton icon="plus" label={`Add ${env}`} size="sm" onClick={() => setStoring(env)} />}
-            </div>
-          );
-        })}
-      </Section>
-      {agents.size + people.size > 0 && (
-        <Section name="Who may use it" count={agents.size + people.size}>
-          {[...agents].map(([bot, a]) => {
-            const name = dir?.byId[`bot:${bot}`]?.name ?? bot;
+              {k.stored ? <Held /> : <Pill>No value</Pill>}
+              {k.last_used_at ? <Ago at={k.last_used_at} className="row-age" /> : <span className="row-age" />}
+            </Row>
+          ))}
+          {missing.map((env) => {
+            const conns = (s?.connections ?? []).filter((c) => c.env === env);
             return (
-              <Who
-                key={bot}
-                actor={`bot:${bot}`}
-                name={name}
-                right={
-                  <>
-                    {a.problem && <Pill>{a.problem}</Pill>}
-                    <span className="lvl">{WRITE[a.level] ?? a.level}</span>
-                  </>
-                }
-              />
+              <div key={env} className="row arow" title={env}>
+                <span className="row-title">
+                  <Code>{env}</Code>
+                </span>
+                <span className="arow-w">{conns.some((c) => c.problem) ? 'Missing' : conns.some((c) => c.status === 'ready') ? 'On computer' : 'Not set'}</span>
+                {vault?.can_manage && <IconButton icon="plus" label={`Add ${env}`} size="sm" onClick={() => setStoring(env)} />}
+              </div>
             );
           })}
-          {[...people].map((p) => (
-            <Who key={p} actor={p} name={subjectName(p, vault, dir)} right={<span className="lvl">{WRITE[s?.writes ?? 'never']}</span>} />
-          ))}
-        </Section>
-      )}
-      {body && (
-        <Section name="What it can do">
-          <Markdown text={body} />
-        </Section>
-      )}
-      {storing && <StoreKeyDialog env={storing} name={s?.title || row.name} service={service} onClose={() => setStoring(null)} />}
-    </Shell>
-  );
-}
-
-/* ---------------------------------------------------------------- Slack: linked threads */
-
-const LINK_STATE: Record<string, string> = { requested: 'Asked', active: 'Linked', suspended: 'Paused', refused: 'Refused', unlinked: 'Unlinked' };
-
-/** Threads linked to Slack channels. Admins only: anyone else gets nothing here. */
-export function SlackLinks() {
-  const q = useQuery(slackLinksQuery);
-  const [linking, setLinking] = useState(false);
-  if (!q.data) return null;
-  const links = q.data.links;
-  return (
-    <Section
-      name="Linked threads"
-      count={links.length || undefined}
-      target="tool-slack:links"
-      actions={q.data.available !== false && <IconButton icon="plus" label="Link a thread" size="sm" onClick={() => setLinking(true)} />}
-    >
-      {links.map((l) => {
-        const channel = `#${l.channel.name || l.channel.id}`;
-        return (
-          <div key={l.id} className="row urow" title={l.reason || channel}>
-            <span className="row-title">{channel}</span>
-            <span className="row-ctx">{LINK_STATE[l.state] ?? l.state}</span>
-            <Menu trigger={<IconButton icon="more" label={`${channel} options`} size="sm" />}>
-              {(l.state === 'suspended' || l.state === 'refused') && (
-                <MenuItem label="Check again" onSelect={() => void press('tools.resumeSlack', { link: l.id }, 'Not checked')} />
-              )}
-              <MenuRule />
-              <MenuItem label="Unlink" onSelect={() => void press('tools.unlinkSlack', { link: l.id }, 'Not unlinked')} />
-            </Menu>
-            <Ago at={l.updated_at} className="row-age" />
-          </div>
-        );
-      })}
-      {linking && <LinkDialog onClose={() => setLinking(false)} />}
-    </Section>
-  );
-}
-
-function LinkDialog({ onClose }: { onClose: () => void }) {
-  const threads = useQuery(threadPicksQuery);
-  const [thread, setThread] = useState('');
-  const [channel, setChannel] = useState('');
-  const [history, setHistory] = useState(false);
-  const [busy, go] = useGo(onClose);
-  const options = (threads.data ?? []).map((t) => ({ value: t.id, label: t.title || t.name || 'Thread' }));
-  const picked = thread || options[0]?.value || '';
-  return (
-    <Dialog
-      open
-      onOpenChange={(o) => !o && onClose()}
-      title="Link a thread"
-      actions={
-        <Foot
-          onClose={onClose}
-          label="Link"
-          busy={busy}
-          ready={!!picked && !!channel.trim()}
-          onGo={() => void go('tools.linkSlack', { thread: picked, channel: channel.trim(), history }, 'Not linked')}
-        />
+        </>
       }
+      who={[
+        ...[...agents].map(([bot, a]) => (
+          <WhoRow key={bot} actor={`bot:${bot}`} name={dir?.byId[`bot:${bot}`]?.name ?? bot} right={a.problem && <Pill>{a.problem}</Pill>} level={WRITE[a.level] ?? a.level} />
+        )),
+        ...[...people].map((p) => <WhoRow key={p} actor={p} name={subjectName(p, vault, dir)} level={WRITE[s?.writes ?? 'never']} />),
+      ]}
+      whoCount={agents.size + people.size}
+      can={body && <Markdown text={body} />}
     >
-      {options.length ? <Select label="Thread" options={options} value={picked} onValueChange={setThread} /> : threads.data && <Empty title="No threads to link" />}
-      <Field label="Channel" value={channel} onValueChange={setChannel} placeholder="#channel" autoComplete="off" />
-      <Switch label="Copy history" checked={history} onCheckedChange={setHistory} />
-    </Dialog>
+      {storing && <RotateDialog env={{ env: storing, name: s?.title || row.name, service }} onClose={() => setStoring(null)} />}
+    </ToolPage>
   );
 }
 
-/* ---------------------------------------------------------------- a mailbox */
+/* ---------------------------------------------------------------- Email, and a mailbox */
+
+/** Email itself, before or beside any one mailbox: the Google connection, what agents may do and send. */
+export function EmailView() {
+  const google = useGoogle();
+  const sending = useSending();
+  return (
+    <ToolPage
+      name="Email"
+      kind="mailbox"
+      target="tool:mailbox"
+      connects={google.facts ?? <Facts>{null}</Facts>}
+      connectsActions={google.actions}
+      can={
+        <>
+          <MayFacts />
+          {sending.facts}
+        </>
+      }
+      canActions={sending.actions}
+    />
+  );
+}
 
 const SEND_STATE: Record<string, string> = {
   sent: 'Sent',
@@ -428,418 +308,361 @@ const SEND_STATE: Record<string, string> = {
   canceled: 'Canceled',
 };
 
-/** A press whose answer is a line to show (a check): the line, or why it failed. */
-async function check(id: string, input: unknown) {
-  const r = await run(id, input, { via: 'click' });
-  const out = r.out as { ok: boolean; text: string } | undefined;
-  toast(r.ok && out ? { text: out.text, kind: out.ok ? 'done' : 'failed' } : refusal(r, 'Not checked'));
-}
-
 export function MailboxView({ id, row }: { id: string; row: ToolIndexRow }) {
   const q = useQuery(mailboxQuery(id));
   const d = q.data;
   const m = d?.mailbox;
   const [stopping, setStopping] = useState(false);
   const agents = (d?.accesses ?? []).filter((a) => a.grantee_type === 'bot').map((a) => ({ id: a.grantee_id, name: a.name }));
+  const sending = useSending(agents);
+  const reads = m && m.level !== 'none' && m.state === 'connected';
+  const mail = useQuery({ ...mailboxMailQuery(m?.address ?? ''), enabled: !!reads });
+  const sends = useInfiniteQuery({ ...mailboxSendsQuery(m?.address ?? ''), enabled: !!m });
+  const sent = sends.data?.pages.flatMap((p) => p.sends) ?? [];
   const sharable = !!d && !!m && d.can_manage && m.status === 'active' && m.kind === 'personal' && !m.person_id;
-  const more = (
-    <PageMore>
-      <MenuItem label="Email settings" onSelect={() => void press('tools.open', { tool: 'mailbox' })} />
-      {sharable && <MenuItem label="Make shared inbox" onSelect={() => void press('tools.shareMailbox', { mailbox: id }, 'Not shared')} />}
-      {d?.can_stop && (
-        <>
-          <MenuRule />
-          <MenuItem label="Stop using" onSelect={() => setStopping(true)} />
-        </>
-      )}
-    </PageMore>
-  );
   return (
-    <Shell name={m?.address ?? row.name} kind="mailbox" problem={bad(row)} more={more} state={stateOf(q)} onRetry={() => void q.refetch()} target={`tool:${row.id}`}>
-      {d && m && (
-        <>
-          <Section name="What it is">
-            <Facts>
-              <LabelValue label="Kind">{KIND.mailbox}</LabelValue>
-              <LabelValue label="Address">
-                <Code>{m.address}</Code>
-              </LabelValue>
-              <LabelValue label="Mailbox">{m.kind === 'shared' ? 'Shared' : `${m.person_name}'s`}</LabelValue>
-            </Facts>
-          </Section>
-          <Section name="How it connects" target={`tool-connect:mailbox:${id}`}>
-            <Facts>
-              <LabelValue label="Through">{m.provider}</LabelValue>
-              <LabelValue label="State">{row.status.text}</LabelValue>
-              {m.synced_at && <LabelValue label="Synced">{when(m.synced_at)}</LabelValue>}
-              {m.sync_error && <LabelValue label="Problem">{m.sync_error}</LabelValue>}
-            </Facts>
-            {m.status === 'active' && <More onClick={() => void check('tools.checkMailbox', { mailbox: id })}>Check now</More>}
-          </Section>
-          {(d.accesses.length > 0 || (d.can_manage && d.candidates.length > 0)) && (
-            <Section
-              name="Who may use it"
-              count={d.accesses.length || undefined}
-              target={`tool-who:mailbox:${id}`}
-              actions={
-                d.can_manage &&
-                d.candidates.length > 0 && (
-                  <Menu trigger={addTrigger}>
-                    {d.candidates.map((c) => (
-                      <MenuItem
-                        key={`${c.type}:${c.id}`}
-                        label={c.name}
-                        onSelect={() => void press('tools.addMailboxAccess', { mailbox: id, type: c.type, who: c.id, level: 'read' }, 'Not added')}
-                      />
-                    ))}
-                  </Menu>
-                )
-              }
-            >
-              {d.accesses.map((a) => {
-                const access = a.id;
-                return (
-                  <Who
-                    key={`${a.grantee_type}:${a.grantee_id}`}
-                    actor={a.grantee_type === 'admins' ? null : `${a.grantee_type === 'person' ? 'human' : 'bot'}:${a.grantee_id}`}
-                    name={a.name}
-                    right={
-                      d.can_manage && !a.implicit && access ? (
-                        <Menu
-                          trigger={
-                            <button type="button" className="lvl" aria-label={`${a.name}: ${LEVEL(a.level)}`}>
-                              {LEVEL(a.level)}
-                            </button>
-                          }
-                        >
-                          {(['read', 'read_write'] as const).map((l) => (
-                            <MenuItem
-                              key={l}
-                              label={LEVEL(l)}
-                              on={a.level === l}
-                              onSelect={() => void press('tools.setMailboxAccess', { mailbox: id, access, level: l }, 'Not changed')}
-                            />
-                          ))}
-                          <MenuRule />
-                          <MenuItem label="Remove" onSelect={() => void press('tools.setMailboxAccess', { mailbox: id, access, level: 'none' }, 'Not removed')} />
-                        </Menu>
-                      ) : (
-                        <span className="lvl">{LEVEL(a.level)}</span>
-                      )
-                    }
-                  />
-                );
-              })}
-            </Section>
+    <ToolPage
+      name={m?.address ?? row.name}
+      kind="mailbox"
+      problem={bad(row)}
+      q={q}
+      target={`tool:mailbox:${id}`}
+      more={
+        <PageMore>
+          <MenuItem label="Email settings" onSelect={() => void press('tools.open', { tool: 'mailbox' })} />
+          {sharable && <MenuItem label="Make shared inbox" onSelect={() => void press('tools.shareMailbox', { mailbox: id }, 'Not shared')} />}
+          {d?.can_stop && (
+            <>
+              <MenuRule />
+              <MenuItem label="Stop using" onSelect={() => setStopping(true)} />
+            </>
           )}
-          <MayDo may={d.may} />
-          <SendingSection agents={agents} />
-          {m.level !== 'none' && m.state === 'connected' && <MailboxMail address={m.address} />}
-          <MailboxSends address={m.address} />
-          {stopping && (
-            <Confirm
-              title={`Stop using ${m.address}?`}
-              description="Tico stops reading and sending from it."
-              label="Stop using"
-              onGo={() => press('tools.stopMailbox', { mailbox: id }, 'Not stopped')}
-              onClose={() => setStopping(false)}
-            />
-          )}
-        </>
-      )}
-    </Shell>
-  );
-}
-
-/** Its newest mail, from Gmail. Each opens in Mail. */
-function MailboxMail({ address }: { address: string }) {
-  const q = useQuery(mailboxMailQuery(address));
-  if (!q.data?.length) return null;
-  return (
-    <Section name="Recent mail" count={q.data.length}>
-      {q.data.map((x, n) => {
-        const what = x.subject || '(No subject)';
-        const at = x.epoch ? new Date(x.epoch * 1000) : null;
-        return (
-          <Row key={x.id ?? x.thread_id ?? n} className="row urow" title={what} href={`/threads/mail?box=${encodeURIComponent(address)}${x.thread_id ? `&open=${encodeURIComponent(x.thread_id)}` : ''}`}>
-            <span className="row-title">{what}</span>
-            <span className="row-ctx">{x.from_header || x.from_addr || ''}</span>
-            {at ? <Ago at={at} className="row-age" /> : <span className="row-age" />}
-          </Row>
-        );
-      })}
-    </Section>
-  );
-}
-
-/** What was sent from it: when, by whom, to whom, how it ended; a page at a time. */
-function MailboxSends({ address }: { address: string }) {
-  const q = useInfiniteQuery(mailboxSendsQuery(address));
-  const sends = q.data?.pages.flatMap((p) => p.sends) ?? [];
-  if (!sends.length) return null;
-  return (
-    <Section name="Activity" count={sends.length}>
-      {sends.map((x) => (
-        <div key={x.id} className="row urow" title={`${x.subject || '(No subject)'} ${x.recipients.join(', ')}`}>
-          <span className="row-title">{x.subject || '(No subject)'}</span>
-          <span className="row-ctx">{x.recipients.join(', ')}</span>
-          {x.state !== 'sent' && <Pill>{SEND_STATE[x.state] ?? x.state}</Pill>}
-          <Face actor={x.bot ? `bot:${x.bot}` : x.actor || null} />
-          <Ago at={x.created_at} className="row-age" />
-        </div>
-      ))}
-      {q.hasNextPage && <More onClick={() => void q.fetchNextPage()}>More</More>}
-    </Section>
-  );
-}
-
-/* ---------------------------------------------------------------- a Tico address or number */
-
-/** Who reads it: everyone, or one team (and the teams under it). Only an admin changes it (`can`); others read it. */
-export function InboxReaders({ box, can = true }: { box: Inbox; can?: boolean }) {
-  const teams = useQuery(teamsQuery).data ?? [];
-  const group = (box as Inbox & { group_id?: string | null }).group_id ?? null;
-  const team = box.audience === 'team' ? teams.find((t) => t.id === group) : undefined;
-  const word = box.audience === 'team' ? (team?.name ?? 'One team') : 'Everyone';
-  const pick = (audience: 'company' | 'team', g?: string) => void press('tools.setInboxReaders', { inbox: box.inbox_id, audience, group: g }, 'Not saved');
-  if (!can) return <LabelValue label="Reads it">{word}</LabelValue>;
-  return (
-    <LabelValue label="Reads it">
-      <Menu
-        trigger={
-          <button type="button" className="lvl" aria-label={`Reads it: ${word}`}>
-            {word}
-          </button>
-        }
-      >
-        <MenuItem label="Everyone" on={box.audience !== 'team'} onSelect={() => pick('company')} />
-        {teams.length > 0 && <MenuRule />}
-        {teams.map((t) => (
-          <MenuItem key={t.id} label={t.name} on={box.audience === 'team' && t.id === group} onSelect={() => pick('team', t.id)} />
-        ))}
-      </Menu>
-    </LabelValue>
-  );
-}
-
-export function CheckInbox() {
-  return <More onClick={() => void check('tools.checkInbox', {})}>Check connection</More>;
-}
-
-/** Inboxes read again after a check: here so ToolsPage needs no new query of its own. */
-export const inboxesKey = inboxesQuery.queryKey;
-
-/* ---------------------------------------------------------------- a website */
-
-type Account = WebsiteTool['accounts'][number];
-
-/** Who may use each shared account: a person, an agent, a team or every agent; given here or taken away. */
-export function AccountAccess({ tool, t }: { tool: string; t: WebsiteTool }) {
-  const dir = useQuery(directoryQuery).data;
-  const teams = useQuery(teamsQuery).data ?? [];
-  const many = t.accounts.length > 1;
-  const editable = (a: Account) => a.can_manage && a.kind === 'shared';
-  const rows = t.accounts.flatMap((a) => [
-    ...(a.all_bots ? [{ a, subject: 'bots', name: 'All agents', actor: null as string | null, via: false }] : []),
-    ...a.access.map((p) => ({ a, subject: p.subject, name: p.name, actor: p.kind === 'group' ? null : p.subject, via: !!p.via?.length })),
-  ]);
-  const open = t.accounts.filter(editable);
-  if (!rows.length && !open.length) return null;
-  const give = (a: Account, subject: string) => void press('tools.setAccountAccess', { tool, account: a.id, subject, on: true }, 'Not added');
-  const choices = (a: Account) => {
-    const has = new Set(a.access.map((p) => p.subject));
-    return (
-      <>
-        {!a.all_bots && <MenuItem label="All agents" onSelect={() => give(a, 'bots')} />}
-        {teams
-          .filter((g) => !has.has(`group:${g.id}`))
-          .map((g) => (
-            <MenuItem key={g.id} label={g.name} onSelect={() => give(a, `group:${g.id}`)} />
-          ))}
-        {(dir?.actors ?? [])
-          .filter((x) => !has.has(x.id))
-          .map((x) => (
-            <MenuItem key={x.id} label={x.name} onSelect={() => give(a, x.id)} />
-          ))}
-      </>
-    );
-  };
-  const label = (a: Account) => a.username || a.holder?.name || 'Account';
-  return (
-    <Section
-      name="Who may use it"
-      count={rows.length || undefined}
-      target={`tool-who:website:${tool}`}
-      actions={
-        open.length > 0 && (
-          <Menu trigger={addTrigger}>
-            {open.length === 1 && open[0]
-              ? choices(open[0])
-              : open.map((a) => (
-                  <MenuSub key={a.id} label={label(a)}>
-                    {choices(a)}
-                  </MenuSub>
-                ))}
-          </Menu>
+        </PageMore>
+      }
+      about={
+        m && (
+          <>
+            <LabelValue label="Address">
+              <Code>{m.address}</Code>
+            </LabelValue>
+            <LabelValue label="Mailbox">{m.kind === 'shared' ? 'Shared' : `${m.person_name}'s`}</LabelValue>
+          </>
         )
       }
-    >
-      {rows.map((r) => (
-        <Who
-          key={`${r.a.id}:${r.subject}`}
-          actor={r.actor}
-          name={r.name}
-          right={
-            <>
-              {many && <span className="row-ctx">{label(r.a)}</span>}
-              {editable(r.a) && !r.via && (
-                <IconButton
-                  icon="close"
-                  label={`Remove ${r.name}`}
-                  size="sm"
-                  onClick={() => void press('tools.setAccountAccess', { tool, account: r.a.id, subject: r.subject, on: false }, 'Not removed')}
-                />
-              )}
-            </>
-          }
+      connects={
+        m && (
+          <Facts>
+            <LabelValue label="Through">{m.provider}</LabelValue>
+            <LabelValue label="State">{row.status.text}</LabelValue>
+            {m.synced_at && <LabelValue label="Synced">{when(m.synced_at)}</LabelValue>}
+            {m.sync_error && <LabelValue label="Problem">{m.sync_error}</LabelValue>}
+          </Facts>
+        )
+      }
+      connectsActions={m?.status === 'active' && <IconButton icon="refresh" label="Check now" size="sm" onClick={() => void check('tools.checkMailbox', { mailbox: id })} />}
+      who={d?.accesses.map((a) => (
+        <WhoRow
+          key={`${a.grantee_type}:${a.grantee_id}`}
+          actor={a.grantee_type === 'admins' ? null : `${a.grantee_type === 'person' ? 'human' : 'bot'}:${a.grantee_id}`}
+          name={a.name}
+          level={a.level}
+          onLevel={d.can_manage && !a.implicit && a.id ? (level) => void press('tools.setMailboxAccess', { mailbox: id, access: a.id, level }, 'Not changed') : undefined}
         />
       ))}
-    </Section>
-  );
-}
-
-/** For good: an account, or the whole website. */
-export function RemoveAccountConfirm({ tool, account, name, onClose }: { tool: string; account: string; name: string; onClose: () => void }) {
-  return (
-    <Confirm
-      title={`Remove ${name}?`}
-      description="Its login and who may use it go. This cannot be undone."
-      label="Remove"
-      onGo={() => press('tools.removeAccount', { tool, account }, 'Not removed')}
-      onClose={onClose}
-    />
-  );
-}
-export function DeleteWebsiteConfirm({ tool, name, onClose }: { tool: string; name: string; onClose: () => void }) {
-  return (
-    <Confirm
-      title={`Delete ${name}?`}
-      description="Its logins and who may use them go. This cannot be undone."
-      label="Delete"
-      onGo={() => press('tools.deleteWebsite', { tool }, 'Not deleted')}
-      onClose={onClose}
-    />
-  );
-}
-
-/** Central only: its sign-ins happen on Tico's computer, never on an agent's own. */
-export function CentralOnly({ tool, on, can }: { tool: string; on: boolean; can: boolean }) {
-  return (
-    <LabelValue label="Central only">
-      <Switch label="Central only" labelHidden checked={on} disabled={!can} onCheckedChange={(next) => void press('tools.editWebsite', { tool, central_only: next }, 'Not saved')} />
-    </LabelValue>
-  );
-}
-
-/* ---------------------------------------------------------------- who sees an API tool or a website */
-
-/** "Everyone can read": every agent reads the tool with no grant while it is on. */
-export function EveryoneReads({ tool, on, can }: { tool: string; on: boolean; can: boolean }) {
-  return <Switch label="Everyone can read" checked={on} disabled={!can} onCheckedChange={(next) => void press('tools.setEveryoneReads', { tool, on: next }, 'Not saved')} />;
-}
-
-interface Seen {
-  id: string;
-  kind: 'person' | 'group' | 'bot' | 'finance';
-  name: string;
-  subject: string;
-  why: 'Owner' | 'Listed' | 'Can use it';
-}
-const LISTS: Partial<Record<Seen['kind'], keyof SeenList>> = { person: 'people', group: 'teams', bot: 'bots' };
-
-/** Who can see it: Everyone, or Only listed (the owner, the list and whoever can use it). */
-export function SeenBy({
-  kind,
-  tool,
-  t,
-}: {
-  kind: 'api' | 'website';
-  tool: string;
-  t: { private: boolean; audience?: AccessAudience | null; seen_by?: Seen[]; can_set_audience: boolean };
-}) {
-  const dir = useQuery(directoryQuery).data;
-  const teams = useQuery(teamsQuery).data ?? [];
-  if (!t.can_set_audience) return null;
-  const list = (): SeenList => ({ people: [...(t.audience?.people ?? [])], teams: [...(t.audience?.teams ?? [])], bots: [...(t.audience?.bots ?? [])] });
-  const send = (audience: SeenList | null) => void press('tools.setSeenBy', { kind, tool, audience }, 'Not saved');
-  const listed = list();
-  const add = (into: keyof SeenList, id: string) => {
-    const a = list();
-    a[into] = [...a[into], id];
-    send(a);
-  };
-  const people = (dir?.actors ?? []).filter((x) => {
-    const [k, id = ''] = x.id.split(':');
-    return k === 'human' ? !listed.people.includes(id) : !listed.bots.includes(id);
-  });
-  const freeTeams = teams.filter((g: Group) => !listed.teams.includes(g.id));
-  return (
-    <Section
-      name="Who can see it"
-      target={`tool-seen:${tool}`}
-      actions={
-        t.private &&
-        people.length + freeTeams.length > 0 && (
-          <Menu trigger={addTrigger}>
-            {freeTeams.map((g) => (
-              <MenuItem key={g.id} label={g.name} onSelect={() => add('teams', g.id)} />
+      whoCount={d?.accesses.length || undefined}
+      whoActions={
+        d?.can_manage && (
+          <AddSomeone
+            choices={d.candidates.map((c) => ({ id: `${c.type}:${c.id}`, name: c.name }))}
+            onPick={(pick) => {
+              const [type, ...rest] = pick.split(':');
+              void press('tools.addMailboxAccess', { mailbox: id, type, who: rest.join(':'), level: 'read' }, 'Not added');
+            }}
+          />
+        )
+      }
+      can={
+        <>
+          <MayFacts may={d?.may} />
+          {sending.facts}
+        </>
+      }
+      canActions={sending.actions}
+      recent={
+        (!!mail.data?.length || sent.length > 0) && (
+          <>
+            {mail.data?.map((x, n) => (
+              <Row
+                key={x.id ?? x.thread_id ?? n}
+                className="row urow"
+                title={x.subject || '(No subject)'}
+                href={`/threads/mail?box=${encodeURIComponent(m?.address ?? '')}${x.thread_id ? `&open=${encodeURIComponent(x.thread_id)}` : ''}`}
+              >
+                <span className="urow-lead">
+                  <Icon name="download" />
+                </span>
+                <span className="row-title">{x.subject || '(No subject)'}</span>
+                <span className="row-ctx">{x.from_header || x.from_addr || ''}</span>
+                {x.epoch ? <Ago at={new Date(x.epoch * 1000)} className="row-age" /> : <span className="row-age" />}
+              </Row>
             ))}
-            {people.map((x) => {
-              const [k, id = ''] = x.id.split(':');
-              return <MenuItem key={x.id} label={x.name} onSelect={() => add(k === 'human' ? 'people' : 'bots', id)} />;
-            })}
-          </Menu>
+            {sent.map((x) => (
+              <UseRow key={x.id} title={x.subject || '(No subject)'} ctx={x.recipients.join(', ')} actor={x.bot ? `bot:${x.bot}` : x.actor || null} at={x.created_at} lead={<Icon name="send" />}>
+                {x.state !== 'sent' && <Pill>{SEND_STATE[x.state] ?? x.state}</Pill>}
+              </UseRow>
+            ))}
+            {sends.hasNextPage && <More onClick={() => void sends.fetchNextPage()}>More</More>}
+          </>
         )
       }
     >
-      <Segmented
-        label="Who can see it"
-        options={[
-          { value: 'everyone', label: 'Everyone' },
-          { value: 'only', label: 'Only listed' },
-        ]}
-        value={t.private ? 'only' : 'everyone'}
-        onValueChange={(v) => send(v === 'only' ? list() : null)}
-      />
-      {t.private &&
-        (t.seen_by ?? []).map((r) => {
-          const into = LISTS[r.kind];
-          return (
-            <Who
-              key={r.subject}
-              actor={r.kind === 'person' || r.kind === 'bot' ? r.subject : null}
-              name={r.name || r.id}
-              right={
-                <>
-                  <span className="row-ctx">{r.why}</span>
-                  {r.why === 'Listed' && into && (
-                    <IconButton
-                      icon="close"
-                      label={`Remove ${r.name || r.id}`}
-                      size="sm"
-                      onClick={() => {
-                        const a = list();
-                        a[into] = a[into].filter((x) => x !== r.id);
-                        send(a);
-                      }}
-                    />
-                  )}
-                </>
-              }
-            />
-          );
-        })}
-    </Section>
+      {m && stopping && (
+        <Confirm
+          title={`Stop using ${m.address}?`}
+          description="Tico stops reading and sending from it."
+          label="Stop using"
+          onGo={() => press('tools.stopMailbox', { mailbox: id }, 'Not stopped')}
+          onClose={() => setStopping(false)}
+        />
+      )}
+    </ToolPage>
+  );
+}
+
+/* ---------------------------------------------------------------- a Tico address or number, and numbers asked for */
+
+/** Numbers asked for: each waits on a price to accept, or is canceled. */
+export function NumbersView() {
+  return <ToolPage name="Phone numbers" kind="number" target="tool:number" connects={<NumberRequests always />} />;
+}
+
+export function InboxView({ inbox, row, number }: { inbox: string; row: ToolIndexRow | undefined; number: boolean }) {
+  const boxes = useQuery(inboxesQuery);
+  const messages = useQuery(inboxMessagesQuery(inbox));
+  const teams = useQuery(teamsQuery).data ?? [];
+  const admin = useAdmin();
+  const box = boxes.data?.find((b) => b.inbox_id === inbox);
+  const [dialog, setDialog] = useState<'edit' | 'release' | 'join' | null>(null);
+  const [reading, setReading] = useState<InMessage | null>(null);
+  // As the old page: anyone renames an address; a number, joining the shared Inbox and stopping are an admin's.
+  const editable = !number || admin;
+  const team = box?.audience === 'team' ? teams.find((t) => t.id === box.group_id) : undefined;
+  const readers = box?.audience === 'team' ? (team?.name ?? 'One team') : 'Everyone';
+  const pick = (audience: 'company' | 'team', group?: string) => void press('tools.setInboxReaders', { inbox, audience, group }, 'Not saved');
+  return (
+    <ToolPage
+      name={box?.name ?? row?.name ?? (number ? 'Phone number' : 'Tico address')}
+      kind={number ? 'number' : 'mailbox'}
+      kindWord={number ? KIND.number : KIND.tico}
+      problem={row && bad(row)}
+      q={boxes}
+      target={`tool:${row?.id ?? inbox}`}
+      more={
+        box &&
+        editable && (
+          <PageMore>
+            <MenuItem label="Edit" onSelect={() => setDialog('edit')} />
+            {!number && admin && <MenuItem label="Join shared Inbox" onSelect={() => setDialog('join')} />}
+            {admin && (
+              <>
+                <MenuRule />
+                <MenuItem label="Stop using" onSelect={() => setDialog('release')} />
+              </>
+            )}
+          </PageMore>
+        )
+      }
+      about={
+        <>
+          <LabelValue label={number ? 'Number' : 'Address'}>
+            <Code>{box?.address ?? row?.detail ?? ''}</Code>
+          </LabelValue>
+          {box && (
+            <LabelValue label="Reads it">
+              {admin ? (
+                <Menu
+                  trigger={
+                    <button type="button" className="lvl" aria-label={`Reads it: ${readers}`}>
+                      {readers}
+                    </button>
+                  }
+                >
+                  <MenuItem label="Everyone" on={box.audience !== 'team'} onSelect={() => pick('company')} />
+                  {teams.length > 0 && <MenuRule />}
+                  {teams.map((t) => (
+                    <MenuItem key={t.id} label={t.name} on={!!team && t.id === team.id} onSelect={() => pick('team', t.id)} />
+                  ))}
+                </Menu>
+              ) : (
+                readers
+              )}
+            </LabelValue>
+          )}
+          {box?.used_for && <LabelValue label="Used for">{box.used_for}</LabelValue>}
+        </>
+      }
+      connects={
+        <>
+          <Facts>
+            <LabelValue label="Through">Tico</LabelValue>
+            <LabelValue label="State">{row?.status.text ?? box?.state ?? ''}</LabelValue>
+          </Facts>
+          {number && <NumberRequests />}
+        </>
+      }
+      connectsActions={<IconButton icon="refresh" label="Check connection" size="sm" onClick={() => void check('tools.checkInbox', {})} />}
+      recent={!!messages.data?.length && <Messages list={messages.data as unknown as InMessage[]} onOpen={setReading} />}
+      recentActions={!!messages.data?.length && <IconButton icon="chevron" label="All messages" size="sm" onClick={() => void press('tools.open', { tool: 'messages' })} />}
+    >
+      {reading && <MessageDialog message={reading.message_id} title={reading.subject || reading.preview || 'Message'} hasCode={!!reading.has_code} onClose={() => setReading(null)} />}
+      {dialog === 'join' && <SharedInboxDialog onClose={() => setDialog(null)} />}
+      {box && dialog === 'edit' && <EditInboxDialog box={box} onClose={() => setDialog(null)} />}
+      {box && dialog === 'release' && <ReleaseDialog box={box} number={number} onClose={() => setDialog(null)} />}
+    </ToolPage>
+  );
+}
+
+/** Messages that came in, each opening in the reader. */
+function Messages({ list, onOpen }: { list: InMessage[]; onOpen: (m: InMessage) => void }) {
+  return list.map((m) => (
+    <UseRow
+      key={m.message_id}
+      title={m.subject || m.preview || (m.retention_removed ? 'Removed after its time' : 'Message')}
+      ctx={m.from ?? ''}
+      at={new Date(m.received_at * 1000)}
+      lead={<Icon name="download" />}
+      onOpen={() => onOpen(m)}
+    >
+      {m.has_code && <Pill>Code</Pill>}
+      {m.spam && <Pill>Spam</Pill>}
+    </UseRow>
+  ));
+}
+
+/* ---------------------------------------------------------------- Messages: every Tico address and number */
+
+const CHANNEL: Record<'email' | 'sms', string> = { email: 'Email', sms: 'Texts' };
+
+/** What came in to every address and number, or the ones picked, narrowed by channel, words, a code or spam. */
+export function MessagesView() {
+  const boxes = useQuery(inboxesQuery);
+  const [pick, setPick] = useState<Omit<MessageFilter, 'q'>>({});
+  const [words, setWords] = useState('');
+  const [q, setQ] = useState('');
+  // Typed words are sent after a short pause, so each key is not a read.
+  useEffect(() => {
+    const t = setTimeout(() => setQ(words.trim()), 300);
+    return () => clearTimeout(t);
+  }, [words]);
+  const list = useInfiniteQuery(allMessagesQuery({ ...pick, q: q || undefined }));
+  const [reading, setReading] = useState<InMessage | null>(null);
+  const inboxes = boxes.data ?? [];
+  const picked = pick.inboxes ?? [];
+  const set = (change: Partial<typeof pick>) => setPick({ ...pick, ...change });
+  const toggle = (id: string) => set({ inboxes: picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id] });
+  const chips: FilterChip[] = [
+    ...inboxes.filter((b) => picked.includes(b.inbox_id)).map((b) => ({ label: b.name || b.address, onClear: () => toggle(b.inbox_id) })),
+    ...(pick.kind ? [{ label: CHANNEL[pick.kind], onClear: () => set({ kind: undefined }) }] : []),
+    ...(pick.has_code ? [{ label: 'Has a code', onClear: () => set({ has_code: undefined }) }] : []),
+    ...(pick.spam ? [{ label: 'Includes spam', onClear: () => set({ spam: undefined }) }] : []),
+  ];
+  const rows = list.data?.pages.flatMap((p) => p.messages) ?? [];
+  const filter = (
+    <Menu trigger={<IconButton icon="filter" label="Filter messages" on={chips.length > 0} data-phone />}>
+      {inboxes.length > 0 && (
+        <MenuSub label="Inbox">
+          <MenuItem label="Every inbox" on={!picked.length} onSelect={() => set({ inboxes: undefined })} />
+          <MenuRule />
+          {inboxes.map((b) => (
+            <MenuItem key={b.inbox_id} label={b.name || b.address} meta={b.state === 'released' ? 'Not in use' : undefined} on={picked.includes(b.inbox_id)} onSelect={() => toggle(b.inbox_id)} />
+          ))}
+        </MenuSub>
+      )}
+      <MenuSub label="Channel">
+        <MenuItem label="Every channel" on={!pick.kind} onSelect={() => set({ kind: undefined })} />
+        <MenuItem label="Email" on={pick.kind === 'email'} onSelect={() => set({ kind: 'email' })} />
+        <MenuItem label="Texts" on={pick.kind === 'sms'} onSelect={() => set({ kind: 'sms' })} />
+      </MenuSub>
+      <MenuRule />
+      <MenuItem label="Has a code" on={!!pick.has_code} onSelect={() => set({ has_code: !pick.has_code || undefined })} />
+      <MenuItem label="Include spam" on={!!pick.spam} onSelect={() => set({ spam: !pick.spam || undefined })} />
+    </Menu>
+  );
+  return (
+    // The inboxes feed the filter: when they fail, the page shows its fault rather than "No messages yet".
+    <ToolPage name="Messages" kind="mailbox" fill={filter} q={boxes.isError ? boxes : list} target="tool:messages" bare>
+      <div className="msg-find">
+        <Search label="Find messages" value={words} onValueChange={setWords} placeholder="Words" />
+      </div>
+      <FilterRow filters={chips} onClearAll={() => setPick({})} />
+      {!rows.length && <Empty title={chips.length || q ? 'Nothing matches' : 'No messages yet'} />}
+      <Messages list={rows} onOpen={setReading} />
+      {list.hasNextPage && !list.isFetchingNextPage && <More onClick={() => void list.fetchNextPage()}>Older messages</More>}
+      {reading && <MessageDialog message={reading.message_id} title={reading.subject || reading.preview || 'Message'} hasCode={!!reading.has_code} onClose={() => setReading(null)} />}
+    </ToolPage>
+  );
+}
+
+/* ---------------------------------------------------------------- an outgoing webhook */
+
+const SENT: Record<string, string> = { ready: 'Waiting', sending: 'Sending', delivered: 'Delivered', failed: 'Failed', canceled: 'Canceled', withheld: 'Held back' };
+
+/** Where it sends and how its sends went; its ⋯ holds Edit, Send test, Pause, New secret and Delete. Tools is its only
+    home: Add tool › Webhook adds one. */
+export function WebhookView({ id, row }: { id: string; row: ToolIndexRow | undefined }) {
+  const hook = useQuery(webhookQuery(id));
+  const sends = useQuery(webhookSendsQuery(id));
+  const [dialog, setDialog] = useState<'edit' | 'secret' | 'delete' | null>(null);
+  const w = hook.data?.webhook;
+  const paused = !!w?.paused_reason;
+  const name = w?.name ?? row?.name ?? 'Outgoing webhook';
+  return (
+    <ToolPage
+      name={name}
+      kind="webhook"
+      problem={(row && bad(row)) || w?.disabled_reason || null}
+      q={hook}
+      target={`tool:webhook:${id}`}
+      more={
+        w?.can_change && (
+          <PageMore>
+            <MenuItem label="Edit" onSelect={() => setDialog('edit')} />
+            <MenuItem label="Send test" onSelect={() => void press('tools.testWebhook', { webhook: id }, 'The test did not send')} />
+            <MenuItem label={paused ? 'Send again' : 'Pause'} onSelect={() => void press('tools.pauseWebhook', { webhook: id, on: paused }, paused ? 'It did not restart' : 'It did not pause')} />
+            <MenuItem label="New secret" onSelect={() => setDialog('secret')} />
+            <MenuRule />
+            <MenuItem label="Delete" onSelect={() => setDialog('delete')} />
+          </PageMore>
+        )
+      }
+      about={w && <LabelValue label="Events">{w.events.length ? w.events.join(', ') : 'All'}</LabelValue>}
+      connects={
+        w && (
+          <Facts>
+            <LabelValue label="Sends to">
+              <Code>{w.url || w.host}</Code>
+            </LabelValue>
+            <LabelValue label="State">{paused ? w.paused_reason : w.enabled ? 'On' : 'Off'}</LabelValue>
+            <LabelValue label="Last 7 days">
+              {`${w.last_7_days.delivered} delivered, ${w.last_7_days.failed} failed, ${w.last_7_days.pending} waiting`}
+            </LabelValue>
+          </Facts>
+        )
+      }
+      recent={sends.data?.map((x) => (
+        <UseRow key={x.id} title={x.subject || x.type} ctx={x.last_status ? `${SENT[x.state] ?? x.state} (${x.last_status})` : (SENT[x.state] ?? x.state)} at={x.delivered_at ?? x.created_at}>
+          {w?.can_change && (x.state === 'failed' || x.state === 'canceled') && (
+            <IconButton icon="refresh" label="Retry" size="sm" onClick={() => void press('tools.retrySend', { webhook: id, send: x.id }, 'Not sent again')} />
+          )}
+        </UseRow>
+      ))}
+    >
+      {w && dialog === 'edit' && <WebhookDialog hook={w} onClose={() => setDialog(null)} />}
+      {dialog === 'secret' && <NewSecretDialog webhook={id} onClose={() => setDialog(null)} />}
+      {dialog === 'delete' && (
+        <Confirm title={`Delete ${name}?`} description="Nothing more is sent to it." label="Delete" onGo={() => press('tools.deleteWebhook', { webhook: id }, 'Not deleted')} onClose={() => setDialog(null)} />
+      )}
+    </ToolPage>
   );
 }
 

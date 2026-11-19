@@ -12,6 +12,9 @@
    it fades instead. */
 .kit-sheet{z-index:var(--z-dialog)}
 .kit-dim{z-index:var(--z-scrim);transition:opacity var(--dur) var(--ease)}
+/* a select mounts its scrim, hidden, as soon as its button takes focus (a dialog's first field): .scrim's display must
+   not undo [hidden], or the closed scrim covers the dialog */
+.kit-dim[hidden]{display:none}
 .kit-dim[data-starting-style],.kit-dim[data-ending-style]{opacity:0}
 .kit-rise{transition:transform var(--card-dur) var(--card-ease),opacity var(--dur-fast) var(--ease)}
 .kit-rise[data-starting-style],.kit-rise[data-ending-style]{transform:translateY(calc(100% + var(--sheet-gap)))}

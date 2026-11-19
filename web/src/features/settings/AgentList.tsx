@@ -3,7 +3,8 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { useState, type HTMLAttributes } from 'react';
 import { refusal, run } from '@/actions';
 import { directoryQuery, meQuery, type Actor } from '@/data';
-import { ModelPicker, agentsQuery, computersQuery, type AgentRow } from '@/features/team/exports';
+import { ModelPicker } from '@/features/team/exports';
+import { agentsQuery, computersQuery, type AgentRow } from '@/features/team/routing';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Checkbox } from '@/kit/Checkbox';
@@ -316,57 +317,10 @@ function AccessDialog({ bot, name, now, onClose }: { bot: string; name: string; 
 
 // ---------------------------------------------------------------- runs that stopped part way
 
-/** When and how it stopped (backend/execution.py review_jobs `stopped`), as the old review said it. */
-const STOPPED_WHAT: Record<string, (tools: string) => string> = {
-  read: () => 'before changing anything',
-  restarted: () => 'when its computer restarted',
-  timeout: () => 'at its run time limit',
-  changed: (tools) => `after using ${tools || 'a tool that can change things'}`,
-  twice: () => 'the same way more than once',
-  unknown: () => 'before answering',
-};
-
-const stoppedAt = (j: StoppedRun) => {
-  const at = j.run?.started_at || j.run?.created_at;
-  const d = at ? new Date(at) : null;
-  return d && !Number.isNaN(d.getTime()) ? d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
-};
-
-/** The request, what the run saved, and the tools it called: read before deciding. */
-function StoppedDetails({ j }: { j: StoppedRun }) {
-  const saved = j.run?.final_text || (j.output ?? []).map((o) => o.text ?? '').join('');
-  return (
-    <div className="set-stop">
-      {j.task && <span className="set-cmd-note">{`Task ${j.task.status ?? ''}${j.task.owner_name ? `, owner ${j.task.owner_name}` : ''}`}</span>}
-      {j.request && (
-        <>
-          <b>Request</b>
-          <span className="set-cmd-note set-pre">{j.request}</span>
-        </>
-      )}
-      <b>{saved ? 'What the run saved' : 'No answer was saved'}</b>
-      {saved && <span className="set-cmd-note set-pre">{saved}</span>}
-      {!!j.tools?.length && (
-        <>
-          <b>{`Tool calls (${j.tools.length})`}</b>
-          {j.tools.map((t, i) => (
-            <span key={i} className="set-cmd-note">
-              <code>{t.tool}</code>
-              {t.summary ? ` ${t.summary}` : ''}
-              {t.status ? `, ${t.status}` : ''}
-            </span>
-          ))}
-        </>
-      )}
-    </div>
-  );
-}
-
 function StoppedDialog({ bot, jobs, onClose }: { bot: string; jobs: StoppedRun[]; onClose: () => void }) {
   const [note, setNote] = useState('');
   // A decision once made (or being sent) cannot be made again: its buttons stay off.
   const [deciding, setDeciding] = useState<Record<string, boolean>>({});
-  const [details, setDetails] = useState<Record<string, boolean>>({});
   const decide = async (j: StoppedRun, decision: 'resume' | 'dismiss') => {
     setDeciding((d) => ({ ...d, [j.id]: true }));
     const r = await run(
@@ -393,20 +347,12 @@ function StoppedDialog({ bot, jobs, onClose }: { bot: string; jobs: StoppedRun[]
         {jobs.map((j) => {
           const pending = j.pending_decision?.decision;
           const off = !!pending || !!deciding[j.id];
-          const when = stoppedAt(j);
-          const what = (STOPPED_WHAT[j.stopped] ?? STOPPED_WHAT.unknown)?.((j.acted ?? []).join(', ')) ?? '';
           return (
             <div key={j.id} className="set-stop">
               <b>{j.task?.title || 'Interrupted conversation'}</b>
-              <span className="set-cmd-note">{`Stopped ${when ? `${when}, ` : ''}${what}.`}</span>
               {j.reason && <span className="set-cmd-note">{j.reason}</span>}
               {!SAFE_RETRY.includes(j.stopped) && <span className="set-cmd-note">Trying again could repeat work that already finished.</span>}
-              {pending && (
-                <span className="set-cmd-note" role="status">
-                  {`Choice saved. The agent is busy; Tico will ${pending === 'resume' ? 'try again' : 'dismiss this run'} when its turn ends.`}
-                </span>
-              )}
-              {details[j.id] && <StoppedDetails j={j} />}
+              {pending && <Word fine>Saved</Word>}
               <div className="open-foot">
                 <Button disabled={off} onClick={() => void decide(j, 'resume')}>
                   Try again
@@ -414,9 +360,6 @@ function StoppedDialog({ bot, jobs, onClose }: { bot: string; jobs: StoppedRun[]
                 <Button disabled={off} onClick={() => void decide(j, 'dismiss')}>
                   Dismiss
                 </Button>
-                <Verb quiet onClick={() => setDetails((d) => ({ ...d, [j.id]: !d[j.id] }))}>
-                  {details[j.id] ? 'Hide details' : 'Details'}
-                </Verb>
               </div>
             </div>
           );
@@ -722,7 +665,8 @@ interface Group {
   slugs: string[];
 }
 
-export function AgentList({ open }: { open?: string }) {
+/** `section`: Agents (grouped as the person picks) or Computers (always by computer, one folding section each). */
+export function AgentList({ open, section = 'agents' }: { open?: string; section?: 'agents' | 'computers' }) {
   const navigate = useNavigate();
   const dir = useQuery(directoryQuery);
   const subs = useQuery(subscriptionsQuery);
@@ -730,7 +674,8 @@ export function AgentList({ open }: { open?: string }) {
   const bots = useQuery({ ...botsQuery, retry: false });
   const mayRestore = useMayRestore();
   const [q, setQ] = useState('');
-  const [by, setBy] = useState<By>(open?.startsWith('computer:') ? 'computer' : 'team');
+  const fixed = section === 'computers';
+  const [by, setBy] = useState<By>(fixed || open?.startsWith('computer:') ? 'computer' : 'team');
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const [changing, setChanging] = useState(false);
   const [editing, setEditing] = useState<Change | null>(null);
@@ -854,10 +799,12 @@ export function AgentList({ open }: { open?: string }) {
                 <span className="tools-n">{agentsWord(shown.length)}</span>
               </>
             )}
-            <span className="fl-by">
-              <span>Group by</span>
-              <Segmented label="Group by" options={BY} value={by} onValueChange={setBy} />
-            </span>
+            {!fixed && (
+              <span className="fl-by">
+                <span>Group by</span>
+                <Segmented label="Group by" options={BY} value={by} onValueChange={setBy} />
+              </span>
+            )}
           </div>
           <div className="tbl-head g-bots g-fleet" aria-hidden="true">
             <span />
@@ -881,7 +828,7 @@ export function AgentList({ open }: { open?: string }) {
                 m && (
                   <Link
                     to="/settings/$section"
-                    params={{ section: 'agents' }}
+                    params={{ section }}
                     search={opened === m.id ? {} : { open: `computer:${m.id}` }}
                     className={opened === m.id ? 'fl-sum is-on' : 'fl-sum'}
                     aria-label={`Open ${m.label || m.id}`}
@@ -908,8 +855,8 @@ export function AgentList({ open }: { open?: string }) {
           })}
         </div>
       )}
-      {opened && <ComputerPanel id={opened} onClose={() => void navigate({ to: '/settings/$section', params: { section: 'agents' }, search: {} })} />}
-      {retired.length > 0 && (
+      {opened && <ComputerPanel id={opened} onClose={() => void navigate({ to: '/settings/$section', params: { section }, search: {} })} />}
+      {!fixed && retired.length > 0 && (
         <Section name="Retired" count={retired.length} defaultOpen={false} target="setting:retired">
           {retired.map((b) => {
             const key = b.id ?? b.slug ?? '';

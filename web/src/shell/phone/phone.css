@@ -4,15 +4,15 @@
    peek, the lips drawing down, the bottom fade, the page foot) are laid out at once and revealed by moving cards.
    Lips are full width and opaque (README, audit fix), so the mock's rest scales (.97, .93, .89) are not used.
 
-   State on .ph (React):  data-card="none|tico-half|tico|menu|chat"   .has-chat  .is-peek  .is-handle  .is-back  .is-call
-   State on .ph (set by hand, never by React):  data-drag="tico|menu|chat"  data-scrolling  data-typing="tico|menu|chat|page"
+   State on .phone (React):  data-card="none|tico-half|tico|menu|chat"   .has-chat  .is-peek  .is-handle  .is-back  .is-call
+   State on .phone (set by hand, never by React):  data-drag="tico|menu|chat"  data-scrolling  data-typing="tico|menu|chat|page"
      style --c (0..1, lips drawn down)  --p (page set back)  --f (full content shown)  --kb  --vv-top  --dock-h */
 
 /* the document never scrolls (platforms.md 2.1). The stack and its cards clip rather than hide: a hidden box still
    scrolls when something in it takes focus, which strands every card mid-screen. */
-html:has(.ph),html:has(.ph) body{height:100%;overflow:hidden;overscroll-behavior:none}
+html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-behavior:none}
 
-.ph{position:fixed;left:0;right:0;top:0;height:100dvh;overflow:clip;background:var(--ground);isolation:isolate;color:var(--ink);overscroll-behavior:none;
+.phone{position:fixed;left:0;right:0;top:0;height:100dvh;overflow:clip;background:var(--ground);isolation:isolate;color:var(--ink);overscroll-behavior:none;
   --sat:env(safe-area-inset-top,0px);
   --sab:max(env(safe-area-inset-bottom,0px),8px);
   --lipT:58px;                /* Tico's lip */
@@ -31,195 +31,195 @@ html:has(.ph),html:has(.ph) body{height:100%;overflow:hidden;overscroll-behavior
   --up:var(--phone-up);       /* the shadow cast up from a card */
   --dim:var(--phone-dim)}     /* of --scrim */
 /* the card spring (--card-dur, --card-ease, and motion Off's 1ms) comes from tokens-app.css */
-.ph.has-chat{--lipC:38px;--drawC:var(--drawM)}
-.ph.is-peek{--lipT:84px}
-.ph.is-handle{--cards-h:0px}
-.ph.is-back{--p:1}
+.phone.has-chat{--lipC:38px;--drawC:var(--drawM)}
+.phone.is-peek{--lipT:84px}
+.phone.is-handle{--cards-h:0px}
+.phone.is-back{--p:1}
 /* a window wider than a phone (the narrow desktop): a small bottom margin, a taller half */
-@media (min-width:501px){.ph{--sab:max(env(safe-area-inset-bottom,0px),10px);--half:440px}}
+@media (min-width:501px){.phone{--sab:max(env(safe-area-inset-bottom,0px),10px);--half:440px}}
 
 /* ---------- the page: the back card ---------- */
-.ph>.pg{position:absolute;left:env(safe-area-inset-left,0px);right:env(safe-area-inset-right,0px);top:0;bottom:0;z-index:1;background:var(--sheet);--surface:var(--sheet);
+.phone>.pg{position:absolute;left:env(safe-area-inset-left,0px);right:env(safe-area-inset-right,0px);top:0;bottom:0;z-index:1;background:var(--sheet);--surface:var(--sheet);
   display:flex;flex-direction:column;overflow:hidden;transform-origin:50% 0;
   transition:transform var(--card-dur) var(--card-ease),border-radius var(--dur-slow) var(--ease)}
-.ph>.pg::after{content:"";position:absolute;inset:0;background:var(--scrim);opacity:calc(var(--dim) * var(--p));pointer-events:none;transition:opacity var(--dur-slow) var(--ease);z-index:5}
-.ph>.pg::before{content:"";position:absolute;left:0;right:0;bottom:0;height:calc(var(--cards-h) + 22px);z-index:4;pointer-events:none;
+.phone>.pg::after{content:"";position:absolute;inset:0;background:var(--scrim);opacity:calc(var(--dim) * var(--p));pointer-events:none;transition:opacity var(--dur-slow) var(--ease);z-index:5}
+.phone>.pg::before{content:"";position:absolute;left:0;right:0;bottom:0;height:calc(var(--cards-h) + 22px);z-index:4;pointer-events:none;
   background:linear-gradient(to top,var(--sheet) calc(100% - 44px),transparent);
   transform:translateY(calc(var(--drawM) + var(--drawC)));transition:transform var(--card-dur) var(--card-ease),opacity var(--dur) var(--ease)}
-.ph.is-handle>.pg::before{opacity:0}
+.phone.is-handle>.pg::before{opacity:0}
 /* set back only while something is in front or a finger pulls a card: a transform here would hold fixed children */
-.ph.is-back>.pg,.ph[data-drag]>.pg{transform:translateY(calc(6px * var(--p))) scale(calc(1 - .07 * var(--p)));border-radius:calc(26px * var(--p))}
-.ph>.pg-tuck{position:absolute;inset:0;z-index:1;display:none;cursor:pointer;-webkit-tap-highlight-color:transparent}
-.ph.is-back>.pg-tuck{display:block}
+.phone.is-back>.pg,.phone[data-drag]>.pg{transform:translateY(calc(6px * var(--p))) scale(calc(1 - .07 * var(--p)));border-radius:calc(26px * var(--p))}
+.phone>.pg-tuck{position:absolute;inset:0;z-index:1;display:none;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.phone.is-back>.pg-tuck{display:block}
 
 /* the page's frame, shared by every page on a phone */
-.ph .pg-head{flex:none;height:calc(var(--sat) + 60px);padding:var(--sat) 4px 0 16px;display:flex;align-items:center;gap:2px;min-width:0}
-.ph .pg-head h1{font-size:24px;min-width:0;overflow:hidden;text-overflow:ellipsis}
-.ph .pg-head .back{margin-left:-12px}
-.ph .pg-sub{color:var(--muted);font-size:var(--t-sm);margin:6px 0 0 8px;white-space:nowrap}
-.ph .pg-body{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:none;padding-bottom:calc(var(--cards-h) + 20px)}
-.ph.is-handle .pg-body{padding-bottom:20px}
+.phone .pg-head{flex:none;height:calc(var(--sat) + 60px);padding:var(--sat) 4px 0 16px;display:flex;align-items:center;gap:2px;min-width:0}
+.phone .pg-head h1{font-size:24px;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.phone .pg-head .back{margin-left:-12px}
+.phone .pg-sub{color:var(--muted);font-size:var(--t-sm);margin:6px 0 0 8px;white-space:nowrap}
+.phone .pg-body{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:none;padding-bottom:calc(var(--cards-h) + 20px)}
+.phone.is-handle .pg-body{padding-bottom:20px}
 /* the page kinds' scrollers end the same way, so the last row clears the cards resting at the bottom: a page's body
    (a board's inside its .board), a list beside its item, both sides of settings. A virtual list that fills one of
    them is the real scroller, so the room moves onto it. With a handle in place of the cards, --cards-h is 0. */
-.ph>.pg :is(.page-body:not(.board-wrap),.board,.tl-list,.set-nav,.set-body){padding-bottom:calc(var(--cards-h) + 20px)}
-.ph>.pg :is(.page-body,.tl-list):has(>*>.vl-space){padding-bottom:0}
-.ph>.pg :is(.page-body,.tl-list)>:has(>.vl-space){padding-bottom:calc(var(--cards-h) + 20px)}
-.ph .pg-row2{flex:none;display:flex;align-items:center;gap:8px;height:44px;padding:0 12px 0 8px}
-.ph .p-tabs{flex:none;display:flex;gap:2px;overflow:auto;scrollbar-width:none;padding:0 6px;box-shadow:inset 0 -1px 0 var(--line)}
+.phone>.pg :is(.page-body:not(.board-wrap),.board,.tl-list,.set-nav,.set-body){padding-bottom:calc(var(--cards-h) + 20px)}
+.phone>.pg :is(.page-body,.tl-list):has(>*>.vl-space){padding-bottom:0}
+.phone>.pg :is(.page-body,.tl-list)>:has(>.vl-space){padding-bottom:calc(var(--cards-h) + 20px)}
+.phone .pg-row2{flex:none;display:flex;align-items:center;gap:8px;height:44px;padding:0 12px 0 8px}
+.phone .p-tabs{flex:none;display:flex;gap:2px;overflow:auto;scrollbar-width:none;padding:0 6px;box-shadow:inset 0 -1px 0 var(--line)}
 /* stylelint-disable-next-line color-no-hex -- mask */
-.ph .p-tabs.is-long{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 36px),transparent)}
+.phone .p-tabs.is-long{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 36px),transparent)}
 /* a message box that belongs to the page (an agent's own page) sits over the lips and follows them down */
-.ph .pg-foot{flex:none;padding:6px 10px calc(var(--cards-h) + 10px);transform:translateY(calc(var(--drawM) + var(--drawC)));transition:transform var(--card-dur) var(--card-ease)}
+.phone .pg-foot{flex:none;padding:6px 10px calc(var(--cards-h) + 10px);transform:translateY(calc(var(--drawM) + var(--drawC)));transition:transform var(--card-dur) var(--card-ease)}
 
 /* the bottom of a page or a chat that has its own: an answer, a message box, a call's controls */
-.ph .p-dock{flex:none;position:relative;z-index:6;display:flex;flex-direction:column;align-items:stretch;gap:8px;padding:12px 10px calc(var(--sab) + 6px);
+.phone .p-dock{flex:none;position:relative;z-index:6;display:flex;flex-direction:column;align-items:stretch;gap:8px;padding:12px 10px calc(var(--sab) + 6px);
   --surface:var(--raised);background:var(--raised);box-shadow:var(--lift-2),0 -12px 28px -14px var(--up)}
-.ph .p-dock .answer{padding:2px 0 2px 6px;border-radius:0;background:none;box-shadow:none}
-.ph .p-dock .answer.is-ask{padding:4px 2px 0}
-.ph .p-dock .an-why{margin-right:0}
-.ph .p-dock .composer{background:var(--dock-field)}
-.ph .p-dock.is-flat{background:none;box-shadow:inset 0 1px 0 var(--line);padding-top:10px}
-.ph .p-dock.is-flat .composer{background:var(--well)}
-.ph .p-dock .look{align-self:flex-start}
-.ph .pg>.p-dock{padding-top:18px}
+.phone .p-dock .answer{padding:2px 0 2px 6px;border-radius:0;background:none;box-shadow:none}
+.phone .p-dock .answer.is-ask{padding:4px 2px 0}
+.phone .p-dock .an-why{margin-right:0}
+.phone .p-dock .composer{background:var(--dock-field)}
+.phone .p-dock.is-flat{background:none;box-shadow:inset 0 1px 0 var(--line);padding-top:10px}
+.phone .p-dock.is-flat .composer{background:var(--well)}
+.phone .p-dock .look{align-self:flex-start}
+.phone .pg>.p-dock{padding-top:18px}
 
 /* ---------- the cards in front of the page ---------- */
-.ph>.ly{position:absolute;left:env(safe-area-inset-left,0px);right:env(safe-area-inset-right,0px);top:var(--top);height:calc(100% - var(--top));
+.phone>.ly{position:absolute;left:env(safe-area-inset-left,0px);right:env(safe-area-inset-right,0px);top:var(--top);height:calc(100% - var(--top));
   border-radius:var(--r-layer) var(--r-layer) 0 0;overflow:clip;transform-origin:50% 0;
   transform:translateY(var(--ty));transition:transform var(--card-dur) var(--card-ease);will-change:transform;
   box-shadow:var(--lift-2),0 -10px 26px -10px var(--up)}
-.ph>.ly:focus{outline:none}
-.ph>.ly-chat{z-index:2;background:var(--c-chat);--surface:var(--c-chat);--ty:calc(100% - var(--cards-h) + var(--drawM) + var(--drawC))}
-.ph>.ly-menu{z-index:3;background:var(--c-menu);--surface:var(--c-menu);--ty:calc(100% - var(--sab) - var(--lipT) - var(--lipM) + var(--drawM))}
-.ph>.ly-tico{z-index:4;background:var(--c-tico);--surface:var(--c-tico);--ty:calc(100% - var(--sab) - var(--lipT))}
-.ph:not(.has-chat)>.ly-chat{--ty:calc(100% + 48px)}
-.ph.is-handle>.ly{--ty:calc(100% + 48px)}
-.ph[data-card="menu"]>.ly-menu,.ph[data-card="chat"]>.ly-chat,.ph[data-card="tico"]>.ly-tico{--ty:0px}
-.ph[data-card="tico-half"]>.ly-tico{--ty:calc(100% - var(--half))}
+.phone>.ly:focus{outline:none}
+.phone>.ly-chat{z-index:2;background:var(--c-chat);--surface:var(--c-chat);--ty:calc(100% - var(--cards-h) + var(--drawM) + var(--drawC))}
+.phone>.ly-menu{z-index:3;background:var(--c-menu);--surface:var(--c-menu);--ty:calc(100% - var(--sab) - var(--lipT) - var(--lipM) + var(--drawM))}
+.phone>.ly-tico{z-index:4;background:var(--c-tico);--surface:var(--c-tico);--ty:calc(100% - var(--sab) - var(--lipT))}
+.phone:not(.has-chat)>.ly-chat{--ty:calc(100% + 48px)}
+.phone.is-handle>.ly{--ty:calc(100% + 48px)}
+.phone[data-card="menu"]>.ly-menu,.phone[data-card="chat"]>.ly-chat,.phone[data-card="tico"]>.ly-tico{--ty:0px}
+.phone[data-card="tico-half"]>.ly-tico{--ty:calc(100% - var(--half))}
 /* raised, a card stands a step higher */
-.ph[data-card="menu"]>.ly-menu,.ph[data-card="chat"]>.ly-chat,.ph[data-card^="tico"]>.ly-tico{box-shadow:var(--lift-3),0 -14px 34px -10px var(--up)}
+.phone[data-card="menu"]>.ly-menu,.phone[data-card="chat"]>.ly-chat,.phone[data-card^="tico"]>.ly-tico{box-shadow:var(--lift-3),0 -14px 34px -10px var(--up)}
 
-.ph .lip{position:absolute;left:0;right:0;top:0;border:0;background:none;display:flex;align-items:center;gap:8px;padding:0 14px;color:var(--ink);font-size:15px;line-height:20px;text-align:left;
+.phone .lip{position:absolute;left:0;right:0;top:0;border:0;background:none;display:flex;align-items:center;gap:8px;padding:0 14px;color:var(--ink);font-size:15px;line-height:20px;text-align:left;
   touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;transition:opacity var(--dur) var(--ease)}
-.ph .lip::before{content:"";position:absolute;left:0;right:0;top:-6px;height:6px}      /* a 38px lip is a 44px target */
-.ph .lip b{font-weight:var(--w-strong);white-space:nowrap}
-.ph .lip .lip-t{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.ph .lip>.ico{width:12px;height:12px;stroke-width:2;color:var(--faint);margin:0 -3px}
-.ph .lip .lip-end{margin-left:auto;display:inline-flex;align-items:center;gap:6px;flex:none;color:var(--muted);font-size:var(--t-sm);font-variant-numeric:tabular-nums}
-.ph .lip .lip-end b{color:var(--ink)}
-.ph .ly-menu>.lip{height:40px}
-.ph .ly-menu .lip .co-mark{width:20px;height:20px;border-radius:6px;font-size:11px;flex:none;color:var(--c-menu)}
-.ph .ly-chat>.lip{height:42px}
-.ph .ly-chat .lip .lip-t{color:var(--ink-2)}
-.ph .lip>*{transition:opacity var(--dur) var(--ease)}
+.phone .lip::before{content:"";position:absolute;left:0;right:0;top:-6px;height:6px}      /* a 38px lip is a 44px target */
+.phone .lip b{font-weight:var(--w-strong);white-space:nowrap}
+.phone .lip .lip-t{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.phone .lip>.ico{width:12px;height:12px;stroke-width:2;color:var(--faint);margin:0 -3px}
+.phone .lip .lip-end{margin-left:auto;display:inline-flex;align-items:center;gap:6px;flex:none;color:var(--muted);font-size:var(--t-sm);font-variant-numeric:tabular-nums}
+.phone .lip .lip-end b{color:var(--ink)}
+.phone .ly-menu>.lip{height:40px}
+.phone .ly-menu .lip .co-mark{width:20px;height:20px;border-radius:6px;font-size:11px;flex:none;color:var(--c-menu)}
+.phone .ly-chat>.lip{height:42px}
+.phone .ly-chat .lip .lip-t{color:var(--ink-2)}
+.phone .lip>*{transition:opacity var(--dur) var(--ease)}
 /* drawn down, the back lips' contents fade by the time they are half way */
-.ph>.ly-menu>.lip>*,.ph>.ly-chat>.lip>*{opacity:calc(1 - min(1, var(--c) * 2))}
+.phone>.ly-menu>.lip>*,.phone>.ly-chat>.lip>*{opacity:calc(1 - min(1, var(--c) * 2))}
 /* a control that stands on a lip without being part of its tap target ("Join", mute) */
-.ph .lip-act{position:absolute;top:0;right:14px;z-index:1;display:flex;align-items:center;gap:6px;transition:opacity var(--dur) var(--ease)}
-.ph .ly-tico>.lip-act{height:var(--lipT)}
-.ph .ly-chat>.lip-act{height:38px}
-.ph .full{position:absolute;left:0;right:0;top:0;height:100%;display:flex;flex-direction:column;opacity:0;pointer-events:none;transition:opacity var(--dur) var(--ease)}
-.ph .ly.is-up>.lip,.ph .ly.is-up>.lip-act{opacity:0;pointer-events:none}
-.ph .ly.is-up>.full{opacity:1;pointer-events:auto}
-.ph .grab{position:absolute;left:50%;top:7px;z-index:2;width:36px;height:4px;margin-left:-18px;border-radius:2px;background:var(--line-strong);opacity:0;touch-action:none;transition:opacity var(--dur) var(--ease)}
-.ph .grab::before{content:"";position:absolute;inset:-7px -40px -14px}
-.ph .ly.is-up>.grab{opacity:1}
+.phone .lip-act{position:absolute;top:0;right:14px;z-index:1;display:flex;align-items:center;gap:6px;transition:opacity var(--dur) var(--ease)}
+.phone .ly-tico>.lip-act{height:var(--lipT)}
+.phone .ly-chat>.lip-act{height:38px}
+.phone .full{position:absolute;left:0;right:0;top:0;height:100%;display:flex;flex-direction:column;opacity:0;pointer-events:none;transition:opacity var(--dur) var(--ease)}
+.phone .ly.is-up>.lip,.phone .ly.is-up>.lip-act{opacity:0;pointer-events:none}
+.phone .ly.is-up>.full{opacity:1;pointer-events:auto}
+.phone .grab{position:absolute;left:50%;top:7px;z-index:2;width:36px;height:4px;margin-left:-18px;border-radius:2px;background:var(--line-strong);opacity:0;touch-action:none;transition:opacity var(--dur) var(--ease)}
+.phone .grab::before{content:"";position:absolute;inset:-7px -40px -14px}
+.phone .ly.is-up>.grab{opacity:1}
 /* a resting card's grab is hidden: its wide hit area must not take a tap meant for the lip under it */
-.ph .ly:not(.is-up)>.grab{pointer-events:none}
+.phone .ly:not(.is-up)>.grab{pointer-events:none}
 /* a raised card's head is where it is taken hold of */
-.ph .tico-head,.ph .m-head,.ph .c-head,.ph .call-head,.ph [data-grab]{touch-action:none}
+.phone .tico-head,.phone .m-head,.phone .c-head,.phone .call-head,.phone [data-grab]{touch-action:none}
 
 /* a finger holds a card: no transitions on what follows it; lip and content crossfade by position */
-.ph[data-drag]>.pg,.ph[data-drag]>.pg::after{transition:none}
-.ph[data-drag="tico"]>.ly-tico,.ph[data-drag="menu"]>.ly-menu,.ph[data-drag="chat"]>.ly-chat{transition:none}
-.ph[data-drag="tico"]>.ly-tico>.full,.ph[data-drag="menu"]>.ly-menu>.full,.ph[data-drag="chat"]>.ly-chat>.full{opacity:var(--f);transition:none}
-.ph[data-drag="tico"]>.ly-tico>.lip,.ph[data-drag="menu"]>.ly-menu>.lip,.ph[data-drag="chat"]>.ly-chat>.lip{opacity:calc(1 - var(--f));transition:none}
-.ph[data-drag="tico"]>.ly-tico>.grab,.ph[data-drag="menu"]>.ly-menu>.grab,.ph[data-drag="chat"]>.ly-chat>.grab{opacity:var(--f);transition:none}
+.phone[data-drag]>.pg,.phone[data-drag]>.pg::after{transition:none}
+.phone[data-drag="tico"]>.ly-tico,.phone[data-drag="menu"]>.ly-menu,.phone[data-drag="chat"]>.ly-chat{transition:none}
+.phone[data-drag="tico"]>.ly-tico>.full,.phone[data-drag="menu"]>.ly-menu>.full,.phone[data-drag="chat"]>.ly-chat>.full{opacity:var(--f);transition:none}
+.phone[data-drag="tico"]>.ly-tico>.lip,.phone[data-drag="menu"]>.ly-menu>.lip,.phone[data-drag="chat"]>.ly-chat>.lip{opacity:calc(1 - var(--f));transition:none}
+.phone[data-drag="tico"]>.ly-tico>.grab,.phone[data-drag="menu"]>.ly-menu>.grab,.phone[data-drag="chat"]>.ly-chat>.grab{opacity:var(--f);transition:none}
 /* a scroll draws the lips down under the finger; the snap afterwards runs on the spring */
-.ph[data-scrolling]>.ly,.ph[data-scrolling]>.pg::before,.ph[data-scrolling] .pg-foot,.ph[data-scrolling]>.ly>.lip>*{transition:none}
+.phone[data-scrolling]>.ly,.phone[data-scrolling]>.pg::before,.phone[data-scrolling] .pg-foot,.phone[data-scrolling]>.ly>.lip>*{transition:none}
 
 /* Tico: the front card. Its Dot stays where it is while the lip turns into the card's head. */
-.ph .tico-dot{position:absolute;left:14px;top:14px;z-index:3;pointer-events:none;display:block}
-.ph .ly-tico>.lip{height:var(--lipT);padding-left:56px;font-size:var(--t-md)}
-.ph .ly-tico .lip .lip-t{color:var(--muted)}
-.ph .ly-tico .lip .lip-say{color:var(--ink);white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:15px;line-height:21px}
-.ph .ly-tico .lip .lip-did{display:flex;align-items:center;gap:8px;color:var(--ink-2);font-size:15px;min-width:0}
-.ph .ly-tico .lip .lip-did .ico{width:15px;height:15px;stroke-width:2;color:var(--muted);flex:none}
-.ph .ly-tico .lip .lip-did span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.ph .ly-tico>.full{height:var(--vis,100%)}
-.ph[data-card="tico-half"] .ly-tico>.full{--vis:var(--half)}
-.ph .tico-head{flex:none;height:58px;display:flex;align-items:center;gap:4px;padding:0 6px 0 56px}
-.ph .tico-head b{font-weight:var(--w-title);font-size:var(--t-md);line-height:var(--lh-tight);margin-right:auto}
-.ph .ly-tico .chat-body{padding:4px 16px 8px}
-.ph .tico-foot{flex:none;padding:4px 10px calc(var(--sab) + 6px);display:flex;flex-direction:column;align-items:flex-start;gap:8px}
-.ph .composer{min-height:48px;font-size:var(--t-md)}
-.ph .did{min-height:28px}
-.ph .look{font-size:var(--t-sm);height:28px}
-.ph .msg p,.ph .msg ul{font-size:15px}
+.phone .tico-dot{position:absolute;left:14px;top:14px;z-index:3;pointer-events:none;display:block}
+.phone .ly-tico>.lip{height:var(--lipT);padding-left:56px;font-size:var(--t-md)}
+.phone .ly-tico .lip .lip-t{color:var(--muted)}
+.phone .ly-tico .lip .lip-say{color:var(--ink);white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:15px;line-height:21px}
+.phone .ly-tico .lip .lip-did{display:flex;align-items:center;gap:8px;color:var(--ink-2);font-size:15px;min-width:0}
+.phone .ly-tico .lip .lip-did .ico{width:15px;height:15px;stroke-width:2;color:var(--muted);flex:none}
+.phone .ly-tico .lip .lip-did span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.phone .ly-tico>.full{height:var(--vis,100%)}
+.phone[data-card="tico-half"] .ly-tico>.full{--vis:var(--half)}
+.phone .tico-head{flex:none;height:58px;display:flex;align-items:center;gap:4px;padding:0 6px 0 56px}
+.phone .tico-head b{font-weight:var(--w-title);font-size:var(--t-md);line-height:var(--lh-tight);margin-right:auto}
+.phone .ly-tico .chat-body{padding:4px 16px 8px}
+.phone .tico-foot{flex:none;padding:4px 10px calc(var(--sab) + 6px);display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+.phone .composer{min-height:48px;font-size:var(--t-md)}
+.phone .did{min-height:28px}
+.phone .look{font-size:var(--t-sm);height:28px}
+.phone .msg p,.phone .msg ul{font-size:15px}
 /* fields are 16px on touch so iOS does not zoom on focus (platforms.md 2.4) */
-@media (pointer:coarse){.ph input,.ph textarea,.ph select,.ph [contenteditable]{font-size:max(16px,1em)}}
+@media (pointer:coarse){.phone input,.phone textarea,.phone select,.phone [contenteditable]{font-size:max(16px,1em)}}
 
 /* the menu */
-.ph .m-head{flex:none;height:60px;display:flex;align-items:center;gap:2px;padding:6px 6px 0 14px}
+.phone .m-head{flex:none;height:60px;display:flex;align-items:center;gap:2px;padding:6px 6px 0 14px}
 /* stylelint-disable-next-line color-no-hex -- mask */
-.ph .m-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:none;padding-bottom:18px;-webkit-mask-image:linear-gradient(#000 calc(100% - 22px),transparent);mask-image:linear-gradient(#000 calc(100% - 22px),transparent)}
-.ph .m-scroll .nav-item{font-size:15px}
-.ph .m-scroll .nav-kid{height:40px;font-size:var(--t-base)}
-.ph .tree-row,.ph .tree-team{height:44px;font-size:15px}
-.ph .tree-team{font-size:var(--t-base)}
-.ph .tree-head{height:36px}
-.ph .m-foot{flex:none;height:56px;display:flex;align-items:center;gap:2px;padding:0 6px 0 12px;border-top:1px solid var(--line);margin-bottom:calc(var(--sab) + var(--lipT))}
-.ph .m-foot .me-name{display:inline-flex;align-items:center;gap:10px;font-size:15px}
-.ph .ly-menu .co-pick{height:44px;font-size:var(--t-md)}
-.ph .ly-menu .co-pick .co-mark{color:var(--c-menu)}
+.phone .m-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:none;padding-bottom:18px;-webkit-mask-image:linear-gradient(#000 calc(100% - 22px),transparent);mask-image:linear-gradient(#000 calc(100% - 22px),transparent)}
+.phone .m-scroll .nav-item{font-size:15px}
+.phone .m-scroll .nav-kid{height:40px;font-size:var(--t-base)}
+.phone .tree-row,.phone .tree-team{height:44px;font-size:15px}
+.phone .tree-team{font-size:var(--t-base)}
+.phone .tree-head{height:36px}
+.phone .m-foot{flex:none;height:56px;display:flex;align-items:center;gap:2px;padding:0 6px 0 12px;border-top:1px solid var(--line);margin-bottom:calc(var(--sab) + var(--lipT))}
+.phone .m-foot .me-name{display:inline-flex;align-items:center;gap:10px;font-size:15px}
+.phone .ly-menu .co-pick{height:44px;font-size:var(--t-md)}
+.phone .ly-menu .co-pick .co-mark{color:var(--c-menu)}
 
 /* the second chat. Its sheet is a desktop side sheet (.pane.side), which the phone rules hide (parts.css): in the card
    it is drawn again and fills the card, so the conversation scrolls inside it and its box holds the bottom. Its head
    is the mock's .c-head. */
-.ph .ly-chat>.full>.pane{display:flex;flex:1;min-height:0;border-radius:0;box-shadow:none;--surface:var(--c-chat)}
-.ph .ly-chat .side-head{height:60px;padding:6px 6px 0 16px;border-bottom:0;touch-action:none}
-.ph .c-head{flex:none;height:60px;display:flex;align-items:center;gap:10px;padding:6px 6px 0 16px}
-.ph .c-head b{font-weight:var(--w-title);font-size:var(--t-md);line-height:var(--lh-tight);margin-right:auto;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.ph .ly-chat .chat-body{padding:4px 16px 20px}
-.ph .chat-body{overscroll-behavior:contain;touch-action:pan-y}
+.phone .ly-chat>.full>.pane{display:flex;flex:1;min-height:0;border-radius:0;box-shadow:none;--surface:var(--c-chat)}
+.phone .ly-chat .side-head{height:60px;padding:6px 6px 0 16px;border-bottom:0;touch-action:none}
+.phone .c-head{flex:none;height:60px;display:flex;align-items:center;gap:10px;padding:6px 6px 0 16px}
+.phone .c-head b{font-weight:var(--w-title);font-size:var(--t-md);line-height:var(--lh-tight);margin-right:auto;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.phone .ly-chat .chat-body{padding:4px 16px 20px}
+.phone .chat-body{overscroll-behavior:contain;touch-action:pan-y}
 
 /* the handle: the whole stack drawn down to one small pull with the Dot, on the top edge of whatever holds the bottom.
    It comes in once its card has landed. */
-.ph>.nub{position:absolute;left:50%;bottom:calc(var(--dock-h) - 15px);z-index:7;width:66px;height:30px;margin-left:-33px;padding:0;border:0;border-radius:15px;background:var(--c-tico);
+.phone>.nub{position:absolute;left:50%;bottom:calc(var(--dock-h) - 15px);z-index:7;width:66px;height:30px;margin-left:-33px;padding:0;border:0;border-radius:15px;background:var(--c-tico);
   box-shadow:var(--lift-2),0 6px 16px -6px var(--up);display:grid;place-items:center;opacity:0;pointer-events:none;transform:translateY(40px) scale(.7);
   touch-action:none;-webkit-tap-highlight-color:transparent;transition:transform var(--card-dur) var(--card-ease),opacity var(--dur) var(--ease)}
-.ph>.nub::before{content:"";position:absolute;inset:-7px 0}
-.ph.is-handle>.nub{opacity:1;pointer-events:auto;transform:none;transition:transform 260ms var(--card-ease) var(--card-dur),opacity var(--dur) var(--ease) var(--card-dur)}
-.ph.is-handle[data-card^="tico"]>.nub,.ph[data-typing]>.nub{opacity:0;pointer-events:none;transform:translateY(40px) scale(.7);transition:transform var(--card-dur) var(--card-ease),opacity var(--dur) var(--ease)}
+.phone>.nub::before{content:"";position:absolute;inset:-7px 0}
+.phone.is-handle>.nub{opacity:1;pointer-events:auto;transform:none;transition:transform 260ms var(--card-ease) var(--card-dur),opacity var(--dur) var(--ease) var(--card-dur)}
+.phone.is-handle[data-card^="tico"]>.nub,.phone[data-typing]>.nub{opacity:0;pointer-events:none;transform:translateY(40px) scale(.7);transition:transform var(--card-dur) var(--card-ease),opacity var(--dur) var(--ease)}
 
 /* measures the bottom safe area for the drag math */
-.ph>.ph-sab{position:absolute;left:0;bottom:0;width:0;height:var(--sab);visibility:hidden;pointer-events:none}
+.phone>.ph-sab{position:absolute;left:0;bottom:0;width:0;height:var(--sab);visibility:hidden;pointer-events:none}
 
 /* ---------- a call: the second chat's card, as a takeover ---------- */
-.ph.is-call>.ly-chat{top:0;height:100%}
-.ph.is-call[data-card="chat"]>.ly-chat{border-radius:0;background:var(--sheet);--surface:var(--sheet)}
-.ph.is-call[data-card="chat"]>.ly-chat>.grab{display:none}
-.ph .call-head{flex:none;display:flex;align-items:center;gap:4px;height:calc(var(--sat) + 62px);padding:var(--sat) 6px 0 6px}
+.phone.is-call>.ly-chat{top:0;height:100%}
+.phone.is-call[data-card="chat"]>.ly-chat{border-radius:0;background:var(--sheet);--surface:var(--sheet)}
+.phone.is-call[data-card="chat"]>.ly-chat>.grab{display:none}
+.phone .call-head{flex:none;display:flex;align-items:center;gap:4px;height:calc(var(--sat) + 62px);padding:var(--sat) 6px 0 6px}
 
 /* ---------- the keyboard: the card being typed in rides it (platforms.md 2.3) ----------
    The system keyboard sets the pace, so what follows it has no transition of its own. The layer is shifted down by
    any pan iOS made, so it fills exactly what can be seen. Handles and the other lips are away while typing. */
-.ph[data-typing]{transform:translateY(var(--vv-top))}
-.ph[data-typing="tico"]>.ly:not(.ly-tico),.ph[data-typing="chat"]>.ly:not(.ly-chat),.ph[data-typing="menu"]>.ly:not(.ly-menu),.ph[data-typing="page"]>.ly{--ty:calc(100% + 48px)}
-.ph[data-typing="tico"]>.ly-tico,.ph[data-typing="chat"]>.ly-chat,.ph[data-typing="menu"]>.ly-menu{transition:none}
-.ph[data-typing="tico"][data-card="tico-half"]>.ly-tico{--ty:calc(100% - var(--kb) - 204px)}
-.ph[data-typing="tico"][data-card="tico-half"]>.ly-tico>.full{--vis:204px}
-.ph[data-typing="tico"][data-card="tico"]>.ly-tico>.full{--vis:calc(100% - var(--kb))}
-.ph[data-typing="tico"][data-card="tico-half"] .tico-head{display:none}
-.ph[data-typing="tico"][data-card="tico-half"] .ly-tico .tico-dot{opacity:0}
+.phone[data-typing]{transform:translateY(var(--vv-top))}
+.phone[data-typing="tico"]>.ly:not(.ly-tico),.phone[data-typing="chat"]>.ly:not(.ly-chat),.phone[data-typing="menu"]>.ly:not(.ly-menu),.phone[data-typing="page"]>.ly{--ty:calc(100% + 48px)}
+.phone[data-typing="tico"]>.ly-tico,.phone[data-typing="chat"]>.ly-chat,.phone[data-typing="menu"]>.ly-menu{transition:none}
+.phone[data-typing="tico"][data-card="tico-half"]>.ly-tico{--ty:calc(100% - var(--kb) - 204px)}
+.phone[data-typing="tico"][data-card="tico-half"]>.ly-tico>.full{--vis:204px}
+.phone[data-typing="tico"][data-card="tico"]>.ly-tico>.full{--vis:calc(100% - var(--kb))}
+.phone[data-typing="tico"][data-card="tico-half"] .tico-head{display:none}
+.phone[data-typing="tico"][data-card="tico-half"] .ly-tico .tico-dot{opacity:0}
 /* stylelint-disable-next-line color-no-hex -- mask */
-.ph[data-typing="tico"][data-card="tico-half"] .ly-tico .chat-body{padding-top:18px;-webkit-mask-image:linear-gradient(transparent 4px,#000 16px);mask-image:linear-gradient(transparent 4px,#000 16px)}
-.ph[data-typing] .tico-foot,.ph[data-typing] .p-dock{padding-bottom:8px}
-.ph[data-typing="chat"]>.ly-chat>.full,.ph[data-typing="menu"]>.ly-menu>.full{height:calc(100% - var(--kb))}
-.ph[data-typing="chat"] .ly-chat .chat-body{padding-bottom:8px}
+.phone[data-typing="tico"][data-card="tico-half"] .ly-tico .chat-body{padding-top:18px;-webkit-mask-image:linear-gradient(transparent 4px,#000 16px);mask-image:linear-gradient(transparent 4px,#000 16px)}
+.phone[data-typing] .tico-foot,.phone[data-typing] .p-dock{padding-bottom:8px}
+.phone[data-typing="chat"]>.ly-chat>.full,.phone[data-typing="menu"]>.ly-menu>.full{height:calc(100% - var(--kb))}
+.phone[data-typing="chat"] .ly-chat .chat-body{padding-bottom:8px}
 /* typing in a page's own message box (an agent's page): the page ends at the keyboard and the stack waits under it */
-.ph[data-typing="page"]>.pg{bottom:var(--kb)}
-.ph[data-typing="page"]>.pg::before{display:none}
-.ph[data-typing="page"] .pg-body{padding-bottom:12px}
-.ph[data-typing="page"] .pg-foot{padding-bottom:8px;transform:none;transition:none}
+.phone[data-typing="page"]>.pg{bottom:var(--kb)}
+.phone[data-typing="page"]>.pg::before{display:none}
+.phone[data-typing="page"] .pg-body{padding-bottom:12px}
+.phone[data-typing="page"] .pg-foot{padding-bottom:8px;transform:none;transition:none}

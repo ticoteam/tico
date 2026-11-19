@@ -131,6 +131,23 @@ describe('tico:// links', () => {
     expect(parseDeepLink(`tico://open?u=${encodeURIComponent('https://beta.tico.team/api/v2/logout')}`, companies, 'cacme')).toEqual({ kind: 'open', companyId: 'cbeta' });
     expect(parseDeepLink(`tico://open?u=${encodeURIComponent('https://beta.tico.team/auth/login')}`, companies, 'cacme')).toEqual({ kind: 'open', companyId: 'cbeta' });
   });
+  it('opens a local copy’s sign-in link on loopback only, and no other /api/ address', () => {
+    const local = [...companies, { id: 'clocal', origin: 'http://127.0.0.1:8766' }];
+    const link = 'http://127.0.0.1:8766/api/v2/local-signin?token=t0k&next=/next/';
+    const open = (u: string) => parseDeepLink(`tico://open?u=${encodeURIComponent(u)}`, local, 'cacme');
+    expect(open(link)).toEqual({ kind: 'open', companyId: 'clocal', url: link });
+    // an unknown local copy: Add company, prefilled with the whole link
+    expect(parseDeepLink(`tico://open?u=${encodeURIComponent(link)}`, companies, 'cacme')).toEqual({ kind: 'add', server: link });
+    for (const other of ['/api/v2/logout', '/api/v2/local-signin/x?token=t', '/api/v2/local-signinx?token=t', '/API/v2/local-signin?token=t']) {
+      expect(open(`http://127.0.0.1:8766${other}`), other).toEqual({ kind: 'open', companyId: 'clocal' });
+    }
+    // in the copy's own view its redirect chain stays (same origin); another company's page never drives it there
+    expect(decideNavigation(link, { ...ctx, origin: 'http://127.0.0.1:8766', others: [] })).toEqual({ kind: 'stay' });
+    expect(decideNavigation(link, { ...ctx, others: [{ id: 'clocal', origin: 'http://127.0.0.1:8766' }] })).toEqual({ kind: 'switch', companyId: 'clocal' });
+    // not on loopback: only brings the company forward, never loads the link
+    expect(open('https://beta.tico.team/api/v2/local-signin?token=t0k')).toEqual({ kind: 'open', companyId: 'cbeta' });
+    expect(parseDeepLink(`tico://open?u=${encodeURIComponent('https://new.example/api/v2/local-signin?token=t')}`, companies, 'cacme')).toEqual({ kind: 'add', server: 'https://new.example' });
+  });
   it('maps today’s tico://<path> onto the active company’s /next/, and never off it', () => {
     expect(parseDeepLink('tico://meetings/abc', companies, 'cacme')).toEqual({ kind: 'open', companyId: 'cacme', url: 'https://acme.tico.team/next/meetings/abc' });
     expect(parseDeepLink('tico://..%2F..%2Fapi/v2/logout', companies, 'cacme')?.kind).not.toBe('open');

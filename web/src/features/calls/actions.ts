@@ -5,7 +5,6 @@ import { meQuery } from '@/data';
 import { callWindowControls, desktop, isCallWindow } from '@/desktop';
 import { TRANSCRIPT_SOURCE_IDS, VIEWS, type TranscriptSource } from './model';
 import {
-  addItem,
   addToCall,
   callKeys,
   changeEvent,
@@ -23,7 +22,6 @@ import {
   meetKeys,
   removeEvent,
   reviewMeeting,
-  reviewMeetings,
   setImporter,
   setMeetingSettings,
   startCall,
@@ -33,13 +31,11 @@ import {
   type MeetingItems,
   cancelCall,
   deleteMeeting,
-  linkTask,
   moveCall,
   scheduleCall,
   sendMeeting,
   setMeetingPrivate,
   startTitled,
-  unlinkTask,
 } from './queries';
 import { decline } from './ring';
 import { claim, hear, join, leave, pickDevice, prime, setMuted, toggleMute } from './session';
@@ -51,7 +47,6 @@ const day = s.string({ pattern: /^\d{4}-\d{2}-\d{2}$/, what: 'a day, 2026-11-18'
 const when = s.string({ pattern: /^\d{4}-\d{2}-\d{2}T/, what: 'an ISO time, 2026-11-18T10:30:00Z' });
 const person = s.string({ min: 3, max: 200, pattern: /^(human|bot):[^\s]+$/, what: 'human:<id> or bot:<id>' });
 const guest = s.string({ min: 3, max: 200, pattern: /^((human|bot|team):[^\s]+|[^\s@]+@[^\s@]+)$/, what: 'human:<id>, bot:<id>, team:<id> or an email' });
-const section = s.oneOf(['doc', 'task', 'feature'] as const);
 
 type Search = Record<string, unknown>;
 const toCalendar = ({ router }: Ctx, search: (prev: Search) => Search) => router.navigate({ to: '/calendar', search });
@@ -178,16 +173,6 @@ const itemOf = ({ queryClient }: Ctx, meeting: string, item: string): MeetingIte
   return found;
 };
 
-export const addMeetingItem = defineAction({
-  id: 'calls.addItem',
-  title: 'Add to a meeting',
-  kind: 'change',
-  input: s.object({ meeting: id('a meeting id'), section, text: s.string({ min: 1, max: 2000 }) }),
-  run: (_ctx, { meeting, section, text }) => addItem(meeting, section, text),
-  did: ({ section }) => (section === 'task' ? 'Added a task to make' : 'Added to the agenda'),
-  target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
-});
-
 export const dismissMeetingItem = defineAction({
   id: 'calls.dismissItem',
   title: 'Hide a meeting item',
@@ -236,19 +221,6 @@ export const review = defineAction({
   did: ({ action, send }) =>
     action === 'approve' ? (send ? 'Shared and sent the meeting' : 'Shared the meeting') : action === 'dismiss' ? 'Put the meeting away' : 'Brought the meeting back',
   target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
-});
-
-/** Share or dismiss several Pending meetings at once (old Meetings' Share N / Dismiss N). */
-export const reviewMany = defineAction({
-  id: 'calls.reviewMany',
-  title: 'Share or put away several pending meetings',
-  kind: 'change',
-  input: s.object({ meetings: s.array(id('a meeting id'), { max: 200 }), action: s.oneOf(['approve', 'dismiss'] as const) }),
-  // Sharing shows meetings only the person saw to the whole company: their own press.
-  can: (ctx, { meetings, action }) => meetings.length > 0 && !(ctx.via === 'tico' && action === 'approve'),
-  run: (_ctx, { meetings, action }) => reviewMeetings(meetings, action),
-  did: ({ meetings, action }) => `${action === 'approve' ? 'Shared' : 'Put away'} ${meetings.length === 1 ? 'a meeting' : `${meetings.length} meetings`}`,
-  target: () => PAGE,
 });
 
 export const makeMeetingTask = defineAction({
@@ -637,33 +609,6 @@ export const deleteMeetingAction = defineAction({
   target: () => PAGE,
 });
 
-/** A task's number ("#123", "123"), its id, or its link (".../task/<id>"). */
-const taskRef = (raw: string): string => {
-  const t = raw.trim();
-  const linked = /\/task\/([^/?#]+)/.exec(t);
-  return linked ? decodeURIComponent(linked[1] as string) : t.replace(/^#/, '');
-};
-
-export const linkTaskAction = defineAction({
-  id: 'calls.linkTask',
-  title: 'Link a task to a meeting',
-  kind: 'change',
-  input: s.object({ meeting: meetingId, task: s.string({ min: 1, max: 500, what: 'a task: #123, its id or its link' }) }),
-  run: (_ctx, { meeting, task }) => linkTask(meeting, taskRef(task)),
-  did: () => 'Linked the task',
-  target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
-});
-
-export const unlinkTaskAction = defineAction({
-  id: 'calls.unlinkTask',
-  title: 'Unlink a task from a meeting',
-  kind: 'change',
-  input: s.object({ meeting: meetingId, task: id('a task id') }),
-  run: (_ctx, { meeting, task }) => unlinkTask(meeting, task),
-  did: () => 'Unlinked the task',
-  target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
-});
-
 /* ---------------------------------------------------------------- booked calls */
 
 const callWith = s.array(person, { max: 50 });
@@ -753,20 +698,6 @@ export const shareAction = defineAction({
     });
   },
   did: ({ on }) => (on ? 'Shared the screen' : 'Stopped sharing'),
-});
-
-export const showFileAction = defineAction({
-  id: 'calls.showFile',
-  title: 'Show a Tico file to everyone on the call',
-  kind: 'change',
-  input: s.object({ id: id('a call id'), file: id('a file id') }),
-  run: async (_ctx, { id, file }) => {
-    await setStage(id, { kind: 'file', file_id: file });
-    // one thing at a time: a file in place of my screen
-    await shareScreen(false);
-  },
-  did: () => 'Showed the file',
-  target: ({ id }) => ({ kind: 'page', id: `/call/${id}` }),
 });
 
 /** My screen stops, then what I showed (or, for the starter, what anyone showed) leaves the stage. */

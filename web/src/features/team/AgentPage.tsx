@@ -23,7 +23,7 @@ import { FilesSection } from './Files';
 import { LastRun } from './LastRun';
 import { DecisionsSection, DreamSection } from './Learnings';
 import { ListEditor, ListSections, useLists } from './Lists';
-import { AllTasks, EditDialog, Foot, Fold, OwnRow, PickDialog, waitsOn } from './parts';
+import { AllTasks, EditDialog, Foot, Fold, OwnRow, OwnRows, PickLine, waitsOn } from './parts';
 import {
   agentFilesQuery,
   agentQuery,
@@ -266,12 +266,10 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
           )}
           <DreamSection slug={slug} actorId={actor.id} />
           <Section name="Tasks" actions={<AllTasks owner={actor.id} />}>
-            {rest.map((t) => (
-              <OwnRow key={t.id} task={t} me={me?.id} />
-            ))}
+            <OwnRows tasks={rest} me={me?.id} label="Open tasks" />
             {doneN > 0 && (
               <Fold label="Done" text={`${doneN} this week`}>
-                {done.data?.tasks.map((t) => <OwnRow key={t.id} task={t} me={me?.id} />)}
+                <OwnRows tasks={done.data?.tasks ?? []} me={me?.id} label="Done tasks" />
               </Fold>
             )}
           </Section>
@@ -308,7 +306,7 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
   const runs = useQuery(runsQuery(slug));
   const learned = useQuery(learnedQuery(slug));
   const changes = useQuery(changesQuery(slug));
-  const [editing, setEditing] = useState<'' | 'role' | 'team' | 'reports' | 'model' | 'computer' | 'users' | 'credential' | 'instructions'>('');
+  const [editing, setEditing] = useState<'' | 'role' | 'model' | 'users' | 'credential' | 'instructions'>('');
   const newRule = useAction('agents.newRule');
   const openRule = useAction('rules.open');
   const close = (o: boolean) => !o && setEditing('');
@@ -316,7 +314,6 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
   const botId = bareId(actor.id);
   const team = teamOf(groups.data ?? [], 'agent', botId);
   const reportsTo = row?.reports_to ?? detail.data?.reports_to ?? '';
-  const boss = actors.find((a) => bareId(a.id) === reportsTo);
   const computer = computers.data?.find((c) => c.id === row?.machine?.runner_id) ?? computers.data?.find((c) => c.bots?.includes(botId));
   const role = row?.description ?? detail.data?.description ?? '';
   const manage = row?.can_manage !== false;
@@ -339,25 +336,42 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
           <Section name="Info">
             <Facts label="Info">
               <CopyFacts slug={slug} botId={botId} manage={manage} />
-              <LabelValue label="Role" onEdit={() => setEditing('role')}>
+              <LabelValue label="Role" onEdit={manage ? () => setEditing('role') : undefined}>
                 {role || 'None'}
               </LabelValue>
-              <LabelValue label="Team" onEdit={() => setEditing('team')}>
-                {team?.name ?? 'None'}
-              </LabelValue>
-              <LabelValue label="Reports to" onEdit={() => setEditing('reports')}>
-                {boss?.name ?? detail.data?.reports_to_name ?? 'Nobody'}
-              </LabelValue>
+              <PickLine
+                label="Team"
+                options={(groups.data ?? []).map((g) => ({ value: g.id, label: g.name }))}
+                value={team?.id ?? ''}
+                shown="None"
+                action={manage ? 'team.move' : undefined}
+                input={(t) => ({ kind: 'agent', id: botId, team: t })}
+              />
+              <PickLine
+                label="Reports to"
+                options={actors.filter((a) => a.id !== actor.id).map((a) => ({ value: bareId(a.id), label: a.name }))}
+                value={reportsTo}
+                shown={detail.data?.reports_to_name ?? 'Nobody'}
+                action={manage ? 'agents.setReportsTo' : undefined}
+                input={(to) => ({ slug, to })}
+              />
               <LabelValue label="Works for" onEdit={manage ? () => setEditing('users') : undefined}>
                 {users.length ? users.map((u) => u.name ?? u.id).join(', ') : 'Nobody'}
               </LabelValue>
-              <LabelValue label="Computer" onEdit={manage && computers.data?.length ? () => setEditing('computer') : undefined}>
-                <Link className="fact-link" href={`${path}?tab=computer`}>
-                  {computer?.label ?? row?.machine?.label ?? (row?.cloud_machine?.shared ? 'Shared' : 'None')}
-                  <Icon name="arrow" />
-                </Link>
-              </LabelValue>
-              <LabelValue label="Model" onEdit={() => setEditing('model')}>
+              <PickLine
+                label="Computer"
+                options={(computers.data ?? []).map((c) => ({ value: c.id, label: c.label }))}
+                value={row?.machine?.runner_id ?? computer?.id ?? ''}
+                shown={row?.machine?.label ?? (row?.cloud_machine?.shared ? 'Shared' : 'None')}
+                action={manage && computers.data?.length ? 'agents.move' : undefined}
+                input={(c) => ({ slug, computer: c })}
+                trail={
+                  <Link className="ib ib-sm" href={`${path}?tab=computer`} aria-label="Open the computer" title="Open the computer">
+                    <Icon name="arrow" />
+                  </Link>
+                }
+              />
+              <LabelValue label="Model" onEdit={manage ? () => setEditing('model') : undefined}>
                 {row ? modelLine(row, models?.models) : ''}
               </LabelValue>
             </Facts>
@@ -443,35 +457,6 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
             action="agents.setRole"
             input={(r) => ({ slug, role: r })}
           />
-          <PickDialog
-            open={editing === 'team'}
-            onOpenChange={close}
-            title="Team"
-            options={(groups.data ?? []).map((g) => ({ value: g.id, label: g.name }))}
-            value={team?.id ?? ''}
-            action="team.move"
-            input={(t) => ({ kind: 'agent', id: botId, team: t })}
-          />
-          <PickDialog
-            open={editing === 'reports'}
-            onOpenChange={close}
-            title="Reports to"
-            options={actors
-              .filter((a) => a.id !== actor.id)
-              .map((a) => ({ value: bareId(a.id), label: a.name }))}
-            value={reportsTo}
-            action="agents.setReportsTo"
-            input={(to) => ({ slug, to })}
-          />
-          <PickDialog
-            open={editing === 'computer'}
-            onOpenChange={close}
-            title="Computer"
-            options={(computers.data ?? []).map((c) => ({ value: c.id, label: c.label }))}
-            value={row?.machine?.runner_id ?? computer?.id ?? ''}
-            action="agents.move"
-            input={(c) => ({ slug, computer: c })}
-          />
           <InstructionsDialog
             open={editing === 'instructions'}
             onOpenChange={close}
@@ -507,6 +492,7 @@ function HistRow({ h }: { h: HistLine }) {
       </span>
       <span className="row-title">
         {h.title}
+        {h.from && <small className="rule-from">From {h.from}</small>}
         {h.live && (
           <span className="typing">
             <i />

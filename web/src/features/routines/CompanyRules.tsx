@@ -44,12 +44,12 @@ export function useNamer() {
 }
 
 /** Several parties picked: each a chip with its ×, then a picker for one more. Everyone stands alone: picking it
-   clears the rest, picking anyone else clears it. `everyone: false` for a With (teammates only). */
-export function PartyPick({ label, value, onChange, everyone = true, disabled }: { label: string; value: readonly string[]; onChange: (next: string[]) => void; everyone?: boolean; disabled?: boolean }) {
+   clears the rest, picking anyone else clears it. */
+export function PartyPick({ label, value, onChange, disabled }: { label: string; value: readonly string[]; onChange: (next: string[]) => void; disabled?: boolean }) {
   const name = useNamer();
   const teams = useQuery(teamsQuery).data ?? [];
   const actors = useActors();
-  const all = [...(everyone ? [{ value: '*', label: 'Everyone' }] : []), ...teams.map((g) => ({ value: `group:${g.id}`, label: g.name })), ...actors.map((a) => ({ value: a.id, label: a.name }))];
+  const all = [{ value: '*', label: 'Everyone' }, ...teams.map((g) => ({ value: `group:${g.id}`, label: g.name })), ...actors.map((a) => ({ value: a.id, label: a.name }))];
   const add = (p: string) => onChange(p === '*' ? ['*'] : [...value.filter((x) => x !== '*' && x !== p), p]);
   return (
     <div className="f" role="group" aria-label={label}>

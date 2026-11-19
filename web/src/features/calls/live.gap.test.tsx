@@ -14,9 +14,11 @@ import { CallSide } from './CallSide';
 import { callQuery } from './queries';
 import { callState, resetCall } from './session';
 
-/* The live call's gaps: the bar's Share, Captions, Add agent and End (s1049); show a screen or a file, take an agent
+/* The live call's gaps: the bar's Share and Captions, the call page's Add agent and End (s1049); show a screen or a file, take an agent
    out with Undo (s1046); after the call, the transcript and Create task (s1047); the agents' chat beside (s488). */
 
+// The stage's file preview is the library's: not under test here.
+vi.mock('@/features/library/exports', () => ({ FilePreview: () => null }));
 vi.mock('@/tico/dot', () => ({
   Dot: () => <span className="dot" />,
   CallBars: () => <span className="lvl" />,
@@ -182,6 +184,11 @@ function show(at = `/call/${ROOM}`) {
 }
 
 const room = () => lk.rooms.at(-1)!;
+async function joined() {
+  fireEvent.click(await screen.findByRole('button', { name: 'Join' }));
+  await screen.findByRole('button', { name: 'Mute' });
+}
+
 async function joinThenGo(router: ReturnType<typeof show>, to = '/tasks') {
   fireEvent.click(await screen.findByRole('button', { name: 'Join' }));
   await screen.findByRole('button', { name: 'Mute' });
@@ -204,15 +211,15 @@ describe('The call bar @s1049', () => {
     expect(room().localParticipant.setScreenShareEnabled.mock.calls[0]).toEqual([true, { audio: false }]);
     expect(sent.find((x) => x.method === 'PUT')?.body).toEqual({ kind: 'screen' });
     expect(await within(bar).findByRole('button', { name: 'Stop sharing' })).toBeTruthy();
+    expect(within(bar).queryByRole('button', { name: 'More' })).toBeNull();
   });
 
-  it('More holds Add agent, and End call for the one who started it @s1049', async () => {
+  it('the call page’s More holds Add agent, and End call for the one who started it @s1049', async () => {
     base = { connector: 'human:me' };
     queryClient.setQueryData(callQuery(ROOM).queryKey, call());
-    const router = show();
-    await joinThenGo(router);
-    const bar = await screen.findByRole('banner', { name: 'Call' });
-    fireEvent.click(within(bar).getByRole('button', { name: 'More' }));
+    show();
+    await joined();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
     expect(await screen.findByRole('menuitem', { name: 'Add agent' })).toBeTruthy();
     fireEvent.click(screen.getByRole('menuitem', { name: 'End call' }));
     const ask = await screen.findByRole('alertdialog', { name: 'End the call for everyone?' });
@@ -221,10 +228,9 @@ describe('The call bar @s1049', () => {
   });
 
   it('End is not in More for someone else’s call, and Tico may not end it either @s1049', async () => {
-    const router = show();
-    await joinThenGo(router);
-    const bar = await screen.findByRole('banner', { name: 'Call' });
-    fireEvent.click(within(bar).getByRole('button', { name: 'More' }));
+    show();
+    await joined();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
     await screen.findByRole('menuitem', { name: 'Add agent' });
     expect(screen.queryByRole('menuitem', { name: 'End call' })).toBeNull();
     expect(await run('calls.end', { id: ROOM }, { via: 'tico' })).toMatchObject({ ok: false });
@@ -236,10 +242,9 @@ describe('The call bar @s1049', () => {
   });
 
   it('Add agent brings the agent in @s1049', async () => {
-    const router = show();
-    await joinThenGo(router);
-    const bar = await screen.findByRole('banner', { name: 'Call' });
-    fireEvent.click(within(bar).getByRole('button', { name: 'More' }));
+    show();
+    await joined();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Add agent' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Finance' }));
     await waitFor(() => expect(sent.find((x) => x.url.endsWith(`/calls/${ROOM}/bots`))?.body).toEqual({ bots: ['fin'] }));
@@ -257,15 +262,6 @@ describe('Show and take out @s1046', () => {
     await waitFor(() => expect(sent.some((x) => x.method === 'DELETE' && x.url.endsWith(`/calls/${ROOM}/bots/gm`))).toBe(true));
     fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
     await waitFor(() => expect(sent.find((x) => x.method === 'POST' && x.url.endsWith(`/calls/${ROOM}/bots`))?.body).toEqual({ bots: ['gm'] }));
-  });
-
-  it('Show a Tico file puts it on the stage for everyone @s1046', async () => {
-    const router = show();
-    await joinThenGo(router);
-    const r = await run('calls.showFile', { id: ROOM, file: 'f1' }, { via: 'tico' });
-    expect(r.ok).toBe(true);
-    expect(sent.find((x) => x.method === 'PUT' && x.url.endsWith(`/calls/${ROOM}/stage`))?.body).toEqual({ kind: 'file', file_id: 'f1' });
-    expect(queryClient.getQueryData<Call>(callQuery(ROOM).queryKey)?.stage).toMatchObject({ kind: 'file', file_id: 'f1' });
   });
 
   it('sharing my screen stays my own press: Tico may not start it @s1046', async () => {

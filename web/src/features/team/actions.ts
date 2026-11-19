@@ -28,6 +28,8 @@ import {
   sendLoginCode,
   setBrowserControl,
   setAgentModel,
+  setCompactAt,
+  COMPACT_AT,
   setAgentStatus,
   setProfile,
   setScreenMode,
@@ -159,6 +161,16 @@ export const setModel = defineAction({
   }),
   run: (_ctx, { slug, ...pick }) => said("Couldn't change the model", () => setAgentModel(slug, pick)),
   did: ({ model }) => `Moved it to ${model}`,
+  target: ({ slug }) => onPage(slug),
+});
+
+export const setCompact = defineAction({
+  id: 'agents.setCompact',
+  title: "Change where an agent's conversation compacts",
+  kind: 'change',
+  input: s.object({ slug, at: s.nullable(s.oneOf(COMPACT_AT)) }),
+  run: (_ctx, { slug, at }) => said("Couldn't change it", () => setCompactAt(slug, at)),
+  did: () => 'Changed where it compacts',
   target: ({ slug }) => onPage(slug),
 });
 

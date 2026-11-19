@@ -34,17 +34,6 @@ const SETUP_TARGET = { kind: 'dialog', id: 'setup' } as const;
 // What Tico hears when the person hands it the setup: it asks the rest in its own chat.
 const HAND_OFF = 'Set up my company.';
 
-export const openStart = defineAction({
-  id: 'start.open',
-  title: 'Open Start',
-  kind: 'view',
-  input: s.object({}),
-  run: ({ router }) => router.navigate({ to: '/start' }),
-  show: ({ router }) => router.navigate({ to: '/start' }),
-  did: () => 'Opened Start',
-  target: () => ({ kind: 'page', id: '/start' }),
-});
-
 /* Signing in and out is the person's own: the server's pages do it, never Tico. */
 export const signOut = defineAction({
   id: 'start.signOut',
@@ -178,10 +167,10 @@ export const finish = defineAction({
   run: async ({ router }, { job }) => {
     await finishSetup(job);
     cancelConnect();
-    return router.navigate({ to: '/start' });
+    return router.navigate({ to: '/tasks' });
   },
   did: () => 'Created the team',
-  target: () => ({ kind: 'page', id: '/start' }),
+  target: () => ({ kind: 'page', id: '/tasks' }),
 });
 
 /* ---------------------------------------------------------------- GitHub: the App the agents' repositories live under */

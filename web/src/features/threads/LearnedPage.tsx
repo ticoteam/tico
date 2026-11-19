@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
-import { useActors, type Actor } from '@/data';
+import { configQuery, useActors, type Actor } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
@@ -11,8 +11,7 @@ import { Field, Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
-import { Switch } from '@/kit/Switch';
-import { List, Section } from '@/pagekinds';
+import { List, PageMore, Section } from '@/pagekinds';
 import { Dot } from '@/tico/dot';
 import { Face, press, useMe } from './people';
 import { learnedQuery, viewersQuery, type LearnedEntry, type Viewers } from './queries';
@@ -28,6 +27,7 @@ const has = (text: string, q: string) => !q || text.toLowerCase().includes(q.toL
 export function LearnedPage() {
   const learned = useQuery(learnedQuery);
   const viewers = useQuery(viewersQuery);
+  const companyName = useQuery(configQuery).data?.company_name || 'About the company';
   const [words, setWords] = useState('');
   const [editing, setEditing] = useState<LearnedEntry | null>(null);
   const [deleting, setDeleting] = useState<LearnedEntry | null>(null);
@@ -42,7 +42,8 @@ export function LearnedPage() {
   const readers = (viewers.data?.bots ?? []).filter((b) => has(b.name ?? b.slug ?? b.bot, q));
   const nothing = !d?.personal.length && !company?.entries.length && !vision && !goals.length && !viewers.data?.bots.length;
   const state = learned.isPending ? 'loading' : learned.isError ? 'fault' : nothing ? 'empty' : 'ready';
-  const row = (e: LearnedEntry) => <Line key={e.id} e={e} onEdit={() => setEditing(e)} onDelete={() => setDeleting(e)} />;
+  const chosen = (editing ?? deleting)?.id;
+  const row = (e: LearnedEntry) => <Line key={e.id} e={e} on={e.id === chosen} onEdit={() => setEditing(e)} onDelete={() => setDeleting(e)} />;
 
   return (
     <>
@@ -51,6 +52,11 @@ export function LearnedPage() {
       path="/learned"
       lead={<Dot still size={28} />}
       search={<Search label="Search" placeholder="Search" value={words} onValueChange={setWords} />}
+      more={
+        <PageMore>
+          <MenuItem label="Add an agent" icon="plus" onSelect={() => setAdding(true)} />
+        </PageMore>
+      }
       state={state}
       empty={{ title: 'Nothing learned yet' }}
       onRetry={() => void learned.refetch()}
@@ -66,7 +72,7 @@ export function LearnedPage() {
           )}
           {company && (companyRows.length > 0 || vision || goals.length > 0 || !q) && (
             <div className="lr-sec">
-              <Section name="About the company" count={companyRows.length + (vision ? 1 : 0) + goals.length}>
+              <Section name={companyName} count={companyRows.length + (vision ? 1 : 0) + goals.length}>
                 {companyRows.map(row)}
                 {vision && <LinkLine text={vision} />}
                 {goals.map((g) => (
@@ -85,13 +91,6 @@ export function LearnedPage() {
                 {readers.map((b) => (
                   <Reader key={b.bot} b={b} />
                 ))}
-                {viewers.data.bots.length > 0 && !q && (
-                  <Switch
-                    label="Include what Tico learned"
-                    checked={viewers.data.include_learned}
-                    onCheckedChange={(on) => void press('learned.includeLearned', { on })}
-                  />
-                )}
               </Section>
             </div>
           )}
@@ -105,10 +104,10 @@ export function LearnedPage() {
   );
 }
 
-function Line({ e, onEdit, onDelete }: { e: LearnedEntry; onEdit: () => void; onDelete: () => void }) {
+function Line({ e, on, onEdit, onDelete }: { e: LearnedEntry; on: boolean; onEdit: () => void; onDelete: () => void }) {
   const me = useMe();
   return (
-    <div className="lr-row" data-target={`learned:${e.id}`}>
+    <div className={on ? 'lr-row is-on' : 'lr-row'} data-target={`learned:${e.id}`}>
       <span className="lr-text">{e.text}</span>
       {e.taught_in_chat || !me ? <Dot still size={22} /> : <Face actor={me} />}
       <Ago at={e.updated_at ?? e.created_at} className="row-age" />

@@ -10,6 +10,7 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
+import { SkeletonRows } from '@/kit/Skeleton';
 import { VirtualList } from '@/kit/VirtualList';
 import { fmtDate, newId } from '@/lib';
 import { SUPPORT_CHAT } from './actions';
@@ -152,7 +153,11 @@ export function SupportChat() {
           <Empty icon="alert" title="Tico support did not load">
             <Button onClick={() => void list.refetch()}>Try again</Button>
           </Empty>
-        ) : null}
+        ) : (
+          <div className="chat-body">
+            <SkeletonRows rows={4} label="Loading Tico support" />
+          </div>
+        )}
       </>
     );
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anyCallLive, badgeFor, cleanUserAgent } from './badge';
+import { anyCallLive, badgeFor, cleanUserAgent, dotBitmap } from './badge';
 import * as C from './companies';
 import { doneFromPortal, issuerCookie, parsePicks } from './portal';
 import * as V from './validate';
@@ -147,6 +147,14 @@ describe('badge and user agent', () => {
     expect(badgeFor([{ needs: 2, signedOut: false }, { needs: 3, signedOut: false }])).toEqual({ count: 5, text: '5' });
     expect(badgeFor([{ needs: 0, signedOut: false }, { needs: 4, signedOut: true }])).toEqual({ count: 0, text: '!' });
     expect(badgeFor([])).toEqual({ count: 0, text: '' });
+  });
+  it('draws the Windows overlay as a round jade dot', () => {
+    const size = 16;
+    const px = dotBitmap(size);
+    expect(px.length).toBe(size * size * 4);
+    const at = (x: number, y: number) => [...px.subarray((y * size + x) * 4, (y * size + x) * 4 + 4)];
+    expect(at(8, 8)).toEqual([0x71, 0x9c, 0x4f, 255]); // BGRA, opaque in the middle
+    expect(at(0, 0)).toEqual([0, 0, 0, 0]); // clear in the corners
   });
   it('knows a call is live in any company’s page, not only the small window', () => {
     expect(anyCallLive(false, [{ callLive: false }, { callLive: true }])).toBe(true);

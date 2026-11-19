@@ -1,7 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Button } from '@/kit/Button';
-import { Checkbox } from '@/kit/Checkbox';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { Select } from '@/kit/Select';
@@ -22,17 +21,6 @@ const HOURS = [
 ] as const;
 
 const kb = (bytes: number) => `${Math.max(1, Math.ceil(bytes / 1024))} KB`;
-
-/** The attachment's parts a person may leave out: every top-level key but its own header. */
-const HEADER = ['format', 'created', 'capture'];
-const parse = (text: string): Record<string, unknown> | null => {
-  try {
-    const v: unknown = JSON.parse(text);
-    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-};
 
 export interface DiagnosticsProps {
   open: boolean;
@@ -62,16 +50,6 @@ function Review({ attached, onAttach, onCancel }: { attached: Attached | null; o
   const [text, setText] = useState<string | null>(keep ? (attached?.edited ?? null) : null);
   const shown = text ?? bundle?.text ?? '';
   const edited = bundle && text !== null && text !== bundle.text ? text : undefined;
-  const base = bundle ? parse(bundle.text) : null;
-  const now = parse(shown);
-  const sections = base ? Object.keys(base).filter((k) => !HEADER.includes(k)) : [];
-  const toggle = (key: string, on: boolean) => {
-    if (!base || !now) return;
-    const next = { ...now };
-    if (on) next[key] = base[key];
-    else delete next[key];
-    setText(JSON.stringify(next, null, 2));
-  };
   const refresh = () => {
     setText(null);
     if (keep) setAgain(true);
@@ -88,13 +66,6 @@ function Review({ attached, onAttach, onCancel }: { attached: Attached | null; o
           setText(null);
         }}
       />
-      {sections.length > 0 && (
-        <div className="sup-secs" role="group" aria-label="Sections">
-          {sections.map((k) => (
-            <Checkbox key={k} label={k} checked={!!now && k in now} disabled={!now} onCheckedChange={(on) => toggle(k, on)} />
-          ))}
-        </div>
-      )}
       <Field label="Diagnostics" labelHidden area value={shown} onValueChange={setText} disabled={!bundle} />
       <p className="sup-note" role="status">
         {fresh.isError && !keep ? 'Diagnostics did not load.' : bundle ? (edited !== undefined ? 'Edited. Checked again on send.' : kb(bundle.bytes)) : 'Loading'}

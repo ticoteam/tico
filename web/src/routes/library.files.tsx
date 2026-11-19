@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { FilesPage, filesSearch, loadFiles } from '@/features/library/exports';
+import { FilesPage } from '@/features/library/exports';
+import { filesSearch, loadFiles } from '@/features/library/routing';
 
 export const Route = createFileRoute('/library/files')({
   validateSearch: filesSearch,

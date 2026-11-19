@@ -4,6 +4,7 @@ import { toast } from '@/kit/Toast';
 import {
   addPeople,
   addViewer,
+  archiveMail,
   archiveThread,
   archiveUpdates,
   changeThread,
@@ -11,15 +12,15 @@ import {
   editLearned,
   followThread,
   forgetLearned,
-  includeLearned,
   joinThread,
+  markMailUnread,
   markUpdatesRead,
-  muteThread,
   openEarlier,
   readAll,
   removeMember,
   removeViewer,
   renameThread,
+  replyMail,
   startNew,
   summarizeThread,
   unarchiveThread,
@@ -91,16 +92,6 @@ export const archiveThreadAction = defineAction({
     if (archived && open) await router.navigate({ to: '/threads' });
   },
   did: ({ archived = true }) => (archived ? 'Archived' : 'Moved back'),
-  target: ({ thread }) => ({ kind: 'thread', id: thread }),
-});
-
-export const muteThreadAction = defineAction({
-  id: 'threads.mute',
-  title: 'Mute a thread',
-  kind: 'change',
-  input: s.object({ thread, muted: s.optional(s.boolean()) }),
-  run: (_ctx, { thread, muted = true }) => muteThread(thread, muted),
-  did: ({ muted = true }) => (muted ? 'Muted' : 'Unmuted'),
   target: ({ thread }) => ({ kind: 'thread', id: thread }),
 });
 
@@ -280,14 +271,52 @@ export const pickMailbox = defineAction({
   target: () => ({ kind: 'page', id: '/threads/mail' }),
 });
 
-export const openText = defineAction({
+export const openContact = defineAction({
   id: 'messaging.open',
-  title: 'Open a text',
+  title: "Open a contact's texts",
   kind: 'view',
-  input: s.object({ text: id('a text id') }),
-  run: ({ router }, { text }) => router.navigate({ to: '/threads/messaging', search: { open: text } }),
-  did: () => 'Opened the text',
-  target: ({ text }) => ({ kind: 'text', id: text }),
+  input: s.object({ contact: id('who the texts came from') }),
+  run: ({ router }, { contact }) => router.navigate({ to: '/threads/messaging', search: { open: contact } }),
+  did: () => 'Opened the texts',
+  target: ({ contact }) => ({ kind: 'contact', id: contact }),
+});
+
+const box = id('a mailbox address');
+const letter = id('a mail thread id');
+
+export const replyMailAction = defineAction({
+  id: 'mail.reply',
+  title: 'Reply to a mail',
+  kind: 'change',
+  input: s.object({ box, letter, text: s.string({ min: 1, max: 20000 }) }),
+  // Ordinary work, Tico's too: the send gate holds every email for its undo window and asks any OK it needs.
+  run: (_ctx, { box, letter, text }) => replyMail(box, letter, text),
+  did: () => 'Reply sent',
+  target: ({ letter }) => ({ kind: 'letter', id: letter }),
+});
+
+export const archiveMailAction = defineAction({
+  id: 'mail.archive',
+  title: 'Archive a mail',
+  kind: 'change',
+  input: s.object({ box, letter, ids: s.array(id('a letter id'), { max: 500 }) }),
+  run: async ({ router }, { box, letter, ids }) => {
+    await archiveMail(box, letter, ids);
+    if ((router.state.location.search as { open?: string }).open === letter)
+      await router.navigate({ to: '/threads/mail', search: { box } });
+  },
+  did: () => 'Archived',
+  target: () => ({ kind: 'page', id: '/threads/mail' }),
+});
+
+export const markMailUnreadAction = defineAction({
+  id: 'mail.markUnread',
+  title: 'Mark a mail unread',
+  kind: 'change',
+  input: s.object({ box, letter: id('a letter id') }),
+  run: (_ctx, { box, letter }) => markMailUnread(box, letter),
+  did: () => 'Marked unread',
+  target: () => ({ kind: 'page', id: '/threads/mail' }),
 });
 
 /* ---------------------------------------------------------------- updates */
@@ -395,17 +424,6 @@ export const addViewerAction = defineAction({
   target: () => ({ kind: 'page', id: '/learned' }),
 });
 
-export const includeLearnedAction = defineAction({
-  id: 'learned.includeLearned',
-  title: 'Let the agents that read your chat with Tico read what it has learned',
-  kind: 'change',
-  input: s.object({ on: s.boolean() }),
-  tico: false,
-  run: (_ctx, { on }) => includeLearned(on),
-  did: ({ on }) => (on ? 'They read what Tico learned' : 'They no longer read what Tico learned'),
-  target: () => ({ kind: 'page', id: '/learned' }),
-});
-
 export const removeViewerAction = defineAction({
   id: 'learned.removeReader',
   title: "Stop an agent reading your chat with Tico",
@@ -419,13 +437,6 @@ export const removeViewerAction = defineAction({
 
 /* ---------------------------------------------------------------- finding mail */
 
-// The label filter's choices (old mail.ts MAIL_CHIPS); any other label id the server knows is taken too.
-export const MAIL_LABELS = [
-  { id: 'INBOX', name: 'Inbox' },
-  { id: 'UNREAD', name: 'Unread' },
-  { id: 'STARRED', name: 'Starred' },
-] as const;
-
 export const findMail = defineAction({
   id: 'mail.find',
   title: 'Find mail',
@@ -433,12 +444,9 @@ export const findMail = defineAction({
   input: s.object({
     box: s.optional(id('a mailbox address')),
     q: s.optional(s.string({ max: 500, what: 'the words to find' })),
-    label: s.optional(s.string({ max: 200, what: 'a Gmail label id, such as UNREAD or STARRED' })),
-    attach: s.optional(s.boolean()),
   }),
-  // Each narrowing replaces the last in history: Back leaves the list, not each word typed.
-  run: ({ router }, { box, q, label, attach }) =>
-    router.navigate({ to: '/threads/mail', search: { box, q: q || undefined, label: label || undefined, attach: attach || undefined }, replace: true }),
-  did: ({ q }) => (q ? 'Searched the mail' : 'Filtered the mail'),
+  // Each search replaces the last in history: Back leaves the list, not each word typed.
+  run: ({ router }, { box, q }) => router.navigate({ to: '/threads/mail', search: { box, q: q || undefined }, replace: true }),
+  did: ({ q }) => (q ? 'Searched the mail' : 'Showed all mail'),
   target: () => ({ kind: 'page', id: '/threads/mail' }),
 });

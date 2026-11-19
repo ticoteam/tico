@@ -1,24 +1,29 @@
 import { useInfiniteQuery, useQuery, type QueryClient } from '@tanstack/react-query';
-import { Outlet, createRootRouteWithContext, useLocation, useRouter } from '@tanstack/react-router';
-import { Suspense, lazy, useEffect, type ReactNode } from 'react';
+import { Link, Outlet, createRootRouteWithContext, useLocation, useRouter } from '@tanstack/react-router';
+import { Fragment, Suspense, lazy, useEffect, useState, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
-import { reportCallToDesktop } from '@/desktop';
+import { reportCallToDesktop, useCallWindow } from '@/desktop';
 import { ticoRoomQuery } from '@/conversation';
-import { configQuery, directoryQuery, meQuery, recordVisit, useHeldCount, type Actor, type Directory } from '@/data';
-import { CallBar, CallSide, RingCard, TOGGLE_MUTE, isCallActive, useCall } from '@/features/calls/exports';
-import { FileViewerHost } from '@/features/library/exports';
+import { configQuery, directoryQuery, meQuery, recordVisit, useActor, useHeldCount, type Actor, type Directory } from '@/data';
+import { TOGGLE_MUTE, isCallActive, ringingQuery, useCall } from '@/features/calls/routing';
+import { useFileOpen } from '@/features/library/routing';
 import { AssetRecovery, PlanLock } from '@/features/notices/exports';
-import { supportAccessQuery } from '@/features/settings/exports';
-import { FirstRun, StartScreen, useStartGate } from '@/features/start/exports';
-import { SUPPORT_CHAT, SupportChat, supportUnreadQuery } from '@/features/support/exports';
-import { flowQuery, pipelinesQuery, roadmapPipeline } from '@/features/tasks/exports';
-import { TeammateChat, teamSlug, whoHref } from '@/features/team/exports';
-import { ChatSheet, catchUpQuery, updateListQuery } from '@/features/threads/exports';
+import { StartScreen, useStartGate } from '@/features/start/routing';
+import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
+import { flowGroups, flowQuery, pipelinesQuery, roadmapPipeline } from '@/features/tasks/routing';
+import { teamSlug, whoHref } from '@/features/team/routing';
+import { catchUpQuery, updateListQuery } from '@/features/threads/routing';
+import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
+import { Empty } from '@/kit/Empty';
+import { FlowMark } from '@/kit/FlowMark';
+import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { MenuItem, MenuRule } from '@/kit/Menu';
+import { Menu as DropMenu, MenuItem, MenuRule } from '@/kit/Menu';
 import { OfflineBar } from '@/kit/OfflineBar';
+import { LatePill } from '@/kit/Pill';
 import { Placeholder } from '@/kit/placeholder/Placeholder';
+import { FoldButton } from '@/kit/SectionHead';
 import { Segmented } from '@/kit/Segmented';
 import { Toasts } from '@/kit/Toast';
 import { startLive, useLiveStatus } from '@/live';
@@ -31,7 +36,6 @@ import {
   Menu,
   Sheet,
   SheetHead,
-  SupportLine,
   arrangementFor,
   desktop,
   foldSheet,
@@ -39,6 +43,8 @@ import {
   isTeammate,
   reportToDesktop,
   useCompanies,
+  useSheet,
+  useTabTitle,
   watchCallWindow,
   type Company,
   type MenuMate,
@@ -74,8 +80,25 @@ export const Route = createRootRouteWithContext<RouterContext>()({
   notFoundComponent: () => <Placeholder title="Not found" />,
 });
 
-/* An open task's chat comes with the task's own code: the first load carries the shell only. */
+/* An open task's chat comes with the task's own code: the first load carries the shell only. So does every part the
+   root mounts over a page: each loads the first time it has something to show (Later), never before the first paint. */
 const TaskChat = lazy(() => import('@/features/task/exports').then((m) => ({ default: m.TaskChat })));
+const CallBar = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.CallBar })));
+const CallSide = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.CallSide })));
+const RingCard = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.RingCard })));
+const FileViewerHost = lazy(() => import('@/features/library/exports').then((m) => ({ default: m.FileViewerHost })));
+const FirstRun = lazy(() => import('@/features/start/exports').then((m) => ({ default: m.FirstRun })));
+const SupportChat = lazy(() => import('@/features/support/exports').then((m) => ({ default: m.SupportChat })));
+const TeammateChat = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.TeammateChat })));
+const ChatSheet = lazy(() => import('@/features/threads/exports').then((m) => ({ default: m.ChatSheet })));
+
+/** Mounted from the first time `on` holds, and kept after: its code loads only once it is needed, and what it shows
+    can still close in its own way (a dialog's last step stays drawn while it closes). */
+function Later({ on, children }: { on: boolean; children: ReactNode }) {
+  const [seen, setSeen] = useState(on);
+  if (on && !seen) setSeen(true);
+  return seen ? <Suspense fallback={null}>{children}</Suspense> : null;
+}
 
 const dotEl = () => dot.el();
 const closeChat = () => void run('shell.closeChat', {}, { via: 'click' });
@@ -128,6 +151,7 @@ function useDesktopReports(signedOut: boolean) {
 }
 
 function App() {
+  useTabTitle();
   const router = useRouter();
   const me = useQuery(meQuery);
   const signedIn = me.isSuccess;
@@ -149,8 +173,6 @@ function App() {
   // One stream, once the person is known and Tico's room is drawn (its follow then rides the first connection).
   const room = useQuery(ticoRoomQuery);
   const ready = signedIn && !room.isPending;
-  // Tico support signed in to the company: a quiet line on every screen (only those who may read it see it).
-  const letIn = useQuery({ ...supportAccessQuery, enabled: signedIn, retry: false });
   useEffect(() => {
     if (ready) startLive();
   }, [ready]);
@@ -180,15 +202,20 @@ function App() {
   let chat: ReactNode =
     at.chat === SUPPORT_CHAT ? (
       <Sheet kind="chat" label="Tico support">
-        <SupportChat />
+        <Suspense fallback={null}>
+          <SupportChat />
+        </Suspense>
       </Sheet>
     ) : at.chat ? (
       <SecondChat chat={at.chat} />
     ) : undefined;
   let widgets: ReactNode;
   let side: ReactNode;
+  let list: ReactNode;
   if (arrangement === 'task') {
     const task = top === 'tasks' ? b : a;
+    // Task and Flow are one view: what waits on you stands in the menu's place, the open task chosen
+    list = task ? <TaskList open={decodeURIComponent(task)} /> : undefined;
     chat = task ? (
       <Sheet kind="chat" label="The task's chat">
         <Suspense fallback={null}>
@@ -197,7 +224,11 @@ function App() {
       </Sheet>
     ) : undefined;
   } else if (arrangement === 'call' && a) {
-    side = <CallSide room={decodeURIComponent(a)} />;
+    side = (
+      <Suspense fallback={null}>
+        <CallSide room={decodeURIComponent(a)} />
+      </Suspense>
+    );
   } else if (arrangement === 'agent' && a) {
     widgets = page;
     page = <TeammateSheet who={decodeURIComponent(a)} />;
@@ -208,19 +239,25 @@ function App() {
   const callChat = arrangement === 'page' && !chat && isCallActive(callNow) ? (callNow.chat ?? null) : null;
   if (callChat) chat = <SecondChat chat={callChat} />;
   const hideCallChat = () => void run('calls.hideChat', {}, { via: 'click' });
+  const callOut = useCallWindow().open;
+  const ringing = (useQuery(ringingQuery).data?.calls ?? []).some((c) => c.ring && c.state === 'live');
+  const setupOpen = useLocation({ select: (l) => !!(l.search as { setup?: unknown }).setup });
+  const fileOpen = useFileOpen();
 
   return (
     <>
       {/* a call on another page shows its bar over the frame; the frame takes the rest of the window */}
       <div className="shell-col">
-        <SupportLine session={letIn.data?.active} />
-        <CallBar />
+        <Later on={isCallActive(callNow) || callOut}>
+          <CallBar />
+        </Later>
         <Frame
           arrangement={callChat ? 'chat' : arrangement}
           tico={<TicoSheet />}
           menu={<AppMenu note={status === 'offline' ? <OfflineBar held={held} /> : null} />}
           page={page}
           chat={chat}
+          list={list}
           widgets={widgets}
           side={side}
           panel={panel ? <PanelHost /> : undefined}
@@ -230,12 +267,20 @@ function App() {
           onClosePanel={closePanel}
         />
       </div>
-      {signedIn ? <FirstRun /> : null}
+      {signedIn ? (
+        <Later on={setupOpen}>
+          <FirstRun />
+        </Later>
+      ) : null}
       <ActionsRoot dot={dotEl} fold={foldSheet} />
       <Toasts />
       {/* the file `files.view` opens, over any page */}
-      <FileViewerHost />
-      <RingCard />
+      <Later on={fileOpen}>
+        <FileViewerHost />
+      </Later>
+      <Later on={ringing}>
+        <RingCard />
+      </Later>
       {/* over every page: a locked plan; the app's own files failing to load after a release */}
       <PlanLock />
       <AssetRecovery />
@@ -394,7 +439,9 @@ function SecondChat({ chat }: { chat: string }) {
   const who = dir?.byId[bare(chat)];
   return (
     <Sheet kind="chat" label={`Chat with ${who?.name ?? 'teammate'}`}>
-      <ChatSheet chat={chat} />
+      <Suspense fallback={null}>
+        <ChatSheet chat={chat} />
+      </Suspense>
     </Sheet>
   );
 }
@@ -411,7 +458,97 @@ function TeammateSheet({ who }: { who: string }) {
         title={name}
         lead={actor ? <Avatar decorative kind={actor.kind} name={actor.name} initials={short(actor.name)} hue={actor.hue ?? 0} size={28} live={actor.working} /> : null}
       />
-      <TeammateChat who={who} />
+      <Suspense fallback={null}>
+        <TeammateChat who={who} />
+      </Suspense>
+    </Sheet>
+  );
+}
+
+/* ---------------------------------------------------------------- an open task's list */
+
+function ListFace({ id }: { id: string | null }) {
+  const who = useActor(id);
+  return id ? <Avatar decorative kind={who?.kind ?? (id.startsWith('bot:') ? 'agent' : 'person')} name={who?.name ?? 'Teammate'} hue={who?.hue} live={who?.working} size={22} /> : null;
+}
+
+/* Beside an open task, in the menu's place (pages/1-tasks/more.js flowList): every task that waits on you, by pipeline
+   and stage, the open one chosen. The pick goes to a pipeline's board, Flow (pressed) back to Tasks, and Close folds
+   the list to the menu's icons. */
+function TaskList({ open }: { open: string }) {
+  const sheet = useSheet();
+  const { data: flow } = useQuery(flowQuery);
+  const { data: pipes = [] } = useQuery(pipelinesQuery);
+  const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
+  const flip = (key: string) => setShut((was) => (was.has(key) ? new Set([...was].filter((k) => k !== key)) : new Set(was).add(key)));
+  const groups = flowGroups(flow?.items ?? [], pipes);
+  return (
+    <Sheet kind="list" label="Flow">
+      <header className="li-head">
+        <DropMenu
+          align="start"
+          trigger={
+            <button className="li-pick" type="button">
+              All pipelines
+              <Icon name="chevdown" />
+            </button>
+          }
+        >
+          <MenuItem label="All pipelines" on onSelect={() => undefined} />
+          {pipes.map((p) => (
+            <MenuItem key={p.id} label={p.name} onSelect={press('shell.goTo', { to: `/tasks/${encodeURIComponent(p.id)}` })} />
+          ))}
+        </DropMenu>
+        <span className="grow" />
+        <Link to="/tasks" className="li-play is-on" aria-pressed aria-label="Flow" title="Flow">
+          <FlowMark size={22} />
+          {flow?.count ? <b>{flow.count}</b> : null}
+        </Link>
+        {sheet.canFold ? <IconButton icon="close" label="Close" quiet onClick={sheet.toggleFold} /> : null}
+      </header>
+      <div className="nav-scroll li-body">
+        {flow && !groups.length ? <Empty title="Nothing waits on you" /> : null}
+        {groups.map((g) => (
+          <Fragment key={g.key}>
+            <div className="li-sec">
+              <h2 className="sec-name">
+                <FoldButton
+                  name={
+                    <>
+                      {g.pipe}
+                      <Icon name="chevron" className="sec-sep" />
+                      {g.stage}
+                    </>
+                  }
+                  count={g.items.length}
+                  open={!shut.has(g.key)}
+                  onToggle={() => flip(g.key)}
+                />
+              </h2>
+            </div>
+            {shut.has(g.key)
+              ? null
+              : g.items.map((it) => {
+                  const n = String(it.number ?? it.id);
+                  return (
+                    <Link key={it.id} to="/flow/$task" params={{ task: n }} className={n === open || it.id === open ? 'li is-on' : 'li'} title={it.title} data-target={`task:${n}`}>
+                      <span className="li-mark">
+                        <FlowMark size={10} />
+                      </span>
+                      <span className="li-main">
+                        <span className="li-title">{it.title}</span>
+                        {it.late ? <LatePill /> : null}
+                      </span>
+                      <span className="li-who">
+                        <ListFace id={it.owner_id} />
+                        <Ago at={it.since} className="row-age" />
+                      </span>
+                    </Link>
+                  );
+                })}
+          </Fragment>
+        ))}
+      </div>
     </Sheet>
   );
 }

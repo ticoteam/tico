@@ -1,3 +1,3 @@
-/* The virtual list's spacer and its placed rows. The mock has no virtual list; tokens only. */
-.vl-space{position:relative;width:100%;height:var(--h)}
-.vl-item{position:absolute;top:0;left:0;width:100%;transform:translateY(var(--y))}
+/* The virtual list's spacer and its placed rows; the virtualizer writes the height and each row's transform. */
+.vl-space{position:relative;width:100%}
+.vl-item{position:absolute;top:0;left:0;width:100%}

@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { UpdatesPage, loadUpdates, updatesSearch } from '@/features/threads/exports';
+import { UpdatesPage } from '@/features/threads/exports';
+import { loadUpdates, updatesSearch } from '@/features/threads/routing';
 
 export const Route = createFileRoute('/updates/')({
   validateSearch: updatesSearch,

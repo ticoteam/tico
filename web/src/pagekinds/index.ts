@@ -1,5 +1,5 @@
 // The nine page kinds (tico/page-types.html). Every page in the app is one of them; a page fills its slots.
-export { List, type ListProps } from './List';
+export { List, PagePending, type ListProps } from './List';
 export { Board, BoardColumn, type BoardProps, type BoardColumnProps } from './Board';
 export { ListAndItem, ItemHead, type ListAndItemProps, type ItemHeadProps } from './ListAndItem';
 export { Record, RecordPanel, type RecordProps, type RecordPanelProps } from './Record';
@@ -20,6 +20,8 @@ export {
   PageBody,
   PanelHost,
   usePagePanelOpen,
+  StateBody,
+  SkRows,
   type FilterRowProps,
   type FilterChip,
   type SectionProps,

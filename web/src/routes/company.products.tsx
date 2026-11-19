@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { loadProducts, panelSearch, ProductsPage } from '@/features/company/exports';
+import { ProductsPage } from '@/features/company/exports';
+import { loadProducts, panelSearch } from '@/features/company/routing';
 
 export const Route = createFileRoute('/company/products')({
   validateSearch: panelSearch,

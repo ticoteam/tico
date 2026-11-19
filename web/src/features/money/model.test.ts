@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { budgetGroups, centsOf, funnelSteps, pnlRange, stepRange } from './model';
+import { readState } from './parts';
 import type { Budget } from './queries';
 import { panelOf, validateFinanceSearch } from './search';
 
@@ -35,6 +36,12 @@ describe('money model', () => {
 
   it('keeps only known address values', () => {
     expect(validateFinanceSearch({ tab: 'pnl', period: 'week', panel: 'line:acc_1', from: '2026-13' })).toEqual({ tab: 'pnl', panel: 'line:acc_1' });
-    expect(panelOf('budget:new')).toEqual(['budget', 'new']);
+    expect(panelOf('budget:b1')).toEqual(['budget', 'b1']);
+  });
+
+  it('a read paused offline with nothing held is a fault with Try again, not a skeleton that never ends', () => {
+    const q = { isPending: true, isError: false, error: null };
+    expect(readState({ ...q, fetchStatus: 'fetching' })).toBe('loading');
+    expect(readState({ ...q, fetchStatus: 'paused' })).toBe('fault');
   });
 });

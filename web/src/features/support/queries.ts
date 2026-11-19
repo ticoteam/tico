@@ -1,6 +1,6 @@
 import { queryOptions } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
-import { QUIET_STALE_MS, meQuery, queryClient, quietRoot, write } from '@/data';
+import { meQuery, queryClient, quietRoot, write } from '@/data';
 import { browserFailures } from './failures';
 
 /* Tico support (backend/support.py): the person's tickets, drawn as one conversation. A message goes to the newest
@@ -76,13 +76,12 @@ const readTickets = async ({ signal }: { signal: AbortSignal }) => {
   return keepPending(next, queryClient.getQueryData<SupportList>(TICKETS));
 };
 
-export const ticketsQuery = queryOptions({ queryKey: TICKETS, queryFn: readTickets, staleTime: QUIET_STALE_MS });
+export const ticketsQuery = queryOptions({ queryKey: TICKETS, queryFn: readTickets });
 
 /** The replies from Tico support the person has not read: the menu's "?" can carry a mark. */
 export const supportUnreadQuery = queryOptions({
   queryKey: TICKETS,
   queryFn: readTickets,
-  staleTime: QUIET_STALE_MS,
   select: (d: SupportList) => (d.enabled ? d.unread : 0),
 });
 

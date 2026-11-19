@@ -151,7 +151,7 @@ describe('Budgets @s404 @s463', () => {
     fireEvent.submit(field.closest('form')!);
 
     await waitFor(() => expect(within(row).getByText('$900')).toBeTruthy());
-    expect(within(row).getByText('$700')).toBeTruthy();
+    expect(within(screen.getByRole('complementary', { name: 'Tools' })).getByText('$700')).toBeTruthy();
     refuse();
     await waitFor(() => expect(within(row).getByText('$500')).toBeTruthy());
     expect(within(row).queryByText('$900')).toBeNull();
@@ -216,30 +216,6 @@ describe('Budgets @s404 @s463', () => {
     expect((screen.getByRole('textbox', { name: /^Budget for / }) as HTMLInputElement).disabled).toBe(true);
     expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'New budget' })).toBeNull();
-  });
-
-  it('a new budget for a line is added from its panel @s462', async () => {
-    const posted: Record<string, unknown>[] = [];
-    serve((url, method, body) => {
-      if (method === 'POST') {
-        posted.push(body);
-        return ok({ kind: 'budget_create', status: 'committed' });
-      }
-      if (url.includes('budget_vs_actual')) return ok({ columns: [], budgets: [] });
-      if (url.endsWith('/finance/access')) return ok(OWNER);
-      return ok({ budgets: [budget] });
-    });
-    seed([ROW('acc_ads', 'Ads', 'expense', 'operating', '6200', [0])]);
-    show('finance', '/company/finance?tab=budgets');
-    fireEvent.click(await screen.findByRole('button', { name: 'New budget' }));
-    const panel = await screen.findByRole('complementary', { name: 'New budget' });
-    await pick(within(panel).getByRole('combobox', { name: 'Line' }), /^Ads$/);
-    expect((within(panel).getByRole('textbox', { name: 'Name' }) as HTMLInputElement).value).toBe('Ads');
-    fireEvent.change(within(panel).getByRole('textbox', { name: 'Amount a month' }), { target: { value: '300' } });
-    fireEvent.click(within(panel).getByRole('button', { name: 'Add budget' }));
-    await waitFor(() =>
-      expect(posted).toEqual([{ kind: 'budget_create', payload: { name: 'Ads', period: 'month', account_id: 'acc_ads', amount: 30000, effective_from: `${ym}-01` } }]),
-    );
   });
 });
 
@@ -313,7 +289,8 @@ describe('Finance dialogs @s449 @s461 @s453 @s454', () => {
       return ok({ rows: [] });
     });
     show('finance', '/company/finance?tab=transactions');
-    fireEvent.click(await screen.findByRole('button', { name: 'New transfer' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'New transfer' }));
     const dialog = await screen.findByRole('dialog', { name: 'Transfer' });
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Amount' }), { target: { value: '100' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Transfer' }));
@@ -345,7 +322,8 @@ describe('Finance dialogs @s449 @s461 @s453 @s454', () => {
       return json({ rows: [] });
     });
     show('finance', '/company/finance?tab=transactions');
-    fireEvent.click(await screen.findByRole('button', { name: 'New transfer' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'New transfer' }));
     const dialog = await screen.findByRole('dialog', { name: 'Transfer' });
     const amount = within(dialog).getByRole('textbox', { name: 'Amount' });
     const button = within(dialog).getByRole('button', { name: 'Transfer' });
@@ -520,7 +498,7 @@ describe('Finance books @s420 @s455 @s456 @s458 @s459 @s464 @s465', () => {
     expect(new URL(read, 'http://x').searchParams.get('view_as')).toBe('human:sam');
     expect(screen.getByText(/^Viewing as /)).toBeTruthy();
     expect(searchOf(screen.getByRole('link', { name: 'Stop' }).getAttribute('href')).as).toBeUndefined();
-    expect(screen.queryByRole('button', { name: 'New transfer' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'More for Ink Co' })).toBeNull();
   });
 });
@@ -585,7 +563,7 @@ describe('Finance tabs and sources', () => {
     show('finance', '/company/finance?tab=cards');
     const cards = await screen.findByRole('table', { name: 'Cards' });
     expect(within(cards).getByText('Travel').closest('tr')!.textContent).toContain('$1,000');
-    fireEvent.click(await screen.findByRole('button', { name: 'New card' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add card' }));
     const dialog = await screen.findByRole('dialog', { name: 'New card' });
     await waitFor(() => expect(within(dialog).getByRole('combobox', { name: 'Mercury user' }).textContent).toContain('Lee'));
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Limit / mo' }), { target: { value: '250' } });
@@ -606,9 +584,12 @@ describe('Finance tabs and sources', () => {
     show('finance', '/company/finance?tab=access');
     const table = await screen.findByRole('table', { name: 'Access' });
     expect(within(table).getByText("Their team's lines").closest('tr')!.textContent).toContain('Yes');
-    expect(screen.getByText('1 other sees nothing')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'View as' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Edit defaults' }));
+    // Those who see nothing fold into one line, which opens them.
+    fireEvent.click(screen.getByRole('button', { name: /1 other sees nothing/ }));
+    expect(await within(table).findAllByRole('row')).toHaveLength(4);
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    expect(await screen.findByRole('menuitem', { name: 'View as' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit defaults' }));
     const dialog = await screen.findByRole('dialog', { name: 'Edit defaults' });
     await pick(within(dialog).getByRole('combobox', { name: 'Managers' }), /^Own expenses$/);
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
@@ -682,11 +663,11 @@ describe('Finance tabs and sources', () => {
     });
     show('finance', '/company/finance?tab=sources');
     const table = await screen.findByRole('table', { name: 'Sources' });
-    expect(within(table).getByText('Bank feed').closest('tr')!.textContent).toContain('Banks');
+    expect(within(table).getByText('Bank feed').closest('tr')!.textContent).toContain('Cash, Transactions');
     fireEvent.click(screen.getByRole('button', { name: 'More for Ledger books' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Use as books' }));
     const use = await screen.findByRole('dialog', { name: 'Use QuickBooks as the books' });
-    fireEvent.click(within(use).getByRole('button', { name: 'Use as books' }));
+    fireEvent.click(within(use).getByRole('button', { name: 'Use' }));
     await waitFor(() => expect(posted).toEqual([{ kind: 'mirror_start', payload: { connection_id: 'qb' } }]));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Use QuickBooks as the books' })).toBeNull());
     fireEvent.click(screen.getByRole('button', { name: 'More for Bank feed' }));

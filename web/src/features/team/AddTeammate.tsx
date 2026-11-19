@@ -53,7 +53,6 @@ export function AddTeammate({
           </button>
         )
       }
-      actions={step === 'pick' ? <Button onClick={close}>Cancel</Button> : undefined}
     >
       {step === 'pick' && (
         <>

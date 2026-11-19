@@ -11,9 +11,9 @@ import { Table } from '@/kit/Table';
 import { List, Section, SidePanel } from '@/pagekinds';
 import { ConfirmDialog, ConnectBooksDialog, ConnectKeyDialog, ShownOnce, useMay, WebhookDialog } from './dialogs';
 import { StatementDialog } from './forms';
-import { FIN, plural, useFinanceHead } from './head';
+import { FIN, FinanceOwner, plural, useFinanceHead } from './head';
 import { cash } from './model';
-import { ActLink, Prow, readState, usePress, useViewAs } from './parts';
+import { ActLink, PhoneRows, Prow, readState, usePhone, usePress, useViewAs } from './parts';
 import { balanceQuery, BOOKS, hooksQuery, KEY_SOURCES, sourcesQuery, type KeyProvider, type SourceGroup, type SourceRow } from './queries';
 import { panelOf, type FinanceSearch } from './search';
 
@@ -32,6 +32,18 @@ const holds = (r: Src) =>
   [r.last4 && `Ends in ${r.last4}`, r.entries && plural(r.entries, 'entry', 'entries'), r.bills && plural(r.bills, 'bill'), r.invoices && plural(r.invoices, 'invoice')]
     .filter(Boolean)
     .join(', ');
+/** What each kind of source feeds in Finance, as the mock says it ("Cash, Transactions"). */
+const FEEDS: Record<string, string> = {
+  banks: 'Cash, Transactions',
+  cards: 'Transactions, Cards',
+  payments: 'Revenue, Payment fees',
+  payroll: 'Payroll',
+  bills_invoices: 'Payables, Receivables',
+  tico: 'AI services',
+  accounting: 'P&L, Balance sheet',
+  manual: 'Transactions',
+};
+const feeds = (g: { group: string; name: string }) => FEEDS[g.group] ?? g.name;
 const failing = (r: Src) => r.sync?.status === 'error' || r.sync?.status === 'failed' || !!r.sync?.last_error;
 const live = (r: Src) => r.sync?.status === 'active' || r.sync?.status === 'new';
 const mirroring = (r: Src) => r.mirror === 'mirror' || r.mirror === 'exporting';
@@ -59,6 +71,7 @@ export function SourcesPage({ failure, onDismiss, search }: { failure: string | 
   const may = useMay();
   const admin = may('finance.admin');
   const head = useFinanceHead();
+  const phone = usePhone();
   const q = useQuery(sourcesQuery(useViewAs()));
   const hooks = useQuery({ ...hooksQuery, enabled: admin });
   const [open, setOpen] = useState<Open | null>(null);
@@ -114,7 +127,7 @@ export function SourcesPage({ failure, onDismiss, search }: { failure: string | 
       {open?.kind === 'key' && <ConnectKeyDialog provider={open.provider} onOpenChange={close} />}
       {open?.kind === 'books' && <ConnectBooksDialog provider={open.provider} onOpenChange={close} />}
       {open?.kind === 'mirror' && (
-        <ConfirmDialog title={`Use ${booksName(open.row)} as the books`} submit="Use as books" action="finance.startMirror" input={{ connection: open.row.id }} onOpenChange={close} />
+        <ConfirmDialog title={`Use ${booksName(open.row)} as the books`} submit="Use" action="finance.startMirror" input={{ connection: open.row.id }} onOpenChange={close} />
       )}
       {open?.kind === 'stop' && <ConfirmDialog title={`Stop using ${booksName(open.row)}`} submit="Stop" action="finance.stopMirror" input={{}} onOpenChange={close} />}
       {open?.kind === 'disconnect' && (
@@ -155,7 +168,7 @@ export function SourcesPage({ failure, onDismiss, search }: { failure: string | 
       <p className="t-read">{failure}</p>
     </SidePanel>
   ) : (
-    sel && <SourcePanel row={sel.r} group={sel.g.name} all={rows.map((x) => x.r)} admin={admin} onReconnect={(p) => setOpen({ kind: 'books', provider: p })} />
+    sel && <SourcePanel row={sel.r} group={feeds(sel.g)} all={rows.map((x) => x.r)} admin={admin} onReconnect={(p) => setOpen({ kind: 'books', provider: p })} />
   );
   return (
     <List
@@ -165,12 +178,39 @@ export function SourcesPage({ failure, onDismiss, search }: { failure: string | 
       empty={{ title: 'No source connected' }}
       actions={
         <>
+          <FinanceOwner />
           {connect}
           {dialogs}
         </>
       }
       panel={panel || undefined}
       sections={
+        phone ? (
+          <PhoneRows
+            label="Sources"
+            groups={[
+              {
+                rows: rows.map(({ g, r }) => {
+                  const more = items(g, r);
+                  return {
+                    key: `${g.group}:${r.id}`,
+                    title: (
+                      <>
+                        <ActLink to={FIN} search={{ tab: 'sources', panel: `source:${r.id}` }} action="finance.openSource" input={{ source: r.id }} className="t-link">
+                          {r.name}
+                        </ActLink>
+                        {failing(r) && <Pill flag>Sign in again</Pill>}
+                      </>
+                    ),
+                    sub: [feeds(g), r.manual ? 'Entered by hand' : holds(r)],
+                    fig: r.sync?.last_ok_at ? fmtAge(r.sync.last_ok_at) : '',
+                    act: more.length > 0 && <Menu trigger={<IconButton icon="more" label={`More for ${r.name}`} size="sm" quiet />}>{more}</Menu>,
+                  };
+                }),
+              },
+            ]}
+          />
+        ) : (
         <div className="t-scroll">
           <Table label="Sources" stick>
             <colgroup>
@@ -202,7 +242,7 @@ export function SourcesPage({ failure, onDismiss, search }: { failure: string | 
                       </ActLink>
                       {failing(r) && <Pill flag>Sign in again</Pill>}
                     </td>
-                    <td className="t-words">{g.name}</td>
+                    <td className="t-words">{feeds(g)}</td>
                     <td className="t-words">{r.manual ? 'Entered by hand' : holds(r)}</td>
                     <td className="num t-words">{r.sync?.last_ok_at ? fmtAge(r.sync.last_ok_at) : ''}</td>
                     <td className="t-act">{more.length > 0 && <Menu trigger={<IconButton icon="more" label={`More for ${r.name}`} size="sm" quiet />}>{more}</Menu>}</td>
@@ -212,6 +252,7 @@ export function SourcesPage({ failure, onDismiss, search }: { failure: string | 
             </tbody>
           </Table>
         </div>
+        )
       }
     />
   );

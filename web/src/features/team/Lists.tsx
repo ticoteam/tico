@@ -12,7 +12,7 @@ import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
 import { FIELD_NAME, LIST_FIELDS, isListField, lineOf, type ListLine } from './model';
-import { OwnRow } from './parts';
+import { OwnRows } from './parts';
 import { listKey, listTasksAfter, listTasksQuery, taskTabsQuery, type OwnTask, type TaskTab } from './queries';
 
 /** Its own lists (the layout's tabs that are not a default), each with its key, and whether the viewer may change them. */
@@ -70,9 +70,7 @@ function ListSection({ slug, list, tab, me, canEdit }: { slug: string; list: str
         )
       }
     >
-      {rows.map((t) => (
-        <OwnRow key={t.id} task={t} me={me} />
-      ))}
+      <OwnRows tasks={rows} me={me} label={tab.name} onEnd={next && !reading ? () => void readMore() : undefined} />
       {more > 0 && (
         <div className="stage-fold">
           <span className="fold-label">Earlier</span>

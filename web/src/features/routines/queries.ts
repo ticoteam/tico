@@ -1,6 +1,6 @@
 import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import type { AutomationOverviewRuns, AutomationTemplate, AutomationTemplates, EventTypeList, Webhook, WebhookCreate, WebhookCreated, WebhookList, WebhookUpdate } from '@/api/schema';
+import type { AutomationOverviewRuns, AutomationTemplate, AutomationTemplates } from '@/api/schema';
 import type { Dest } from './board';
 import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
 import type {
@@ -56,21 +56,18 @@ export const routinesQuery = queryOptions({
     const { automations } = await api.get<{ automations: Routine[] }>('/api/v2/automations?limit=500', { signal });
     return automations.filter((a) => a.kind !== 'system' && a.trigger?.type !== 'listening');
   },
-  ...quiet,
 });
 
 export const routineQuery = (id: string) =>
   queryOptions({
     queryKey: ['routines', 'one', id],
     queryFn: ({ signal }) => api.get<Routine>(`/api/v2/automations/${enc(id)}`, { signal }),
-    ...quiet,
   });
 
 export const runsQuery = (id: string) =>
   queryOptions({
     queryKey: ['routines', 'runs', id],
     queryFn: async ({ signal }) => (await api.get<{ runs: Run[] }>(`/api/v2/automations/${enc(id)}/runs?limit=20`, { signal })).runs,
-    ...quiet,
   });
 
 /** What a new routine or an edit sends: the old app's one-step routine, an agent taking a turn on the instruction. */
@@ -187,7 +184,6 @@ export const versionsQuery = (id: string) =>
       const r = await api.get<{ versions: Version[] }>(`/api/v2/automations/${enc(id)}/versions`, { signal });
       return [...(r.versions ?? [])].sort((a, b) => b.n - a.n);
     },
-    ...quiet,
   });
 
 /** Restore a version as a new one, or turn a proposal on (it keeps its number). */
@@ -236,8 +232,6 @@ export const RUN_RANGES = ['5m', '1h', '24h', '7d'] as const;
 export type RunRange = (typeof RUN_RANGES)[number];
 export const RUN_STATUSES = ['failed', 'waiting', 'running', 'done'] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
-export const RUN_TRIGGERS = ['schedule', 'event', 'webhook', 'due', 'message', 'task_received', 'listening', 'system'] as const;
-export type RunTrigger = (typeof RUN_TRIGGERS)[number];
 export type AnyRun = AutomationOverviewRuns['runs'][number];
 
 /** Runs across every routine the person may see, newest first, fifty a page; `next` is the next page's `before`. */
@@ -250,7 +244,6 @@ export const allRunsQuery = (range: RunRange, status?: RunStatus) =>
     },
     initialPageParam: '',
     getNextPageParam: (last) => last.next || undefined,
-    ...quiet,
   });
 
 // ---------------------------------------------------------------- inbox templates
@@ -258,7 +251,6 @@ export const allRunsQuery = (range: RunRange, status?: RunStatus) =>
 export const templatesQuery = queryOptions({
   queryKey: ['routines', 'templates'],
   queryFn: async ({ signal }) => (await api.get<AutomationTemplates>('/api/v2/automations/templates', { signal })).templates,
-  ...quiet,
 });
 
 /** A template filled in for an owner (`person:`, `bot:` or `group:<id>`) and an inbox: the flow the server would save.
@@ -294,22 +286,18 @@ export function createInbox(f: AutomationTemplate, on: boolean) {
 export const maintenanceQuery = queryOptions({
   queryKey: ['routines', 'maintenance'],
   queryFn: ({ signal }) => api.get<Maintenance>('/api/v2/maintenance', { signal }),
-  ...quiet,
 });
 export const maintenanceRunsQuery = queryOptions({
   queryKey: ['routines', 'maintenance', 'runs'],
   queryFn: async ({ signal }) => (await api.get<{ runs: MaintenanceRun[] }>('/api/v2/maintenance/runs?limit=10', { signal })).runs,
-  ...quiet,
 });
 export const heartbeatQuery = queryOptions({
   queryKey: ['routines', 'heartbeat'],
   queryFn: ({ signal }) => api.get<Heartbeat>('/api/v2/heartbeat?limit=10', { signal }),
-  ...quiet,
 });
 export const systemJobsQuery = queryOptions({
   queryKey: ['routines', 'system'],
   queryFn: async ({ signal }) => (await api.get<{ jobs: SystemJob[] }>('/api/v2/system-routines', { signal })).jobs,
-  ...quiet,
 });
 
 export type MaintenanceChange = { schedule?: string; paused?: boolean; step?: { key: string; enabled: boolean } };
@@ -375,7 +363,6 @@ export async function runJob(key: string): Promise<void> {
 export const hooksQuery = queryOptions({
   queryKey: ['routines', 'hooks'],
   queryFn: async ({ signal }) => (await api.get<{ triggers: Hook[] }>('/api/v2/triggers', { signal })).triggers,
-  ...quiet,
 });
 
 export const deliveriesQuery = (id: string) =>
@@ -385,7 +372,6 @@ export const deliveriesQuery = (id: string) =>
       const r = await api.get<{ deliveries: Delivery[] } | Delivery[]>(`/api/v2/triggers/${enc(id)}/deliveries`, { signal });
       return Array.isArray(r) ? r : r.deliveries;
     },
-    ...quiet,
   });
 
 /** One kept call's headers and body. Read when opened, and not kept after. */
@@ -443,15 +429,8 @@ export function signHookOff(id: string) {
   });
 }
 
-/** A webhook's settings (POST /triggers/{id}): what is left out stays. `type_from` '' goes back to the preset's own. */
-export interface HookSettings {
-  name?: string;
-  type_from?: string;
-  hourly?: number;
-  keep_days?: number;
-  unheard?: 'log' | 'note';
-}
-export function updateHook(id: string, body: HookSettings) {
+/** A webhook's name (POST /triggers/{id}): its other settings stay. */
+export function updateHook(id: string, body: { name: string }) {
   return write<{ trigger: Hook }>({
     key: hooksQuery.queryKey,
     optimistic: (list: Hook[] | undefined) => list?.map((h) => (h.id === id ? { ...h, ...body } : h)),
@@ -460,82 +439,17 @@ export function updateHook(id: string, body: HookSettings) {
   });
 }
 
-/** Run a kept call again, as a new occurrence (a refused one is recovered instead). */
-export function replayDelivery(hook: string, delivery: string) {
-  return write<{ replay: { delivery: string; tasks: number } }>({
-    key: deliveriesQuery(hook).queryKey,
-    optimistic: (list: Delivery[] | undefined) => list,
-    send: (idempotencyKey) => api.post(`/api/v2/triggers/${enc(hook)}/deliveries/${enc(delivery)}/replay`, {}, { idempotencyKey }),
-  });
-}
-
-export interface Recovered {
-  found: number;
-  recovered: number;
-  duplicate?: number;
-  still_refused?: number;
-  more?: boolean;
-}
-/** Check again, under the current secret and preset, the refused calls of the last `since` hours still kept. */
-export function recoverHook(hook: string, since: number) {
-  return write<{ recover: Recovered }>({
-    key: [deliveriesQuery(hook).queryKey, hooksQuery.queryKey],
-    optimistic: (cur: unknown) => cur,
-    send: (idempotencyKey) => api.post(`/api/v2/triggers/${enc(hook)}/recover`, { since_hours: since }, { idempotencyKey }),
-  });
-}
-
 /** The address without its secret: what a row may copy. The secret is the last path part (backend/triggers.py). */
 export function stripSecret(url: string): string {
   return url.replace(/\/[^/]+$/, '');
 }
 
-// ---------------------------------------------------------------- outgoing endpoints (/v2/webhooks)
-
-export type Endpoint = Webhook;
-
-export const endpointsQuery = queryOptions({
-  queryKey: ['routines', 'endpoints'],
-  queryFn: async ({ signal }) => (await api.get<WebhookList>('/api/v2/webhooks?limit=200', { signal })).items,
+/** Who owns each page (GET /page-owners), for the face in a page's head. Library and Finance read it under this key too. */
+export const pageOwnersQuery = queryOptions({
+  queryKey: ['settings', 'page-owners'],
+  queryFn: async ({ signal }) => (await api.get<{ pages?: Record<string, { bot: string | null }> }>('/api/v2/page-owners', { signal })).pages ?? {},
   ...quiet,
 });
-
-/** The events an endpoint may send: the catalog less the ones only rules see. */
-export const eventTypesQuery = queryOptions({
-  queryKey: ['routines', 'event-types'],
-  queryFn: async ({ signal }) => (await api.get<EventTypeList>('/api/v2/event-types', { signal })).items.filter((t) => t.outbound !== false),
-  staleTime: 60 * 60_000,
-});
-
-type Shown = Webhook & { secret?: string; replayed?: boolean };
-const unsecret = ({ secret: _s, replayed: _r, ...h }: Shown): Webhook => h;
-
-/* A new endpoint's signing secret is in the answer once. It goes back to the caller only (the dialog's state): the
-   list keeps the endpoint without it. An agent's call files an approval instead. */
-export async function createEndpoint(body: WebhookCreate): Promise<{ id?: string; secret?: string; replayed?: boolean; approval?: boolean }> {
-  const r = await write<WebhookCreated & { webhook?: Shown }>({
-    key: endpointsQuery.queryKey,
-    optimistic: (list: Webhook[] | undefined) => list,
-    send: (idempotencyKey) => api.post<WebhookCreated & { webhook?: Shown }>('/api/v2/webhooks', body, { idempotencyKey }),
-    settle: (list: Webhook[] | undefined, made) => (made.webhook && list ? [...list.filter((h) => h.id !== made.webhook?.id), unsecret(made.webhook)] : list),
-  });
-  if (!r.webhook) return { approval: !!r.approval };
-  return { id: r.webhook.id, secret: r.webhook.secret, replayed: !!r.webhook.replayed };
-}
-
-export async function updateEndpoint(id: string, body: WebhookUpdate) {
-  const made = await write<{ webhook: Webhook }>({
-    key: endpointsQuery.queryKey,
-    optimistic: (list: Webhook[] | undefined) =>
-      list?.map((h) => (h.id === id ? { ...h, ...(body.name ? { name: body.name } : {}), ...(body.events ? { events: body.events } : {}) } : h)),
-    send: (idempotencyKey) => api.post<{ webhook: Webhook }>(`/api/v2/webhooks/${enc(id)}/update`, body, { idempotencyKey }),
-    settle: (list: Webhook[] | undefined, made) => list?.map((h) => (h.id === id ? made.webhook : h)),
-  });
-  // The same webhook on its Tools page: read it again there too. Loaded when needed: Library's pages lead back to
-  // this feature's, and a fixed import made a loop in which the page addresses were not yet set.
-  void import('@/features/library/exports').then(({ webhookQuery }) => queryClient.invalidateQueries({ queryKey: webhookQuery(id).queryKey }));
-  return made;
-}
 
 // ---------------------------------------------------------------- rules
 
@@ -543,7 +457,6 @@ export const orgRulesQuery = (status: 'active' | 'suggested') =>
   queryOptions({
     queryKey: ['rules', 'org', status],
     queryFn: async ({ signal }) => (await api.get<{ rules: OrgRule[] }>(`/api/v2/rules?status=${status}&limit=100`, { signal })).rules,
-    ...quiet,
   });
 
 export interface StageRules {
@@ -555,19 +468,16 @@ export const stageRulesQuery = (status: 'active' | 'suggested') =>
   queryOptions({
     queryKey: ['rules', 'stage', status],
     queryFn: ({ signal }) => api.get<StageRules>(`/api/v2/stage-rules${status === 'suggested' ? '?status=suggested' : ''}`, { signal }),
-    ...quiet,
   });
 
 export const ruleGroupsQuery = queryOptions({
   queryKey: ['rules', 'groups'],
   queryFn: ({ signal }) => api.get<RuleGroups>('/api/v2/rule-groups', { signal }),
-  ...quiet,
 });
 
 export const dueQuery = queryOptions({
   queryKey: ['rules', 'due'],
   queryFn: async ({ signal }) => (await api.get<{ due: DueDate[] }>('/api/v2/rules/due?next=3660d', { signal })).due,
-  ...quiet,
 });
 
 /** One due date in full: its history and what the viewer may do. */
@@ -575,7 +485,6 @@ export const dueOneQuery = (id: string) =>
   queryOptions({
     queryKey: ['rules', 'due', id],
     queryFn: ({ signal }) => api.get<DueDetail>(`/api/v2/rule-due/${enc(id)}`, { signal }),
-    ...quiet,
   });
 
 export interface DueFields {
@@ -627,7 +536,6 @@ export function removeDue(id: string) {
 export const ruleSourcesQuery = queryOptions({
   queryKey: ['rules', 'sources'],
   queryFn: async ({ signal }) => (await api.get<{ sources: RuleSource[] }>('/api/v2/rule-sources?limit=200', { signal })).sources,
-  ...quiet,
 });
 
 /** Files kinds no text is read from. */
@@ -639,7 +547,6 @@ export const docFilesQuery = queryOptions({
     const r = await api.get<{ files?: DocFile[] }>('/api/v2/files?limit=50', { signal });
     return (r.files ?? []).filter((f) => f.locator !== 'remote_link' && !f.url && !UNREAD.has(f.library_kind ?? '') && !f.archived);
   },
-  ...quiet,
 });
 
 /** Files found by title and text, beyond the recent ones: those with text to read. */
@@ -670,13 +577,11 @@ export const holdsQuery = queryOptions({
     const r = await api.get<{ holds: RuleHold[] } | RuleHold[]>('/api/v2/rule-holds', { signal });
     return Array.isArray(r) ? r : r.holds;
   },
-  ...quiet,
 });
 
 export const reachQuery = queryOptions({
   queryKey: ['rules', 'reach'],
   queryFn: ({ signal }) => api.get<Reach>('/api/v2/reach', { signal }),
-  ...quiet,
 });
 
 export const teamsQuery = queryOptions({
@@ -685,7 +590,6 @@ export const teamsQuery = queryOptions({
     const r = await api.get<Group[] | { groups: Group[] }>('/api/v2/groups', { signal });
     return Array.isArray(r) ? r : r.groups;
   },
-  ...quiet,
 });
 
 /** A company rule as the editor writes it. */
@@ -697,9 +601,6 @@ export interface OrgRuleFields {
   reviewer?: string | null;
   /** Who follows it: Everyone (`*`), or teams, agents and people (`group:<id>`, `bot:<id>`, `human:<id>`). */
   who: string[];
-  /** Internal: the teammates it is about, if any. */
-  with?: string[];
-  description?: string;
   /** External: who it is from (a From's id). */
   source_id?: string;
 }
@@ -711,9 +612,7 @@ export function partiesOf(s: Scope | null | undefined): string[] {
   const out = [...(s.groups ?? []).map((g) => `group:${sid(g)}`), ...(s.bots ?? []).map((b) => `bot:${sid(b)}`), ...(s.people ?? []).map((p) => `human:${sid(p)}`)];
   return out.length ? out : ['*'];
 }
-/** A With as parties: none is no one. */
-export const withOf = (s: Scope | null | undefined): string[] => (s ? partiesOf({ ...s, everyone: false, all_bots: false }).filter((p) => p !== '*') : []);
-/** Parties as the server's Who or With. */
+/** Parties as the server's Who. */
 export function scopeOf(parties: readonly string[]): ScopeBody {
   if (parties.includes('*')) return { everyone: true };
   const ids = (p: string) => parties.filter((x) => x.startsWith(p)).map((x) => x.slice(p.length));
@@ -727,20 +626,16 @@ const orgBody = (f: OrgRuleFields) => ({
   if_broken: f.if_broken,
   reviewer: f.if_broken === 'escalate' ? (f.reviewer ?? null) : null,
   who: someone(scopeOf(f.who)),
-  ...(f.kind === 'internal' && f.with?.length ? { with: someone(scopeOf(f.with)) } : {}),
-  ...(f.description ? { description: f.description } : {}),
   ...(f.kind === 'external' && f.source_id ? { source_id: f.source_id } : {}),
 });
 
-/** An edit sends every field the editor shows: the whole Who (every team, agent and person, not only the first), the
-   With, the description and the From. Under Ask first an empty reviewer is the manager (''). */
+/** An edit sends every field the editor shows: the whole Who (every team, agent and person, not only the first) and the
+   From. Under Ask first an empty reviewer is the manager (''). */
 const orgEdit = (f: OrgRuleFields) => ({
   text: f.text,
   if_broken: f.if_broken,
   ...(f.if_broken === 'escalate' ? { reviewer: f.reviewer ?? '' } : {}),
   who: someone(scopeOf(f.who)),
-  ...(f.kind === 'internal' ? { with: scopeOf(f.with ?? []) } : {}),
-  description: f.description ?? '',
   ...(f.kind === 'external' && f.source_id ? { source_id: f.source_id } : {}),
 });
 
@@ -759,7 +654,7 @@ export function addOrgRule(f: OrgRuleFields) {
 export function updateOrgRule(rule: Pick<OrgRule, 'id' | 'version'>, f: OrgRuleFields) {
   return write<OrgRule>({
     key: orgRulesQuery('active').queryKey,
-    optimistic: (list: OrgRule[] | undefined) => list?.map((r) => (r.id === rule.id ? { ...r, text: f.text, if_broken: f.if_broken, description: f.description ?? r.description } : r)),
+    optimistic: (list: OrgRule[] | undefined) => list?.map((r) => (r.id === rule.id ? { ...r, text: f.text, if_broken: f.if_broken } : r)),
     send: (idempotencyKey) => api.post<OrgRule>(`/api/v2/rules/${enc(rule.id)}`, { version: rule.version, ...orgEdit(f) }, { idempotencyKey }),
     settle: (list: OrgRule[] | undefined, made) => list?.map((r) => (r.id === rule.id ? made : r)),
   });
@@ -851,28 +746,24 @@ export function setReach(party: string, values: ReachValues) {
 export const watchesQuery = queryOptions({
   queryKey: ['listening', 'watches'],
   queryFn: async ({ signal }) => (await api.get<{ automations: Routine[] }>('/api/v2/automations?trigger=listening&limit=500', { signal })).automations,
-  ...quiet,
 });
 
 export const watchQuery = (id: string) =>
   queryOptions({
     queryKey: ['listening', 'watch', id],
     queryFn: ({ signal }) => api.get<Routine>(`/api/v2/automations/${enc(id)}`, { signal }),
-    ...quiet,
   });
 
 export const matchesQuery = (id: string) =>
   queryOptions({
     queryKey: ['listening', 'items', id],
     queryFn: async ({ signal }) => (await api.get<{ items: Match[] }>(`/api/v2/listening/items?automation=${enc(id)}&limit=100`, { signal })).items,
-    ...quiet,
   });
 
 export const sourcesQuery = (id: string) =>
   queryOptions({
     queryKey: ['listening', 'sources', id],
     queryFn: async ({ signal }) => (await api.get<{ sources: WatchSource[] }>(`/api/v2/listening/sources?automation=${enc(id)}`, { signal })).sources,
-    ...quiet,
   });
 
 /** A new watch, as the old app made one: off, no sources yet, ten a day, posting each kept match as an update. */

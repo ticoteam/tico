@@ -9,23 +9,23 @@ import { Field } from '@/kit/Field';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
-import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { press, ToolGlyph } from './parts';
-import { ConnectMailboxDialog, MailingAddressDialog, NewAddressDialog, RequestNumberDialog } from './ToolDialogs';
+import { ConnectMailboxDialog, MailingAddressDialog, NewAddressDialog, RequestNumberDialog, WebhookDialog } from './ToolDialogs';
 import { probeMcp, type LoginAdd, type McpProbe } from './queries';
 import { useAdmin } from './ToolShell';
 
-/* Add tool (tools.js addMenu; the old app's tools-api, tools-mcp and tools-website dialogs): an API, an MCP server
-   or a website. Secrets typed here are only sent: nothing typed comes back to the page. */
+/* Add tool (tools.js addMenu; the old app's tools-api, tools-mcp and tools-website dialogs): an API, an MCP server,
+   a website, an outgoing webhook, or mail. Secrets typed here are only sent: nothing typed comes back to the page. */
 
-export type Adding = 'api' | 'mcp' | 'website' | 'mailbox' | 'tico' | 'number' | 'address';
+export type Adding = 'api' | 'mcp' | 'website' | 'webhook' | 'mailbox' | 'tico' | 'number' | 'address';
 
 /** The mock's Add menu, in its order; each with the glyph its tool shows. */
 const ADD: Array<[Adding, string, string]> = [
   ['api', 'API', 'api'],
   ['mcp', 'MCP server', 'mcp'],
   ['website', 'Website', 'website'],
+  ['webhook', 'Webhook', 'webhook'],
   ['mailbox', 'Email', 'mailbox'],
   ['tico', 'Tico address', 'mailbox'],
   ['number', 'Phone number', 'number'],
@@ -54,6 +54,7 @@ export function AddItems({ onPick }: { onPick: (a: Adding) => void }) {
 export function AddDialog({ adding, onClose }: { adding: Adding; onClose: () => void }) {
   if (adding === 'api') return <AddApi onClose={onClose} />;
   if (adding === 'mcp') return <AddMcp onClose={onClose} />;
+  if (adding === 'webhook') return <WebhookDialog onClose={onClose} />;
   if (adding === 'mailbox') return <ConnectMailboxDialog onClose={onClose} />;
   if (adding === 'tico') return <NewAddressDialog onClose={onClose} />;
   if (adding === 'number') return <RequestNumberDialog onClose={onClose} />;
@@ -309,7 +310,6 @@ function useLogin() {
 
 function AddWebsite({ onClose }: { onClose: () => void }) {
   const [site, setSite] = useState('');
-  const [central, setCentral] = useState(false);
   const [login, setLogin, body] = useLogin();
   const [busy, go] = useGo(onClose);
   return (
@@ -326,7 +326,6 @@ function AddWebsite({ onClose }: { onClose: () => void }) {
           onGo={() =>
             void go('tools.addWebsiteWithLogin', {
               site: site.trim(),
-              central_only: central,
               ...body(),
             })
           }
@@ -335,7 +334,6 @@ function AddWebsite({ onClose }: { onClose: () => void }) {
     >
       <Field label="Site" value={site} onValueChange={setSite} placeholder="app.example.com" autoComplete="off" autoFocus />
       <LoginFields login={login} onChange={setLogin} />
-      <Switch label="Central only" checked={central} onCheckedChange={setCentral} />
     </Dialog>
   );
 }

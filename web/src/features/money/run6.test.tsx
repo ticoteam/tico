@@ -10,7 +10,7 @@ import { validateGrowthSearch } from './search';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
-/* Run 6 on Growth: the phone's Sources and Channels tables, and a count chart's axis. Made-up figures and names only. */
+/* Run 6 on Growth: the phone's Channels and Retention tables, and a count chart's axis. Made-up figures and names only. */
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
@@ -68,6 +68,17 @@ afterEach(() => {
 describe('Growth on a phone (run 6)', () => {
   beforeEach(() => {
     document.documentElement.dataset.layout = 'cards';
+  });
+
+  it('Retention drops Day 180, which would push the table sideways', async () => {
+    const win = { value: 0.5, n: 10, status: 'ok' };
+    serve({
+      '/growth/read': { ...READ, retention: [{ cohort: '2026-05', entered: 20, kept_d30: win, kept_d90: win, kept_d180: win }] },
+      '/growth/segments': { segments: [] },
+      '/page-owners': { pages: {} },
+    });
+    show('/company/growth?month=2026-10');
+    expect(heads(await screen.findByRole('table', { name: 'Retention' }))).toEqual(['First order', 'Customers', 'Day 30', 'Day 90']);
   });
 
   it('Channels shows Channel, New and CAC', async () => {

@@ -4,16 +4,13 @@ import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { BarChart } from '@/kit/Chart';
 import { Field } from '@/kit/Field';
-import { IconButton } from '@/kit/IconButton';
 import { Markdown } from '@/kit/Markdown';
-import { Menu, MenuItem } from '@/kit/Menu';
-import { Select } from '@/kit/Select';
+import { MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Table, Td, Th, Tr } from '@/kit/Table';
-import { toast } from '@/kit/Toast';
 import { fmtAge, fmtDate } from '@/lib';
 import { Dashboard, FiguresStrip, PageMore, Section, SidePanel, type Figure, type PageTab } from '@/pagekinds';
-import { Go, PanelLink, useDo, usdShort } from './parts';
+import { Go, PageOwner, PanelLink, useDo, usdShort } from './parts';
 import {
   listeningStatsQuery,
   marketBriefingQuery,
@@ -21,9 +18,7 @@ import {
   marketNoteQuery,
   marketSetupQuery,
   marketSpendQuery,
-  strategyQuery,
   valueChainQuery,
-  type CitableStrategy,
   type ListeningStats,
   type MarketAnswer,
   type MarketBriefing,
@@ -76,11 +71,9 @@ export function MarketTab({ head, search }: { head: Head; search: { panel?: stri
   // Never set up: nothing in the market, nothing sized and no briefing yet.
   const blank = count.data === 0 && !segs.length && !items.length;
   const none = <span className="none">None yet</span>;
-  // The mock's four figures, each kept with its empty line until the server has it, so the page keeps its shape.
+  // The mock's four figures. Reachable and Our share are left out until the server has numbers for them.
   const figures: Figure[] = [
     { label: 'Market', value: total != null ? usdShort(total) : none, sub: spend.data?.name ?? undefined, target: 'figure:market' },
-    { label: 'Reachable', value: none, target: 'figure:reachable' },
-    { label: 'Our share', value: none, target: 'figure:share' },
     { label: 'Buyer posts', value: daily.length ? sum(daily.at(-1)?.sources) : none, sub: daily.length ? 'today' : undefined, target: 'figure:posts' },
   ];
   const pending = (spend.isPending && brief.isPending) || (blank && owner && setup.isPending);
@@ -90,6 +83,7 @@ export function MarketTab({ head, search }: { head: Head; search: { panel?: stri
   return (
     <Dashboard
       {...head}
+      actions={<PageOwner page="strategy" />}
       more={
         <PageMore target="market:more">
           <MenuItem label="Definition" onSelect={() => void open.run({ panel: 'definition' })} />
@@ -124,17 +118,17 @@ export function MarketTab({ head, search }: { head: Head; search: { panel?: stri
                     <tr>
                       <Th>Organization</Th>
                       <Th>Sells</Th>
-                      <Th num>Figure</Th>
+                      <Th num>Yearly sales</Th>
                     </tr>
                   </thead>
                   <tbody>
                     {players.map((p, i) => {
-                      const fig = p.figures?.find((f) => f.value != null);
+                      const sales = p.figures?.find((f) => f.metric === 'revenue' && typeof f.value === 'number')?.value;
                       return (
                         <Tr key={`${p.entity_id ?? p.name}:${i}`} className={p.us ? 'is-us' : undefined} linked={!!p.entity_id} selected={kind === 'player' && p.entity_id === ref}>
                           <Td>{p.entity_id ? <PanelLink panel={`player:${p.entity_id}`}>{p.name}</PanelLink> : p.name}</Td>
                           <td className="dim">{p.sells}</td>
-                          <Td num>{typeof fig?.value === 'number' ? usdShort(fig.value) : (fig?.value ?? '')}</Td>
+                          <Td num>{typeof sales === 'number' ? usdShort(sales) : ''}</Td>
                         </Tr>
                       );
                     })}
@@ -222,22 +216,12 @@ function SegmentPanel({ seg, parent, year, owner, onClose }: { seg: MarketSegmen
   const overlaps = estimates.map((e) => e.overlaps).find(Boolean) ?? z?.overlaps;
   const spread = estimates.map((e) => e.spread).find(Boolean) ?? z?.spread;
   const growth = z?.growth_pct;
-  const [doing, setDoing] = useState<'research' | 'cite' | null>(null);
   return (
     <SidePanel
       title={seg.name}
       target={`segment:${seg.id}`}
       onClose={onClose}
       className="mkt-pnl"
-      actions={
-        owner && (
-          <Menu trigger={<IconButton icon="more" label="More" quiet />}>
-            <MenuItem label="Research this segment" onSelect={() => setDoing('research')} />
-            <MenuItem label="Cite in a bet" onSelect={() => setDoing('cite')} />
-          </Menu>
-        )
-      }
-      foot={doing && <SegmentAsk key={doing} seg={seg.id} what={doing} onDone={() => setDoing(null)} />}
     >
       <section className="rail-sec">
         <div className="mkt-pills">
@@ -280,47 +264,6 @@ function SegmentPanel({ seg, parent, year, owner, onClose }: { seg: MarketSegmen
         </section>
       )}
     </SidePanel>
-  );
-}
-
-/** The owner's two asks on a segment (market-spend.ts): the Librarian researches it, or a bet cites it. */
-function SegmentAsk({ seg, what, onDone }: { seg: string; what: 'research' | 'cite'; onDone: () => void }) {
-  const research = useDo('market.research');
-  const cite = useDo('market.cite');
-  const strategy = useQuery({ ...strategyQuery, enabled: what === 'cite' });
-  const [text, setText] = useState('');
-  const [bet, setBet] = useState<string | null>(null);
-  const bets = ((strategy.data as CitableStrategy | undefined)?.bets ?? []).filter((b) => b.status === 'active' && !(b.cites ?? []).includes(seg));
-  const go = async () => {
-    const ok = what === 'research' ? !!text.trim() && (await research.run({ segment: seg, instructions: text.trim() })) : !!bet && (await cite.run({ bet, segment: seg }));
-    if (!ok) return;
-    toast({ text: what === 'research' ? 'Asked the Librarian' : 'Cited it' });
-    onDone();
-  };
-  return (
-    <form
-      className="mkt-ask"
-      onSubmit={(e) => {
-        e.preventDefault();
-        void go();
-      }}
-    >
-      {what === 'research' ? (
-        <Field label="What to find" area value={text} onValueChange={setText} autoFocus placeholder="Each competitor's public pricing, with sources" />
-      ) : strategy.isSuccess && !bets.length ? (
-        <p className="mkt-p">No active bets</p>
-      ) : (
-        <Select label="Bet" options={bets.map((b) => ({ value: b.id, label: b.statement }))} value={bet} onValueChange={setBet} placeholder="Bet" />
-      )}
-      <span className="an-row">
-        <Button type="submit" variant="primary" busy={research.pending || cite.pending}>
-          {what === 'research' ? 'Start' : 'Cite'}
-        </Button>
-        <Button variant="quiet" onClick={onDone}>
-          Cancel
-        </Button>
-      </span>
-    </form>
   );
 }
 

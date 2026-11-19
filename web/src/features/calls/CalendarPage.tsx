@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 import type { CalendarOccurrence, Call } from '@/api/schema';
 import { Button } from '@/kit/Button';
-import { Checkbox } from '@/kit/Checkbox';
 import { Empty } from '@/kit/Empty';
+import { SettledSearch } from '@/kit/Field';
+import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Dialog } from '@/kit/Dialog';
@@ -33,7 +34,9 @@ import {
   isPast,
   joinOf,
   lengthWords,
+  hasSummary,
   markOf,
+  minIn,
   minutes,
   onDay,
   panelOf,
@@ -41,7 +44,6 @@ import {
   place,
   rangeOf,
   rangeWords,
-  shortRange,
   step,
   tip,
   toggled,
@@ -56,9 +58,9 @@ import { eventsQuery, findEventsQuery, liveCallsQuery, meetingsQuery, type Meeti
 import './calls.css';
 
 const HOUR = 56;
+// 3 days (s977) is planned, not drawn: its address still works, the switch leaves it out.
 const VIEW_WORDS: { value: CalView; label: string }[] = [
   { value: 'day', label: 'Day' },
-  { value: '3day', label: '3 days' },
   { value: 'week', label: 'Week' },
   { value: 'month', label: 'Month' },
   { value: 'list', label: 'List' },
@@ -68,7 +70,7 @@ const UNIT: Record<CalView, string> = { day: 'day', '3day': '3 days', week: 'wee
 /** The calendar's address with some of it changed: what every link on the page points at. */
 type At = (patch: CalendarSearch, drop?: 'panel') => CalendarSearch;
 
-/** Calendar: Day, 3 days, Week, Month and List. Meetings, due dates, routines' runs and time away; an event opens on the right. */
+/** Calendar: Day, Week, Month and List. Meetings, due dates, routines' runs and time away; an event opens on the right. */
 export function CalendarPage() {
   const search = calendarSearch(useSearch({ strict: false }) as Record<string, unknown>);
   const navigate = useNavigate();
@@ -91,6 +93,7 @@ export function CalendarPage() {
   const list = events.data?.occurrences ?? [];
   const open = panelOf(search.panel);
   const close = () => void navigate({ to: '/calendar', search: at({}, 'panel') });
+  const show = (v: CalView) => void navigate({ to: '/calendar', search: at({ view: v }) });
 
   const panel =
     open?.kind === 'event' ? (
@@ -99,19 +102,27 @@ export function CalendarPage() {
       <MeetingPanel id={open.id} onClose={close} />
     ) : undefined;
 
-  const find = <ListFind q={search.q ?? ''} onFind={(q) => void navigate({ to: '/calendar', search: at({ q: q || undefined }), replace: true })} />;
+  const find = view === 'list' && <ListFind q={search.q ?? ''} onFind={(q) => void navigate({ to: '/calendar', search: at({ q: q || undefined }), replace: true })} />;
+  const viewSwitch = <Segmented label="View" className="cal-seg" options={VIEW_WORDS} value={view} onValueChange={show} />;
+  const steps = view !== 'list' && (
+    <span className="cv-step">
+      <Link to="/calendar" search={at({ date: dayKey(step(view, day, -1)) })} className="ib" aria-label={`Previous ${UNIT[view]}`} title={`Previous ${UNIT[view]}`}>
+        <Icon name="chevron" className="flip" />
+      </Link>
+      <Link to="/calendar" search={at({ date: dayKey(step(view, day, 1)) })} className="ib" aria-label={`Next ${UNIT[view]}`} title={`Next ${UNIT[view]}`}>
+        <Icon name="chevron" />
+      </Link>
+    </span>
+  );
   const grid =
     view === 'month' ? (
       <MonthGrid days={range.days} weeks={range.weeks} month={day.getMonth()} list={list} now={now} today={today} at={at} />
     ) : view === 'list' ? (
-      <>
-        {/* a phone's head keeps two controls: the search sits under it */}
-        {cards && <div className="cl-find">{find}</div>}
-        <ListView list={list} now={now} today={today} at={at} search={search} />
-      </>
+      <ListView list={list} now={now} today={today} at={at} search={search} />
     ) : (
       <TimeGrid view={view} days={range.days} list={list} now={now} today={today} at={at} open={open?.kind === 'event' ? open.id : null} />
     );
+  const read = view === 'list' ? past : events;
 
   return (
     <>
@@ -120,118 +131,86 @@ export function CalendarPage() {
         path="/calendar"
         className="cal-page"
         after={
-          view === 'list' ? undefined : (
+          !cards && view !== 'list' ? (
             <>
               <span className="cv-range">{rangeWords(view, day)}</span>
-              <span className="cv-range-s">{shortRange(view, day)}</span>
-              <span className="cv-step">
-                <Link
-                  to="/calendar"
-                  search={at({ date: dayKey(step(view, day, -1)) })}
-                  className="ib"
-                  aria-label={`Previous ${UNIT[view]}`}
-                  title={`Previous ${UNIT[view]}`}
-                >
-                  <Icon name="chevron" className="flip" />
-                </Link>
-                <Link
-                  to="/calendar"
-                  search={at({ date: dayKey(step(view, day, 1)) })}
-                  className="ib"
-                  aria-label={`Next ${UNIT[view]}`}
-                  title={`Next ${UNIT[view]}`}
-                >
-                  <Icon name="chevron" />
-                </Link>
-              </span>
+              {steps}
             </>
+          ) : undefined
+        }
+        // A phone (phone-calendar): the views, then the range and its steps, under the head; New event is the filled one.
+        search={
+          cards ? (
+            <div className="cv-phone">
+              <div className="cv-views">{viewSwitch}</div>
+              {view === 'list' ? (
+                find
+              ) : (
+                <div className="cv-rangerow">
+                  <b>{rangeWords(view, day)}</b>
+                  <span className="grow" />
+                  {steps}
+                </div>
+              )}
+            </div>
+          ) : (
+            find || undefined
           )
         }
         actions={
-          <>
-            {view === 'list' && !cards && find}
-            {view === 'list' && <ListFilter search={search} at={at} />}
-            <Segmented
-              label="View"
-              className="cal-seg"
-              options={VIEW_WORDS}
-              value={view}
-              onValueChange={(v) => void navigate({ to: '/calendar', search: at({ view: v }) })}
-            />
-            {(!cards || view === 'list') && <IconButton icon="plus" label="New event" onClick={() => setAdding(true)} data-phone />}
-            {!cards && <StartCall />}
-          </>
+          cards ? (
+            <Button variant="primary" onClick={() => setAdding(true)} data-phone>
+              New event
+            </Button>
+          ) : (
+            <>
+              {view === 'list' && <ListFilter search={search} at={at} />}
+              {viewSwitch}
+              <IconButton icon="plus" label="New event" onClick={() => setAdding(true)} />
+              <StartCall open={calling} onOpenChange={setCalling} />
+            </>
+          )
         }
-        // A phone's head keeps two controls and the ⋯: Previous and Next where the view steps through dates (New event
-        // then moves into the ⋯), New event in List. The view switch, Filter and Start call are always in the ⋯.
         more={
-          view === 'list' || cards ? (
-            <MeetingMenu>
-              {cards && (
-                <>
-                  <MenuSub label="View" icon="calendar">
-                    {VIEW_WORDS.map((o) => (
-                      <MenuItem key={o.value} label={o.label} on={o.value === view} onSelect={() => void navigate({ to: '/calendar', search: at({ view: o.value }) })} />
-                    ))}
+          <MeetingMenu>
+            {cards && (
+              <>
+                {view === 'list' && (
+                  <MenuSub label="Filter" icon="filter">
+                    <FilterItems search={search} at={at} />
                   </MenuSub>
-                  {view === 'list' && (
-                    <MenuSub label="Filter" icon="filter">
-                      <FilterItems search={search} at={at} />
-                    </MenuSub>
-                  )}
-                  {view !== 'list' && <MenuItem label="New event" icon="plus" onSelect={() => setAdding(true)} />}
-                  <MenuItem label="Start call" icon="call" onSelect={() => setCalling(true)} />
-                  <MenuRule />
-                </>
-              )}
-            </MeetingMenu>
-          ) : undefined
+                )}
+                <MenuItem label="Start call" icon="call" onSelect={() => setCalling(true)} />
+                <MenuRule />
+              </>
+            )}
+          </MeetingMenu>
         }
         // Until the range is read the grid would say "Nothing this week": the kind's bars instead.
-        state={view === 'list' ? (past.isError ? 'fault' : undefined) : events.isError ? 'fault' : events.isPending ? 'loading' : undefined}
-        onRetry={() => void (view === 'list' ? past.refetch() : events.refetch())}
+        state={read.isError ? 'fault' : read.isPending ? 'loading' : undefined}
+        onRetry={() => void read.refetch()}
         grid={grid}
-        agenda={view === 'week' || view === 'month' ? <Agenda days={range.days} list={list} now={now} today={today} at={at} /> : undefined}
+        agenda={
+          view === 'week' ? (
+            <WeekStrip days={range.days} day={day} list={list} now={now} today={today} at={at} />
+          ) : view === 'month' ? (
+            <Agenda days={range.days} list={list} now={now} today={today} at={at} />
+          ) : undefined
+        }
         panel={panel}
       />
       <EventDialog open={adding} onOpenChange={setAdding} />
-      {cards && <StartCallDialog open={calling} onOpenChange={setCalling} />}
+      {cards && <StartCall open={calling} onOpenChange={setCalling} sheet />}
     </>
   );
 }
 
 /* ---------------------------------------------------------------- List's search and filter */
 
-/** Find a meeting: the words go in the address a moment after the last key. */
+/** Find a meeting: a search icon until pressed (a phone shows the field); the words go in the address a moment after
+    the last key. */
 function ListFind({ q, onFind }: { q: string; onFind: (q: string) => void }) {
-  const [text, setText] = useState(q);
-  const [seen, setSeen] = useState(q);
-  const wait = useRef<ReturnType<typeof setTimeout>>(undefined);
-  // The address changed from elsewhere (Back, Tico): show its words.
-  if (q !== seen) {
-    setSeen(q);
-    if (q !== text.trim()) setText(q);
-  }
-  useEffect(() => () => clearTimeout(wait.current), []);
-  return (
-    <label className="search">
-      <span>
-        <Icon name="search" />
-      </span>
-      <input
-        type="search"
-        placeholder="Find a meeting"
-        aria-label="Find a meeting"
-        value={text}
-        onChange={(e) => {
-          const v = e.target.value;
-          setText(v);
-          clearTimeout(wait.current);
-          wait.current = setTimeout(() => onFind(v.trim()), 300);
-        }}
-      />
-    </label>
-  );
+  return <SettledSearch label="Find a meeting" placeholder="Find a meeting" value={q} onSettle={onFind} wait={300} button="Find a meeting" />;
 }
 
 const HAS_WORDS: Record<(typeof HAS)[number], string> = { summary: 'Has summary', recording: 'Has recording', tasks: 'Has tasks' };
@@ -272,68 +251,51 @@ function FilterItems({ search, at }: { search: CalendarSearch; at: At }) {
   );
 }
 
-/* ---------------------------------------------------------------- the head's Start call */
+/* ---------------------------------------------------------------- Start call: who to call */
 
-function StartCall() {
-  const [open, setOpen] = useState(false);
+/** The head's Start call (t-cal-pick): a picker under the filled button; on a phone the same pick as a sheet, opened
+    from the ⋯. Nobody picked is a call with Tico. */
+function StartCall({ open, onOpenChange, sheet }: { open: boolean; onOpenChange: (open: boolean) => void; sheet?: boolean }) {
   const [who, setWho] = useState<string[]>([]);
+  const set = (o: boolean) => {
+    onOpenChange(o);
+    if (!o) setWho([]);
+  };
+  const pick = <PeoplePick value={who} onChange={setWho} tico autoFocus />;
+  const go = (
+    <Button
+      variant="primary"
+      className={sheet ? undefined : 'pop-go'}
+      onClick={() => {
+        set(false);
+        void press('calls.start', { with: who });
+      }}
+    >
+      {who.length ? 'Start call' : 'Call Tico'}
+    </Button>
+  );
+  if (sheet)
+    return (
+      <Dialog open={open} onOpenChange={set} title="Start call" actions={go}>
+        {open && pick}
+      </Dialog>
+    );
   return (
     <Popover
       className="pop call-pick"
       label="Start call"
       open={open}
-      onOpenChange={(o) => {
-        setOpen(o);
-        if (!o) setWho([]);
-      }}
+      onOpenChange={set}
       align="end"
       trigger={
-        <Button variant="primary" icon="call" aria-haspopup="dialog" data-phone>
+        <Button variant="primary" icon="call" aria-haspopup="dialog">
           Start call
         </Button>
       }
     >
-      <PeoplePick value={who} onChange={setWho} tico autoFocus />
-      <Button
-        variant="primary"
-        className="pop-go"
-        onClick={() => {
-          setOpen(false);
-          void press('calls.start', { with: who });
-        }}
-      >
-        {who.length ? 'Start call' : 'Call Tico'}
-      </Button>
+      {pick}
+      {go}
     </Popover>
-  );
-}
-
-/** Start call on a phone: the head has no room for the button, so the ⋯ opens the same pick as a dialog. */
-function StartCallDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
-  const [who, setWho] = useState<string[]>([]);
-  const close = () => {
-    onOpenChange(false);
-    setWho([]);
-  };
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => (o ? onOpenChange(true) : close())}
-      title="Start call"
-      actions={
-        <Button
-          variant="primary"
-          onClick={() => {
-            close();
-            void press('calls.start', { with: who });
-          }}
-        >
-          {who.length ? 'Start call' : 'Call Tico'}
-        </Button>
-      }
-    >
-      {open && <PeoplePick value={who} onChange={setWho} tico autoFocus />}
-    </Dialog>
   );
 }
 
@@ -553,6 +515,47 @@ function MonthGrid({ days, weeks, month, list, now, today, at }: GridProps & { d
 
 /* ---------------------------------------------------------------- the phone's agenda (Week and Month) */
 
+/** A phone's Week (phone-calendar): the days as a strip, a mark for each thing on them, and the chosen day under it. */
+function WeekStrip({ days, day, list, now, today, at }: GridProps & { days: Date[]; day: Date }) {
+  const evs = onDay(list, day);
+  return (
+    <>
+      <div className="cv-strip">
+        {days.map((d) => (
+          <Link
+            key={d.getTime()}
+            to="/calendar"
+            search={at({ date: dayKey(d) })}
+            className={['cv-sd', d.getTime() === today.getTime() && 'is-today', d.getTime() === day.getTime() && 'is-on'].filter(Boolean).join(' ')}
+            aria-label={dl(d)}
+          >
+            <span>{DOW[d.getDay()]}</span>
+            <b>{d.getDate()}</b>
+            <span className="pips">
+              {onDay(list, d)
+                .map((p) => markOf(p.o))
+                .sort((x, y) => 'mdr'.indexOf(x) - 'mdr'.indexOf(y))
+                .slice(0, 3)
+                .map((k, i) => (
+                  <i key={i} className={`km km-${k}`} />
+                ))}
+            </span>
+          </Link>
+        ))}
+      </div>
+      {evs.length ? (
+        <div className="page-body cl-body">
+          {evs.map((p) => (
+            <EventRow key={p.o.occurrence_id} o={p.o} now={now} at={at} />
+          ))}
+        </div>
+      ) : (
+        <Empty title={`Nothing on ${dl(day)}`} />
+      )}
+    </>
+  );
+}
+
 function Agenda({ days, list, now, today, at }: GridProps & { days: Date[] }) {
   const groups = days.map((d) => ({ d, evs: onDay(list, d) })).filter((g) => g.evs.length);
   if (!groups.length) return <Empty title="Nothing on the calendar" />;
@@ -573,13 +576,7 @@ function Agenda({ days, list, now, today, at }: GridProps & { days: Date[] }) {
 /* ---------------------------------------------------------------- List: what Meetings was */
 
 const kept = (m: Meeting, h: (typeof HAS)[number]) =>
-  h === 'summary'
-    ? Array.isArray(m.outcome?.summary)
-      ? m.outcome.summary.length > 0
-      : !!m.outcome?.summary
-    : h === 'recording'
-      ? !!m.media_url
-      : (m.outcome?.tasks?.length ?? 0) > 0;
+  h === 'summary' ? hasSummary(m.outcome?.summary) : h === 'recording' ? !!m.media_url : (m.outcome?.tasks?.length ?? 0) > 0;
 
 const REVIEW_WORDS: Record<Review, string> = { live: 'Past', pending: 'Pending', dismissed: 'Dismissed', shared: 'Shared with me' };
 
@@ -593,8 +590,6 @@ function ListView({ list, now, today, at, search }: GridProps & { search: Calend
   const past = useQuery(meetingsQuery(search.review ?? 'live', q));
   const found = useQuery({ ...findEventsQuery(q), enabled: !!q });
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
-  // Pending rows ticked for Share N / Dismiss N; only rows still shown count.
-  const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set());
   const fold = (k: string) => {
     const next = new Set(folded);
     if (!next.delete(k)) next.add(k);
@@ -609,17 +604,6 @@ function ListView({ list, now, today, at, search }: GridProps & { search: Calend
     ? []
     : (live.data?.calls ?? []).filter((c) => c.state === 'live' && !booked.has(c.id) && (c.title || 'Call').toLowerCase().includes(words));
   const done = (past.data?.meetings ?? []).filter((m) => has.every((h) => kept(m, h)));
-  const pending = search.review === 'pending';
-  const picked = pending ? done.filter((m) => ticked.has(m.id)).map((m) => m.id) : [];
-  const tick = (id: string, on: boolean) => {
-    const next = new Set(ticked);
-    if (on) next.add(id);
-    else next.delete(id);
-    setTicked(next);
-  };
-  const bulk = async (action: 'approve' | 'dismiss') => {
-    if (await press('calls.reviewMany', { meetings: picked, action })) setTicked(new Set());
-  };
   const comingDays = groupBy(coming, (o) => dayKey(new Date(o.start)));
   const pastDays = groupBy(done, (m) => dayKey(new Date(m.started ?? m.created ?? 0)));
 
@@ -649,39 +633,20 @@ function ListView({ list, now, today, at, search }: GridProps & { search: Calend
         <ListSec name="Coming" count={coming.length} open={!folded.has('coming')} onToggle={() => fold('coming')}>
           {comingDays.map(([key, evs]) => (
             <div key={key}>
-              <DayHead d={parseDay(key) as Date} today={today} />
-              {evs.map((o) => (
-                <EventRow key={o.occurrence_id} o={o} now={now} at={at} />
-              ))}
+              <DayHead d={parseDay(key) as Date} today={today} open={!folded.has(`coming:${key}`)} onToggle={() => fold(`coming:${key}`)} />
+              {!folded.has(`coming:${key}`) &&
+                evs.map((o) => <EventRow key={o.occurrence_id} o={o} now={now} at={at} />)}
             </div>
           ))}
         </ListSec>
       )}
       {done.length > 0 && (
-        <ListSec
-          name={REVIEW_WORDS[search.review ?? 'live']}
-          count={done.length}
-          open={!folded.has('past')}
-          onToggle={() => fold('past')}
-          bulk={
-            picked.length > 0 && (
-              <span className="bulk">
-                <b>{`${picked.length} checked`}</b>
-                <Button onClick={() => void bulk('dismiss')}>{`Dismiss ${picked.length}`}</Button>
-                <Button onClick={() => void bulk('approve')}>{`Share ${picked.length}`}</Button>
-                <Button variant="quiet" onClick={() => setTicked(new Set())}>
-                  Clear
-                </Button>
-              </span>
-            )
-          }
-        >
+        <ListSec name={REVIEW_WORDS[search.review ?? 'live']} count={done.length} open={!folded.has('past')} onToggle={() => fold('past')}>
           {pastDays.map(([key, ms]) => (
             <div key={key}>
-              <DayHead d={parseDay(key) as Date} today={today} />
-              {ms.map((m) => (
-                <PastRow key={m.id} m={m} at={at} pick={pending ? { on: ticked.has(m.id), set: (on) => tick(m.id, on) } : undefined} />
-              ))}
+              <DayHead d={parseDay(key) as Date} today={today} open={!folded.has(`past:${key}`)} onToggle={() => fold(`past:${key}`)} />
+              {!folded.has(`past:${key}`) &&
+                ms.map((m) => <PastRow key={m.id} m={m} at={at} />)}
             </div>
           ))}
         </ListSec>
@@ -701,42 +666,26 @@ function groupBy<T>(xs: readonly T[], key: (x: T) => string): [string, T[]][] {
   return [...m];
 }
 
-function ListSec({
-  name,
-  count,
-  open,
-  onToggle,
-  bulk,
-  children,
-}: {
-  name: string;
-  count: number;
-  open: boolean;
-  onToggle: () => void;
-  /** Pending's Share N / Dismiss N, while rows are ticked. */
-  bulk?: ReactNode;
-  children: ReactNode;
-}) {
+function ListSec({ name, count, open, onToggle, children }: { name: string; count: number; open: boolean; onToggle: () => void; children: ReactNode }) {
   return (
     <section className={open ? 'cl-sec' : 'cl-sec is-folded'}>
       <header className="cl-sec-head">
         <h2 className="sec-name">
           <FoldButton name={name} count={count} open={open} onToggle={onToggle} />
         </h2>
-        {bulk}
       </header>
       {open && children}
     </section>
   );
 }
 
-function DayHead({ d, today }: { d: Date; today: Date }) {
+/** A day: its name ("Today", "Wed, Nov 18"), the date beside a near one; in List the name folds the day. */
+function DayHead({ d, today, open, onToggle }: { d: Date; today: Date; open?: boolean; onToggle?: () => void }) {
   const name = dayName(d, today);
-  const near = name === 'Today' || name === 'Tomorrow' || name === 'Yesterday';
   return (
     <div className="cl-day">
-      <h3 className="sec-name is-2">{dl(d)}</h3>
-      {near && <span className="stage-n">{name}</span>}
+      <h3 className="sec-name is-2">{onToggle ? <FoldButton name={name} open={!!open} onToggle={onToggle} /> : name}</h3>
+      {name !== dl(d) && <span className="stage-n">{dl(d)}</span>}
     </div>
   );
 }
@@ -758,9 +707,7 @@ function EventRow({ o, now, at }: { o: CalendarOccurrence; now: Date; at: At }) 
       </Link>
       <span className="row-pills">{way && 'url' in way && /meet\.google\.com/.test(way.url) ? <span className="pill">Google Meet</span> : null}</span>
       <span className="cl-kept" />
-      <span className="row-age cl-len">
-        {live ? `${Math.max(0, Math.round((now.getTime() - s.getTime()) / 60_000))} min in` : len > 0 ? lengthWords(len) : ''}
-      </span>
+      <span className="row-age cl-len">{live ? minIn(s, now) : len > 0 ? lengthWords(len) : ''}</span>
       <span className="er-who">
         <Who refs={refsOf(o.attendees)} />
       </span>
@@ -790,7 +737,7 @@ function LiveCallRow({ call, now }: { call: Call; now: Date }) {
       </Link>
       <span className="row-pills" />
       <span className="cl-kept" />
-      <span className="row-age cl-len">{`${Math.max(0, Math.round((now.getTime() - s.getTime()) / 60_000))} min in`}</span>
+      <span className="row-age cl-len">{minIn(s, now)}</span>
       <span className="er-who">
         <Who refs={others} />
       </span>
@@ -803,17 +750,17 @@ function LiveCallRow({ call, now }: { call: Call; now: Date }) {
   );
 }
 
-/** A meeting that is over. In Pending it has a box to tick for Share N / Dismiss N, and a ⋯ to share or dismiss it alone. */
-function PastRow({ m, at, pick }: { m: Meeting; at: At; pick?: { on: boolean; set: (on: boolean) => void } }) {
+/** A meeting that is over. One that waits on you (Pending: share or dismiss it, in its panel) has the Flow mark. */
+function PastRow({ m, at }: { m: Meeting; at: At }) {
   const s = new Date(m.started ?? m.created ?? 0);
-  const summary = Array.isArray(m.outcome?.summary) ? m.outcome.summary.length > 0 : !!m.outcome?.summary;
+  const summary = hasSummary(m.outcome?.summary);
   const tasks = m.outcome?.tasks?.length ?? 0;
   const who = (m.participants ?? []).map((p) => p.person_id ?? p.email ?? p.name ?? '').filter(Boolean);
   return (
     <div className={m.review_state === 'pending' ? 'row cl-row is-past is-unread' : 'row cl-row is-past'} title={m.title}>
       <span className="er-time">{clock(minutes(s))}</span>
       <span className="cl-mark">
-        {pick ? <Checkbox label={<span className="cl-hide">{`Check ${m.title}`}</span>} checked={pick.on} onCheckedChange={pick.set} /> : <Icon name="call" />}
+        <Icon name="call" />
       </span>
       <Link to="/calendar" search={at({ view: 'list', panel: `meeting:${m.id}` })} className="row-title" data-target={`meeting:${m.id}`}>
         {m.title}
@@ -835,14 +782,7 @@ function PastRow({ m, at, pick }: { m: Meeting; at: At; pick?: { on: boolean; se
       <span className="er-who">
         <Who refs={who} />
       </span>
-      <span className="cl-act">
-        {pick && (
-          <Menu trigger={<IconButton icon="more" label={`More for ${m.title}`} size="sm" quiet />}>
-            <MenuItem label="Share & send" onSelect={() => void press('calls.review', { meeting: m.id, action: 'approve', send: 'auto' })} />
-            <MenuItem label="Dismiss" onSelect={() => void press('calls.review', { meeting: m.id, action: 'dismiss' })} />
-          </Menu>
-        )}
-      </span>
+      <span className="cl-act">{m.review_state === 'pending' && <FlowMark />}</span>
     </div>
   );
 }

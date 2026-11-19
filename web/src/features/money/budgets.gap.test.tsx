@@ -8,7 +8,7 @@ import { bind } from '@/actions/bind';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { FinancePage } from './Finance';
-import { addMonths, budgetDay, monthName, monthSpan, pnlRange } from './model';
+import { addMonths, budgetDay, monthSpan, pnlRange } from './model';
 import { budgetsKey, pnlQuery, type Budget, type Pnl } from './queries';
 import { validateFinanceSearch } from './search';
 
@@ -158,59 +158,58 @@ describe('Finance tabs @s398 @s402', () => {
 describe('Budgets @s404 @s462 @s463', () => {
   const access = (url: string) => (url.endsWith('/finance/access') ? ok(OWNER) : null);
 
-  it('steps to another month and reads its budgets; search keeps the matches @s404', async () => {
-    serve((url) => access(url) ?? (url.includes('/finance/budgets') ? ok({ budgets: [BUDGET('b1', 'Tools'), BUDGET('b2', 'Ads')] }) : ok({})));
+  it('Month, Quarter and Year: a quarter reads each budget against the quarter that holds today @s404', async () => {
+    serve(
+      (url) =>
+        access(url) ??
+        (url.includes('budget_vs_actual')
+          ? ok({
+              columns: [
+                { start: '2000-01-01', end: '2000-03-31' },
+                { start: `${ym}-01`, end: monthSpan(ym).end },
+              ],
+              budgets: [{ id: 'b1', budget: [1, 90000], actual: [1, 45000] }],
+            })
+          : url.includes('/finance/budgets')
+            ? ok({ budgets: [BUDGET('b1', 'Tools')] })
+            : ok({})),
+    );
     const router = show('/company/finance?tab=budgets');
     expect(await screen.findByRole('link', { name: 'Tools' })).toBeTruthy();
-    fireEvent.change(screen.getByLabelText('Search budgets'), { target: { value: 'ads' } });
-    await waitFor(() => expect(screen.queryByRole('link', { name: 'Tools' })).toBeNull());
-    expect(screen.getByRole('link', { name: 'Ads' })).toBeTruthy();
-
-    const earlier = addMonths(ym, -1);
-    fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
-    await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: 'budgets', month: earlier }));
-    expect(await screen.findByText(monthName(earlier))).toBeTruthy();
-    await waitFor(() => expect(gets.some((u) => u.includes(`/finance/budgets?at=${earlier}-01`))).toBe(true));
+    expect(screen.queryByRole('button', { name: 'Earlier' })).toBeNull();
+    expect(screen.queryByLabelText('Search budgets')).toBeNull();
+    expect(screen.queryByRole('columnheader', { name: 'Left' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Quarter' }));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: 'budgets', period: 'quarter' }));
+    const row = (await screen.findByRole('link', { name: 'Tools' })).closest('tr')!;
+    await waitFor(() => expect(within(row).getByText('$900')).toBeTruthy());
+    expect(within(row).getByText('$450')).toBeTruthy();
+    expect(gets.some((u) => u.includes('budget_vs_actual') && u.includes('period=quarter') && u.includes(`start=${addMonths(ym, -2)}-01`))).toBe(true);
   });
 
-  it('a new budget sits under the line budget, for a teammate and vendor, with its warning and month @s462', async () => {
-    serve((url) => access(url) ?? (url.includes('/finance/budgets') ? ok({ budgets: [BUDGET('b_ads', 'Ads')] }) : ok({})));
-    queryClient.setQueryData(pnlQuery({ ...monthSpan(ym), period: 'month', basis: 'accrual' }).queryKey, PNL([ROW('acc_ads', 'Ads')]));
+  it('a budget for a teammate and a vendor sits under the line budget, with its warning and month; Tico may not add one @s462', async () => {
+    serve((url) => access(url) ?? ok({}));
     show('/company/finance?tab=budgets');
-    fireEvent.click(await screen.findByRole('button', { name: 'New budget' }));
-    const panel = await screen.findByRole('complementary', { name: 'New budget' });
-    await pick(within(panel).getByRole('combobox', { name: 'Line' }), /^Ads$/);
-    expect(within(panel).getByRole('combobox', { name: 'Under' }).textContent).toContain('Ads');
-    await pick(within(panel).getByRole('combobox', { name: 'Teammate' }), /^lee$/);
-    fireEvent.change(within(panel).getByRole('textbox', { name: 'Vendor' }), { target: { value: 'Acme' } });
-    expect((within(panel).getByRole('textbox', { name: 'Name' }) as HTMLInputElement).value).toBe('lee');
-    fireEvent.change(within(panel).getByRole('textbox', { name: 'Amount a month' }), { target: { value: '200' } });
-    fireEvent.change(within(panel).getByRole('textbox', { name: 'Warn at' }), { target: { value: '90' } });
     const next = addMonths(ym, 1);
-    await pick(within(panel).getByRole('combobox', { name: 'From' }), new RegExp(`^${monthName(next)}$`));
-    fireEvent.click(within(panel).getByRole('button', { name: 'Add budget' }));
-    await waitFor(() =>
-      expect(posted).toEqual([
-        {
-          kind: 'budget_create',
-          payload: {
-            name: 'lee',
-            period: 'month',
-            account_id: 'acc_ads',
-            amount: 20000,
-            effective_from: `${next}-01`,
-            parent_id: 'b_ads',
-            teammate: 'human:lee',
-            vendor: 'Acme',
-            warn_pct: 90,
-          },
+    const input = { name: 'lee', line: 'acc_ads', amount: 200, under: 'b_ads', teammate: 'human:lee', vendor: 'Acme', warn: 90, period: 'month', from: next } as const;
+    expect(await run('budget.addRow', input, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(await run('budget.addRow', input, { via: 'click' })).toMatchObject({ ok: true });
+    expect(posted).toEqual([
+      {
+        kind: 'budget_create',
+        payload: {
+          name: 'lee',
+          period: 'month',
+          account_id: 'acc_ads',
+          amount: 20000,
+          effective_from: `${next}-01`,
+          parent_id: 'b_ads',
+          teammate: 'human:lee',
+          vendor: 'Acme',
+          warn_pct: 90,
         },
-      ]),
-    );
-    expect(await run('budget.addRow', { name: 'Ads', line: 'acc_ads', amount: 10, under: 'b_ads', vendor: 'Acme' }, { via: 'tico' })).toMatchObject({
-      ok: false,
-      error: 'not_allowed',
-    });
+      },
+    ]);
   });
 
   it('a P&L line with a budget adds a vendor budget under it; one without adds its line budget @s463', async () => {

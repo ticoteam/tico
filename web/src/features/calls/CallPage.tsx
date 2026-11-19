@@ -129,7 +129,7 @@ export function CallPage({ room }: CallPageProps) {
       {head}
       {ended ? <Ended room={room} small={small} meeting={c?.meeting_id} /> : <Stage room={room} c={c} s={s} phase={phase} isTico={isTico} row={(cards || small) && !isTico} small={small} />}
       {(cards || small) && c && !ended && <CallSide room={room} />}
-      {!ended && <Controls room={room} c={c} s={s} phase={phase} onBack={cards || small ? undefined : back} />}
+      {!ended && <Controls room={room} c={c} s={s} phase={phase} isTico={isTico} onBack={cards || small ? undefined : back} />}
     </main>
   );
 }
@@ -363,7 +363,7 @@ function captionOf(c: Call | undefined): { who: string; text: string } | null {
   return b?.caption ? { who: `bot:${b.slug}`, text: b.caption } : null;
 }
 
-function Controls({ room, c, s, phase, onBack }: { room: string; c: Call | undefined; s: CallState; phase: Phase; onBack?: () => void }) {
+function Controls({ room, c, s, phase, isTico, onBack }: { room: string; c: Call | undefined; s: CallState; phase: Phase; isTico: boolean; onBack?: () => void }) {
   const me = useMe();
   const on = phase === 'live' || phase === 'reconnecting';
   const meTalks = phase === 'live' && !!s.me && !s.muted && s.speaking.includes(s.me);
@@ -419,7 +419,7 @@ function Controls({ room, c, s, phase, onBack }: { room: string; c: Call | undef
       <span className="grow" />
       {onBack && (
         <Button className="cw-back" icon="tobar" onClick={onBack}>
-          Minimize
+          {isTico ? 'Back to Tico' : 'Back to bar'}
         </Button>
       )}
       <Button variant="primary" className="cc-leave" onClick={() => void press('calls.leave', {})}>

@@ -3,15 +3,14 @@ import { useState, type ReactNode } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
-import { IconButton } from '@/kit/IconButton';
-import { Menu, MenuItem } from '@/kit/Menu';
-import { pipelinesQuery, type Pipeline } from '@/features/tasks/exports';
-import { FilterRow, List, PageMore, Section, type PageTab } from '@/pagekinds';
-import { DUE_STATUSES, hasWho, ROUTINES, RULES, type RuleTab } from './actions';
+import { MenuItem } from '@/kit/Menu';
+import { pipelinesQuery, type Pipeline } from '@/features/tasks/routing';
+import { List, PageMore, Section, type PageTab } from '@/pagekinds';
+import { hasWho, ROUTINES, RULES, type RuleTab } from './actions';
 import { CompanyRules, holdsOf, OrgRuleRow, partiesOf, PartyPick } from './CompanyRules';
-import { Find, press, RemoveItem, RuleRow, useConfirmRemove, useName, Verb } from './parts';
+import { Find, press, RemoveItem, Rows, RuleRow, useConfirmRemove, useName } from './parts';
 import { ReadDocument } from './ReadDocument';
-import { dueQuery, holdsQuery, orgRulesQuery, routinesQuery, ruleGroupsQuery, ruleSourcesQuery, stageRulesQuery, teamsQuery } from './queries';
+import { dueQuery, holdsQuery, orgRulesQuery, routinesQuery, ruleGroupsQuery, stageRulesQuery, teamsQuery } from './queries';
 import { RulePanel } from './RulePanel';
 import { runnerOf } from './RoutinesPage';
 import type { DueDate, Group, OrgRule, Routine, StageRule } from './types';
@@ -30,13 +29,8 @@ export interface RulesSearch {
   who?: string;
   /** Any tab: the words searched for. */
   q?: string;
-  /** Outside: one From's id. */
-  from?: string;
-  /** Due: late, soon or later. */
-  status?: (typeof DUE_STATUSES)[number];
 }
 
-const DUE_WORDS: Record<(typeof DUE_STATUSES)[number], string> = { overdue: 'Late', due_soon: 'Due soon', upcoming: 'Later' };
 /** Every word searched for is in the text, in any order. */
 export const hasWords = (text: string, q: string | undefined) => !q || q.toLowerCase().split(/\s+/).every((w) => text.toLowerCase().includes(w));
 
@@ -71,47 +65,41 @@ function grouped<T>(list: T[], key: (x: T) => string, first?: string): [string, 
   return [...m].filter(([, xs]) => xs.length);
 }
 
+type Confirm = (what: string, go: () => void) => void;
+interface TabProps {
+  search: RulesSearch;
+  confirm: Confirm;
+  /** The page's "Remove …?" dialog. */
+  asked: ReactNode;
+}
+
+/** Each tab is its own small page reading only its own data. */
+const TABS: Record<RuleTab, (p: TabProps) => ReactNode> = {
+  '': CompanyTab,
+  stages: StagesTab,
+  'built-in': BuiltInTab,
+  outside: OutsideTab,
+  due: DueTab,
+  wakes: AutoTab,
+  'on-tasks': AutoTab,
+  suggested: SuggestedTab,
+};
+
 export function RulesPage({ search }: { search: RulesSearch }) {
-  const t: RuleTab = search.tab ?? '';
   const remove = useConfirmRemove();
+  const Tab = TABS[search.tab ?? ''];
+  return <Tab search={search} confirm={remove.confirm} asked={remove.node} />;
+}
+
+/** The page around one tab's rows: the head, its states and the open rule. */
+function Page({ search, asked, state, retry, empty, dialogs, children }: Omit<TabProps, 'confirm'> & { state: State; retry: () => void; empty: string; dialogs?: ReactNode; children: ReactNode }) {
+  const t: RuleTab = search.tab ?? '';
+  const [reading, setReading] = useState(false);
   const kind = t === 'stages' ? 'stage' : t === 'outside' ? 'outside' : 'org';
   const add = (
     <Button variant="primary" onClick={() => void press('rules.new', { kind })}>
       Add rule
     </Button>
-  );
-  const [whoFor, setWhoFor] = useState<OrgRule | null>(null);
-  const body = useTab(t, search, remove.confirm, setWhoFor);
-  const [reading, setReading] = useState(false);
-  const sources = useQuery({ ...ruleSourcesQuery, enabled: t === 'outside' }).data ?? [];
-  const list = (to: Omit<RulesSearch, 'tab' | 'panel' | 'who'>) => void press('rules.list', { tab: t, ...to });
-  const { q, from, status } = search;
-  const fromName = sources.find((x) => x.id === from)?.name ?? 'One From';
-  const chips = [
-    ...(from ? [{ label: fromName, onClear: () => list({ q }) }] : []),
-    ...(status ? [{ label: DUE_WORDS[status], onClear: () => list({ q }) }] : []),
-  ];
-  const filter =
-    t === 'outside' && sources.length ? (
-      <Menu trigger={<IconButton icon="filter" label="Filter" on={!!from} data-phone />}>
-        <MenuItem label="Every From" on={!from} onSelect={() => list({ q })} />
-        {sources.map((x) => (
-          <MenuItem key={x.id} label={x.name} on={x.id === from} onSelect={() => list({ q, from: x.id })} />
-        ))}
-      </Menu>
-    ) : t === 'due' ? (
-      <Menu trigger={<IconButton icon="filter" label="Filter" on={!!status} data-phone />}>
-        <MenuItem label="All" on={!status} onSelect={() => list({ q })} />
-        {DUE_STATUSES.map((x) => (
-          <MenuItem key={x} label={DUE_WORDS[x]} on={x === status} onSelect={() => list({ q, status: x })} />
-        ))}
-      </Menu>
-    ) : null;
-  const more = (
-    <PageMore>
-      <MenuItem label="Add due date" icon="calendar" onSelect={() => void press('rules.newDue', {})} />
-      <MenuItem label="Add document" icon="file" onSelect={() => setReading(true)} />
-    </PageMore>
   );
   return (
     <List
@@ -119,236 +107,236 @@ export function RulesPage({ search }: { search: RulesSearch }) {
       path={RULES}
       tabs={rulesTabs}
       className="rr"
-      search={<Find label="Search rules" value={q} onFind={(words) => list({ q: words, from, status })} />}
-      filter={chips.length > 0 && <FilterRow filters={chips} />}
+      search={<Find label="Search rules" value={search.q} onFind={(words) => void press('rules.list', { tab: t, q: words })} />}
       actions={
         <>
-          {filter}
           {add}
-          {remove.node}
+          {asked}
+          {dialogs}
           {reading && <ReadDocument onClose={() => setReading(false)} />}
-          {whoFor && <AcceptWho rule={whoFor} onClose={() => setWhoFor(null)} />}
         </>
       }
-      more={more}
-      state={body.state}
-      onRetry={body.retry}
-      empty={{ title: body.empty, action: t === 'suggested' || t === 'built-in' ? undefined : add }}
-      sections={body.sections}
+      more={
+        <PageMore>
+          <MenuItem label="Add due date" icon="calendar" onSelect={() => void press('rules.newDue', {})} />
+          <MenuItem label="Add document" icon="file" onSelect={() => setReading(true)} />
+        </PageMore>
+      }
+      state={state}
+      onRetry={retry}
+      empty={{ title: empty, action: t === 'suggested' || t === 'built-in' ? undefined : add }}
+      sections={children}
       panel={search.panel && <RulePanel key={search.panel} panel={search.panel} tab={t} onClose={close} />}
     />
   );
 }
 
-interface Body {
-  state: State;
-  retry: () => void;
-  empty: string;
-  sections: ReactNode;
+/** A team's name by its id. */
+function useTeamName() {
+  const teams = useQuery(teamsQuery).data ?? [];
+  return (id: string) => teams.find((g) => g.id === id)?.name;
 }
 
-function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () => void) => void, askWho: (r: OrgRule) => void): Body {
+function CompanyTab({ search, confirm, asked }: TabProps) {
   const org = useQuery(orgRulesQuery('active'));
+  return (
+    <Page search={search} asked={asked} state={org.isPending ? 'loading' : org.isError ? 'fault' : 'ready'} retry={() => void org.refetch()} empty="No rules yet">
+      <CompanyRules who={search.who ?? '*'} panel={search.panel} confirm={confirm} q={search.q} />
+    </Page>
+  );
+}
+
+function StagesTab({ search, confirm, asked }: TabProps) {
   const stage = useQuery(stageRulesQuery('active'));
+  const team = useTeamName();
+  const items = (stage.data?.items ?? []).filter((r) => hasWords([r.name, r.pipeline_name, ...stageParts(r, team), r.jev, r.reason].join(' '), search.q));
+  const every = 'Every pipeline';
+  return (
+    <Page search={search} asked={asked} state={stateOf(stage, items.length)} retry={() => void stage.refetch()} empty="No stage rules yet">
+      {grouped(items, (r) => (r.scope === 'company' ? every : (r.pipeline_name ?? 'A pipeline')), every).map(([g, rs]) => (
+        <Section key={g} name={g} count={rs.length} target={`section:${g}`}>
+          <Rows
+            label={g}
+            items={rs}
+            getKey={(r) => r.id}
+            draw={(r) => <StageRow key={r.id} r={r} team={team} selected={search.panel === `stage:${r.id}`} search={{ tab: 'stages', panel: `stage:${r.id}` }} confirm={confirm} />}
+          />
+        </Section>
+      ))}
+    </Page>
+  );
+}
+
+function BuiltInTab({ search, asked }: TabProps) {
   const groups = useQuery(ruleGroupsQuery);
-  const due = useQuery(dueQuery);
-  const routines = useQuery(routinesQuery);
-  const orgSugg = useQuery(orgRulesQuery('suggested'));
-  const stageSugg = useQuery(stageRulesQuery('suggested'));
+  const list = (groups.data?.built_in ?? []).filter((b) => hasWords(`${b.name} ${b.what ?? ''}`, search.q));
+  return (
+    <Page search={search} asked={asked} state={stateOf(groups, list.length)} retry={() => void groups.refetch()} empty="No built-in rules">
+      <Section name="Always on" count={list.length} target="section:built-in">
+        {list.map((b) => (
+          <RuleRow key={b.name} how="fixed" parts={b.what ? [agentWords(b.name), agentWords(b.what)] : [agentWords(b.name)]} fixed target={`builtin:${b.name}`} />
+        ))}
+      </Section>
+    </Page>
+  );
+}
+
+function OutsideTab({ search, confirm, asked }: TabProps) {
+  const org = useQuery(orgRulesQuery('active'));
+  const due = useQuery(dueQuery).data;
   const holds = useQuery(holdsQuery).data;
+  const list = (org.data ?? []).filter((r) => r.kind === 'external' && hasWords(`${r.text} ${r.description ?? ''} ${r.source?.name ?? ''}`, search.q));
+  const dueOf = (id: string) => due?.find((d) => d.rule.id === id);
+  return (
+    <Page search={search} asked={asked} state={stateOf(org, list.length)} retry={() => void org.refetch()} empty="No outside rules yet">
+      {grouped(list, (r) => r.source?.name ?? 'Other').map(([g, rs]) => (
+        <Section key={g} name={g} count={rs.length}>
+          {rs.map((r) => (
+            <OrgRuleRow
+              key={r.id}
+              r={r}
+              search={{ tab: 'outside', panel: `org:${r.id}` }}
+              selected={search.panel === `org:${r.id}`}
+              holds={holdsOf(holds, r.id)}
+              onRemove={() => confirm('this rule', () => void press('rules.remove', { rule: r.id, kind: 'org' }))}
+              cols={{ src: true, who: true, at: true }}
+              src={r.source?.name}
+              who={dueOf(r.id)?.owner ?? firstMember(r)}
+              at={dayWords(dueOf(r.id)?.due_on)}
+            />
+          ))}
+        </Section>
+      ))}
+    </Page>
+  );
+}
+
+function DueTab({ search, asked }: TabProps) {
+  const due = useQuery(dueQuery);
+  const list = (due.data ?? []).filter((d) => hasWords(d.rule.text, search.q));
+  const soon = dayIn(30);
+  const when = (d: DueDate) => (d.status === 'overdue' ? 'Late' : d.due_on <= soon ? 'Next 30 days' : 'Later');
+  return (
+    <Page search={search} asked={asked} state={stateOf(due, list.length)} retry={() => void due.refetch()} empty="No due dates">
+      {grouped([...list].sort((a, b) => a.due_on.localeCompare(b.due_on)), when, 'Late').map(([g, ds]) => (
+        <Section key={g} name={g} count={ds.length}>
+          {ds.map((d) => (
+            <DueRow key={d.id} d={d} selected={search.panel === `due:${d.id}`} />
+          ))}
+        </Section>
+      ))}
+    </Page>
+  );
+}
+
+/** A due date: what is due, how early its task opens, and who gets that task. */
+function DueRow({ d, selected }: { d: DueDate; selected: boolean }) {
+  const owner = useName(d.owner);
+  return (
+    <RuleRow
+      how="date"
+      parts={[agentWords(d.rule.text), ...(d.task_days ? [`${d.task_days} days before`, ...(owner ? [`${owner} gets a task`] : [])] : [])]}
+      to={RULES}
+      search={{ tab: 'due', panel: `due:${d.id}` }}
+      selected={selected}
+      word={d.status === 'overdue' ? 'Late' : undefined}
+      cols={{ who: true, at: true }}
+      who={d.owner}
+      at={dayWords(d.due_on)}
+      target={`due:${d.id}`}
+    />
+  );
+}
+
+/** Wakes, and routines on tasks: both are routines, read from the rule groups; each row opens on Routines. */
+function AutoTab({ search, asked }: TabProps) {
+  const wake = search.tab === 'wakes';
+  const groups = useQuery(ruleGroupsQuery);
+  const routines = useQuery(routinesQuery).data;
   const teams = useQuery(teamsQuery).data ?? [];
   const pipes = useQuery(pipelinesQuery).data ?? [];
-  const panel = search.panel;
-  const q = search.q;
-  const opened = (k: 'org' | 'stage', id: string) => panel === `${k}:${id}`;
-  const removeOrg = (r: OrgRule) => () => confirm('this rule', () => void press('rules.remove', { rule: r.id, kind: 'org' }));
-  const teamName = (id: string) => teams.find((g) => g.id === id)?.name;
+  const byId = new Map((routines ?? []).map((r) => [r.id, r]));
+  const words = (w: { id: string; name: string }) => {
+    const r = byId.get(w.id);
+    return `${w.name} ${r ? triggerWords(r.trigger) : ''}`;
+  };
+  const list = ((wake ? groups.data?.wakes : groups.data?.automations) ?? []).filter((w) => hasWords(words(w), search.q));
+  const sectionOf = (r: Routine | undefined) => (wake ? wakeSection(r, teams, pipes) : pipelineSection(r, pipes));
+  return (
+    <Page search={search} asked={asked} state={stateOf(groups, list.length)} retry={() => void groups.refetch()} empty={wake ? 'No wakes yet' : 'No routines on tasks yet'}>
+      {grouped(list, (w) => sectionOf(byId.get(w.id))).map(([g, ws]) => (
+        <Section key={g} name={g} count={ws.length}>
+          {ws.map((w) => (
+            <AutoRuleRow key={w.id} id={w.id} name={w.name} on={w.enabled} r={byId.get(w.id)} wake={wake} />
+          ))}
+        </Section>
+      ))}
+    </Page>
+  );
+}
 
-  switch (t) {
-    case '': {
-      return {
-        state: org.isPending ? 'loading' : org.isError ? 'fault' : 'ready',
-        retry: () => void org.refetch(),
-        empty: 'No rules yet',
-        sections: <CompanyRules who={search.who ?? '*'} panel={panel} confirm={confirm} q={q} />,
-      };
-    }
-    case 'stages': {
-      const items = (stage.data?.items ?? []).filter((r) => hasWords([r.name, r.pipeline_name, ...stageParts(r, teamName), r.jev, r.reason].join(' '), q));
-      const every = 'Every pipeline';
-      return {
-        state: stateOf(stage, items.length),
-        retry: () => void stage.refetch(),
-        empty: 'No stage rules yet',
-        sections: grouped(items, (r) => (r.scope === 'company' ? every : (r.pipeline_name ?? 'A pipeline')), every).map(([g, rs]) => (
-          <Section key={g} name={g} count={rs.length} target={`section:${g}`}>
-            {rs.map((r) => (
-              <StageRow key={r.id} r={r} team={teamName} selected={opened('stage', r.id)} search={{ tab: 'stages', panel: `stage:${r.id}` }} confirm={confirm} />
-            ))}
-          </Section>
-        )),
-      };
-    }
-    case 'built-in': {
-      const list = (groups.data?.built_in ?? []).filter((b) => hasWords(`${b.name} ${b.what ?? ''}`, q));
-      return {
-        state: stateOf(groups, list.length),
-        retry: () => void groups.refetch(),
-        empty: 'No built-in rules',
-        sections: (
-          <Section name="Always on" count={list.length} target="section:built-in">
-            {list.map((b) => (
-              <RuleRow key={b.name} how="fixed" parts={b.what ? [agentWords(b.name), agentWords(b.what)] : [agentWords(b.name)]} fixed target={`builtin:${b.name}`} />
-            ))}
-          </Section>
-        ),
-      };
-    }
-    case 'outside': {
-      const list = (org.data ?? []).filter(
-        (r) => r.kind === 'external' && (!search.from || r.source?.id === search.from) && hasWords(`${r.text} ${r.description ?? ''} ${r.source?.name ?? ''}`, q),
-      );
-      const dueOf = (id: string) => due.data?.find((d) => d.rule.id === id);
-      return {
-        state: stateOf(org, list.length),
-        retry: () => void org.refetch(),
-        empty: 'No outside rules yet',
-        sections: grouped(list, (r) => r.source?.name ?? 'Other').map(([g, rs]) => (
-          <Section key={g} name={g} count={rs.length}>
-            {rs.map((r) => (
-              <OrgRuleRow
-                key={r.id}
-                r={r}
-                search={{ tab: 'outside', panel: `org:${r.id}` }}
-                selected={opened('org', r.id)}
-                holds={holdsOf(holds, r.id)}
-                onRemove={removeOrg(r)}
-                cols={{ src: true, who: true, at: true }}
-                src={r.source?.name}
-                who={dueOf(r.id)?.owner ?? firstMember(r)}
-                at={dayWords(dueOf(r.id)?.due_on)}
-              />
-            ))}
-          </Section>
-        )),
-      };
-    }
-    case 'due': {
-      const list = (due.data ?? []).filter((d) => (!search.status || d.status === search.status) && hasWords(d.rule.text, q));
-      const soon = dayIn(30);
-      const when = (d: DueDate) => (d.status === 'overdue' ? 'Late' : d.due_on <= soon ? 'Next 30 days' : 'Later');
-      return {
-        state: stateOf(due, list.length),
-        retry: () => void due.refetch(),
-        empty: 'No due dates',
-        sections: grouped(
-          [...list].sort((a, b) => a.due_on.localeCompare(b.due_on)),
-          when,
-          'Late',
-        ).map(([g, ds]) => (
-          <Section key={g} name={g} count={ds.length}>
-            {ds.map((d) => (
-              <RuleRow
-                key={d.id}
-                how="date"
-                parts={[agentWords(d.rule.text), ...(d.task_days ? [`${d.task_days} days before`] : [])]}
-                to={RULES}
-                search={{ tab: 'due', panel: `due:${d.id}` }}
-                selected={panel === `due:${d.id}`}
-                word={d.status === 'overdue' ? 'Late' : undefined}
-                cols={{ who: true, at: true }}
-                who={d.owner}
-                at={dayWords(d.due_on)}
-                target={`due:${d.id}`}
-              />
-            ))}
-          </Section>
-        )),
-      };
-    }
-    case 'wakes':
-    case 'on-tasks': {
-      const byId = new Map((routines.data ?? []).map((r) => [r.id, r]));
-      const words = (w: { id: string; name: string }) => {
-        const r = byId.get(w.id);
-        return `${w.name} ${r ? triggerWords(r.trigger) : ''}`;
-      };
-      const list = ((t === 'wakes' ? groups.data?.wakes : groups.data?.automations) ?? []).filter((w) => hasWords(words(w), q));
-      const sectionOf = (r: Routine | undefined) => (t === 'wakes' ? wakeSection(r, teams, pipes) : pipelineSection(r, pipes));
-      return {
-        state: stateOf(groups, list.length),
-        retry: () => void groups.refetch(),
-        empty: t === 'wakes' ? 'No wakes yet' : 'No routines on tasks yet',
-        sections: grouped(list, (w) => sectionOf(byId.get(w.id))).map(([g, ws]) => (
-          <Section key={g} name={g} count={ws.length}>
-            {ws.map((w) => (
-              <AutoRuleRow key={w.id} id={w.id} name={w.name} on={w.enabled} r={byId.get(w.id)} wake={t === 'wakes'} />
-            ))}
-          </Section>
-        )),
-      };
-    }
-    case 'suggested': {
-      const orgs = (orgSugg.data ?? []).filter((r) => hasWords(`${r.text} ${r.description ?? ''}`, q));
-      const stages = (stageSugg.data?.items ?? []).filter((r) => hasWords([r.name, ...stageParts(r, teamName)].join(' '), q));
-      const n = orgs.length + stages.length;
-      const both = { isPending: orgSugg.isPending && stageSugg.isPending, isError: orgSugg.isError && stageSugg.isError };
-      const cols = { who: true, at: true };
-      const live = stage.data?.items ?? [];
-      // Add all takes the ones that say who follows them; the rest wait for a Who
-      const ready = orgs.filter(hasWho).length + stages.length;
-      return {
-        state: stateOf(both, n),
-        retry: () => void Promise.all([orgSugg.refetch(), stageSugg.refetch()]),
-        empty: 'No suggestions',
-        sections: (
-          <Section
-            name="Suggested"
-            count={n}
-            target="section:suggested"
-            actions={ready > 1 ? <Verb onClick={() => void press('rules.acceptAll', {})}>Add all</Verb> : undefined}
-          >
-            {orgs.map((r) => (
-              <RuleRow
-                key={r.id}
-                how={r.if_broken === 'escalate' && r.reviewer ? 'person' : 'model'}
-                by={r.reviewer ? `human:${r.reviewer.id}` : null}
-                parts={[agentWords(r.text)]}
-                cols={cols}
-                who={r.suggested_by}
-                at={r.created_at ? <Ago at={r.created_at} /> : ''}
-                verb={{ label: 'Add', onClick: () => (hasWho(r) ? void press('rules.accept', { rule: r.id, kind: 'org' }) : askWho(r)) }}
-                more={<MenuItem label="Set aside" icon="archive" onSelect={() => void press('rules.skip', { rule: r.id, kind: 'org' })} />}
-                target={`rule:${r.id}`}
-              />
-            ))}
-            {stages.map((r) => {
-              const was = r.suggests ? live.find((x) => x.id === r.suggests) : undefined;
-              const retires = !!r.suggests && !!r.then_params?.retire;
-              const shown = retires && was ? was : r;
-              return (
-                <RuleRow
-                  key={r.id}
-                  how={shown.jev ? 'model' : 'fixed'}
-                  parts={retires ? [`Retire: ${stageParts(shown, teamName)[0] ?? ''}`, ...stageParts(shown, teamName).slice(1)] : stageParts(r, teamName)}
-                  cost={!!shown.jev}
-                  cols={cols}
-                  who={r.created_by}
-                  at={r.updated_at ? <Ago at={r.updated_at} /> : ''}
-                  to={RULES}
-                  search={{ tab: 'suggested', panel: `stage:${r.id}` }}
-                  selected={opened('stage', r.id)}
-                  verb={{ label: retires ? 'Retire' : r.suggests ? 'Accept change' : 'Add', onClick: () => void press('rules.accept', { rule: r.id, kind: 'stage' }) }}
-                  more={<MenuItem label="Set aside" icon="archive" onSelect={() => void press('rules.skip', { rule: r.id, kind: 'stage' })} />}
-                  target={`rule:${r.id}`}
-                />
-              );
-            })}
-          </Section>
-        ),
-      };
-    }
-  }
+function SuggestedTab({ search, asked }: TabProps) {
+  const orgSugg = useQuery(orgRulesQuery('suggested'));
+  const stageSugg = useQuery(stageRulesQuery('suggested'));
+  // a suggested change or retire names the rule in force it is about
+  const live = useQuery(stageRulesQuery('active')).data?.items ?? [];
+  const team = useTeamName();
+  const [whoFor, setWhoFor] = useState<OrgRule | null>(null);
+  const opened = (id: string) => search.panel === `stage:${id}`;
+  const orgs = (orgSugg.data ?? []).filter((r) => hasWords(`${r.text} ${r.description ?? ''}`, search.q));
+  const stages = (stageSugg.data?.items ?? []).filter((r) => hasWords([r.name, ...stageParts(r, team)].join(' '), search.q));
+  const n = orgs.length + stages.length;
+  const both = { isPending: orgSugg.isPending && stageSugg.isPending, isError: orgSugg.isError && stageSugg.isError };
+  const cols = { who: true, at: true };
+  return (
+    <Page
+      search={search}
+      asked={asked}
+      state={stateOf(both, n)}
+      retry={() => void Promise.all([orgSugg.refetch(), stageSugg.refetch()])}
+      empty="No suggestions"
+      dialogs={whoFor && <AcceptWho rule={whoFor} onClose={() => setWhoFor(null)} />}
+    >
+      <Section name="Suggested" count={n} target="section:suggested">
+        {orgs.map((r) => (
+          <RuleRow
+            key={r.id}
+            how={r.if_broken === 'escalate' && r.reviewer ? 'person' : 'model'}
+            by={r.reviewer ? `human:${r.reviewer.id}` : null}
+            parts={[agentWords(r.text)]}
+            cols={cols}
+            who={r.suggested_by}
+            at={r.created_at ? <Ago at={r.created_at} /> : ''}
+            verb={{ label: 'Add', onClick: () => (hasWho(r) ? void press('rules.accept', { rule: r.id, kind: 'org' }) : setWhoFor(r)) }}
+            more={<MenuItem label="Set aside" icon="archive" onSelect={() => void press('rules.skip', { rule: r.id, kind: 'org' })} />}
+            target={`rule:${r.id}`}
+          />
+        ))}
+        {stages.map((r) => {
+          const was = r.suggests ? live.find((x) => x.id === r.suggests) : undefined;
+          const retires = !!r.suggests && !!r.then_params?.retire;
+          const shown = retires && was ? was : r;
+          return (
+            <RuleRow
+              key={r.id}
+              how={shown.jev ? 'model' : 'fixed'}
+              parts={retires ? [`Retire: ${stageParts(shown, team)[0] ?? ''}`, ...stageParts(shown, team).slice(1)] : stageParts(r, team)}
+              cost={!!shown.jev}
+              cols={cols}
+              who={r.created_by}
+              at={r.updated_at ? <Ago at={r.updated_at} /> : ''}
+              to={RULES}
+              search={{ tab: 'suggested', panel: `stage:${r.id}` }}
+              selected={opened(r.id)}
+              verb={{ label: retires ? 'Retire' : r.suggests ? 'Accept change' : 'Add', onClick: () => void press('rules.accept', { rule: r.id, kind: 'stage' }) }}
+              more={<MenuItem label="Set aside" icon="archive" onSelect={() => void press('rules.skip', { rule: r.id, kind: 'stage' })} />}
+              target={`rule:${r.id}`}
+            />
+          );
+        })}
+      </Section>
+    </Page>
+  );
 }
 
 const same = (a: string | null | undefined, b: string) => !!a && a.toLowerCase() === b.toLowerCase();
@@ -415,7 +403,7 @@ function StageRow({
   team: (id: string) => string | undefined;
   selected: boolean;
   search: Record<string, string>;
-  confirm: (what: string, go: () => void) => void;
+  confirm: Confirm;
 }) {
   return (
     <RuleRow

@@ -16,14 +16,11 @@ import {
   botsQuery,
   changelogQuery,
   computersQuery,
-  contactTypesQuery,
-  feedsQuery,
   healthQuery,
   hostedQuery,
   labelsQuery,
   limitsQuery,
   modelsQuery,
-  operateQuery,
   roadmapQuery,
   stoppedRunsQuery,
   subscriptionsQuery,
@@ -82,7 +79,7 @@ const ACTORS = [
   { id: 'human:p1', kind: 'person', name: 'Ana Test' },
 ];
 const NONE = { daily_usd: null, hourly_usd: null, monthly_usd: null, per_30m_usd: null, weekly_usd: null };
-const ROAD = { labels: ['feature'], cors_origins: ['https://site.example.test'], action_limit: 10, suggestion_limit: 20, bot_public_approval: true, suggestions_bot: null };
+const ROAD = { labels: ['feature'], bot_public_approval: true };
 const RULES = { mode: 'on', budget: 10, criteria: ['Spending', 'Hiring'], own: false };
 const LIST = { can_add: false, can_review: false, current_version: '0.0.2', drafts: [] };
 const EVERY = { everyone: true, people: [], teams: [], bots: [] };
@@ -123,25 +120,10 @@ describe('Settings › Tasks @s1077', () => {
     );
     fireEvent.click(within(ask).getByRole('button', { name: 'Everyone' }));
     fireEvent.change(within(ask).getByRole('spinbutton', { name: 'Tighten after' }), { target: { value: '25' } });
-    fireEvent.click(within(ask).getByRole('button', { name: 'Save' }));
+    fireEvent.keyDown(within(ask).getByRole('spinbutton', { name: 'Tighten after' }), { key: 'Enter' });
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ method: 'PUT', body: { budget: 25, team: true } }));
     const lines = screen.getByRole('region', { name: /Ask me about/ });
     expect(within(lines).getByTitle('Spending')).toBeTruthy();
-  });
-
-  it('roadmap websites, receiver and limits save; Tico may take a website off but not add one @s1077', async () => {
-    serve((url) => (url === '/api/v2/roadmaps/settings' ? ok(ROAD) : undefined));
-    show(<SettingsPage section="tasks" />, '/settings/tasks');
-    const road = await screen.findByRole('region', { name: /Public roadmap/ });
-    expect(within(road).getByText('https://site.example.test')).toBeTruthy();
-    await pick(within(road).getByRole('combobox', { name: 'Suggestions go to' }), /^Beta Agent$/);
-    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/roadmaps/settings', body: { suggestions_bot: 'b2' } }));
-    fireEvent.change(within(road).getByRole('spinbutton', { name: 'Visitor requests a day' }), { target: { value: '50' } });
-    fireEvent.click(within(road).getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(sent.at(-1)).toMatchObject({ body: { action_limit: 50 } }));
-    expect(await run('settings.roadmapSites', { origins: ['https://site.example.test', 'https://new.example.test'] }, { via: 'tico' })).toMatchObject({ ok: false });
-    expect(await run('settings.roadmapSites', { origins: [] }, { via: 'tico' })).toMatchObject({ ok: true });
-    expect(sent.at(-1)).toMatchObject({ url: '/api/v2/roadmaps/settings', body: { cors_origins: [] } });
   });
 });
 
@@ -172,26 +154,6 @@ describe('Settings › Health @s1082', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Check now' }));
     await waitFor(() => expect(read).toContain('/api/v2/health'));
   });
-
-  it('a Tico bug finding is reported to Tico support; Setup check shows what fails @s1082', async () => {
-    serve((url) => {
-      if (url === '/api/v2/health/findings') return ok({ findings: [{ key: 'bug:1', kind: 'bug', title: 'A page failed to load', occurrences: 2 }] });
-      if (url === '/api/v2/support/setup-check') return ok({ checks: [{ name: 'Address', status: 'bad', detail: 'Not reachable', fix: 'Open port 443' }] });
-      return undefined;
-    });
-    queryClient.setQueryData(healthQuery.queryKey, { ...HEALTH, stuck: [] } as never);
-    show(<SettingsPage section="health" />, '/settings/health');
-    const found = await screen.findByRole('region', { name: 'Findings' });
-    fireEvent.click(within(found).getByRole('button', { name: 'Report' }));
-    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/health/findings/bug%3A1/report', method: 'POST' }));
-    fireEvent.click(within(found).getByRole('switch', { name: 'Report Tico bugs without asking' }));
-    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/access/rules', method: 'PUT', body: { health_monitor_reports: true } }));
-    expect(await run('settings.reportRule', { on: true }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    fireEvent.click(screen.getByRole('button', { name: 'Setup check' }));
-    const setup = await screen.findByRole('region', { name: 'Setup check' });
-    expect(within(setup).getByText('Not reachable Fix: Open port 443')).toBeTruthy();
-    expect(within(setup).getByText('1 of 1 checks fail')).toBeTruthy();
-  });
 });
 
 // ---------------------------------------------------------------- Changelog
@@ -221,34 +183,10 @@ describe('Settings › Changelog @s1068', () => {
   });
 });
 
-// ---------------------------------------------------------------- Contacts
-
-describe('Settings › Contacts @s1078', () => {
-  it('lists where we operate and removes a place; an inbox switch adds every sender @s1078', async () => {
-    serve((url, method) =>
-      method === 'GET' && url === '/api/v2/entities/self'
-        ? ok({ id: 'us', name: 'Sample Co', operates_in: [] })
-        : method === 'GET' && url === '/api/v2/mailboxes'
-          ? ok({ admin: false, mine: { id: 'mb1', address: 'ana@example.test', kind: 'personal', feeds_directory: true } })
-          : undefined,
-    );
-    queryClient.setQueryData(contactTypesQuery.queryKey, [] as never);
-    queryClient.setQueryData(operateQuery.queryKey, { id: 'us', name: 'Sample Co', operates_in: [{ id: 'pl1', name: 'Oregon', link_id: 'ln1' }] } as never);
-    queryClient.setQueryData(feedsQuery.queryKey, [{ id: 'mb1', address: 'ana@example.test', kind: 'personal', feeds_directory: false }]);
-    show(<SettingsPage section="contacts" />, '/settings/contacts');
-    const where = await screen.findByRole('region', { name: /Where we operate/ });
-    fireEvent.click(within(where).getByRole('button', { name: 'Remove Oregon' }));
-    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/entities/unlink', method: 'POST', body: { link_id: 'ln1' } }));
-    expect(within(where).queryByTitle('Oregon')).toBeNull();
-    fireEvent.click(screen.getByRole('switch', { name: 'ana@example.test' }));
-    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/mailboxes/mb1/contacts', method: 'PATCH', body: { on: true } }));
-  });
-});
-
 // ---------------------------------------------------------------- Stopped runs
 
 describe('Settings › Agents › stopped runs @s1110', () => {
-  it('a decision already saved keeps its buttons off; Details shows the request, the saved answer and the tool calls @s1110', async () => {
+  it('a decision already saved keeps its buttons off and says Saved @s1110', async () => {
     serve();
     queryClient.setQueryData(botsQuery.queryKey, [{ id: 'a1', slug: 'alpha', display_name: 'Alpha Agent', state: 'active', owner_id: 'human:p1', bot_owners: [] }]);
     queryClient.setQueryData(botAccessQuery('a1').queryKey, { bot: 'a1', see: EVERY, read: EVERY, write: EVERY, revision: 2 });
@@ -258,9 +196,7 @@ describe('Settings › Agents › stopped runs @s1110', () => {
         id: 'j1',
         run_id: 'r1',
         stopped: 'read',
-        request: 'Sum up the week',
-        run: { final_text: 'Half a summary', started_at: '2026-03-04T10:00:00Z' },
-        tools: [{ tool: 'search', summary: 'looked up notes' }],
+        task: { title: 'Sum up the week' },
         pending_decision: { decision: 'resume' },
       },
     ] as never);
@@ -268,14 +204,10 @@ describe('Settings › Agents › stopped runs @s1110', () => {
     const line = (await screen.findByText('Stopped runs')).closest('.fact') as HTMLElement;
     fireEvent.click(within(line).getByRole('button', { name: 'Review' }));
     const dlg = await screen.findByRole('dialog', { name: 'Stopped runs' });
-    expect(within(dlg).getByText(/^Stopped .*before changing anything\.$/)).toBeTruthy();
+    expect(within(dlg).getByText('Sum up the week')).toBeTruthy();
     expect((within(dlg).getByRole('button', { name: 'Try again' }) as HTMLButtonElement).disabled).toBe(true);
     expect((within(dlg).getByRole('button', { name: 'Dismiss' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(within(dlg).getByRole('status').textContent).toContain('Tico will try again');
-    fireEvent.click(within(dlg).getByRole('button', { name: 'Details' }));
-    expect(within(dlg).getByText('Sum up the week')).toBeTruthy();
-    expect(within(dlg).getByText('Half a summary')).toBeTruthy();
-    expect(within(dlg).getByText('Tool calls (1)')).toBeTruthy();
+    expect(within(dlg).getByText('Saved')).toBeTruthy();
   });
 });
 

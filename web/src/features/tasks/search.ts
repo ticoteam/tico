@@ -11,11 +11,9 @@ export const VIEW_PREF = 'tasks.view.v1';
 /** `tico-next:tasks.pipeline.v1`: the pipeline Tasks opened last. */
 export const LAST_PREF = 'tasks.pipeline.v1';
 
-/** What a pipeline's address holds: the view (when chosen), the filters, and the side panel. */
+/** What a pipeline's address holds: the view (when chosen) and the filters. */
 export interface TasksSearch extends Filters {
   view?: View;
-  /** Edit pipeline, or New pipeline, beside the page. */
-  panel?: 'pipeline' | 'new';
 }
 
 const text = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
@@ -25,11 +23,10 @@ const actor = (v: unknown) => {
 };
 const DUE: readonly Due[] = ['overdue', 'week', 'any'];
 
-/** `?view=board|list|archived&owner=bot:qa&waiting=human:1&asked=…&tag=ui&due=week&late=true&q=checkout&panel=pipeline`. */
+/** `?view=board|list|archived&owner=bot:qa&waiting=human:1&asked=…&tag=ui&due=week&late=true&q=checkout`. */
 export function validateTasksSearch(raw: Record<string, unknown>): TasksSearch {
   const out: TasksSearch = {};
   if (raw.view === 'board' || raw.view === 'list' || raw.view === 'archived') out.view = raw.view;
-  if (raw.panel === 'pipeline' || raw.panel === 'new') out.panel = raw.panel;
   const owner = actor(raw.owner);
   if (owner) out.owner = owner;
   const waiting = actor(raw.waiting);
@@ -51,9 +48,9 @@ export interface RoadmapSearch extends Filters {
   requesters?: string;
 }
 
-/** `?owner=…&late=true&requesters=<task id>`: the pipeline's filters, without its view or panel. */
+/** `?owner=…&late=true&requesters=<task id>`: the pipeline's filters, without its view. */
 export function validateRoadmapSearch(raw: Record<string, unknown>): RoadmapSearch {
-  const { view: _view, panel: _panel, ...filters } = validateTasksSearch(raw);
+  const { view: _view, ...filters } = validateTasksSearch(raw);
   const task = text(raw.requesters, 100);
   return task ? { ...filters, requesters: task } : filters;
 }

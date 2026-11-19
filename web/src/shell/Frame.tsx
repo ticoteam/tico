@@ -9,7 +9,6 @@ import { IconButton } from '@/kit/IconButton';
 import { C, layout, modeFor, press, specOf, type Arrangement, type ArrangementSpec, type Saved, type SheetId, type SheetLayout } from './layout';
 import { keepOne, useSheetMemory, withFold, withWidth, withoutWidth } from './memory';
 import { SheetContext, type SheetControls } from './Sheet';
-import { useTabTitle } from './title';
 import './Frame.css';
 import './desktop.css';
 
@@ -102,7 +101,6 @@ interface Placed {
 }
 
 function Sheets(p: FrameProps & { arr: Arrangement }) {
-  useTabTitle();
   const { width, mode } = useWindowMode();
   const lights = useDesktopInset();
   const [saved, update] = useSheetMemory();

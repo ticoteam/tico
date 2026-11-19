@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { flowQuery, FlowPage, pipelinesQuery } from '@/features/tasks/exports';
+import { FlowPage } from '@/features/tasks/exports';
+import { flowQuery, pipelinesQuery } from '@/features/tasks/routing';
 
 /** Flow: what waits on the person, across every pipeline. */
 export const Route = createFileRoute('/flow/')({

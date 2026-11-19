@@ -10,7 +10,7 @@ import { bind } from '@/actions/bind';
 import type { FactoryMap, KpiDetail } from '@/api/schema';
 import { factoryGroups, moveTargets } from './OrgPage';
 import {
-  companyRoleQuery,
+  accessQuery,
   factoriesQuery,
   groupsQuery,
   listeningStatsQuery,
@@ -510,7 +510,7 @@ describe('Org factories @s265', () => {
     serve(nothing);
     org({ factories: [], pipelines: map.pipelines });
     show(<StrategyPage tab="org" />, ORG);
-    await screen.findByRole('tree', { name: 'Org' });
+    await screen.findByRole('region', { name: 'Ops' });
     expect(screen.queryByRole('region', { name: 'Factories' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
     expect(factoryGroups(null)).toEqual([]);
@@ -522,7 +522,7 @@ describe('Org factories @s265', () => {
       method === 'POST' ? { status: 200, body: { factory: { id: 'f2', name: 'Sales', goal: '' } } } : url.includes('/api/v2/factories') ? { status: 200, body: made } : nothing(),
     );
     org();
-    queryClient.setQueryData(companyRoleQuery.queryKey, 'admin');
+    queryClient.setQueryData(accessQuery.queryKey, { you: 'admin', owner: null });
     show(<StrategyPage tab="org" search={{ panel: 'factory-new' }} />, `${ORG}?panel=factory-new`);
     fireEvent.click(await screen.findByRole('button', { name: 'More' }));
     expect(await screen.findByRole('menuitem', { name: 'New factory' })).toBeTruthy();
@@ -534,7 +534,7 @@ describe('Org factories @s265', () => {
     expect(await screen.findByRole('listitem', { name: 'Sales' })).toBeTruthy();
   });
 
-  it('says a taken name on the field and takes the factory back', async () => {
+  it('says why a taken name is refused and takes the factory back', async () => {
     serve((url, method) => (method === 'POST' ? refused(409, 'factory_name') : url.includes('/api/v2/factories') ? { status: 200, body: map } : nothing()));
     queryClient.setQueryData(['me'], owner);
     org();
@@ -542,7 +542,7 @@ describe('Org factories @s265', () => {
     const panel = await screen.findByRole('complementary', { name: 'New factory' });
     fireEvent.change(within(panel).getByRole('textbox', { name: 'Name' }), { target: { value: 'Grooming' } });
     fireEvent.click(within(panel).getByRole('button', { name: 'Save' }));
-    expect(await within(panel).findByText('Name taken')).toBeTruthy();
+    await waitFor(() => expect(toasts).toHaveBeenCalled());
     expect(queryClient.getQueryData<FactoryMap>(factoriesQuery.queryKey)?.factories.map((f) => f.name)).toEqual(['Grooming']);
   });
 

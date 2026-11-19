@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { groupsQuery } from '@/features/team/exports';
+import { groupsQuery } from '@/features/team/routing';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Facts, LabelValue } from '@/kit/LabelValue';

@@ -7,8 +7,8 @@ import { ActionsRoot } from '@/actions';
 import { run } from '@/actions/run';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
-import { DesktopRows } from './Desktop';
-import { Gateway } from './Gateway';
+import { TicoSection } from './Desktop';
+import { GatewayLines } from './Gateway';
 import { gatewayQuery } from './queries';
 
 vi.mock('@/search', () => ({ SearchDialog: () => null }));
@@ -55,11 +55,11 @@ afterEach(() => {
 });
 
 describe('Settings › the desktop app', () => {
-  it('a browser shows none of it, and its actions are refused', async () => {
-    show(<DesktopRows />);
-    await act(async () => {});
-    expect(screen.queryByText('Desktop app')).toBeNull();
-    expect(await run('settings.showLog', {}, { via: 'click' })).toMatchObject({ ok: false });
+  it("a browser shows the company's version only, and the app's actions are refused", async () => {
+    show(<TicoSection version="1.2.3" />);
+    expect(await screen.findByText('1.2.3')).toBeTruthy();
+    expect(screen.queryByText('Updates')).toBeNull();
+    expect(await run('settings.restartToUpdate', {}, { via: 'click' })).toMatchObject({ ok: false });
   });
 
   it('shows the version and a ready update; a restart during a call is refused with a plain line', async () => {
@@ -67,7 +67,7 @@ describe('Settings › the desktop app', () => {
       throw new Error("Error invoking remote method 'app:restart': Error: A call is live. Restart after it ends.");
     });
     (window as { tico?: unknown }).tico = t;
-    show(<DesktopRows />);
+    show(<TicoSection version="9.9.9" />);
     expect(await screen.findByText('9.9.9')).toBeTruthy();
     expect(await screen.findByText('Ready')).toBeTruthy();
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Restart to update' })));
@@ -78,7 +78,7 @@ describe('Settings › the desktop app', () => {
   it('open at login reads the computer and sets it; Tico cannot press any of these', async () => {
     const t = bridge(async () => {});
     (window as { tico?: unknown }).tico = t;
-    show(<DesktopRows />);
+    show(<TicoSection version="9.9.9" />);
     const sw = await screen.findByRole('switch', { name: 'Open at login' });
     await act(async () => fireEvent.click(sw));
     expect(t.app.openAtLogin).toHaveBeenLastCalledWith(true);
@@ -101,7 +101,7 @@ describe('Settings › Tico Gateway @s710', () => {
     });
     queryClient.setQueryData(['me'], { id: 'human:p1', email: 'owner@example.test', role: 'owner', slug: null });
     queryClient.setQueryData(gatewayQuery.queryKey, { connected: true, url: '', default_url: 'https://default.example.test', editable: true, preview: 'abc…xyz', revision: 2 });
-    show(<Gateway />);
+    show(<GatewayLines />);
     fireEvent.click(await screen.findByRole('button', { name: 'Change' }));
     fireEvent.change(screen.getByLabelText('Address'), { target: { value: 'https://new.example.test' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -111,6 +111,5 @@ describe('Settings › Tico Gateway @s710', () => {
       { url: 'https://new.example.test', expected_revision: 2 },
       { url: 'https://new.example.test', credentials: 'keep', expected_revision: 2 },
     ]);
-    expect(await screen.findByText('https://new.example.test')).toBeTruthy();
   });
 });
