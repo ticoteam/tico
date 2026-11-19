@@ -597,6 +597,40 @@ def test_a_speaker_who_goes_quiet_is_told_on_the_media_loop_and_shared_screen_so
         live.stop_recorder("call7")
 
 
+def test_a_failed_reader_makes_the_recorder_rejoin_and_hear_an_unspecified_microphone(fake_rtc, monkeypatch, caplog):
+    sdk = media._sdk()
+    unknown = 0  # LiveKit's source for an SDK publication with no source option
+    monkeypatch.setattr(sdk.TrackSource, "SOURCE_UNKNOWN", unknown, raising=False)
+    original = sdk.AudioStream
+
+    class BrokenReader(original):
+        async def __anext__(self):
+            raise OSError("reader failed")
+
+    monkeypatch.setattr(sdk, "AudioStream", BrokenReader)
+    live, heard, ended = media.LiveKitMedia(CONFIG), [], threading.Event()
+    call_id, room = "call7", "tico-call-call7"
+    recorder = media.RECORDER_PREFIX + call_id
+    frame = b"\x01\x00" * 160
+
+    def receive(identity, pcm, start_ms):
+        heard.append((identity, pcm))
+
+    live.start_recorder(call_id, room, receive, lambda identity: ended.set())
+    try:
+        fake_rtc.hear(live.loop, recorder, "human:ana", [frame], source=unknown)
+        assert ended.wait(5)
+        assert not live.running(call_id) and "microphone reader failed" in caplog.text
+
+        monkeypatch.setattr(sdk, "AudioStream", original)
+        live.start_recorder(call_id, room, receive)  # the sweep reconnects recorders that are no longer running
+        fake_rtc.hear(live.loop, recorder, "human:ana", [frame], source=unknown)
+        wait_until(lambda: bool(heard))
+        assert live.running(call_id) and heard == [("human:ana", frame)]
+    finally:
+        live.stop_recorder(call_id)
+
+
 def test_the_room_list_leaves_tico_voice_out_and_a_gone_room_is_empty(monkeypatch):
     live = media.LiveKitMedia(CONFIG)
     answers = {

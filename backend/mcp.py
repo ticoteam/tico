@@ -496,7 +496,9 @@ def task_dry_run(c, auth, who, body):
             probe = H.CLOSE_PROBE.set(True)
             try:
                 parties = {"owner_id": target, "requester_id": who.actor, "readers": None}
-                privacy.require_readers(c, who, None, H.new_readers(c, who.actor, parties, body.readers), parent_id)
+                privacy.require_readers(
+                    c, who, None, H.new_readers(c, who.actor, parties, body.readers), parent_id, owner=target
+                )
             except (Problem, H.Refused) as exc:
                 problems.append(exc.detail)
             finally:

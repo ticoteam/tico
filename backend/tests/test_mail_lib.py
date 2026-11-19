@@ -14,6 +14,7 @@ from backend.email_content import attachment, parsed, snapshot
 from backend.mail_lib import MAX_BODY, Failure, Refused, zone
 from backend.mail_lib import compose, gmail as gm, labels as lb, lint as ln
 from backend.mail_lib.calendar import meeting_url
+from backend.store import Problem
 
 TZ = zone("America/Los_Angeles")
 
@@ -510,3 +511,46 @@ def test_attachment_bytes_are_bounded_before_and_after_decoding():
         with pytest.raises(Failure):
             gm.attachment_bytes(encoded, declared, limit=limit)
     assert gm.attachment_bytes(b64(b"x" * 10), 0, limit=10) == b"x" * 10
+
+
+# ---------------------------------------------------------------- the send gate's frozen copy (email_content.snapshot)
+
+
+def mail(sender="legal@tidy.example", to=("records@police.example",), body="Please find attached.", files=()):
+    msg = EmailMessage()
+    msg["From"], msg["To"], msg["Subject"] = sender, ", ".join(to), "Records production"
+    msg.set_content(body)
+    for name, mime, data in files:
+        maintype, _, subtype = mime.partition("/")
+        msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=name)
+    return base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=")
+
+
+def test_a_production_of_large_pdfs_and_a_long_text_index_is_frozen_whole():
+    """Live on v0.6.65: a legal inbox's draft with an index and PDF exhibits was refused as 'over 256 KiB of visible
+    text'. Files are never visible text; a long text file leaves the preview (it stays a file) and asks a person."""
+    pdfs = [(f"Exhibit {n}.pdf", "application/pdf", b"%PDF-1.7\n" + bytes(range(256)) * 4000) for n in range(6)]
+    index = ("Index.txt", "text/plain", ("Exhibit A - incident report, 12 pages\n" * 9000).encode())
+    frozen = snapshot(mail(sender="Legal <Legal@Tidy.example>", files=[index, *pdfs]), "legal@tidy.example")
+    assert [f["name"] for f in frozen["attachments"]] == ["Index.txt"] + [f"Exhibit {n}.pdf" for n in range(6)]
+    assert [p["text"].strip() for p in frozen["visible_bodies"]] == ["Please find attached."]
+    assert frozen["classification_complete"] is False
+    small = snapshot(mail(files=[("Index.txt", "text/plain", b"Exhibit A")]), "legal@tidy.example")
+    assert "Exhibit A" in [p["text"] for p in small["visible_bodies"]] and small["classification_complete"]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"sender": "ana@tidy.example"}, "From ana@tidy.example doesn't match the inbox legal@tidy.example"),
+        ({"to": ()}, "it has no recipients in To, Cc or Bcc"),
+        ({"to": [f"p{n}@police.example" for n in range(101)]}, "it has 101 recipients; the limit is 100"),
+        ({"to": ["records@localhost"]}, "not a valid recipient address: records@localhost"),
+        ({"files": [(f"{n}.pdf", "application/pdf", b"%PDF") for n in range(51)]}, "it has 51 files; the limit is 50"),
+        ({"body": "x" * 310 * 1024}, "its visible text is 310 KiB; the limit is 256 KiB"),
+    ],
+)
+def test_a_refused_email_names_the_check_it_failed_and_its_value(kwargs, message):
+    with pytest.raises(Problem) as refused:
+        snapshot(mail(**kwargs), "legal@tidy.example")
+    assert refused.value.status == 422 and refused.value.detail == "Invalid email: " + message

@@ -33,7 +33,7 @@ interface CwState {
   // Bots taken out of the call here: their faces stay, faint, to be tapped back in.
   gone: Set<string>; busy: Set<string>;
   brief: {bot: string; text: string | null} | null;
-  joinTried: boolean; missing: boolean; drawn: number; wide: boolean; size: [number, number] | null;
+  joinTried: boolean; joining: boolean; missing: boolean; drawn: number; wide: boolean; size: [number, number] | null;
   // The notes, once the call has ended (null until read), and what was done with each item here.
   ended: boolean; notes: CwNotes | null; made: Map<string, string>; tq: string; tsearch: boolean; notesTries: number;
   task: '' | 'new' | 'link'; note: string; noteAt: number;
@@ -81,7 +81,7 @@ function cwAv(actor: string, size: number): string {
 
 // ----------------------------------------------------------------- the page
 function pageCallWindow(id: string): void {
-  const join = /[?&]join=1(?:&|$)/.test(location.hash);
+  const join = callWindowJoining();
   // The flag is used once: a reload or a copied address shows Join.
   if (join) history.replaceState(history.state, '', location.pathname + location.search + CALL_ROUTE + encodeURIComponent(id));
   if (CW?.id === id && CW.el.isConnected) {
@@ -117,7 +117,7 @@ function pageCallWindow(id: string): void {
     <footer class="cw-bar"></footer>`;
   document.body.append(el);
   const st: CwState = {id, el, tab: 'chat', threadId: '', title: '', join, chat: null, source: null, meeting: '', after: 0, eventId: 0,
-    chunks: new Map(), bots: [], gone: new Set(), busy: new Set(), brief: null, joinTried: false, missing: false, drawn: 0, wide: false, size: null,
+    chunks: new Map(), bots: [], gone: new Set(), busy: new Set(), brief: null, joinTried: false, joining: false, missing: false, drawn: 0, wide: false, size: null,
     ended: false, notes: null, made: new Map(), tq: '', tsearch: false, notesTries: 0, task: '', note: '', noteAt: 0,
     pop: '', fileKey: '', fileLoad: null, tasks: new Map(), pin: null};
   CW = st;
@@ -132,7 +132,10 @@ function pageCallWindow(id: string): void {
   const screen = $('#cw-screen');
   for (const v of document.querySelectorAll('#call-bar .call-screen video')) screen?.append(v);
   callWindowDraw();
-  void cwLoad(st);
+  const timing = join ? callStartTake(id) : undefined;
+  callStartMark(timing, 'boot-done');
+  if (timing?.membersUnavailable) cwToast(CALL_MEMBERS_WARNING, true);
+  void cwLoad(st, timing);
 }
 // Leaving the page: the view and what it follows go. The call goes on (its bar shows) until it is left.
 function callWindowStop(): void {
@@ -150,19 +153,26 @@ function callWindowStop(): void {
   document.body.classList.remove('call-page', 'cw-wide-page', 'cw-composer');
   if (CALL) callScreenSync();
 }
-async function cwLoad(st: CwState): Promise<void> {
-  const v = await callViewRead(st.id);
+async function cwLoad(st: CwState, timing?: CallStartTiming): Promise<void> {
+  // Start just created this Tico Meet call. The join response supplies the call view and token together.
+  if (timing) await cwJoin(st, timing);
+  if (CW !== st) return;
+  const v = (timing && cwView(st)) || await callViewRead(st.id);
   if (CW !== st) return;
   if (!v) { st.missing = true; callWindowDraw(); return; }
-  st.threadId = v.thread_id || '';
-  st.title = threadTitle(threadsRow(st.threadId)) || v.title || 'Call';
-  st.meeting = v.meeting_id || '';
   // A Google Meet is in Google's own tab: this address opens its thread.
-  if (v.provider === 'google_meet') { location.replace(threadHref(st.threadId)); return; }
-  void cwMembers(st);
+  if (v.provider === 'google_meet') { location.replace(threadHref(v.thread_id || '')); return; }
+  cwKeepCall(st, v);
   if (v.state === 'live') cwLiveMount(st);
   if (v.state === 'live' || v.state === 'scheduled') await cwJoin(st);
   callWindowDraw();
+}
+function cwKeepCall(st: CwState, v: CwCall): void {
+  if (st.threadId || !v.thread_id) return;
+  st.threadId = v.thread_id;
+  st.title = threadTitle(threadsRow(st.threadId)) || v.title || 'Call';
+  st.meeting = v.meeting_id || '';
+  void cwMembers(st);
 }
 // The chat and the transcript's stream, once the call is live (a booked call goes live with its first join).
 function cwLiveMount(st: CwState): void {
@@ -171,11 +181,15 @@ function cwLiveMount(st: CwState): void {
   if (st.meeting) void cwLiveRead(st, true);
 }
 // Join, once, when the window was opened to. A booked call's first join starts it (docs/meet.md, Scheduled calls).
-async function cwJoin(st: CwState): Promise<void> {
-  const v = cwView(st);
-  if (!st.join || st.joinTried || !v || (v.state !== 'live' && v.state !== 'scheduled') || CALL?.id === v.id) return;
+async function cwJoin(st: CwState, timing?: CallStartTiming): Promise<void> {
+  const v = timing ? {id: st.id, state: 'live'} : cwView(st);
+  if (!st.join || st.joining || st.joinTried || !v || (v.state !== 'live' && v.state !== 'scheduled') || CALL?.id === v.id) return;
   st.joinTried = true;
-  await callJoin(st.threadId, v, st.title).catch((e: unknown) => callNoted(st.threadId, e));
+  st.joining = true;
+  callWindowDraw();
+  try { await callJoin(st.threadId, v, st.title, undefined, timing); }
+  catch (e) { callNoted(st.threadId, e); }
+  finally { st.joining = false; callWindowDraw(); }
 }
 // The bots of the call's thread: faint faces to tap into the call.
 async function cwMembers(st: CwState): Promise<void> {
@@ -383,7 +397,7 @@ function callWindowDraw(): void {
 }
 function cwDraw(st: CwState): void {
   const v = cwView(st), el = st.el, live = v?.state === 'live', booked = v?.state === 'scheduled', ended = !!v && !live && !booked;
-  if (live) cwLiveMount(st);
+  if (live) { cwKeepCall(st, v); cwLiveMount(st); }
   // Live to ended while open: the chat and the stream stop and the notes are read.
   if (ended && !st.ended) { st.ended = true; void cwAfterLoad(st); }
   el.classList.toggle('cw-ended', ended);
@@ -399,7 +413,7 @@ function cwDraw(st: CwState): void {
     if (live && since) callTick();
     const mine = sharer === myActor() || sharer === cwHere(st)?.room?.localParticipant?.identity;
     const sharing = sharer && !mine ? `${actorName(sharer)} sharing` : sharer || cwHere(st)?.sharing ? 'You are sharing' : '';
-    patchHTML(meta, live ? `<span class="cw-live-dot" aria-hidden="true"></span>Live${since ? ` · <span data-call-since="${esc(since)}">${esc(callClock(since))}</span>` : ''}${sharing ? ` · ${esc(sharing)}` : ''}`
+    patchHTML(meta, st.joining && !cwHere(st)?.connected ? 'Connecting…' : live ? `<span class="cw-live-dot" aria-hidden="true"></span>Live${since ? ` · <span data-call-since="${esc(since)}">${esc(callClock(since))}</span>` : ''}${sharing ? ` · ${esc(sharing)}` : ''}`
       : ended ? esc(cwWhen(v)) : booked ? esc(callWhen(v.scheduled_start)) : '');
   }
   const tools = el.querySelector<HTMLElement>('.cw-tools');
@@ -422,7 +436,7 @@ function cwDraw(st: CwState): void {
     el.querySelector('.cw-tabs')?.replaceChildren();
     for (const pane of el.querySelectorAll<HTMLElement>('.cw-pane')) pane.hidden = true;
     const bar = el.querySelector<HTMLElement>('.cw-bar');
-    if (bar) patchHTML(bar, `<span class="spacer"></span><button type="button" class="primary cw-join" data-cw="join">Join</button>`);
+    if (bar) patchHTML(bar, `<span class="spacer"></span><button type="button" class="primary cw-join" data-cw="join"${st.joining ? ' disabled' : ''}>Join</button>`);
     return;
   }
   const tabs = el.querySelector<HTMLElement>('.cw-tabs');
@@ -562,8 +576,8 @@ liveOn('reset', () => { if (CW) cwBriefSoon(CW); });
 function cwBarDraw(st: CwState, v: CallRecord | null): void {
   const bar = st.el.querySelector<HTMLElement>('.cw-bar'); if (!bar) return;
   const here = cwHere(st);
-  if (v?.state !== 'live') { patchHTML(bar, ''); return; }
   if (!here) {
+    if (v?.state !== 'live' || st.joining) { patchHTML(bar, ''); return; }
     patchHTML(bar, `<span class="spacer"></span><button type="button" class="primary cw-join" data-cw="join">Join</button>`);
     return;
   }
@@ -572,8 +586,11 @@ function cwBarDraw(st: CwState, v: CallRecord | null): void {
   // Share: Stop while this person shows something, else the menu (Screen, Show a Tico file).
   const showing = here.sharing || callStageMine(here);
   const [shareIcon, shareLabel] = callShareable() ? [CW_ICONS.share, 'Share'] : [CW_ICONS.file, 'Show a Tico file'];
-  patchHTML(bar, `${btn('mute', here.muted ? CW_ICONS.muted : CW_ICONS.mic, here.muted ? 'Unmute' : 'Mute', here.muted)}${
-    showing ? btn('stop', CW_ICONS.stop, 'Stop sharing', true) : btn('share', shareIcon, shareLabel, false, ` aria-haspopup="dialog" aria-expanded="${!!st.pop}"`)}
+  const share = showing ? btn('stop', CW_ICONS.stop, 'Stop sharing', true)
+    : btn('share', shareIcon, shareLabel, false, ` aria-haspopup="dialog" aria-expanded="${!!st.pop}"`);
+  const mic = !here.connected ? btn('mute', CW_ICONS.muted, 'Connecting microphone', false, ' disabled')
+    : btn('mute', here.muted ? CW_ICONS.muted : CW_ICONS.mic, here.muted ? 'Unmute' : 'Mute', here.muted, here.micPending ? ' disabled' : '');
+  patchHTML(bar, `${mic}${here.connected ? share : ''}
     <span class="spacer"></span><button type="button" class="cw-leave" data-cw-ctl="leave"${here.leaving ? ' disabled' : ''}>Leave</button>`);
 }
 // The wide layout while someone else's screen shows. The desktop app's window grows to fit it and goes back after
@@ -656,10 +673,10 @@ function cwFull(st: CwState): void {
   else video?.webkitEnterFullscreen?.();
 }
 async function cwControl(st: CwState, k: string, button: HTMLElement): Promise<void> {
-  const here = cwHere(st); if (!here) return;
+  const here = cwHere(st); if (!here || here.leaving) return;
   if (k === 'leave') {
     // Whoever started the call may also end it for everyone.
-    if (here.connector && here.connector === myActor()) {
+    if (here.connected && here.connector && here.connector === myActor()) {
       thvMenuShow(button, [['leave', 'Leave'], ['end', 'End for everyone']], pick => {
         void (async () => { await callBarAct(pick, button); if (pick === 'leave' && !CALL) cwClose(st); })();
       });

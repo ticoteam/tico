@@ -17,6 +17,7 @@ Posting a feed row:
 - Pending -> posted, or an amount change, updates the row in place; a changed posted row is reversed and posted
   again, never twice. A row a done reconciliation cleared is locked."""
 
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import date, timedelta
@@ -41,10 +42,15 @@ from .store import ledger as SL
 from .store import raw_totals as SR
 from .store import tico
 
+log = logging.getLogger(__name__)
+
 NEW_EVENT, CATEGORY_EVENT, DECLINED_EVENT = "finance.feed.new", "finance.feed.needs_category", "finance.card.declined"
 OTHER, BANK, CARDS, OPENING = "6900", "1000", "2100", "3900"
 BOOKS_PROVIDERS = ("quickbooks", "xero")
+RULE = "rule"  # _settle's answer when a posting rule posted the row
 MATCH_DAYS = 5  # a transfer's two sides post within this many days of each other
+# A card paid from a bank on another connection: the bank's debit posts up to a week from the card's credit.
+CARD_PAY_DAYS = 7
 AUTH_DAYS = 30  # an authorization's hold lasts this long without its settlement
 
 
@@ -669,7 +675,8 @@ def refresh_connection_openings(ctx: Ctx, connection_id: str) -> None:
 
 def pair_card_payments(ctx: Ctx, connection_id: str) -> int:
     """At the end of a sync pass: card payments taken in before both sides could pair (_card_payment) pair now. Each
-    unposted payment on the connection's credit card programs looks for its one bank side again. How many paired.
+    unposted payment on the connection's credit card programs looks for its one bank side again, on its own connection
+    and then across the book's other connections (_card_payment `across`). How many paired.
     A mirror pairs nothing: its rows wait for the provider's own entries (mirror.settle_row)."""
     if ctx.book.mode == "mirror":
         return 0
@@ -684,7 +691,7 @@ def pair_card_payments(ctx: Ctx, connection_id: str) -> int:
         for row in SK.waiting_credits(ctx.c, str(money["id"])):
             if str(row["kind"]) in (*F.CARD_KINDS, *F.TRANSFER_KINDS) or covered_day(ctx, str(row["txn_date"])):
                 continue
-            paired += _card_payment(ctx, row, money)
+            paired += _card_payment(ctx, row, money, across=True)
     return paired
 
 
@@ -814,6 +821,7 @@ def _txn_of(row: Any) -> F.FeedTxn:
         description=str(row["description"]),
         card_id=str(row["card_id"] or ""),
         request_id=str(row["request_id"] or ""),
+        note=str(SK.loads(row["raw"]).get("note") or "")[:500],
         version=int(row["version"]),
         raw=SK.loads(row["raw"]),
     )
@@ -836,7 +844,9 @@ def refresh_covered(ctx: Ctx, before: Mapping[str, int]) -> None:
     shift_openings(ctx, before)
 
 
-def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
+def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> str | None:
+    """Post what a settled (or pending, voided, reversed) row means, the way a new row is taken in. RULE when a posting
+    rule posted it (posting_rules.post_feed), else None."""
     fid = str(row["id"])
     if ctx.book.mode == "mirror":
         from .mirror import settle_row
@@ -1002,7 +1012,7 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         if refunds.settle(ctx, row, money, t, None):
             return
     if posting_rules.post_feed(ctx, row, money, t, gl.id):
-        return
+        return RULE
     # Nothing above decided it (a rule, a bill, a top-up...): it may be one side of a card payment (_card_payment). Here,
     # after those, so the bank side gets the same decision whichever side comes first.
     if card is None and t.kind not in F.CARD_KINDS and not t.request_id and _card_payment(ctx, row, money):
@@ -1550,11 +1560,15 @@ def _counterpart(ctx: Ctx, row: Any, money: Any) -> Any:
     return found[0] if found else None
 
 
-def _card_payment(ctx: Ctx, row: Any, money: Any) -> bool:
-    """A payment from a bank account to a credit card program of the same connection (Mercury IO's autopay: a plain
-    row on each side, no transfer kind) posts as a transfer: Dr the card liability, Cr the bank. Whichever side comes
-    second pairs them; a bank side already posted to Other expenses (still waiting for a category) is taken back, one
-    a rule or match posted elsewhere is not. No pair, or several, and the row posts as any other."""
+def _card_payment(ctx: Ctx, row: Any, money: Any, across: bool = False) -> bool:
+    """A payment from a bank account to a credit card program (Mercury IO's autopay, or a Brex card paid from a Mercury
+    bank: a plain row on each side, no transfer kind) posts as a transfer: Dr the card liability, Cr the bank. Whichever
+    side comes second pairs them on its own connection (within MATCH_DAYS); a bank side on the automatic Other expenses
+    default is taken back (default_debit), one posted anywhere else is not. `across` (pair_card_payments, at the end of
+    the card connection's sync pass, never at ingest): a card side with no pair on its own connection looks at the
+    book's other connections' banks (signs checked) within CARD_PAY_DAYS, for a debit on the automatic default only
+    (an unposted debit is held for a person: bills, a top-up, a canceled payment). Exactly the opposite amount and one
+    candidate each way (the debit could pay no other waiting card payment), else nothing pairs."""
     kind, amount = str(money["kind"]), int(row["amount"])
     if kind == "card_program" and str(money["subtype"]) == "credit" and amount > 0:
         want = "bank"
@@ -1563,27 +1577,18 @@ def _card_payment(ctx: Ctx, row: Any, money: Any) -> bool:
     else:
         return False
     conn = str(money["connection_id"] or "")
-    others = [
-        str(m["id"])
+    accounts = [
+        m
         for m in SK.money_accounts(ctx.c, ctx.book.id)
-        if conn
-        and str(m["kind"]) == want
-        and str(m["connection_id"] or "") == conn
-        and (want == "bank" or str(m["subtype"]) == "credit")
+        if str(m["kind"]) == want and (want == "bank" or str(m["subtype"]) == "credit") and m["connection_id"]
     ]
-    if not others:
-        return False
-    day = dates.day(str(row["txn_date"]))
-    start, end = (day - timedelta(days=MATCH_DAYS)).isoformat(), (day + timedelta(days=MATCH_DAYS)).isoformat()
-    other_line = by_code(ctx, OTHER)
-    found = [
-        r
-        for r in SK.transfer_candidates(ctx.c, others, -amount, start, end)
-        if str(r["kind"]) not in (*F.CARD_KINDS, *F.TRANSFER_KINDS)
-        and not r["card_id"]
-        and not r["request_id"]
-        and (not r["entry_id"] or other_line is not None and _only_other(ctx, r, other_line.id))
-    ]
+    same = [str(m["id"]) for m in accounts if conn and str(m["connection_id"]) == conn]
+    found = _payment_sides(ctx, row, same, MATCH_DAYS)
+    if not found and across and want == "bank" and conn:
+        cross = [str(m["id"]) for m in accounts if str(m["connection_id"]) != conn and not _awaiting_sign(ctx, m)]
+        found = [r for r in _payment_sides(ctx, row, cross, CARD_PAY_DAYS) if r["entry_id"]]
+        if len(found) == 1 and len(_waiting_card_sides(ctx, found[0])) != 1:
+            return False  # the debit could pay another waiting card payment too: a person picks
     if len(found) != 1:
         return False
     other = found[0]
@@ -1591,7 +1596,36 @@ def _card_payment(ctx: Ctx, row: Any, money: Any) -> bool:
         unpost_row(ctx, other, "it pays the card")
         other = SK.get(ctx.c, "fin_feed_txns", str(other["id"]))
     transfer(ctx, row, money, other)
+    for fid in (str(row["id"]), str(other["id"])):
+        SK.withdraw_asks(ctx.c, CATEGORY_EVENT, fid)  # an ask not yet sent on: neither side waits for a person now
     return True
+
+
+def _payment_sides(ctx: Ctx, row: Any, money_ids: Sequence[str], days: int) -> list[Any]:
+    """The rows on these money accounts that may be the other side of a card payment: the opposite amount within `days`,
+    no card, request, card or transfer kind, and not posted, or posted on the automatic Other expenses default."""
+    if not money_ids:
+        return []
+    day = dates.day(str(row["txn_date"]))
+    start, end = (day - timedelta(days=days)).isoformat(), (day + timedelta(days=days)).isoformat()
+    return [
+        r
+        for r in SK.transfer_candidates(ctx.c, money_ids, -int(row["amount"]), start, end)
+        if str(r["kind"]) not in (*F.CARD_KINDS, *F.TRANSFER_KINDS)
+        and not r["card_id"]
+        and not r["request_id"]
+        and (not r["entry_id"] or default_debit(ctx, r))
+    ]
+
+
+def _waiting_card_sides(ctx: Ctx, debit: Any) -> list[Any]:
+    """The waiting card payments, on any connection's credit card program, that this bank debit could pay."""
+    cards = [
+        str(m["id"])
+        for m in SK.money_accounts(ctx.c, ctx.book.id)
+        if str(m["kind"]) == "card_program" and str(m["subtype"]) == "credit" and m["connection_id"]
+    ]
+    return [r for r in _payment_sides(ctx, debit, cards, CARD_PAY_DAYS) if not r["entry_id"]]
 
 
 def _only_other(ctx: Ctx, row: Any, other_id: str) -> bool:
@@ -1759,6 +1793,88 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             "accounts": [account.code],
             **{f"tags.{k}": v for k, v in tags.items()},
         },
+    )
+
+
+def by_rule_again(ctx: Ctx, row: Any, money: Any) -> str:
+    """Settle a past row again as a new row would be (_settle), when it still waits for a category: new with no entry,
+    or posted to the automatic Other expenses default (default_debit). It settles in a savepoint and is kept only when
+    a posting rule posted it; anything else that takes it there (a payment, a document, a Stripe payout, a refund, a
+    top-up, a canceled payment, an ask) is undone, so the row and its asks stay as they were. The default's entry is
+    reversed first, as categorize does, and the row's unsent ask is withdrawn. A row in a closed period is not changed.
+    Says "posted", "closed", "failed" (it raised: undone alone, the others go on) or "". The caller keeps the opening in
+    step (shift_openings)."""
+    fid = str(row["id"])
+    if (
+        row["request_id"]
+        or row["card_id"]
+        or row["refund_of"]
+        or int(row["amount"]) == 0
+        or str(row["provider_status"] or "") in (*F.VOID, F.REVERSED, "returned")
+        or str(row["kind"]) in (*F.TRANSFER_KINDS, *F.CARD_KINDS, *F.BREX_CARD_PAYMENTS)
+    ):
+        return ""
+    if str(money["kind"]) not in ("bank", "card_program") or ctx.book.mode == "mirror":
+        return ""
+    if covered_day(ctx, str(row["txn_date"])) or _awaiting_sign(ctx, money):
+        return ""
+    if row["entry_id"] and not default_debit(ctx, row):
+        return ""
+    rule = posting_rules.first_for(ctx, posting_rules.feed_facts(row, money))
+    if rule is None or rule.then.outcome != "post" or not posting_rules.usable(ctx, rule.then):
+        return ""
+    if SL.closed_on(ctx.c, ctx.book.id, str(row["txn_date"])):
+        return "closed"
+    mark = _alone(ctx.c)
+    try:
+        if row["entry_id"]:
+            unpost_row(ctx, row, "a posting rule took it")
+        done = _settle(ctx, SK.get(ctx.c, "fin_feed_txns", fid), money, None, _txn_of(row))
+    except Exception:
+        _undo_alone(ctx.c, mark)
+        log.exception("Finance: feed row %s did not settle again by the posting rules", fid)
+        return "failed"
+    if done != RULE:
+        _undo_alone(ctx.c, mark)
+        return ""
+    ctx.c.execute(f"RELEASE SAVEPOINT {_ALONE}")
+    SK.withdraw_asks(ctx.c, CATEGORY_EVENT, fid)
+    return "posted"
+
+
+_ALONE = "fin_row_alone"
+
+
+def _alone(c: Any) -> int:
+    """Open the savepoint one row's settling runs in; how many after-commit callbacks were queued before it."""
+    c.execute(f"SAVEPOINT {_ALONE}")
+    hooks = cast(list[object] | None, getattr(c, "after_commit", None))
+    return len(hooks) if hooks is not None else 0
+
+
+def _undo_alone(c: Any, mark: int) -> None:
+    """Undo that row's settling, with the after-commit callbacks it queued."""
+    c.execute(f"ROLLBACK TO SAVEPOINT {_ALONE}")
+    c.execute(f"RELEASE SAVEPOINT {_ALONE}")
+    hooks = cast(list[object] | None, getattr(c, "after_commit", None))
+    if hooks is not None:
+        del hooks[mark:]
+
+
+def default_debit(ctx: Ctx, row: Any) -> bool:
+    """Whether a posted row sits on the automatic Other expenses default _settle gives a debit nothing else took: its
+    live entry is the Other expenses line alone, shared with no other row, with no refund posted against it and no
+    document settled from it; the default's needs_category ask was raised for it (a payment, a contact default or a
+    rule that posts to Other expenses on purpose raises none); and no categorize put it there."""
+    other = by_code(ctx, OTHER)
+    fid = str(row["id"])
+    return (
+        other is not None
+        and _only_other(ctx, row, other.id)
+        and SK.asked(ctx.c, CATEGORY_EVENT, fid)
+        and not SAP.categorized_into(ctx.c, str(row["entry_id"]))
+        and not SK.refunds_of(ctx.c, fid)
+        and not SAP.settled_from(ctx.c, "feed", fid)
     )
 
 

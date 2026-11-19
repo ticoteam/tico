@@ -260,6 +260,35 @@ def test_legacy_runner_preparation_survives_upgrade_and_three_minutes(api, monke
         assert start_places.managed(c, fresh['id'])
 
 
+def test_a_claim_says_when_it_granted_the_turns_start_place(api):
+    """`start_reserved` tells the runner the claim granted the place (start_places.admit), so it does not ask
+    start-place again a moment later; `started` still asks the same admission. A claim past the limit says nothing."""
+    computer = runner(api)
+    assign(api, computer, 'ops')
+    assign(api, computer, 'finance')
+    ready(api, computer, ['ops', 'finance'])
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE runner_states SET capacity=1 WHERE runner_id=?', (computer['runner_id'],))
+    post(api, 'chat/ops', {'text': 'Granted at its claim'})
+    first = claim(api, computer, 'ops')
+    assert first['start_reserved'] is True
+    post(api, 'chat/finance', {'text': 'Claimed past the limit'})
+    second = claim(api, computer, 'finance')
+    assert second is not None and 'start_reserved' not in second
+    assert post(api, f"attempts/{second['id']}/start-place", {}, computer['token'])['reserved'] is False
+    # The kept place starts with no start-place ask in between.
+    assert post(api, f"attempts/{first['id']}/started", {'thread_id': 'kept'}, computer['token'])['started']
+
+
+def test_a_claim_without_start_places_is_not_told_its_place_was_granted(api):
+    computer = runner(api)
+    assign(api, computer, 'ops')
+    ready(api, computer, ['ops'])
+    post(api, 'chat/ops', {'text': 'An old runner'})
+    old = post(api, 'jobs/claim', {'bot': 'ops'}, computer['token'])['attempt']
+    assert old is not None and 'start_reserved' not in old
+
+
 def test_legacy_wait_takes_one_of_the_two_claims_the_limit_allows_until_its_unchecked_start_finishes(api):
     """A worker without start-place support keeps its claim while it waits. Claims go on to twice the limit (2 here),
     so the wait leaves one claim for another bot and the start it has not confirmed releases nothing early."""

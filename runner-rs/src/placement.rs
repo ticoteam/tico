@@ -145,6 +145,8 @@ pub async fn catch_up(bot: &str, generation: &Value, path: &Path, env: &Env) {
     {
         return;
     }
+    // A chat turn here never starts on a fetch from the bot's last placement (crate::fetch_fresh).
+    crate::fetch_fresh::forget(path, &crate::safegit::environment(env)).await;
     let (state, detail) = fast_forward(path, env).await;
     let mut p = placements().lock().unwrap();
     if detail != "could not reach GitHub" {

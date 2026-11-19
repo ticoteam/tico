@@ -330,6 +330,11 @@ _RULE: tuple[Field, ...] = (
     ),
     ("priority?", "int", "posting rules: lower runs first (default 100)"),
     ("external_rule_id?", "str", "the company rule this one carries out"),
+    (
+        "apply_from?",
+        "day",
+        "posting: also posts rows from that day that are still new or on the automatic Other expenses default",
+    ),
 )
 SHAPES: dict[str, tuple[Field, ...]] = {
     "journal": (

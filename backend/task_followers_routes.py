@@ -51,7 +51,9 @@ def register(
                 following=body.following,
                 notify=body.notify,
                 mover=mover(c, who) or None,
-                check=lambda target: reach.check(c, who, target, "task", task_id=task_id),
+                check=lambda target: reach.check(
+                    c, who, target, "task", task_id=task_id, owner=(H.task(c, task_id) or {}).get("owner_id")
+                ),
             )
             return followers_answer(c, who, task_id)
 

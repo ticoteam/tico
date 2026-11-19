@@ -354,9 +354,10 @@ def test_the_assistant_and_botops_never_give_a_bound_ok_from_its_preview(api):
 
 
 # ----------------------------------------------------------------------------- finding 5: an OK never widens who sees
-def test_an_ok_filed_for_a_subject_is_private_to_its_parties_and_its_title_names_nothing_of_it(api):
-    """A bot asks Ben to OK an email whose subject line is confidential. The task filed for it is private, reaches Ben,
-    and is titled only for the kind of act; Cara, a teammate, can neither read it nor open its preview."""
+def test_an_ok_filed_for_an_email_is_private_to_its_parties(api):
+    """A bot asks Ben to OK an email whose subject line is confidential. The task filed for it is titled with the email,
+    so Ben can tell it from other sends, and it is private: it reaches Ben, and Cara, a teammate, can neither read it
+    nor open its preview."""
     as_bot(api)
     secret = {"subject": "Acquisition of Globex: terms", "to": ["ceo@globex.example"]}
     with api.app.state.store.transaction() as c:
@@ -371,7 +372,7 @@ def test_an_ok_filed_for_a_subject_is_private_to_its_parties_and_its_title_names
             title="Send: Acquisition of Globex: terms",
         )
         task = H.task(c, asked["task_id"])
-    assert task["title"] == "Send an email" and task["private"]
+    assert task["title"] == "Send: Acquisition of Globex: terms" and task["private"]
     rid, tid = asked["requirement_id"], asked["task_id"]
     assert get(api, f"oks/{rid}", token="ben-test")["content"] == secret
     for path in (f"oks/{rid}", f"tasks/{tid}"):
@@ -380,20 +381,20 @@ def test_an_ok_filed_for_a_subject_is_private_to_its_parties_and_its_title_names
 
 
 def test_a_filed_oks_needs_you_row_names_what_it_is_about_to_its_party_only(api):
-    """Task #389: Ben's phone listed "Send an email" twice and "OK a Finance action" twice. The filed task keeps the
+    """Task #389: Ben's phone listed "Mail a letter" twice and "OK a Finance action" twice. The filed task keeps the
     kind-only title (it travels further than the task), but Ben's own Needs you row says what each OK is about, from
-    the content it binds: an email by its subject, a Finance action by its line. Cara's list never holds it."""
+    the content it binds: a letter by its recipient, a Finance action by its line. Cara's list never holds it."""
     as_bot(api)
     with api.app.state.store.transaction() as c:
         mail = K.ask_ok(
             c,
             "bot:ops",
             "human:ben",
-            "Send this email?",
+            "Mail this letter?",
             shows=[],
-            subject="email_send:e9",
-            content={"subject": "November product update", "to": ["all@acme.example"]},
-            title="Send: x",
+            subject="letter:l9",
+            content={"recipient": {"name": "Globex Records Office"}},
+            title="Mail a letter to x",
         )
         pay = K.ask_ok(
             c,
@@ -404,13 +405,13 @@ def test_a_filed_oks_needs_you_row_names_what_it_is_about_to_its_party_only(api)
             subject="finance:f9",
             content={"amount": 540},
         )
-        assert H.task(c, mail["task_id"])["title"] == "Send an email"
+        assert H.task(c, mail["task_id"])["title"] == "Mail a letter"
         assert H.task(c, pay["task_id"])["title"] == "OK a Finance action"
     items = {i.get("requirement_id"): i for i in get(api, "needs-you", token="ben-test")["items"]}
-    assert items[mail["requirement_id"]]["about"] == "Send email: November product update"
+    assert items[mail["requirement_id"]]["about"] == "Mail a letter to Globex Records Office"
     assert items[pay["requirement_id"]]["about"] == "Pay Figma $540 for 12 design seats"
     cara = api.get("/api/v2/needs-you", headers=headers("cara-test"))
-    assert "November product update" not in cara.text and "Figma" not in cara.text
+    assert "Globex Records Office" not in cara.text and "Figma" not in cara.text
     # Handed to Cara, who reads its task but is no party to the OK: her row is the ask, never what it is about.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=0 WHERE id=?", (mail["task_id"],))
@@ -419,7 +420,7 @@ def test_a_filed_oks_needs_you_row_names_what_it_is_about_to_its_party_only(api)
     cara = api.get("/api/v2/needs-you", headers=headers("cara-test"))
     handed = {i.get("requirement_id"): i for i in cara.json()["items"]}
     assert mail["requirement_id"] in handed, cara.text
-    assert "November product update" not in cara.text and not handed[mail["requirement_id"]].get("about")
+    assert "Globex Records Office" not in cara.text and not handed[mail["requirement_id"]].get("about")
 
 
 def test_a_roadmap_oks_needs_you_row_names_the_post_by_its_public_title(api):

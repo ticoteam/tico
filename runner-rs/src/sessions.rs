@@ -1687,6 +1687,27 @@ impl Place {
     }
 }
 
+/// Whether the turn may start on the runner's recent fetch of its checkout (crate::fetch_fresh): a person waits for it,
+/// on the bot's main lane, in the bot's own repository. A task turn (it builds and pushes from its worktree), a shared
+/// checkout (others push to it all day), a private meeting's copy and a turn no person waits for fetch first, as before.
+/// A task's turn on the main lane (`session: bot`) is a task's all the same.
+pub fn chat_refresh(place: &Place, attempt: &Value) -> bool {
+    let task = if place.task.is_empty() {
+        text_of(&attempt["task"]["id"])
+    } else {
+        place.task.clone()
+    };
+    chat_turn(&task, place.person, place.disposable, &attempt["config"])
+}
+
+fn chat_turn(task: &str, person: bool, disposable: bool, config: &Value) -> bool {
+    task.is_empty()
+        && person
+        && !disposable
+        && !is_shared(config)
+        && !crate::continuity::memory_pass(config)
+}
+
 impl Runner {
     /// Take the turn's lane, and the bot's checkout: waited for on the main lane, taken only if free on a task lane.
     pub async fn enter_lanes(&self, attempt: &Value, lost: &AtomicBool) -> Result<Place, String> {
@@ -1782,7 +1803,8 @@ impl Runner {
                 }
             }
         }
-        ensure_reads(&self.config.projects_dir(), path).await?;
+        // A chat turn's own checkout may start on the runner's recent fetch; its `reads:` siblings fetch first.
+        crate::fetch_fresh::fetching_first(ensure_reads(&self.config.projects_dir(), path)).await?;
         // A templated bot's files follow the release (crate::product_files); a task lane pushes them at once.
         if crate::product_files::refresh_due(&place.bot, &attempt["config"]) {
             let _git = self.lanes.git_lock(path).lock_owned().await;
@@ -2206,6 +2228,25 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_persons_chat_in_the_bots_own_checkout_starts_on_the_runners_recent_fetch() {
+        let own = json!({"repo": "acme/ops"});
+        assert!(chat_turn("", true, false, &own));
+        // A task builds and pushes from its worktree; a routine or another bot's message has no person waiting.
+        assert!(!chat_turn("t1", true, false, &own));
+        assert!(!chat_turn("", false, false, &own));
+        // A private meeting's copy, a shared checkout others push to, and the nightly memory pass fetch first.
+        assert!(!chat_turn("", true, true, &own));
+        assert!(!chat_turn("", true, false, &json!({"shared": true})));
+        assert!(!chat_turn(
+            "",
+            true,
+            false,
+            &json!({"shared_from": "source", "repo": "acme/app"})
+        ));
+        assert!(!chat_turn("", true, false, &json!({"memory_pass": true})));
+    }
 
     #[tokio::test]
     async fn turns_refuse_explicit_named_and_shared_roots_inside_the_install() {

@@ -889,6 +889,7 @@ RUNNER_KINDS = (
     "subscription_refresh",
     "screen_open",
     "browser_exit",
+    "pushed",  # only to a computer that takes it (backend/github.py tell_pushed)
 )
 _BOT_RUNNER = "SELECT runner_id AS rid FROM assignments WHERE bot={bot}"
 # Credentials and repositories are rare company-wide changes: every computer re-reads its share.

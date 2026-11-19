@@ -22,6 +22,14 @@ TEXT_MARKUP = frozenset(
 TEXT_ATTRIBUTES = frozenset(("alt", "title", "href", "src", "value", "label", "placeholder", "aria-label"))
 
 
+class Refused(ValueError):
+    """One named check an email failed; its text is what the sender is told (`snapshot`)."""
+
+
+def kib(size):
+    return f"{size / 1024:,.0f} KiB"
+
+
 def digest(value):
     return hashlib.sha256(value if isinstance(value, bytes) else str(value).encode()).hexdigest()
 
@@ -70,9 +78,12 @@ class VisibleHTML(HTMLParser):
 
 
 def parsed(raw):
-    data = base64.b64decode(raw + "=" * (-len(raw) % 4), altchars=b"-_", validate=True)
+    try:
+        data = base64.b64decode(raw + "=" * (-len(raw) % 4), altchars=b"-_", validate=True)
+    except ValueError as exc:
+        raise Refused("the raw email is not base64url MIME (" + str(exc)[:120] + ")") from exc
     if len(data) > MAX_RAW:
-        raise ValueError("Email is too large")
+        raise Refused(f"it is {len(data) / 1024 / 1024:.1f} MB; the limit is {MAX_RAW // 1024 // 1024} MB")
     return BytesParser(policy=policy.default).parsebytes(data)
 
 
@@ -127,7 +138,7 @@ def snapshot(raw, mailbox):
         msg = parsed(raw)
         for key in ("from", "sender", "reply-to", "to", "cc", "bcc", "subject", "in-reply-to", "references"):
             if len(msg.get_all(key, [])) > 1:
-                raise ValueError("Ambiguous repeated header")
+                raise Refused(f"the {key.title()} header appears {len(msg.get_all(key, []))} times; an email has one")
         to = sorted(
             {
                 a.lower()
@@ -135,12 +146,21 @@ def snapshot(raw, mailbox):
                 if a
             }
         )
-        sender = [a.lower() for _, a in getaddresses(msg.get_all("from", []))]
+        sender = [a.strip().lower() for _, a in getaddresses(msg.get_all("from", [])) if a.strip()]
+        inbox = str(mailbox or "").strip().lower()
         from .mail_settings import ADDRESS
 
-        if not to or len(to) > 100 or sender != [mailbox] or any(not ADDRESS.fullmatch(a) for a in to):
-            raise ValueError("Invalid envelope")
+        if sender != [inbox]:
+            raise Refused(f"From {', '.join(sender) or '(none)'} doesn't match the inbox {inbox}")
+        if not to:
+            raise Refused("it has no recipients in To, Cc or Bcc")
+        if len(to) > 100:
+            raise Refused(f"it has {len(to)} recipients; the limit is 100")
+        bad = [a for a in to if not ADDRESS.fullmatch(a)]
+        if bad:
+            raise Refused("not a valid recipient address: " + ", ".join(a[:80] for a in bad[:3]))
         bodies, files, texts, visible = body_parts(msg), [], [], []
+        file_texts = set()  # visible entries that are a text file's words, not a body's: kept while they fit
         complete = all(not body.is_multipart() for body in bodies)
         leaves = file_parts(msg)
         attachments = attachment_parts(msg)
@@ -153,7 +173,7 @@ def snapshot(raw, mailbox):
         for index, part in enumerate(leaves):
             for key in ("content-type", "content-disposition", "content-transfer-encoding", "content-id"):
                 if len(part.get_all(key, [])) > 1:
-                    raise ValueError("Ambiguous MIME header")
+                    raise Refused(f"a part repeats its {key.title()} header")
             is_body = any(part is body for body in bodies)
             is_file = id(part) in attachments and id(part) not in attached_children
             payload = part_bytes(part) if not part.is_multipart() or is_file or is_body else b""
@@ -186,6 +206,8 @@ def snapshot(raw, mailbox):
                 # An opaque primary body still needs an inert, complete representation for review.
                 visible.append({"type": part.get_content_type(), "text": base64.b64encode(payload).decode()})
                 continue
+            if not is_body:
+                file_texts.add(len(visible))
             try:
                 text = payload.decode(part.get_content_charset() or "utf-8", errors="strict")
             except (UnicodeDecodeError, LookupError):
@@ -203,19 +225,22 @@ def snapshot(raw, mailbox):
                 visible.append({"type": "text/html", "text": "".join(html.text) if html.complete else text})
             else:
                 visible.append({"type": part.get_content_type(), "text": text})
-        if (
-            len(str(msg.get("subject", ""))) > 1000
-            or len(files) > 50
-            or sum(len(p["text"]) for p in visible) > MAX_PREVIEW
-        ):
-            raise ValueError("The email cannot be previewed in full")
+        if len(str(msg.get("subject", ""))) > 1000:
+            raise Refused(f"the subject is {len(str(msg.get('subject', ''))):,} characters; the limit is 1,000")
+        if len(files) > 50:
+            raise Refused(f"it has {len(files)} files; the limit is 50")
+        shown = sum(len(p["text"]) for i, p in enumerate(visible) if i not in file_texts)
+        if shown > MAX_PREVIEW:
+            raise Refused(f"its visible text is {kib(shown)}; the limit is {kib(MAX_PREVIEW)}")
+        if shown + sum(len(visible[i]["text"]) for i in file_texts) > MAX_PREVIEW:
+            # A text file is a file like a PDF: listed, hashed and downloadable from the review. Its words join the
+            # preview only while they fit; left out, the email is no longer fully classified, so a person is asked.
+            visible = [p for i, p in enumerate(visible) if i not in file_texts]
+            complete = False
+    except Refused as exc:
+        raise Problem("email", "Invalid email: " + str(exc), 422) from exc
     except (ValueError, TypeError, LookupError) as exc:
-        raise Problem(
-            "email",
-            "Invalid email: From must match the inbox, with 1–100 valid recipients, at most 50 files "
-            "and at most 256 KiB of visible text",
-            422,
-        ) from exc
+        raise Problem("email", "Invalid email: its MIME could not be read (" + str(exc)[:200] + ")", 422) from exc
     body = "\n".join(texts) if texts else "\n".join(p["text"] for p in visible)
     parts = [
         {

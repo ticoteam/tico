@@ -3,7 +3,8 @@
 A call happens in a thread. A call is a Tico Meet call (the default, for every call, people-only calls too: audio and
 screen share on the install's own LiveKit) or a Google Meet, picked per call with **Use Google Meet instead** next to the
 call button. A Google Meet has no bots. A live transcript is kept while it runs, and bots that were attached listen and reply in the
-thread. When the call ends, the transcript and the action items drafted from it are posted to the thread.
+thread. When the call ends, the transcript and the action items drafted from it are posted to the thread if there was
+transcribed speech. A silent call leaves only its Call card.
 
 ## Google Meet
 
@@ -148,15 +149,17 @@ A Google Meet call still opens Meet in a tab of its own.
    screen's sound). Each speaker's audio is cut after about 450 ms of quiet. A fragment with less than 600 ms of speech
    gets 700 ms of quiet so the speaker has more time to continue. A clip keeps 200 ms before the first loud frame and
    after the last, and is cut at 60 seconds when nobody pauses. A clip needs at least 200 ms of speech.
-   If microphone frames stop coming, the recorder's timer uses the same pause threshold. The recorder flushes
-   immediately when the track ends. Each clip goes to the Gateway's speech-to-text (`tico-transcribe-1.1`; when the
-   Gateway answers 400 that it does not know that model, the call falls back once to `elevenlabs/scribe-v2` and logs
-   it). Clips are transcribed on workers, so the recorder never waits on the Gateway, and are stored in the order they
-   start, across people: a clip waits for the clips that start before it and for an utterance someone else began before
-   it and is still saying. The text becomes the call's live meeting chunks. Audio is held in memory until its clip is
-   stored and is never stored itself. At most 4 clips of a call wait for their text at once: past that the oldest is
-   dropped. If the Gateway does not answer, that clip is lost and the call goes on; in a 1:1 call with a bot a lost or
-   dropped clip shows `Please repeat that`, and no bot is asked.
+   Gaps between microphone frames count as quiet, and the recorder's timer uses the same pause threshold when frames
+   stop coming. The recorder flushes when the track ends. Each clip goes to the Gateway's speech-to-text
+   (`tico-transcribe-1.1`; when the Gateway answers 400 that it does not know that model, the call falls back once to
+   `elevenlabs/scribe-v2` and logs it). Transcription workers handle Gateway requests while a separate worker writes
+   the chunks in speech order.
+   A ready clip can move past an earlier request that has been out for six seconds. That earlier clip is marked late.
+   A clip still waits for an utterance someone else began before it and is still saying. The text becomes the call's
+   live meeting chunks. Audio is held in memory until its clip is settled. At most 4 clips of a call wait for their text
+   at once. Past that the oldest is dropped. In a 1:1 call with a bot, a late or dropped clip or one the Gateway
+   cannot turn into text shows `Please repeat that`. The server writes one `call_clip` line per clip with only its call
+   ID, clip number, duration, outcome and elapsed time since the cut.
 4. **Bots.** A person who can write to the thread and has joined the call attaches bots (up to 10 in the call, counting
    the ones already in it; more is `422 bot_limit`, through the call's route and the live meeting's alike). A bot must
    be one
@@ -173,7 +176,7 @@ A Google Meet call still opens Meet in a tab of its own.
    thread per call, however many Ends arrive: when it is done within 2 seconds End answers with the call `ended`;
    otherwise it answers `ending` (a second End answers the same), and the call becomes `ended` once the clips are
    stored (up to 45 seconds). A Tico that restarts while a call is `ending` ends it on the sweep. Then the recorder leaves and the media session closes. If LiveKit does not confirm the
-   close, the sweep retries it, and the transcript and action items wait until it does. Then two messages are posted to
+   close, the sweep retries it, and the transcript and action items wait until it does. If speech was transcribed, these messages are posted to
    the thread from the connector, each once. Each names the call's meeting, so the meeting's own rules decide who reads
    it, and each is marked `restricted`:
    - `Call transcript: <title>` with one `speaker: text` line per piece of speech. Long transcripts are cut short, and
@@ -207,8 +210,9 @@ A Tico Meet call is a voice call: `speak_replies` is on by default for Tico Meet
 bots or voice is always Tico Meet: asking for Google Meet with either is `422 voice_needs_tico_meet`, and `auto` picks
 Tico Meet.
 
-**Calling a bot.** The call button in a DM with one bot, and Call on a bot's card in the org chart, start a Tico Meet
-call in the viewer's DM with that bot, with the bot in it, and join it.
+**Calling a bot.** Start in a DM or named private thread whose only other member is a bot includes that bot in the
+call. In a group thread, add a bot from the call window. Call on a bot's card in the org chart opens a Tico Meet call
+with that bot in the viewer's DM.
 
 **Call now.** The Meetings page's call icon (only where the server runs Tico Meet, `features.tico_meet` in the config)
 picks people and bots, each named by its id or its slug, (a team, listed first with a few of its faces and how many, adds its bots in one pick) and
@@ -235,7 +239,7 @@ company subscription. Its first model request warms the bot's identity, the call
 Each bot in the call holds a normal lease and uses one `turns_at_once` slot for the whole call (five slots on Shared).
 Each question goes to the resident session, with updated notes when they change. At 24,000 context tokens the runner
 starts a fresh process with the primer and a short excerpt of the recent call transcript.
-Each bot uses its own model at low effort with Claude Code’s Concise output style. Follow-up tasks use the bot’s usual settings.
+Each bot uses its own model at medium effort with Claude Code’s Concise output style. Follow-up tasks use the bot’s usual settings.
 
 The bot answers in plain spoken sentences, in about 80 words or fewer. It uses what it knows and its call notes.
 The bot can use its usual tools and permissions. People read the transcript and chat through the call thread's

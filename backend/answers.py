@@ -220,6 +220,18 @@ STALE_APPROVAL = "A newer version is submitted. Look again."
 APPROVE_SHOWN = "Approve the version you were shown"
 
 
+def _deciding_bot(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row) -> bool:
+    """Whether `by` is the pipeline's manager bot the page waits on to decide what Jev was unsure of
+    (task_requirements._unsure_to_bots). It answers a document page it may not open as it answers a plain page (which
+    has no read check): else a bot-held stage's document, such as a Validate's Checked in production, stays stuck. A
+    person approving a document is still refused a page they may not read."""
+    if not is_bot(by):
+        return False
+    newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement["id"])
+    standing = R.standing(conn, row, requirement, newest)
+    return standing.state == R.WAITING and standing.on == by and standing.line.startswith(R.DECIDE)
+
+
 def _page_version(
     conn: "sqlite3.Connection",
     by: str,
@@ -262,7 +274,7 @@ def _page_version(
             )
         else:
             readable = page_reader(refs)
-        if not readable:
+        if not readable and not _deciding_bot(conn, by, row, requirement):
             _refuse(conn, by, "task_requirement", "This approval is unavailable", row["id"])
     expected = P.version_key(pages)
     if keyed and is_human(by) and document and value == OK and page_version in (None, ""):

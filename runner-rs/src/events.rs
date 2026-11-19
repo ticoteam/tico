@@ -85,6 +85,7 @@ pub fn channels(kind: &str) -> &'static [&'static str] {
         // A plan's usage read, or a full Claude login's new token or refresh (claude_login.rs).
         "subscription_refresh" => &["refresh", "claude_logins"],
         "screen_open" => &[], // crate::screen polls its sessions at once
+        "pushed" => &[],      // crate::fetch_fresh fetches the bots' checkouts at once
         _ => ALL,
     }
 }
@@ -368,6 +369,9 @@ impl Events {
                 if kind == "screen_open" {
                     crate::screen::heard();
                 }
+                if kind == "pushed" {
+                    crate::fetch_fresh::heard(&frame.bots);
+                }
                 let asked = channels(kind);
                 if kind == "work" {
                     // A follow-up queued or a chat goal changed for these bots (backend/events.py): their running
@@ -447,6 +451,21 @@ mod tests {
         );
         assert!(e.take("claim") && !e.take("sync"));
         assert_eq!(e.last_id.lock().unwrap().as_deref(), Some("8"));
+    }
+
+    #[test]
+    fn a_push_is_handed_to_the_checkout_fetch_and_reads_nothing_again() {
+        let e = Events::new();
+        let bot = format!("pushed-{}", uuid::Uuid::new_v4().simple());
+        let before = e.heard(&bot);
+        e.dispatch(
+            "runner",
+            None,
+            &serde_json::json!({"kind": "pushed", "bots": [bot]}),
+            false,
+        );
+        assert!(crate::fetch_fresh::heard_of(&bot));
+        assert!(CHANNELS.iter().all(|c| !e.take(c)) && e.heard(&bot) == before);
     }
 
     #[test]

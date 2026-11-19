@@ -29,14 +29,20 @@ pub const HEARTBEAT_SLOW_MS: u64 = 1000;
 /// A git command at least this long is recorded (timeouts and commands that never ran always are).
 pub const GIT_SLOW_MS: u64 = 2000;
 /// The order a turn passes its marks in (`util::mark` names plus the flight-only ones). The `claude_*` marks are a
-/// Claude turn's own (hosts/claude.rs): its process spawned, its `system/init`, and its last `result`. `refreshed` is
-/// its checkouts brought up to date, `skills_ready` its company skills staged.
-const PHASES: [&str; 18] = [
+/// Claude turn's own (hosts/claude.rs): its process spawned, its `system/init`, and its last `result`. `prepared` is
+/// its credentials and environment ready, `refreshed` its checkouts brought up to date, `skills_ready` its company
+/// skills staged, `acknowledged` its `started` accepted by the hub. Two marks that are not steps tell a chat turn's
+/// refresh (crate::fetch_fresh): `fetch_skipped`, it started on the runner's recent fetch, and `fetched_first`, it
+/// fetched before it started. A third, `start_asked`, is the turn's first start-place ask: a turn without it kept the
+/// place the hub granted at its claim up to `started` (execute.rs keep_start_place).
+const PHASES: [&str; 20] = [
     "claimed",
+    "prepared",
     "refreshed",
     "placed",
     "harness_started",
     "skills_ready",
+    "acknowledged",
     "claude_spawned",
     "harness_spawned",
     "claude_init",
@@ -608,6 +614,57 @@ pub fn summary(dir: &Path, since_s: f64, now: f64) -> String {
         }
     }
 
+    // A chat turn's checkout refresh, started on the runner's recent fetch or fetching first.
+    let refresh = |how: &str| {
+        let mut v: Vec<u64> = turns
+            .iter()
+            .filter(|t| t["phases"][how].is_u64())
+            .filter_map(|t| {
+                let p = &t["phases"];
+                Some(
+                    p["refreshed"]
+                        .as_u64()?
+                        .saturating_sub(p["prepared"].as_u64()?),
+                )
+            })
+            .collect();
+        v.sort_unstable();
+        v
+    };
+    let (skipped, fetched) = (refresh("fetch_skipped"), refresh("fetched_first"));
+    if !skipped.is_empty() || !fetched.is_empty() {
+        let median = |v: &[u64]| v.get(v.len() / 2).map_or("-".to_string(), |ms| secs(*ms));
+        say(
+            &mut out,
+            format!(
+                "\nChat turns' checkout refresh (prepared -> refreshed, median): {} on the runner's recent fetch ({} turns), {} fetching first ({} turns)",
+                median(&skipped),
+                skipped.len(),
+                median(&fetched),
+                fetched.len()
+            ),
+        );
+    }
+
+    // Turns since a runner that keeps start places: how many still asked the hub for one before `started`.
+    let kept: Vec<&Value> = turns
+        .iter()
+        .filter(|t| t["phases"]["acknowledged"].is_u64())
+        .collect();
+    if !kept.is_empty() {
+        let asked = kept
+            .iter()
+            .filter(|t| t["phases"]["start_asked"].is_u64())
+            .count();
+        say(
+            &mut out,
+            format!(
+                "\nStart-place asks before `started`: {asked} of {} turns asked at least once",
+                kept.len()
+            ),
+        );
+    }
+
     let failed = heartbeats.iter().filter(|h| h["ok"] == false).count();
     say(
         &mut out,
@@ -752,6 +809,8 @@ mod tests {
             r#"{"v":1,"ts":1791968400.25,"kind":"runner.turn","bot":"stale-bot","runtime":"codex","outcome":"completed","total_ms":1,"phases":{"claimed":0}}"#,
             r#"{"v":1,"ts":1791977400.25,"kind":"runner.turn","attempt":"a1","bot":"acme-seo","runtime":"claude","outcome":"completed","total_ms":84000,"phases":{"claimed":0,"placed":1200,"harness_started":1500,"first_output":6000,"finished":80000,"complete_posted":81000,"done":84000}}"#,
             r#"{"v":1,"ts":1791977430.25,"kind":"runner.turn","attempt":"a2","bot":"acme-ops","runtime":"codex","outcome":"completed","total_ms":76100,"phases":{"claimed":0,"first_output":2000,"model_done":30000,"scrubbed":75000,"finished":75100,"saved":75100,"flushed":75200,"complete_posted":76000,"done":76100}}"#,
+            r#"{"v":1,"ts":1791977440.25,"kind":"runner.turn","attempt":"a3","bot":"acme-ops","runtime":"claude","outcome":"completed","total_ms":9000,"phases":{"claimed":0,"prepared":400,"fetch_skipped":420,"refreshed":460,"placed":500,"acknowledged":600,"done":9000}}"#,
+            r#"{"v":1,"ts":1791977450.25,"kind":"runner.turn","attempt":"a4","bot":"acme-ops","runtime":"claude","outcome":"completed","total_ms":9000,"phases":{"claimed":0,"start_asked":5,"prepared":400,"fetched_first":1250,"refreshed":1300,"placed":1350,"acknowledged":1600,"done":9000}}"#,
             r#"{"v":1,"ts":1791977460.25,"kind":"runner.heartbeat","ms":4200,"tries":1,"ok":true}"#,
             r#"{"v":1,"ts":1791977520.25,"kind":"runner.git","verb":"fetch","repo":"acme-seo","ms":9000,"code":0}"#,
             r#"{"v":1,"ts":1791977580.25,"kind":"runner.process","rss_bytes":52428800,"turns":1,"dropped":3}"#,
@@ -761,7 +820,17 @@ mod tests {
         std::fs::write(dir.join(FILE), lines.join("\n")).unwrap();
         let now = crate::util::parse_iso("2026-10-14T12:00:00Z");
         let text = summary(&dir, parse_since("1h").unwrap(), now);
-        assert!(text.contains("Turns: 2"), "{text}");
+        assert!(text.contains("Turns: 4"), "{text}");
+        assert!(
+            text.contains(
+                "acme-ops claude completed 9.0s prepared+0.4s refreshed+0.5s placed+0.5s"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("Chat turns' checkout refresh (prepared -> refreshed, median): 0.1s on the runner's recent fetch (1 turns), 0.9s fetching first (1 turns)"),
+            "{text}"
+        );
         assert!(
             text.contains("acme-seo claude completed 84.0s placed+1.2s"),
             "{text}"
@@ -781,6 +850,10 @@ mod tests {
         assert!(text.contains("4.2s tries 1"), "{text}");
         assert!(text.contains("git fetch acme-seo 9.0s"), "{text}");
         assert!(text.contains("Dropped records: 3"), "{text}");
+        assert!(
+            text.contains("Start-place asks before `started`: 1 of 2 turns asked at least once"),
+            "{text}"
+        );
         assert!(!text.contains("stale-bot"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
     }

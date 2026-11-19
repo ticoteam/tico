@@ -16,10 +16,11 @@
 //! can read them; they are the company's approved skills, which every bot may read anyway, and nobody but the runner
 //! can write them.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use regex::Regex;
@@ -608,15 +609,46 @@ async fn stage_and_report(
         "skills-receipt:{aid}:{}",
         &hex::encode(Sha256::digest(body.to_string().as_bytes()))[..16]
     );
-    if let Err(e) = client
-        .post(&format!("attempts/{aid}/skills/receipt"), &body, Some(&key))
-        .await
-    {
-        log(&format!(
-            "Tico runner: {bot}: could not report its staged company skills: {e}"
-        ));
-    }
+    // The receipt is the Skills page's record of what was staged: it goes out beside `started` instead of before it,
+    // and the turn waits for it before its harness runs (`receipt_landed`), so a skill's use is never recorded against
+    // the previously staged copy (skill_runtime.py record_runner_usage). Its failure was only ever logged.
+    let (client, owner, bot) = (client.clone(), aid.to_string(), bot.to_string());
+    let sent = tokio::spawn(async move {
+        if let Err(e) = client
+            .post(
+                &format!("attempts/{owner}/skills/receipt"),
+                &body,
+                Some(&key),
+            )
+            .await
+        {
+            log(&format!(
+                "Tico runner: {bot}: could not report its staged company skills: {e}"
+            ));
+        }
+    });
+    RECEIPTS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .insert(aid.to_string(), sent);
     Ok(Some(dir))
+}
+
+/// Skills receipts still on their way, by attempt (`stage_and_report`).
+static RECEIPTS: OnceLock<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>> = OnceLock::new();
+
+/// Waits for the turn's skills receipt, if one is on its way: called once the hub has accepted `started`, before the
+/// harness runs. It went out a round trip earlier, so it has usually landed.
+pub async fn receipt_landed(aid: &str) {
+    let sent = RECEIPTS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .remove(aid);
+    if let Some(sent) = sent {
+        let _ = sent.await;
+    }
 }
 
 #[cfg(test)]
@@ -891,7 +923,21 @@ mod tests {
         ])
         .await;
         let client = Client::new(&url, "runner-token", 5, 0).unwrap();
+        // The receipt goes in the background: wait for it, so the hub's replies stay in order.
+        let posted = |n: usize| {
+            let seen = seen.clone();
+            async move {
+                for _ in 0..500 {
+                    if seen.lock().unwrap().len() >= n {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                panic!("no receipt posted");
+            }
+        };
         let dir = prepare(&client, &state, "a-7", "ops").await.unwrap();
+        posted(3).await;
         assert!(dir.join(".claude/skills/acme-brief/SKILL.md").is_file());
         assert!(state
             .join("skill-bundles")
@@ -899,6 +945,7 @@ mod tests {
             .is_file());
         // The next turn reads the bundle from the cache: no second bundle fetch.
         let again = prepare(&client, &state, "a-8", "ops").await.unwrap();
+        posted(5).await;
         assert!(again.join(".claude/skills/acme-brief/SKILL.md").is_file());
         assert_eq!(again, dir, "the bot's next turn adds the same folder");
         let seen = seen.lock().unwrap();

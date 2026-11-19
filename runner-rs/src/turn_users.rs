@@ -126,7 +126,9 @@ for root in sys.argv[1:]:
  share(root)
  for base,dirs,files,fd in os.fwalk(root,follow_symlinks=False):
   for name in dirs+files:
-   s=os.stat(name,dir_fd=fd,follow_symlinks=False)
+   # Git beside the walk (another lane, a background fetch) removes its lock and temporary files: gone is fine.
+   try: s=os.stat(name,dir_fd=fd,follow_symlinks=False)
+   except FileNotFoundError: continue
    if s.st_uid==os.geteuid() and (stat.S_ISDIR(s.st_mode) or stat.S_ISREG(s.st_mode)): share(name,fd)
 "#]).args(paths).env_clear().status().map_err(|e| e.to_string())?;
     if status.success() {

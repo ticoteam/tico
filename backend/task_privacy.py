@@ -1522,14 +1522,17 @@ def require_create(
     return reach
 
 
-def require_readers(c, who, task_id, readers, shared):
-    """A bot adds readers within its reach (reach.check), and a private run only those who read every private task it
-    carries, the task they are added to counted as read. `readers` are the ones being added;
-    `shared` is the task reach counts them as sharing with the bot: the task itself, or a new task's parent."""
+def require_readers(c, who, task_id, readers, shared, owner=None):
+    """A bot adds readers within its reach (reach.check), any teammate to a task it owns, and a private run only those
+    who read every private task it carries, the task they are added to counted as read. `readers` are the ones being
+    added; `shared` is the task reach counts them as sharing with the bot: the task itself, or a new task's parent.
+    `owner`: the task's owner, read from `task_id` when not given (a task not yet made has none to read)."""
     from . import reach
 
+    if owner is None and task_id:
+        owner = (H.task(c, task_id) or {}).get("owner_id")
     for reader in readers:
-        reach.check(c, who, reader, "task", task_id=shared)
+        reach.check(c, who, reader, "task", task_id=shared, owner=owner)
         if private_execution(c, who):
             require_destination(c, who, reader, None, {}, reach=(task_id, reader) if task_id else None)
 
@@ -1695,7 +1698,27 @@ def guard_write(c, who, path, auth):
 
         if bookkeeper.private_finance_run(c, who):
             return  # the Finance Owner's Finance actions from its own Books check or Watch task; the act route checks the kind
-    raise Problem("privacy", "Private task work cannot publish into company-wide resources", 403)
+    if MAILBOX_WRITE.fullmatch(path):
+        # Mail from a mailbox the bot may use publishes nothing into Tico: the route checks the mailbox's own level
+        # (mailbox_access.may), and a send waits on the inbox's send gate, whose OK is a private task of the bot and its
+        # approver alone (email_sending.request_approval). The run's private task is no reason to refuse it.
+        return
+    raise Problem(
+        "privacy",
+        f"Private task work cannot publish into company-wide resources: {path} is one. A private task's run writes "
+        "its own task and thread, and mail from mailboxes it may use",
+        403,
+    )
+
+
+# A mailbox's own writes (backend/mail.py, backend/email_sending.py, backend/org_rule_check.py mail-check): a draft,
+# its discard, a lint or org rule check, labels, an unsubscribe, and queuing or canceling a send. Not the sending
+# policy, suppressions or Google connection, which are company settings.
+MAILBOX_WRITE = re.compile(
+    r"/api/v2/mail/(?:drafts(?:/[^/]+)?|lint|messages/organize|messages/[^/]+/unsubscribe)"
+    r"|/api/v2/email/sends(?:/[^/]+/cancel)?"
+    r"|/api/v2/bots/[^/]+/mail-check"
+)
 
 
 PRIVATE_THREAD_REFUSAL = "Private task work posts only in its own private task's thread"

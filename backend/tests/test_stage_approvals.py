@@ -491,3 +491,149 @@ def test_stale_approval_requires_answer_authority_and_visibility_of_every_page(a
     replay = api.post(path, json=payload, headers=request_headers)
     assert replay.status_code >= 400 and "approval" not in replay.json(), replay.text
     assert all(p["file_id"] not in replay.text for p in (first, second))
+
+
+@pytest.mark.parametrize("document", ["Proposal", "Results", "Checked in production"])
+def test_a_stage_approves_its_own_document_by_its_name(api, document):
+    """Opportunity's Proposal, an experiment's Results and Validate's Checked in production are documents of their
+    own: written under that name, in the stage, they are submitted to its approval, never to a QA report's."""
+    from backend import pipeline_settings as PS
+
+    req = {"kind": "page", "line": document, "settings": {"document": document, "rubric": "Says it."}}
+    problems: list[str] = []
+    PS._check_settings(req, "Stage", problems)  # pyright: ignore[reportPrivateUsage]
+    assert problems == []
+    _, row = _flow(api, document)
+    _, attempt = turn(api)
+    written = _write(api, row["id"], SPEC, attempt["token"], document.lower())  # any spelling is the fixed name
+    assert written["submitted"]["version"] == 1
+    _verdict(api, row["id"], "met")
+    entry = _entry(api, row["id"])
+    assert (entry["line"], entry["approval"]["document"]) == (document, document)
+
+
+# ----------------------------------------------------------------------------- the names migration
+NAMES_MIGRATION = "backend.migrations.20261118000630_approval_document_names"
+
+
+def test_the_names_migration_gives_proposal_results_and_checked_in_production_their_own_documents(api):
+    migration = importlib.import_module(NAMES_MIGRATION)
+    qa = {"kind": "page", "line": "QA report", "person": ANA, "settings": {"document": "QA report", "rubric": "R"}}
+    stages = (
+        {"name": "Proposal", "owner": OPS, "requirements": [qa]},
+        {"name": "Running", "owner": OPS, "requirements": [{"kind": "page", "line": "Results page"}]},
+        {"name": "Validate", "owner": OPS, "requirements": [{"kind": "page", "line": "Checked in production"}]},
+        {"name": "QA", "owner": OPS, "requirements": [qa]},
+        {
+            "name": "Review",
+            "owner": OPS,
+            "requirements": [{"kind": "page", "line": "Results page", "settings": {"at_head": True}}],
+        },
+    )
+    with api.app.state.store.transaction() as c:
+        made = X.pipeline(c, "sales", "Sales", stages)
+        row = X.new_task(c, ANA, "Acme lights", "sales", assignee=OPS)
+    _, attempt = turn(api)
+    file_id = _write(api, row["id"], SPEC, attempt["token"], "QA report")["file_id"]  # what the old name wrote
+    with api.app.state.store.transaction() as c:
+        migration.up(c)
+        migration.up(c)  # again: nothing more changes
+
+        def named(stage):
+            return [
+                (r["line"], R.document_of(dict(r, settings=json.loads(r["settings"]))))
+                for r in c.execute(
+                    "SELECT * FROM requirements WHERE stage_id=? AND withdrawn_at IS NULL", (made["stages"][stage],)
+                ).fetchall()
+            ]
+
+        assert named("Proposal") == [("Proposal", "Proposal")]
+        assert named("Running") == [("Results", "Results")]
+        assert named("Validate") == [("Checked in production", "Checked in production")]
+        assert named("QA") == [("QA report", "QA report")]  # a real QA report stays
+        assert named("Review") == [("Results page", None)]  # a review of the newest commit is never a document
+        rubric = c.execute(
+            "SELECT json_extract(settings, '$.rubric') FROM requirements WHERE stage_id=?",
+            (made["stages"]["Proposal"],),
+        ).fetchone()[0]
+        assert rubric == "R"
+        docs = c.execute(
+            "SELECT role, page_id FROM page_links WHERE target=? AND role NOT IN ('writer', 'related')",
+            ("task:" + row["id"],),
+        ).fetchall()
+        assert [tuple(d) for d in docs] == [("Proposal", file_id)]
+
+
+def test_the_names_migration_never_gives_a_task_two_proposals_and_leaves_finished_tasks(api):
+    """A task in Proposal that already has a Proposal on another page keeps its QA report, in the page links and in
+    the older task_documents rows alike; a done task in Proposal is not touched."""
+    migration = importlib.import_module(NAMES_MIGRATION)
+    qa = {"kind": "page", "line": "QA report", "person": ANA, "settings": {"document": "QA report", "rubric": "R"}}
+    with api.app.state.store.transaction() as c:
+        X.pipeline(c, "sales", "Sales", ({"name": "Proposal", "owner": OPS, "requirements": [qa]},))
+        both = X.new_task(c, ANA, "Acme lights", "sales", assignee=OPS)
+        done = X.new_task(c, ANA, "Bolt doors", "sales", assignee=OPS)
+    _, attempt = turn(api)
+    report = _write(api, both["id"], SPEC, attempt["token"], "QA report")["file_id"]
+    proposal = _write(api, both["id"], SPEC + " Priced.", attempt["token"], "Proposal")["file_id"]
+    assert report != proposal
+    finished = _write(api, done["id"], SPEC, attempt["token"], "QA report")["file_id"]
+    with api.app.state.store.transaction() as c:
+        E.move(c, done["id"], E.DONE, ANA, "Sent the proposal by hand")
+        migration.up(c)
+
+        def roles(task_id):
+            return sorted(
+                tuple(d)
+                for d in c.execute(
+                    "SELECT role, page_id FROM page_links WHERE target=? AND role NOT IN ('writer', 'related')",
+                    ("task:" + task_id,),
+                ).fetchall()
+            )
+
+        assert roles(both["id"]) == sorted([("QA report", report), ("Proposal", proposal)])
+        assert roles(done["id"]) == [("QA report", finished)]
+        if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_documents'").fetchone():
+            names = [
+                r[0] for r in c.execute("SELECT name FROM task_documents WHERE task_id=?", (both["id"],)).fetchall()
+            ]
+            assert names.count("Proposal") <= 1
+
+
+def test_the_names_migration_keeps_a_page_already_attached_in_validate_counted(api):
+    """A task already in Validate with its page attached: once Checked in production is a document, that page is linked
+    to the task with the document's name, so it still counts and nobody attaches it again. A done task is left."""
+    migration = importlib.import_module(NAMES_MIGRATION)
+    validate = {"name": "Validate", "owner": OPS, "requirements": [{"kind": "page", "line": "Checked in production"}]}
+    with api.app.state.store.transaction() as c:
+        made = X.pipeline(c, "ship", "Ship", (validate,))
+        live = X.new_task(c, ANA, "Acme lights", "ship", assignee=OPS)
+        done = X.new_task(c, ANA, "Bolt doors", "ship", assignee=OPS)
+    _, attempt = turn(api)
+    pages = {t["id"]: _write(api, t["id"], SPEC, attempt["token"], "Spec")["file_id"] for t in (live, done)}
+    with api.app.state.store.transaction() as c:
+        rid = c.execute("SELECT id FROM requirements WHERE stage_id=?", (made["stages"]["Validate"],)).fetchone()[0]
+        for task in (live, done):
+            visit = E.task(c, task["id"])["visit"]["id"]
+            c.execute(
+                "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, attached_by_id, "
+                "created_at) VALUES (?,?,?,?,1,?,?)",
+                (H.new_id(), visit, rid, pages[task["id"]], OPS, H.now()),
+            )
+        E.move(c, done["id"], E.DONE, ANA, "Checked by hand")
+        migration.up(c)
+        migration.up(c)  # again: nothing more changes
+
+        def linked(task_id):
+            return [
+                tuple(r)
+                for r in c.execute(
+                    "SELECT role, page_id FROM page_links WHERE target=? AND role='Checked in production'",
+                    ("task:" + task_id,),
+                ).fetchall()
+            ]
+
+        assert linked(live["id"]) == [("Checked in production", pages[live["id"]])]
+        assert linked(done["id"]) == []
+        (standing,) = R.standings(c, E.task(c, live["id"]))
+        assert "No page attached" not in standing.line, standing.line

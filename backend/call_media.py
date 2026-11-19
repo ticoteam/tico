@@ -58,6 +58,7 @@ SPEECH_TIMEOUT = 15  # one sentence's speech from the Gateway
 SPEECH_CHARS = 4000  # the Gateway's limit for one request
 VOICES_TTL_SECONDS = 3600  # the Gateway's voice list, kept this long
 END_PAUSE_MS = 450
+FRAME_GAP_MS = 60  # leave room for normal delivery jitter when comparing the sample and arrival clocks
 SPEECH_TRANSPORT = None  # tests supply the Gateway at the HTTP boundary
 
 
@@ -241,8 +242,8 @@ class Recorder:
         self.room = self.sdk.Room()
         self.room.on("track_subscribed", self._subscribed)
         self.room.on("disconnected", self._disconnected)
+        self.joined_at = self.loop.time()
         await self.room.connect(self.url, self.token, options=self.sdk.RoomOptions(auto_subscribe=True))
-        self.joined_at = time.monotonic()
         if self.closed:  # closed while joining: leave again, so no recorder stays in the room unseen
             await self.room.disconnect()
             return
@@ -254,29 +255,49 @@ class Recorder:
         self.source = source
 
     def _subscribed(self, track, publication, participant):
-        if is_voice(participant.identity):
+        if not self.alive() or is_voice(participant.identity):
             return  # never transcribe a Tico voice, this one's or another server's
-        # Only a microphone is speech: a shared screen's sound (a video, a recording) is not someone asking.
-        if track.kind == self.sdk.TrackKind.KIND_AUDIO and publication.source == self.sdk.TrackSource.SOURCE_MICROPHONE:
+        # SDK callers can omit the microphone source. A labelled screen-share track remains separate.
+        sources = self.sdk.TrackSource
+        if track.kind == self.sdk.TrackKind.KIND_AUDIO and publication.source in (
+            sources.SOURCE_MICROPHONE,
+            getattr(sources, "SOURCE_UNKNOWN", None),
+        ):
             self.loop.create_task(self._listen(track, participant.identity))
 
     async def _listen(self, track, identity):
-        stream = self.sdk.AudioStream(track, sample_rate=SAMPLE_RATE, num_channels=1)
+        stream = None
         heard, base = 0, None  # samples heard from this speaker, and where their first frame falls (ms since joining)
         try:
+            stream = self.sdk.AudioStream(track, sample_rate=SAMPLE_RATE, num_channels=1)
             async for event in stream:
-                if self.closed:
+                if not self.alive():
                     break
+                arrival = max(0, round((self.loop.time() - self.joined_at) * 1000))
                 if base is None:
-                    base = int((time.monotonic() - self.joined_at) * 1000)
-                delay = self.on_audio(identity, bytes(event.frame.data), base + heard * 1000 // SAMPLE_RATE)
+                    base = arrival
+                start = base + heard * 1000 // SAMPLE_RATE
+                if arrival - start >= FRAME_GAP_MS:
+                    # Opus DTX can omit most of a pause. Keep that time on the audio timeline.
+                    base += arrival - start
+                    start = arrival
+                delay = self.on_audio(identity, bytes(event.frame.data), start)
                 heard += event.frame.samples_per_channel
                 self._arm(identity, delay if delay is not None else END_PAUSE_MS / 1000)
-        except Exception:  # noqa: BLE001 - one speaker's stream failing must not end the recording
-            log.warning("The call recorder stopped hearing one speaker", exc_info=True)
+        except Exception:  # noqa: BLE001 - the sweep reconnects a recorder whose microphone reader failed
+            self._reader_failed()
         finally:
             self._went_quiet(identity)  # their track ended (they left): what they said is sent now
-            await stream.aclose()
+            if stream is not None:
+                try:
+                    await stream.aclose()
+                except Exception:  # noqa: BLE001 - the SDK can fail either while reading or closing the stream
+                    self._reader_failed()
+
+    def _reader_failed(self):
+        if self.alive():
+            self._disconnected()
+            log.warning("The call recorder's microphone reader failed; the sweep will reconnect it", exc_info=True)
 
     def _arm(self, identity, delay):
         """Start (again) the timer that says a speaker went quiet: each frame they send pushes it back."""

@@ -2054,11 +2054,11 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                 item["line"] = item["ask"]["line"]
                 if item["ask"]["kind"] == "ok":
                     item["missing"] = [item["ask"]["line"]]
-                    # A task filed for the OK is titled by its kind alone (task_asks.FILED_TITLES); the row says what
+                    # A task filed for the OK is titled by its kind alone (task_asks.KIND_TITLES); the row says what
                     # this one is about, to its party, in place of that title (task #389).
                     title = str((item.get("task") or {}).get("title") or "")
                     # Only to a party of the OK: one handed the ask reads its line as PRIVATE_LINE, and no more here.
-                    if title in task_asks.FILED_TITLES.values() and item["line"] != task_asks.PRIVATE_LINE:
+                    if title in task_asks.KIND_TITLES and item["line"] != task_asks.PRIVATE_LINE:
                         said = task_asks.about(c, item["requirement_id"], item["line"])
                         if said:
                             item["about"] = said

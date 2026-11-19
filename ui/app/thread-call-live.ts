@@ -1,26 +1,61 @@
 /* ui/app/thread-call-live.ts — In a Tico Meet call: joining it, the LiveKit room, the call bar, leaving and ending.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
-   A page part (ui/parts.json): it loads on the first join, so a cold open of Home does not download it (P05b). The call
-   state (CALL, CALL_GEN, CALL_JOINS), the header's phone button, Start and leaving the page stay in ui/app/thread-call.ts
-   with Home. The meeting window (ui/app/call-window.ts) draws the same call: its screen box takes a shared screen, and
-   each change here redraws it (callWindowDraw). What shows on the stage (a shared screen or a Tico file) is one record
+   The thread-call-live part (ui/parts.json) loads on the first Start or Join. The header's phone button and the
+   state needed to cancel a call when the page is hidden live in ui/app/thread-call.ts. The meeting window
+   (ui/app/call-window.ts) draws the same call: its screen box takes a shared screen, and each change here redraws it
+   (callWindowDraw). What shows on the stage (a shared screen or a Tico file) is one record
    on the call, the call view's `stage` (docs/meet.md, Sharing): one thing at a time, the newest write. */
 'use strict';
 
-function callLib(): Promise<LivekitNamespace> {
-  if (window.LivekitClient) return Promise.resolve(window.LivekitClient);
-  CALL_LIB_LOAD ||= new Promise<LivekitNamespace>((ok, fail) => {
-    const s = document.createElement('script');
-    s.src = CALL_LIB; s.onload = () => ok(window.LivekitClient); s.onerror = () => { CALL_LIB_LOAD = null; fail(new Error('Could not load calls')); };
-    document.head.append(s);
+// Tokens last five minutes; a fresh one a minute early keeps a slow answer from dropping the call.
+const CALL_REFRESH_MS = 4 * 60 * 1000;
+// A stalled leave must give up so a later Join can take its turn.
+const CALL_LEAVE_TIMEOUT_MS = 5000;
+// Call id -> joins of it still on their way, so a cancelled Start call never gives back a seat a Join has taken.
+const CALL_JOINING = new Map<string, number>();
+// Call id -> all leaves still on their way, so a rejoin cannot get ahead of cleanup of its previous seat.
+const CALL_LEAVING = new Map<string, Promise<void>>();
+// Start's seat waits for the last Join to settle: a cancelled or failed Join still owes it back.
+// Any leave settles it too, so the last Join cannot give it back twice.
+const CALL_OWED = new Set<string>();
+// A leave stays settled until the last Join finishes, including for a Start response still on its way.
+const CALL_SETTLED = new Set<string>();
+// Named here so scripts/build-icon-font.py keeps them in the icon subset.
+const CALL_ICONS = {mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', bot: 'smart_toy', leave: 'call_end',
+  window: 'open_in_new'};
+// The call's Tico voice in the LiveKit room (backend/call_media.py RECORDER_PREFIX): never shown as a person.
+const CALL_VOICE_PREFIX = 'tico-recorder-';
+
+const callMicAvailable = (): boolean => typeof navigator.mediaDevices?.getUserMedia === 'function';
+const callShareable = (): boolean =>
+  !window.ticoScreenCaptureUnavailable && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
+function callSeatSettled(id: string): void {
+  CALL_OWED.delete(id);
+  if (CALL_JOINING.has(id)) CALL_SETTLED.add(id);
+}
+function callPostLeave(id: string, opts: {keepalive?: boolean} = {}): Promise<void> {
+  const leave: Promise<unknown> = post(callPath(id) + '/leave', {}, undefined,
+    {...opts, timeout: window.__callLeaveTimeoutMs ?? CALL_LEAVE_TIMEOUT_MS}).catch((e: unknown) => {
+    // Every leave is a new one: a kept request id would make the next leave (after a rejoin) replay this one.
+    const signature = isErrorRecord(e) ? e.signature : undefined;
+    if (typeof signature === 'string') pendingWrites.delete(signature);
   });
-  return CALL_LIB_LOAD;
+  const pending: Promise<void> = Promise.all([CALL_LEAVING.get(id), leave]).then(() => {
+    if (CALL_LEAVING.get(id) === pending) CALL_LEAVING.delete(id);
+  });
+  CALL_LEAVING.set(id, pending);
+  return pending;
+}
+function callSeatLeave(id: string): void {
+  callSeatSettled(id);
+  void callPostLeave(id, {keepalive: true});
 }
 // `gen` is the join's number: Start call takes it at the click, so the one number runs through the whole join.
-async function callJoin(threadId: string, call: CallRecord, title: string, gen = ++CALL_GEN): Promise<void> {
+async function callJoin(threadId: string, call: CallRecord, title: string, gen = ++CALL_GEN, timing?: CallStartTiming): Promise<void> {
   CALL_JOINS++;
   CALL_JOINING.set(call.id, (CALL_JOINING.get(call.id) || 0) + 1);
-  try { await callJoinNow(threadId, call, title, gen); } finally {
+  try { await callJoinNow(threadId, call, title, gen, timing); } finally {
+    if (CALL?.startTiming !== timing) callStartReport(timing);
     CALL_JOINS--;
     const left = (CALL_JOINING.get(call.id) ?? 1) - 1;
     if (left) CALL_JOINING.set(call.id, left);
@@ -31,28 +66,40 @@ async function callJoin(threadId: string, call: CallRecord, title: string, gen =
     }
   }
 }
-async function callJoinNow(threadId: string, call: CallRecord, title: string, gen: number): Promise<void> {
+async function callJoinNow(threadId: string, call: CallRecord, title: string, gen: number, timing?: CallStartTiming): Promise<void> {
   if (CALL) await callLeave();
   if (gen !== CALL_GEN) return;
   while (CALL_LEAVING.has(call.id)) {
     await CALL_LEAVING.get(call.id);
     if (gen !== CALL_GEN) return;
   }
+  const library = callLib();
+  // A failed load is handled after the join settles, including giving back the seat it took.
+  void library.catch(() => {});
   const j: CallJoinReply = await post(callPath(call.id) + '/join', {});
-  if (j.call?.id) callViewKeep(j.call);
+  if (j.token) callStartMark(timing, 'token');
   // Overtaken while joining: this seat is given back and the newer join goes on.
   const stale = (): boolean => { if (gen === CALL_GEN) return false; callSeatLeave(call.id); return true; };
   if (stale()) return;
-  const LK = await callLib();
+  let LK: LivekitNamespace;
+  try { LK = await library; }
+  catch (e) { callSeatLeave(call.id); throw e; }
   if (stale()) return;
+  if (j.call?.id) callViewKeep(j.call);
+  const view = j.call || call;
+  threadId ||= view.thread_id || '';
   const room = new LK.Room({adaptiveStream: false, dynacast: false});
-  CALL = {id: call.id, threadId, title: title || call.title || 'Call', connector: (j.call || call).connector, room,
+  CALL = {id: call.id, threadId, title: title || view.title || 'Call', connector: view.connector, room,
           token: j.token, url: j.url, muted: true, sharing: false, leaving: false, timer: 0, gen,
-          stageN: 0, staging: 0, reconnecting: false};
+          stageN: 0, staging: 0, reconnecting: false, connected: false, micPending: true, startTiming: timing};
   const here = CALL;
   room.on(LK.RoomEvent.TrackSubscribed, (track: CallTrack, _pub: unknown, who: CallParticipant | undefined) => { if (CALL === here) callTrackOn(track, who); });
   room.on(LK.RoomEvent.TrackUnsubscribed, (track: CallTrack) => { for (const el of track.detach()) el.remove(); callScreenSync(); });
-  room.on(LK.RoomEvent.ParticipantConnected, callBarDraw);
+  room.on(LK.RoomEvent.ParticipantConnected, () => {
+    if (CALL !== here) return;
+    callStartMark(timing, 'first-remote');
+    callBarDraw();
+  });
   room.on(LK.RoomEvent.ParticipantDisconnected, callBarDraw);
   // The browser's own Stop sharing ends the share, and this tab's screen leaves the stage. Not while LiveKit reconnects:
   // its unpublishing then is not a stop (callStageResync puts things right once it is back). A stop of this tab's own
@@ -71,31 +118,57 @@ async function callJoinNow(threadId: string, call: CallRecord, title: string, ge
   room.on(LK.RoomEvent.Disconnected, (reason: unknown) => {
     if (CALL !== here || here.leaving) return;
     if (reason === LK.DisconnectReason?.PARTICIPANT_REMOVED) CALL_THREADS.set(threadId, {...CALL_THREADS.get(threadId), removed: true});
+    if (!here.connected) callSeatLeave(here.id);
     callDone(here);
   });
   callBarDraw();
+  const {localParticipant: local} = room;
+  // Capture can wait on a permission prompt or the device. Start it with the connection and publish once connected.
+  const mic = callMicAvailable() && LK.createLocalAudioTrack && local.publishTrack ? LK.createLocalAudioTrack().then(track => {
+    if (CALL !== here || gen !== CALL_GEN || here.leaving) { track.stop(); return null; }
+    here.capturedMic = track;
+    return track;
+  }) : null;
+  void mic?.catch(() => {});
   try {
     await room.connect(j.url, j.token, {autoSubscribe: true});
   } catch (e) {
     if (CALL !== here) return;
+    callSeatLeave(here.id);
     callDone(here);
     throw e;
   }
   // A newer join or a leave took over while this one connected: its room goes, and no microphone is turned on.
-  if (CALL !== here || gen !== CALL_GEN) { try { room.disconnect(); } catch {} return; }
-  await callMicSet(here, true);
-  if (CALL !== here) { try { room.disconnect(); } catch {} return; }
+  if (CALL !== here || gen !== CALL_GEN || here.leaving) { try { room.disconnect(); } catch {} return; }
+  here.connected = true;
+  callStartMark(timing, 'connected');
+  if (room.remoteParticipants?.size) callStartMark(timing, 'first-remote');
   here.timer = setInterval(() => void callRefresh(here), CALL_REFRESH_MS);
   callBarDraw();
   callViewsDraw(threadId);
+  await callMicSet(here, true, mic);
+  here.micPending = false;
+  if (CALL === here && !here.leaving && !here.muted) callStartMark(timing, 'mic-published');
+  if (CALL === here) callBarDraw();
+  if (timing && !timing.reported) timing.timer = window.setTimeout(() => callStartReport(timing), 10000);
 }
-async function callMicSet(here: CallState, on: boolean): Promise<void> {
+async function callMicSet(here: CallState, on: boolean, capture?: Promise<CallMic | null> | null): Promise<void> {
   if (on && !callMicAvailable()) { toast('Microphone not available in this window'); return; }
   try {
-    await here.room.localParticipant.setMicrophoneEnabled(on);
+    const track = capture ? await capture : null;
+    if (CALL !== here || here.leaving || (capture && here.gen !== CALL_GEN)) return;
+    const local = here.room.localParticipant;
+    if (track && local.publishTrack) {
+      await local.publishTrack(track, {source: window.LivekitClient.Track.Source.Microphone});
+      here.capturedMic = undefined;
+    } else await local.setMicrophoneEnabled(on);
     here.muted = !on;
   } catch (e) {
-    if (CALL !== here) return;
+    if (capture) {
+      here.capturedMic?.stop();
+      here.capturedMic = undefined;
+    }
+    if (CALL !== here || here.leaving) return;
     const name = isErrorRecord(e) ? e.name : undefined;
     if (name === 'NotAllowedError' || name === 'SecurityError') toast('Microphone blocked');
     else if (name === 'NotFoundError') toast('No microphone found');
@@ -148,6 +221,8 @@ async function callLeave({end = false}: {end?: boolean} = {}): Promise<void> {
       return;
     }
   } else {
+    here.capturedMic?.stop();
+    here.capturedMic = undefined;
     await callPostLeave(here.id);
   }
   callSeatSettled(here.id);
@@ -155,8 +230,11 @@ async function callLeave({end = false}: {end?: boolean} = {}): Promise<void> {
 }
 function callDone(here: CallState): void {
   clearInterval(here.timer);
-  try { here.room?.disconnect(); } catch {}
+  here.capturedMic?.stop();
+  here.capturedMic = undefined;
+  callStartReport(here.startTiming);
   if (CALL === here) CALL = null;
+  try { here.room?.disconnect(); } catch {}
   const info = CALL_THREADS.get(here.threadId);
   if (info && !info.removed) CALL_THREADS.set(here.threadId, {...info, call: null});
   callBarDraw();
@@ -183,7 +261,7 @@ function callBarDraw(): void {
   // The call's Tico voice (the bots speaking) is a participant of the room, never a person: the count is the call view's.
   const n = callCount(CALL_VIEWS.get(CALL.id)) || 1, mine = CALL.connector === myActor();
   callVoiceDraw(bar.querySelector<HTMLElement>('.call-voice'), CALL_VIEWS.get(CALL.id)?.voice);
-  const btn = (k: string, icon: string, label: string, extra = '') => `<button type="button" class="ghost small call-btn${extra}" data-cb="${k}" aria-label="${esc(label)}" title="${esc(label)}"><span class="nav-icon" aria-hidden="true">${icon}</span><span class="call-lbl">${esc(label)}</span></button>`;
+  const btn = (k: string, icon: string, label: string, extra = '') => `<button type="button" class="ghost small call-btn${extra}" data-cb="${k}" aria-label="${esc(label)}" title="${esc(label)}"${k === 'mute' && CALL?.micPending ? ' disabled' : ''}><span class="nav-icon" aria-hidden="true">${icon}</span><span class="call-lbl">${esc(label)}</span></button>`;
   const row = bar.querySelector<HTMLElement>('.call-row');
   if (row) patchHTML(row, `<a class="call-title" href="${threadHref(CALL.threadId)}">${esc(CALL.title)}</a>
     <span class="call-n muted tnum" title="In the call">${n}</span><span class="spacer"></span>

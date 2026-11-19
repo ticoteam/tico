@@ -19,7 +19,7 @@ const {unrouted} = require('./support/routes.cts') as import('./support/routes.c
 type Handler = (...a: unknown[]) => void;
 type FakeRoom = {handlers: Map<string, Handler[]>; remoteParticipants: Map<string, Record<string, unknown>>; emit(ev: string, ...a: unknown[]): void};
 declare const window: Window & typeof globalThis & {LivekitClient: unknown; __rooms: FakeRoom[]; __disconnects: number; __streams: EventSource[];
-  __screens: boolean[]};
+  __screens: boolean[]; __finishConnect?: () => void; __finishMic?: () => void; __published?: boolean;};
 declare function callViewRead(id: string): Promise<unknown>;
 declare function callVoiceDraw(box: HTMLElement, voice: unknown): void;
 
@@ -59,7 +59,8 @@ const FILES = [{id: 'f-plan-0001', title: 'Q4 growth plan', name: 'q4-plan.md', 
   {id: 'f-secret-01', title: 'Board notes', name: 'board.md', library_kind: 'document'}];
 const FILE_TEXT: Record<string, string> = {'f-plan-0001': '# Q4 growth plan\n\nDouble the Reddit posts; one demo day a week.',
   'f-dash-0001': '# Signups\n\n| Week | Signups |\n|---|---|\n| 45 | 212 |\n| 46 | 241 |'};
-async function open(browser: import('playwright').Browser, {phone = false, big = false, lm2 = true, wide = false}: {phone?: boolean; big?: boolean; lm2?: boolean; wide?: boolean} = {}) {
+async function open(browser: import('playwright').Browser, {phone = false, big = false, lm2 = true, wide = false, startup = false}:
+  {phone?: boolean; big?: boolean; lm2?: boolean; wide?: boolean; startup?: boolean} = {}) {
   const context = await browser.newContext({viewport: phone ? {width: 390, height: 844} : wide ? {width: 1280, height: 800} : {width: 420, height: 680}, serviceWorkers: 'block', reducedMotion: 'reduce',
     timezoneId: 'UTC', ...(phone ? {isMobile: true, hasTouch: true} : {})});
   await context.clock.setSystemTime(now);
@@ -67,11 +68,11 @@ async function open(browser: import('playwright').Browser, {phone = false, big =
   const call = liveCall(big);
   const seen = {errors: [] as string[], joins: 0, botWrites: [] as string[], tasks: [] as unknown[], rings: [] as string[], memberWrites: 0, meetingReads: 0,
     streams: [] as string[], notes: notes('bot:content-social'), posts: [] as string[], fileReads: [] as string[], stageWrites: [] as string[],
-    screensAtDelete: [] as boolean[][], briefReads: [] as string[], briefText: 'Signups reached 241 on Thursday.'};
+    screensAtDelete: [] as boolean[][], briefReads: [] as string[], briefText: 'Signups reached 241 on Thursday.', callReads: 0};
   page.on('pageerror', e => seen.errors.push(e.message));
   // A stand-in media client: its rooms keep their handlers so the test can say who speaks and who shares. The room has
   // people the call's view does not list (the recorder, someone already gone): they are no one's face.
-  await page.addInitScript(() => {
+  await page.addInitScript(startup => {
     window.__rooms = [];
     window.__disconnects = 0;
     window.__streams = [];
@@ -81,7 +82,8 @@ async function open(browser: import('playwright').Browser, {phone = false, big =
     window.LivekitClient = {
       RoomEvent: {TrackSubscribed: 'ts', TrackUnsubscribed: 'tu', ParticipantConnected: 'pc', ParticipantDisconnected: 'pd', LocalTrackUnpublished: 'lu',
         Disconnected: 'd', ActiveSpeakersChanged: 'as', TrackMuted: 'tm', TrackUnmuted: 'tum', Reconnecting: 'rc', Reconnected: 'rd'},
-      Track: {Source: {ScreenShare: 'screen'}}, DisconnectReason: {PARTICIPANT_REMOVED: 'removed'},
+      Track: {Source: {ScreenShare: 'screen', Microphone: 'mic'}}, DisconnectReason: {PARTICIPANT_REMOVED: 'removed'},
+      ...(startup ? {createLocalAudioTrack: () => new Promise(resolve => { window.__finishMic = () => resolve({stop() {}}); })} : {}),
       Room: class {
         handlers = new Map<string, Handler[]>();
         remoteParticipants = new Map<string, Record<string, unknown>>([['tico-recorder-c1', {identity: 'tico-recorder-c1', isSpeaking: true}],
@@ -92,16 +94,21 @@ async function open(browser: import('playwright').Browser, {phone = false, big =
         localParticipant = {identity: 'human:ana', isSpeaking: false, trackPublications: new Map(), setMicrophoneEnabled: async (on: boolean) => {
           if (on && !navigator.mediaDevices) throw new TypeError("Cannot read properties of undefined (reading 'getUserMedia')");
         },
+          publishTrack: async (_track: unknown, opts: {source: string}) => { window.__published = opts.source === 'mic'; },
           setScreenShareEnabled: async (on: boolean) => { window.__screens.push(on); }};
         canPlaybackAudio = true;
         constructor() { window.__rooms.push(this as unknown as FakeRoom); }
         on(ev: string, fn: Handler) { this.handlers.set(ev, [...(this.handlers.get(ev) || []), fn]); return this; }
         emit(ev: string, ...a: unknown[]) { for (const fn of this.handlers.get(ev) || []) fn(...a); }
-        async connect() {}
+        async connect() { if (startup) await new Promise<void>(resolve => { window.__finishConnect = resolve; }); }
         disconnect() { window.__disconnects++; }
       },
     };
-  });
+    if (startup && location.hash === '#/call/c1?join=1') {
+      const now = performance.timeOrigin;
+      localStorage.setItem('tico.call-start', JSON.stringify([['c1', now - 100, now - 50, now, true]]));
+    }
+  }, startup);
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -140,7 +147,7 @@ async function open(browser: import('playwright').Browser, {phone = false, big =
     if (p === '/api/v2/threads/t-plan/members' && method === 'GET') return json({members: [{actor: 'human:ana'}, {actor: 'human:thomaz'}, {actor: 'bot:content-social'}], next_cursor: null});
     if (p.startsWith('/api/v2/threads/t-plan/members')) { seen.memberWrites++; return json({ok: true}); }
     if (p === '/api/v2/threads/t-plan/calls') return json({calls: [call], next_before: null, available: true, providers: ['tico', 'google_meet']});
-    if (p === '/api/v2/calls/c1') return json(call);
+    if (p === '/api/v2/calls/c1') { seen.callReads++; return json(call); }
     if (p === '/api/v2/calls/c2') return json(endedCall());
     if (p === '/api/v2/calls/c1/bot-notes') {
       seen.briefReads.push(url.searchParams.get('bot') || '');
@@ -240,6 +247,33 @@ const inView = async (page: Page, selector: string, height: number) => { const b
 let browser: import('playwright').Browser | null = null;
 (async () => {
   browser = await chromium.launch();
+
+  {
+    const {context, page, seen} = await open(browser, {startup: true});
+    const reports: string[] = [];
+    page.on('console', msg => { if (msg.text().startsWith('[call-start] ')) reports.push(msg.text()); });
+    await page.goto('https://tico-ui.test/#/call/c1?join=1');
+    await page.waitForFunction(() => !!window.__finishConnect && !!window.__finishMic);
+    assert.equal(seen.joins, 1);
+    assert.equal(seen.callReads, 0, 'the new window uses the authorized view in the join reply');
+    await page.getByText('Could not check for a bot. Tap its face to add it.').waitFor();
+    await page.getByRole('button', {name: 'Leave', exact: true}).waitFor();
+    assert.equal(await page.getByRole('button', {name: 'Leave', exact: true}).isEnabled(), true);
+    assert.equal(await page.getByRole('button', {name: 'Connecting microphone'}).isDisabled(), true);
+    await page.evaluate(() => window.__finishConnect?.());
+    await page.locator('.cw-live-dot').waitFor();
+    assert.equal(await page.locator('[data-cw-ctl="mute"]').isDisabled(), true);
+    const report = page.waitForEvent('console', {predicate: msg => msg.text().startsWith('[call-start] ')});
+    await page.evaluate(() => window.__finishMic?.());
+    await page.waitForFunction(() => !!window.__published);
+    await report;
+    assert.equal(reports.length, 1);
+    const marks = JSON.parse(reports[0]!.slice('[call-start] '.length));
+    assert.ok(marks['boot-done'] <= marks.token && marks.token <= marks.connected && marks.connected <= marks['mic-published']);
+    assert.equal(typeof marks['first-remote'], 'number');
+    assert.deepEqual(seen.errors, []);
+    await context.close();
+  }
 
   // ---- the small window, opened to join: faces, caption, tabs
   {
@@ -666,7 +700,7 @@ let browser: import('playwright').Browser | null = null;
     await page.goto('https://tico-ui.test/#/call/c2');
     await page.locator('#call-window.cw-ended .cw-item').nth(2).waitFor();
     assert.equal(seen.joins, 0, 'an ended call is not joined');
-    assert.match(await page.locator('.cw-meta').innerText(), /^Today, .+ · 24 min$/);
+    assert.match(await page.locator('.cw-meta').innerText(), /^(Today|[A-Z][a-z]{2} \d{1,2}), .+ · 24 min$/);
     assert.equal(await page.locator('.cw-bar button, .cw-tabs .cw-tab').count(), 0);
     assert.deepEqual(await page.locator('.cw-summary li').allInnerTexts(), seen.notes.summary);
     await page.locator('.cw-after-turns .cw-turn').nth(1).waitFor();
