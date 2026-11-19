@@ -14,6 +14,7 @@ from pydantic import Field
 
 from . import models as M
 from . import runner_online
+from .api_contract import api_v2, error
 from .store import H, Problem, encode
 
 IMPORTERS = {
@@ -98,7 +99,19 @@ def install_meeting_importers(app, store, auth, execution, mutate, importer):
     def configured(c):
         return {r["source"]: dict(r) for r in c.execute("SELECT * FROM meeting_importers")}
 
-    @app.get("/api/v2/meeting-importers")
+    @app.get(
+        "/api/v2/meeting-importers",
+        **api_v2(
+            "Meetings",
+            "listMeetingImporters",
+            "The meeting importers, each with the computer that runs it and how it is doing; owner only",
+            "MeetingImporterList",
+            description="Every importer this server knows (Zoom, Google Meet, Granola), on or off, and the enrolled "
+            "computers that may run them. Credentials never come back: `setup` says which file on the computer holds "
+            "them (docs/meetings.md).",
+            responses={"403": error("forbidden: only the owner manages meeting importers")},
+        ),
+    )
     def listing(request: Request):
         who = request.state.identity
         if who.role != "owner":
@@ -136,7 +149,21 @@ def install_meeting_importers(app, store, auth, execution, mutate, importer):
                 )
             return {"importers": rows, "computers": machines}
 
-    @app.post("/api/v2/meeting-importers/{source}")
+    @app.post(
+        "/api/v2/meeting-importers/{source}",
+        **api_v2(
+            "Meetings",
+            "configureMeetingImporter",
+            "Turn a meeting importer on or off and choose the computer that runs it; owner only",
+            "MeetingImporterSaved",
+            parameters={"source": "The importer: zoom, google-meet or granola"},
+            responses={
+                "403": error("forbidden: only the owner manages meeting importers"),
+                "404": error("not_found: no such importer"),
+                "410": error("importer_retired: the importer is no longer available (it can still be turned off)"),
+            },
+        ),
+    )
     def configure(request: Request, source: str, body: ImporterConfig):
         who = request.state.identity
         if who.role != "owner":

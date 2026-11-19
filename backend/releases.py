@@ -41,6 +41,10 @@ TTL = 6 * 3600
 CHECK_WAIT = 10  # the owner's "Check for updates" waits this long for the fresh answer
 FORCE_GAP = 60  # the owner's "Check for updates" may reach GitHub at most this often
 RETRY = 15 * 60  # after a failed check; a rate-limited or offline box should not hammer GitHub
+# A cached release older than the stable version running: this server is ahead of the newest promoted release (the
+# canary runs a release before it is marked latest, scripts/release_train.py), or the answer is stale. It is read again
+# after this long, not after TTL, and unconditionally, so a cached 304 cannot keep it, and promotion shows within minutes.
+BEHIND = 5 * 60
 MANUAL_COMMAND = "docker compose pull && docker compose up -d"
 SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
 HQ_WAIT = 3  # HQ is a convenience: when it is slow the check goes to GitHub instead
@@ -99,6 +103,12 @@ def parse(value):
 def newer(latest, current):
     a, b = parse(latest), parse(current)
     return bool(a and b and a > b)
+
+
+def ahead(current, tag):
+    """A stable `current` newer than the release `tag`: this server runs a release not yet marked latest (the canary), or
+    the read is stale. A prerelease is expected to be ahead of the newest stable release, so it never counts."""
+    return "-" not in str(current or "") and newer(current, str(tag or "").lstrip("v"))
 
 
 def covers(versions, current):
@@ -184,18 +194,24 @@ class Checker:
         )
 
     def refresh(self, force=False):
-        """One request, conditional unless `force`. Runs in a background thread; tests call it directly."""
+        """One request, conditional unless `force` or the cached release is older than the running version. Runs in a
+        background thread; tests call it directly."""
         mirror = os.environ.get("TICO_RELEASES_URL", "").strip()
         url = mirror or LATEST_URL
         headers = {"Accept": "application/vnd.github+json", "User-Agent": "tico-update-check"}
-        if force:
-            headers["Cache-Control"] = "no-cache"  # the owner asked because a release just went out
+        if force or self._behind():
+            headers["Cache-Control"] = "no-cache"  # the owner asked, or the cached release is older than this server
         elif self.etag and self.release:
             headers["If-None-Match"] = self.etag
         try:
             with _client(CHECK_WAIT if force else 5) as http:
                 r = self._ask_hq(http) if not mirror else None
-                from_hq = r is not None
+                kept = extras(r.json()) if r is not None else None  # HQ's messages and known issues
+                if r is not None and ahead(version(), str(r.json().get("tag_name") or "")):
+                    # HQ's release is older than this stable server: GitHub's is read, unconditionally, and HQ's
+                    # messages are kept with it.
+                    headers.pop("If-None-Match", None)
+                    r = None
                 if r is None:
                     r = http.get(url, headers=headers)
             if r.status_code == 304:
@@ -208,7 +224,7 @@ class Checker:
                     "published_at": str(body.get("published_at") or ""),
                     "name": str(body.get("name") or body.get("tag_name") or ""),
                 }
-                self.extras = extras(body) if from_hq else None
+                self.extras = kept
                 self.etag = r.headers.get("etag", "")
             else:
                 raise httpx.HTTPError("status %s" % r.status_code)
@@ -274,9 +290,14 @@ class Checker:
             )
         return True
 
-    def _refresh_if_stale(self):
+    def _behind(self, current=None):
+        """The cached release is older than the stable version running (see `ahead`)."""
+        return bool(self.release) and ahead(current or version(), self.release["tag"])
+
+    def _refresh_if_stale(self, current=None):
         now = self.clock()
-        if self.running or now < self.retry_at or (self.checked and now - self.checked < TTL):
+        ttl = BEHIND if self._behind(current) else TTL
+        if self.running or now < self.retry_at or (self.checked and now - self.checked < ttl):
             return
         with self.lock:
             if self.running:
@@ -300,11 +321,15 @@ class Checker:
         }
         if not self.enabled() or parse(current) is None:
             return out
-        self._refresh_if_stale()
+        self._refresh_if_stale(current)
         release, more = self.release, self.extras
-        # The check reads the newest stable release; a server on a newer prerelease (0.6.0-rc.8 against 0.5.216) knows
-        # of nothing newer than itself, so an older release is not shown as the latest. A stable build keeps it.
-        if release and not ("-" in str(current or "") and newer(current, release["tag"].lstrip("v"))):
+        # The check reads the newest promoted stable release, and an older one is never shown as the latest. A stable
+        # server ahead of it (the canary on 0.6.79 while 0.6.78 is still latest) runs the newest release there is, so
+        # its own version is the latest, with no update offered (Chris, 2026-11-19). A prerelease ahead of it
+        # (0.6.0-rc.8 against 0.5.216) shows none: it is not a published release.
+        if release and ahead(current, release["tag"]):
+            out.update(latest=current, name=current)
+        elif release and not newer(current, release["tag"].lstrip("v")):
             latest = release["tag"].lstrip("v")
             out.update(
                 latest=latest,
