@@ -42,6 +42,7 @@ import {
   type MenuMate,
   type MenuTeam,
 } from '@/shell';
+import { MenuLip } from '@/shell/phone';
 import { TicoSheet } from '@/tico';
 import { dot } from '@/tico/dot';
 import { pageName } from '@/tico/pageName';
@@ -198,6 +199,11 @@ function App() {
     page = <TeammateSheet who={decodeURIComponent(a)} />;
     chat = undefined;
   }
+  // A call with agents: their chat beside the page while the call bar shows, until it is closed.
+  const callNow = useCall();
+  const callChat = arrangement === 'page' && !chat && isCallActive(callNow) ? (callNow.chat ?? null) : null;
+  if (callChat) chat = <SecondChat chat={callChat} />;
+  const hideCallChat = () => void run('calls.hideChat', {}, { via: 'click' });
 
   return (
     <>
@@ -205,7 +211,7 @@ function App() {
       <div className="shell-col">
         <CallBar />
         <Frame
-          arrangement={arrangement}
+          arrangement={callChat ? 'chat' : arrangement}
           tico={<TicoSheet />}
           menu={<AppMenu note={status === 'offline' ? <OfflineBar held={held} /> : null} />}
           page={page}
@@ -213,8 +219,9 @@ function App() {
           widgets={widgets}
           side={side}
           panel={panel ? <PanelHost /> : undefined}
+          lips={{ menu: <PhoneMenuLip /> }}
           lipActs={{ call: <CallMute /> }}
-          onCloseChat={closeChat}
+          onCloseChat={callChat ? hideCallChat : closeChat}
           onClosePanel={closePanel}
         />
       </div>
@@ -360,6 +367,13 @@ function AccountRows({ me, email }: { me: MenuMate; email: string }) {
       <MenuItem label="Sign out" onSelect={press('settings.signOut')} />
     </>
   );
+}
+
+/* The phone's menu lip: the company and the Flow count, from the same reads as the menu itself. */
+function PhoneMenuLip() {
+  const { data: config } = useQuery(configQuery);
+  const { data: flow } = useQuery(flowQuery);
+  return <MenuLip company={config?.company_name || config?.app_name || ''} flow={some(flow?.count)} />;
 }
 
 /* The phone's call lip: mute without opening the call. */

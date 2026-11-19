@@ -4,10 +4,11 @@ import { desktop, useCallWindow } from '@/desktop';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { CallBars } from '@/tico/dot';
+import { BarMore } from './CallMore';
 import { running } from './model';
 import { Face, inCall, press, SMALL_WINDOW, useCards, useMe, useNameOf, useNow } from './parts';
 import { callQuery } from './queries';
-import { isActive, useCall, type CallState } from './session';
+import { canShare, isActive, useCall, type CallState } from './session';
 import './calls.css';
 
 /**
@@ -68,7 +69,8 @@ function Bar({ room, s }: { room: string; s: CallState }) {
       </header>
     );
 
-  const said = s.caption;
+  // Captions off: what is said stays out of the bar.
+  const said = s.captions ? s.caption : null;
   // Words in the agents' voice are the agent's who talks.
   const saidBy = said && said.who === s.voice ? (talker?.id ?? who.find((x) => x.id.startsWith('bot:'))?.id ?? '') : (said?.who ?? '');
   return (
@@ -100,6 +102,15 @@ function Bar({ room, s }: { room: string; s: CallState }) {
       </div>
       <div className="cb-ctl">
         {mic}
+        {canShare() && (
+          <IconButton
+            icon="share"
+            label={s.sharing ? 'Stop sharing' : 'Share screen'}
+            on={s.sharing}
+            onClick={() => void press('calls.share', { id: room, on: !s.sharing })}
+          />
+        )}
+        <IconButton icon="cc" label="Captions" on={s.captions} onClick={() => void press('calls.captions', { on: !s.captions })} />
         <Link to="/call/$room" params={{ room }} className="ib" aria-label="Open call" title="Open call">
           <Icon name="popout" />
         </Link>
@@ -108,6 +119,7 @@ function Bar({ room, s }: { room: string; s: CallState }) {
           <Icon name="leave" />
           Leave
         </button>
+        <BarMore room={room} c={c} me={s.me ?? me} />
       </div>
     </header>
   );

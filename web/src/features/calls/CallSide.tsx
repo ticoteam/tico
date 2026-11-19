@@ -6,9 +6,11 @@ import { followFromSmallWindow, smallWindowLink } from '@/desktop';
 import { Avatar } from '@/kit/Avatar';
 import { Count } from '@/kit/Count';
 import { Empty } from '@/kit/Empty';
+import { IconButton } from '@/kit/IconButton';
 import { Tabs } from '@/kit/Tabs';
+import { toast } from '@/kit/Toast';
 import { running } from './model';
-import { Face, useNameOf, useSmallWindow } from './parts';
+import { Face, press, useNameOf, useSmallWindow } from './parts';
 import { callQuery, followTranscript, transcriptQuery } from './queries';
 import { useCall } from './session';
 import './calls.css';
@@ -49,7 +51,7 @@ export function CallSide({ room }: CallSideProps) {
             <Person key={p.actor} actor={p.actor} inCall={p.in_call} />
           ))}
           {(call?.bots ?? []).map((b) => (
-            <Person key={b} actor={b.startsWith('bot:') ? b : `bot:${b}`} inCall />
+            <Person key={b} actor={b.startsWith('bot:') ? b : `bot:${b}`} inCall out={live ? { room, bot: b } : undefined} />
           ))}
         </div>
       )}
@@ -69,19 +71,25 @@ function keepOnCall(e: MouseEvent<HTMLElement>) {
   void followFromSmallWindow(link);
 }
 
-function Person({ actor, inCall }: { actor: string; inCall: boolean }) {
+/** One in the call. An agent in a call that is on can be taken out at once, with Undo (old call-window.ts cwBotToggle). */
+function Person({ actor, inCall, out }: { actor: string; inCall: boolean; out?: { room: string; bot: string } }) {
   const nameOf = useNameOf();
+  const takeOut = async (o: { room: string; bot: string }) => {
+    if (!(await press('calls.takeOut', { id: o.room, agent: o.bot }))) return;
+    toast({ text: 'Left the call', name: nameOf(actor), action: { label: 'Undo', run: () => void press('calls.add', { id: o.room, with: [actor] }) } });
+  };
   return (
     <span className="rail-row call-rail">
       <Face actor={actor} size={22} />
       <span>{nameOf(actor)}</span>
       <em>{inCall ? 'In the call' : 'Left'}</em>
+      {out && <IconButton icon="close" label={`Take ${nameOf(actor)} out`} size="sm" quiet onClick={() => void takeOut(out)} />}
     </span>
   );
 }
 
 /** What has been said: read once, then each line as the live meeting's stream sends it (no timer). */
-function Transcript({ meeting, room, live }: { meeting: string; room: string; live: boolean }) {
+export function Transcript({ meeting, room, live }: { meeting: string; room: string; live: boolean }) {
   const t = useQuery(transcriptQuery(meeting));
   const after = t.data?.event_id;
   const loaded = t.isSuccess;

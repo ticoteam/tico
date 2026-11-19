@@ -30,9 +30,20 @@ import {
   syncGranola,
   type MeetingItem,
   type MeetingItems,
+  cancelCall,
+  deleteMeeting,
+  linkTask,
+  moveCall,
+  scheduleCall,
+  sendMeeting,
+  setMeetingPrivate,
+  startTitled,
+  unlinkTask,
 } from './queries';
 import { decline } from './ring';
 import { claim, hear, join, leave, pickDevice, prime, setMuted, toggleMute } from './session';
+import { clearStage, itemKey, keepItem, makeItemTask, setStage, takeOutAgent } from './queries';
+import { callState, hideChat, setCaptions, shareScreen } from './session';
 
 const id = (what: string) => s.string({ min: 1, max: 200, what });
 const day = s.string({ pattern: /^\d{4}-\d{2}-\d{2}$/, what: 'a day, 2026-11-18' });
@@ -315,6 +326,12 @@ export const endCallAction = defineAction({
   title: 'End a call for everyone',
   kind: 'change',
   input: s.object({ id: id('a call id') }),
+  // For everyone at once: a started call by its starter only (calls.may_end), for Tico as for a click.
+  can: (ctx, { id }) => {
+    const c = ctx.queryClient.getQueryData<Call>(callKeys.one(id));
+    const me = ctx.queryClient.getQueryData(meQuery.queryKey)?.id;
+    return !c || c.state === 'scheduled' || !me || c.connector === me;
+  },
   run: (_ctx, { id }) => endCall(id),
   did: () => 'Ended the call',
 });
@@ -546,4 +563,246 @@ export const disconnectGranolaAction = defineAction({
   tico: false,
   run: () => disconnectGranola(),
   did: () => 'Removed Granola',
+});
+
+/* ---------------------------------------------------------------- a meeting's details: who sees it, its agent, its tasks */
+
+const meetingId = id('a meeting id');
+
+export const setPrivateAction = defineAction({
+  id: 'calls.setPrivate',
+  title: 'Make a meeting private or the team’s',
+  kind: 'change',
+  input: s.object({ meeting: meetingId, private: s.boolean() }),
+  // Opening a meeting to the whole company is the person's own press; keeping it private is not.
+  can: (ctx, i) => !(ctx.via === 'tico' && !i.private),
+  run: (_ctx, i) => setMeetingPrivate(i.meeting, i.private),
+  did: (i) => (i.private ? 'Made the meeting private' : 'Showed the meeting to the team'),
+  target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
+});
+
+export const sendMeetingAction = defineAction({
+  id: 'calls.sendMeeting',
+  title: 'Send a meeting to an agent',
+  kind: 'change',
+  input: s.object({ meeting: meetingId, agent: s.string({ min: 5, max: 200, pattern: /^bot:[^\s]+$/, what: 'bot:<id>' }) }),
+  run: (_ctx, { meeting, agent }) => sendMeeting(meeting, agent.slice(4)),
+  did: () => 'Sent the meeting to the agent',
+  target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
+});
+
+export const deleteMeetingAction = defineAction({
+  id: 'calls.deleteMeeting',
+  title: 'Delete a meeting',
+  kind: 'change',
+  // It cannot be undone from the app: the person's own press.
+  tico: false,
+  input: s.object({ meeting: meetingId }),
+  run: async (ctx, { meeting }) => {
+    await deleteMeeting(meeting);
+    await toCalendar(ctx, ({ panel: _, ...rest }) => rest);
+  },
+  did: () => 'Deleted the meeting',
+  target: () => PAGE,
+});
+
+/** A task's number ("#123", "123"), its id, or its link (".../task/<id>"). */
+const taskRef = (raw: string): string => {
+  const t = raw.trim();
+  const linked = /\/task\/([^/?#]+)/.exec(t);
+  return linked ? decodeURIComponent(linked[1] as string) : t.replace(/^#/, '');
+};
+
+export const linkTaskAction = defineAction({
+  id: 'calls.linkTask',
+  title: 'Link a task to a meeting',
+  kind: 'change',
+  input: s.object({ meeting: meetingId, task: s.string({ min: 1, max: 500, what: 'a task: #123, its id or its link' }) }),
+  run: (_ctx, { meeting, task }) => linkTask(meeting, taskRef(task)),
+  did: () => 'Linked the task',
+  target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
+});
+
+export const unlinkTaskAction = defineAction({
+  id: 'calls.unlinkTask',
+  title: 'Unlink a task from a meeting',
+  kind: 'change',
+  input: s.object({ meeting: meetingId, task: id('a task id') }),
+  run: (_ctx, { meeting, task }) => unlinkTask(meeting, task),
+  did: () => 'Unlinked the task',
+  target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
+});
+
+/* ---------------------------------------------------------------- booked calls */
+
+const callWith = s.array(person, { max: 50 });
+
+/** A voice call now, from New call: its title kept. The microphone opens on the person's own press. */
+export const startNowAction = defineAction({
+  id: 'calls.startNow',
+  title: 'Start a voice call now',
+  kind: 'change',
+  tico: false,
+  input: s.object({ with: callWith, title: s.optional(s.string({ max: 200 })) }),
+  run: async (ctx, i) => {
+    prime(null);
+    const call = await startTitled(i.with, i.title?.trim() ?? '').catch((e: unknown) => {
+      void leave();
+      throw e;
+    });
+    claim(call.id);
+    await openCall(ctx, call.id);
+    await join(call.id);
+    return call;
+  },
+  did: () => 'Started the call',
+});
+
+export const scheduleAction = defineAction({
+  id: 'calls.schedule',
+  title: 'Book a voice call',
+  kind: 'change',
+  input: s.object({
+    with: callWith,
+    title: s.optional(s.string({ max: 200 })),
+    start: when,
+    minutes: s.number({ int: true, min: 5, max: 1440 }),
+  }),
+  run: (_ctx, i) => {
+    if (!i.with.length) throw new Error('empty: pick who the call is with');
+    const at = new Date(i.start);
+    if (at.getTime() < Date.now() - 60_000) throw new Error('past: pick a time from now on');
+    return scheduleCall(i.with, i.title?.trim() ?? '', at, i.minutes);
+  },
+  did: ({ title }) => (title?.trim() ? `Booked ${title.trim()}` : 'Booked the call'),
+  target: () => PAGE,
+});
+
+export const moveCallAction = defineAction({
+  id: 'calls.moveCall',
+  title: 'Change a booked call’s time',
+  kind: 'change',
+  input: s.object({ id: id('a call id'), start: when, minutes: s.number({ int: true, min: 5, max: 1440 }) }),
+  run: (_ctx, i) => moveCall(i.id, new Date(i.start), i.minutes),
+  did: () => 'Changed the call’s time',
+  target: () => PAGE,
+});
+
+export const cancelCallAction = defineAction({
+  id: 'calls.cancel',
+  title: 'Cancel a booked call',
+  kind: 'change',
+  input: s.object({ id: id('a call id') }),
+  run: async (ctx, { id }) => {
+    await cancelCall(id);
+    await toCalendar(ctx, ({ panel: _, ...rest }) => rest);
+  },
+  did: () => 'Canceled the call',
+  target: () => PAGE,
+});
+
+/* ---------------------------------------------------------------- on the call: show, agents, captions, items after it */
+
+const cachedCall = (ctx: Ctx, id: string) => ctx.queryClient.getQueryData<Call>(callKeys.one(id));
+const myId = (ctx: Ctx) => ctx.queryClient.getQueryData(meQuery.queryKey)?.id;
+
+export const shareAction = defineAction({
+  id: 'calls.share',
+  title: 'Share my screen on the call, or stop',
+  kind: 'change',
+  // It sends what is on the person's own screen to everyone in the call, from the browser's picker: their own press.
+  tico: false,
+  input: s.object({ id: id('a call id'), on: s.boolean() }),
+  run: async (ctx, { id, on }) => {
+    if (!on) return stopShowing(ctx, id);
+    if (!(await shareScreen(true))) return;
+    await setStage(id, { kind: 'screen' }).catch(async (e: unknown) => {
+      await shareScreen(false);
+      throw e;
+    });
+  },
+  did: ({ on }) => (on ? 'Shared the screen' : 'Stopped sharing'),
+});
+
+export const showFileAction = defineAction({
+  id: 'calls.showFile',
+  title: 'Show a Tico file to everyone on the call',
+  kind: 'change',
+  input: s.object({ id: id('a call id'), file: id('a file id') }),
+  run: async (_ctx, { id, file }) => {
+    await setStage(id, { kind: 'file', file_id: file });
+    // one thing at a time: a file in place of my screen
+    await shareScreen(false);
+  },
+  did: () => 'Showed the file',
+  target: ({ id }) => ({ kind: 'page', id: `/call/${id}` }),
+});
+
+/** My screen stops, then what I showed (or, for the starter, what anyone showed) leaves the stage. */
+async function stopShowing(ctx: Ctx, id: string): Promise<void> {
+  await shareScreen(false);
+  const c = cachedCall(ctx, id);
+  const me = callState().me ?? myId(ctx);
+  if (c?.stage && (c.stage.by === me || c.connector === me)) await clearStage(id);
+}
+
+export const stopShowAction = defineAction({
+  id: 'calls.stopShow',
+  title: 'Stop showing on the call',
+  kind: 'change',
+  input: s.object({ id: id('a call id') }),
+  run: (ctx, { id }) => stopShowing(ctx, id),
+  did: () => 'Stopped showing',
+});
+
+export const captionsAction = defineAction({
+  id: 'calls.captions',
+  title: 'Show or hide captions in the call bar',
+  kind: 'view',
+  input: s.object({ on: s.boolean() }),
+  run: (_ctx, { on }) => setCaptions(on),
+  did: ({ on }) => (on ? 'Captions on' : 'Captions off'),
+});
+
+export const takeOutAction = defineAction({
+  id: 'calls.takeOut',
+  title: 'Take an agent out of the call',
+  kind: 'change',
+  input: s.object({ id: id('a call id'), agent: id('the agent’s id in the call') }),
+  run: (_ctx, { id, agent }) => takeOutAgent(id, agent),
+  did: () => 'Took the agent out',
+  target: ({ id }) => ({ kind: 'page', id: `/call/${id}` }),
+});
+
+const item = { id: id('a call id'), owner: s.string({ max: 200 }), title: s.string({ min: 1, max: 2000 }) };
+
+export const makeItemTaskAction = defineAction({
+  id: 'calls.makeItemTask',
+  title: 'Make a task from a call’s action item',
+  kind: 'change',
+  input: s.object(item),
+  run: async (ctx, i) => {
+    const task = await makeItemTask(cachedCall(ctx, i.id)?.meeting_id ?? null, i.title, i.owner || myId(ctx) || '');
+    keepItem(i.id, itemKey(i), task.id);
+    return task;
+  },
+  did: (i) => `Made ${i.title}`,
+});
+
+export const hideItemAction = defineAction({
+  id: 'calls.hideItem',
+  title: 'Hide a call’s action item',
+  kind: 'view',
+  input: s.object(item),
+  run: (_ctx, i) => keepItem(i.id, itemKey(i), ''),
+  did: () => 'Hid the item',
+});
+
+export const hideChatAction = defineAction({
+  id: 'calls.hideChat',
+  title: 'Close the call’s chat beside the page',
+  kind: 'view',
+  input: s.object({}),
+  run: () => hideChat(),
+  did: () => 'Closed the chat',
 });

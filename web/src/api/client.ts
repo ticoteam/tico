@@ -71,5 +71,6 @@ export const api = {
   post: <T>(path: ApiPath, body?: unknown, opts?: RequestOptions) => request<T>('POST', path, body, opts),
   put: <T>(path: ApiPath, body?: unknown, opts?: RequestOptions) => request<T>('PUT', path, body, opts),
   patch: <T>(path: ApiPath, body?: unknown, opts?: RequestOptions) => request<T>('PATCH', path, body, opts),
-  delete: <T>(path: ApiPath, opts?: RequestOptions) => request<T>('DELETE', path, undefined, opts),
+  /** `body` only for the few routes that take one on DELETE (the server answers 422 without it). */
+  delete: <T>(path: ApiPath, opts?: RequestOptions, body?: unknown) => request<T>('DELETE', path, body, opts),
 };

@@ -113,7 +113,16 @@ export interface SystemJob {
   controllable?: boolean;
   /** Its last run (backend/system_routines.py row_of). */
   last?: { started_at?: string | null; finished_at?: string | null; ok?: boolean; result?: string | null } | null;
+  /** The schedule presets it offers (none: a switch only), the one picked and its daily time "HH:MM". */
+  presets?: { key: JobPreset; label: string }[];
+  preset?: JobPreset | null;
+  at?: string | null;
+  /** When it runs next. */
+  next?: string | null;
 }
+
+/** backend/models.py SystemRoutineUpdate.preset */
+export type JobPreset = '15m' | 'hourly' | '4h' | 'daily' | 'business';
 
 // ---------------------------------------------------------------- incoming webhooks (/v2/triggers)
 

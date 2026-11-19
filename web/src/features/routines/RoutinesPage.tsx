@@ -8,15 +8,15 @@ import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
-import { MenuItem } from '@/kit/Menu';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
-import { List, PageMore, Section, type PageTab } from '@/pagekinds';
-import { BUILTINS, ROUTINES, type Builtin } from './actions';
+import { FilterRow, List, PageMore, Section, type PageTab } from '@/pagekinds';
+import { BUILTINS, ROUTINES, type Builtin, type RoutineState } from './actions';
 import { BuiltinPanel } from './BuiltinPanel';
 import { EndpointDialog, EndpointRow } from './Endpoints';
 import { NewInbox } from './Templates';
-import { Face, press, pressOut, Word } from './parts';
+import { Face, Find, press, pressOut, Word } from './parts';
 import { endpointsQuery, heartbeatQuery, hooksQuery, maintenanceQuery, routinesQuery, systemJobsQuery, type Endpoint, type RunRange, type RunStatus } from './queries';
 import { RoutinePanel } from './RoutinePanel';
 import { RunsTab } from './RunsTab';
@@ -35,6 +35,9 @@ export interface RoutinesSearch {
   /** Runs: which runs, and over what time. */
   status?: RunStatus;
   range?: RunRange;
+  /** Routines: the words searched for, and which state shows. */
+  q?: string;
+  state?: RoutineState;
 }
 
 /** `/company/routines?…`: the address a row opens. */
@@ -56,7 +59,7 @@ export function RoutinesPage({ search }: { search: RoutinesSearch }) {
     const { status, range } = search;
     return <RunsTab head={head} status={status} range={range} panel={search.panel} href={(panel) => routinesHref({ tab: 'runs', status, range, panel })} />;
   }
-  return search.tab === 'webhooks' ? <WebhooksTab panel={search.panel} /> : <RoutinesTab panel={search.panel} />;
+  return search.tab === 'webhooks' ? <WebhooksTab panel={search.panel} /> : <RoutinesTab panel={search.panel} q={search.q} state={search.state} />;
 }
 
 const close = () => void press('routines.closePanel', {});
@@ -75,13 +78,20 @@ const SECTIONS: [string, string][] = [
 /** Who runs it: the agent that takes the turn, or the owner. */
 export const runnerOf = (r: Routine) => r.steps?.find((s) => s.type === 'bot_turn')?.bot ?? r.owner_id ?? null;
 
-function RoutinesTab({ panel }: { panel?: string }) {
+/** The filter's states (old automations-overview.ts AU_STATES): on, last run failed, on hold, off or paused. */
+const STATE_WORDS: Record<RoutineState, string> = { on: 'On', failed: 'Failed', hold: 'On hold', off: 'Off' };
+const stateOf = (r: Routine): RoutineState => (r.last_run?.status === 'failed' ? 'failed' : r.hold ? 'hold' : r.enabled === false || r.paused ? 'off' : 'on');
+const has = (words: string, q: string | undefined) => !q || words.toLowerCase().includes(q.toLowerCase());
+
+function RoutinesTab({ panel, q, state }: { panel?: string; q?: string; state?: RoutineState }) {
   const list = useQuery(routinesQuery);
   const hooks = useQuery(hooksQuery);
-  const routines = list.data ?? [];
+  const all = list.data ?? [];
   const open = panel?.startsWith('routine:') ? panel.slice(8) : null;
   const built = panel?.startsWith('builtin:') ? (BUILTINS.find((b) => `builtin:${b}` === panel) ?? null) : null;
   const hookName = (id: string) => hooks.data?.find((h) => h.id === id)?.name;
+  const routines = all.filter((r) => (!state || stateOf(r) === state) && has(`${r.name ?? ''} ${triggerWords(r.trigger, { hook: hookName })}`, q));
+  const listed = (to: { q?: string; state?: RoutineState }) => void press('routines.list', to);
   const known = new Set(SECTIONS.map(([t]) => t));
   const groups: [string, Routine[]][] = [
     ...SECTIONS.map(([t, name]): [string, Routine[]] => [name, routines.filter((r) => r.trigger.type === t)]),
@@ -94,15 +104,23 @@ function RoutinesTab({ panel }: { panel?: string }) {
   );
   // The built-in section keeps the page ready while there are no routines, so the page kind cannot see it is empty:
   // the empty state's Add is the one filled button then, and the head's draws plain.
-  const none = list.isSuccess && !routines.length;
+  const none = list.isSuccess && !all.length;
   const [inbox, setInbox] = useState(false);
   return (
     <List
       {...head}
       state={list.isPending ? 'loading' : list.isError ? 'fault' : 'ready'}
       onRetry={() => void list.refetch()}
+      search={<Find label="Search routines" value={q} onFind={(words) => listed({ q: words, state })} />}
+      filter={state && <FilterRow filters={[{ label: STATE_WORDS[state], onClear: () => listed({ q }) }]} />}
       actions={
         <>
+          <Menu trigger={<IconButton icon="filter" label="Filter" on={!!state} />}>
+            <MenuItem label="All" on={!state} onSelect={() => listed({ q })} />
+            {(Object.keys(STATE_WORDS) as RoutineState[]).map((k) => (
+              <MenuItem key={k} label={STATE_WORDS[k]} on={k === state} onSelect={() => listed({ q, state: k })} />
+            ))}
+          </Menu>
           {add(none ? 'plain' : 'primary')}
           {inbox && <NewInbox onClose={() => setInbox(false)} />}
         </>
@@ -124,10 +142,12 @@ function RoutinesTab({ panel }: { panel?: string }) {
                   ))}
                 </Section>
               ))
+          ) : all.length ? (
+            <Empty title="No matches" />
           ) : (
             <Empty title="No routines yet">{add('primary')}</Empty>
           )}
-          <BuiltInSection selected={built} />
+          {!state && <BuiltInSection selected={built} q={q} />}
         </>
       }
       panel={open ? <RoutinePanel key={open} id={open} onClose={close} /> : built ? <BuiltinPanel which={built} onClose={close} /> : null}
@@ -163,7 +183,7 @@ function RoutineRow({ r, selected, when }: { r: Routine; selected: boolean; when
 
 /** Maintenance, Heartbeat and System jobs: Tico's own, each with its switch and timing in its panel. One the person
     may not read is left out. */
-function BuiltInSection({ selected }: { selected: Builtin | null }) {
+function BuiltInSection({ selected, q }: { selected: Builtin | null; q?: string }) {
   const m = useQuery(maintenanceQuery);
   const h = useQuery(heartbeatQuery);
   const j = useQuery(systemJobsQuery);
@@ -172,7 +192,7 @@ function BuiltInSection({ selected }: { selected: Builtin | null }) {
     { id: 'heartbeat', name: 'Heartbeat', when: h.data ? `Every ${h.data.interval_s} seconds` : '', at: h.data?.last_beat_at, gone: h.isError },
     { id: 'system', name: 'System jobs', when: j.data ? `${j.data.length} ${j.data.length === 1 ? 'job' : 'jobs'}` : '', gone: j.isError },
   ];
-  const shown = rows.filter((r) => !r.gone);
+  const shown = rows.filter((r) => !r.gone && has(r.name, q));
   if (!shown.length) return null;
   return (
     <Section name="Built in" count={shown.length} target="section:built-in">

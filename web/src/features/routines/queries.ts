@@ -3,7 +3,6 @@ import { api } from '@/api/client';
 import type { AutomationOverviewRuns, AutomationTemplate, AutomationTemplates, EventTypeList, Webhook, WebhookCreate, WebhookCreated, WebhookList, WebhookUpdate } from '@/api/schema';
 import type { Dest } from './board';
 import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
-import { webhookQuery } from '@/features/library/exports';
 import type {
   Delivery,
   DocFile,
@@ -13,6 +12,7 @@ import type {
   Group,
   Heartbeat,
   Hook,
+  JobPreset,
   Maintenance,
   MaintenanceRun,
   Match,
@@ -351,6 +351,16 @@ export function setJob(key: string, on: boolean) {
   });
 }
 
+/** Pick a job's schedule preset or its daily time (PUT /system-routines/{key} {preset, at}); the answer is its row. */
+export function setJobSchedule(key: string, c: { preset?: JobPreset; at?: string }) {
+  return write<{ job: SystemJob }>({
+    key: systemJobsQuery.queryKey,
+    optimistic: (cur: SystemJob[] | undefined) => cur?.map((j) => (j.key === key ? { ...j, ...c } : j)),
+    send: (idempotencyKey) => api.put(`/api/v2/system-routines/${enc(key)}`, c, { idempotencyKey }),
+    settle: (cur: SystemJob[] | undefined, r) => cur?.map((j) => (j.key === key && r?.job?.key === key ? { ...j, ...r.job } : j)),
+  });
+}
+
 /** Run one of Tico's own jobs once, now; its row is read again for the result. */
 export async function runJob(key: string): Promise<void> {
   await api.post(`/api/v2/system-routines/${enc(key)}/run`, {});
@@ -476,8 +486,9 @@ export async function updateEndpoint(id: string, body: WebhookUpdate) {
     send: (idempotencyKey) => api.post<{ webhook: Webhook }>(`/api/v2/webhooks/${enc(id)}/update`, body, { idempotencyKey }),
     settle: (list: Webhook[] | undefined, made) => list?.map((h) => (h.id === id ? made.webhook : h)),
   });
-  // The same webhook on its Tools page: read it again there too.
-  void queryClient.invalidateQueries({ queryKey: webhookQuery(id).queryKey });
+  // The same webhook on its Tools page: read it again there too. Loaded when needed: Library's pages lead back to
+  // this feature's, and a fixed import made a loop in which the page addresses were not yet set.
+  void import('@/features/library/exports').then(({ webhookQuery }) => queryClient.invalidateQueries({ queryKey: webhookQuery(id).queryKey }));
   return made;
 }
 

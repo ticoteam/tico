@@ -166,7 +166,7 @@ describe('A meeting beside List', () => {
     );
     show('/calendar?view=list&panel=meeting%3Amt1');
     const panel = await screen.findByRole('complementary', { name: 'Weekly sync' });
-    expect(within(panel).getByRole('heading', { name: 'Transcript' })).toBeTruthy();
+    fireEvent.click(within(panel).getByRole('tab', { name: 'Transcript' }));
     expect(within(panel).getByText('Then we tell customers in April.')).toBeTruthy();
     expect(within(panel).getByText('Ben')).toBeTruthy();
     expect(within(panel).getByText('1:05')).toBeTruthy();
@@ -176,6 +176,7 @@ describe('A meeting beside List', () => {
     queryClient.setQueryData(meetingQuery('mt1').queryKey, meeting({ review_state: 'live', transcript_readable: 'First line\nSecond line' }));
     show('/calendar?view=list&panel=meeting%3Amt1');
     const panel = await screen.findByRole('complementary', { name: 'Weekly sync' });
+    fireEvent.click(within(panel).getByRole('tab', { name: 'Transcript' }));
     expect(within(panel).getByText('Second line')).toBeTruthy();
   });
 });

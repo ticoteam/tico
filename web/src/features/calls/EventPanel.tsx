@@ -1,22 +1,35 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { CalendarOccurrence } from '@/api/schema';
-import { useActor } from '@/data';
+import { useActor, useActors } from '@/data';
 import { useFollow } from '@/live/follow';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
-import { Field } from '@/kit/Field';
+import { Field, Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { Menu, MenuItem } from '@/kit/Menu';
+import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
+import { Tabs } from '@/kit/Tabs';
+import { toast } from '@/kit/Toast';
 import { SidePanel } from '@/pagekinds';
 import { EventDialog } from './EventDialog';
 import { clock, dl, isLive, joinOf, kindWords, lengthWords, minutes, parseDay, running } from './model';
-import { joinNow, LiveMark, press, refsOf } from './parts';
-import { itemsQuery, meetingQuery, type Meeting, type MeetingItem } from './queries';
+import { joinNow, LiveMark, press, refsOf, useNameOf } from './parts';
+import {
+  itemsQuery,
+  linkedTasksQuery,
+  meetingQuery,
+  transcriptQuery,
+  upcomingCallsQuery,
+  type LiveTranscript,
+  type MeetChat,
+  type Meeting,
+  type MeetingItem,
+  type MeetingMore,
+} from './queries';
 
 /* ---------------------------------------------------------------- an event */
 
@@ -36,6 +49,11 @@ export function EventPanel({
   const o = list.find((x) => x.occurrence_id === id);
   const [editing, setEditing] = useState(false);
   const [removing, setRemoving] = useState(false);
+  // A booked Tico call: its time is the call's (PATCH /calls/{id}), and it is cancelled rather than removed.
+  const way0 = o ? joinOf(o) : null;
+  const callId = way0 && 'call' in way0 ? way0.call : undefined;
+  const upcoming = useQuery({ ...upcomingCallsQuery, enabled: !!callId });
+  const booked = callId ? upcoming.data?.calls.find((c) => c.id.replace(/-/g, '').toLowerCase() === callId.replace(/-/g, '').toLowerCase()) : undefined;
   if (!o)
     return (
       <SidePanel title={pending ? '' : 'Not on this calendar'} target={`event:${id}`} onClose={onClose}>
@@ -54,7 +72,16 @@ export function EventPanel({
       target={`event:${o.occurrence_id}`}
       onClose={onClose}
       actions={
-        editable ? (
+        booked ? (
+          booked.can_edit ? (
+            <>
+              <IconButton icon="edit" label="Change time" size="sm" onClick={() => setEditing(true)} />
+              <Menu trigger={<IconButton icon="more" label="More" size="sm" />}>
+                <MenuItem label="Cancel call" onSelect={() => setRemoving(true)} />
+              </Menu>
+            </>
+          ) : undefined
+        ) : editable ? (
           <>
             <IconButton icon="edit" label="Change" size="sm" onClick={() => setEditing(true)} />
             <Menu trigger={<IconButton icon="more" label="More" size="sm" />}>
@@ -129,9 +156,32 @@ export function EventPanel({
           )}
         </section>
       )}
-      <EventDialog open={editing} onOpenChange={setEditing} event={o} />
+      {booked ? <EventDialog open={editing} onOpenChange={setEditing} call={booked} /> : <EventDialog open={editing} onOpenChange={setEditing} event={o} />}
+      {booked && (
+        <Dialog
+          open={removing}
+          onOpenChange={setRemoving}
+          alert
+          title={`Cancel ${o.title}?`}
+          description="Everyone invited is told."
+          actions={
+            <>
+              <Button onClick={() => setRemoving(false)}>Keep it</Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  setRemoving(false);
+                  void press('calls.cancel', { id: booked.id });
+                }}
+              >
+                Cancel call
+              </Button>
+            </>
+          }
+        />
+      )}
       <Dialog
-        open={removing}
+        open={removing && !booked}
         onOpenChange={setRemoving}
         alert
         title={`Remove ${o.title}?`}
@@ -181,7 +231,13 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
   useFollow({ meeting: id });
   const m = useQuery(meetingQuery(id));
   const items = useQuery(itemsQuery(id));
+  const linked = useQuery({ ...linkedTasksQuery(id), enabled: !!m.data });
+  const liveId = m.data?.live_meeting_id ?? '';
+  const chat = useQuery({ ...transcriptQuery(liveId), enabled: !!liveId, select: (d: LiveTranscript) => (d as LiveTranscript & { chat?: MeetChat[] }).chat ?? [] });
+  const [tab, setTab] = useState<'summary' | 'transcript' | 'chat'>('summary');
+  const [deleting, setDeleting] = useState(false);
   const [text, setText] = useState('');
+  const [ref, setRef] = useState('');
   const summary = m.data?.outcome?.summary;
   const lines = Array.isArray(summary) ? summary : summary ? summary.split('\n').filter((l) => l.trim()) : [];
   const made = m.data?.outcome?.tasks ?? [];
@@ -193,6 +249,11 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
     setText('');
     void press('calls.addItem', { meeting: id, section: 'doc', text: t });
   };
+  const link = async () => {
+    const t = ref.trim();
+    if (!t) return;
+    if (await press('calls.linkTask', { meeting: id, task: t })) setRef('');
+  };
   if (m.isError)
     return (
       <SidePanel title="Meeting" target={`meeting:${id}`} onClose={onClose}>
@@ -201,136 +262,339 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
         </Empty>
       </SidePanel>
     );
-  const state = m.data?.review_state;
+  const mm = m.data as MeetingMore | undefined;
+  const state = mm?.review_state;
+  const canEdit = !!mm?.can_edit;
+  const said = mm ? transcriptRows(mm) : [];
+  const talk = chat.data ?? [];
+  const tabs = [
+    { value: 'summary' as const, label: 'Summary' },
+    ...(said.length ? [{ value: 'transcript' as const, label: 'Transcript' }] : []),
+    ...(talk.length ? [{ value: 'chat' as const, label: 'Chat' }] : []),
+  ];
+  const on = tabs.some((t) => t.value === tab) ? tab : 'summary';
+  const madeIds = new Set(made.map((t) => t.id));
+  const links = (linked.data?.tasks ?? []).filter((t) => !madeIds.has(t.task_id));
   return (
-    <SidePanel title={m.data?.title ?? ''} target={`meeting:${id}`} onClose={onClose}>
-      {(state === 'pending' || state === 'dismissed') && (
-        <section className="rail-sec">
-          <p className="mv-notes">{state === 'pending' ? 'Only you see this' : 'Dismissed'}</p>
-          <div className="mv-review">
-            {state === 'pending' ? (
-              <>
-                <Button onClick={() => void press('calls.review', { meeting: id, action: 'dismiss' })}>Dismiss</Button>
-                <Button variant="primary" onClick={() => void press('calls.review', { meeting: id, action: 'approve' })}>
-                  Share
-                </Button>
-              </>
-            ) : (
-              <Button onClick={() => void press('calls.review', { meeting: id, action: 'restore' })}>Restore</Button>
-            )}
-          </div>
-        </section>
+    <SidePanel
+      title={mm?.title ?? ''}
+      target={`meeting:${id}`}
+      onClose={onClose}
+      actions={mm && state === 'live' ? <MeetingMenu m={mm} canSend={!!items.data?.can_send} onDelete={() => setDeleting(true)} /> : undefined}
+    >
+      {tabs.length > 1 && (
+        <div className="cw-tabs">
+          <Tabs label="Pages" tabs={tabs} value={on} onValueChange={setTab} />
+        </div>
       )}
-      {m.data?.started && (
-        <section className="rail-sec">
-          <Fact k="Day" v={dl(new Date(m.data.started))} />
-          <Fact k="Time" v={clock(minutes(new Date(m.data.started)))} />
-          {m.data.duration_ms ? <Fact k="Length" v={lengthWords(m.data.duration_ms / 60_000)} /> : null}
-        </section>
-      )}
-      {m.data?.media_url?.startsWith('https:') && (
-        <section className="rail-sec">
-          <h3>Recording</h3>
-          <Recording src={m.data.media_url} />
-        </section>
-      )}
-      {lines.length > 0 && (
-        <section className="rail-sec">
-          <h3>Summary</h3>
-          <ul className="mv-list">
-            {lines.map((l, i) => (
-              <li key={i}>{l}</li>
-            ))}
-          </ul>
-        </section>
-      )}
-      <section className="rail-sec">
-        <h3>Agenda</h3>
-        {doc.length > 0 && (
-          <ul className="acts">
-            {doc.map((it) => (
-              <Item key={it.id} meeting={id} it={it} canEdit={!!m.data?.can_edit} />
-            ))}
-          </ul>
-        )}
-        <form
-          className="mv-add"
-          onSubmit={(e) => {
-            e.preventDefault();
-            add();
-          }}
-        >
-          <Field label="Add to the agenda" labelHidden placeholder="Add to the agenda" value={text} onValueChange={setText} lead="plus" />
-        </form>
-      </section>
-      {todo.length > 0 && (
-        <section className="rail-sec">
-          <h3>Action items</h3>
-          <ul className="acts">
-            {todo.map((it) => (
-              <Item key={it.id} meeting={id} it={it} task canPush={!!items.data?.can_push} canEdit={!!m.data?.can_edit} />
-            ))}
-          </ul>
-        </section>
-      )}
-      {made.length > 0 && (
-        <section className="rail-sec">
-          <h3>Tasks made</h3>
-          {made.map((t) => (
-            <Link key={t.id} to="/task/$task" params={{ task: t.id }} className="rail-row call-rail">
-              <Icon name="tasks" />
-              <span>{t.title}</span>
-            </Link>
-          ))}
-        </section>
-      )}
-      {m.data && (m.data.can_edit || m.data.note || m.data.notes) && (
-        <section className="rail-sec">
-          <h3>Notes</h3>
-          {m.data.can_edit ? <Notes m={m.data} /> : m.data.note && <p className="mv-notes">{m.data.note}</p>}
-          {m.data.notes && (
-            <div className="mv-notes">
-              {m.data.notes
-                .split('\n')
-                .filter((l) => l.trim())
-                .map((l, i) => (
-                  <p key={i}>{l}</p>
-                ))}
-            </div>
+      {on === 'transcript' && mm && <Said rows={said} what="transcript" />}
+      {on === 'chat' && <Said rows={talk.map((c) => ({ who: c.actor ?? c.role ?? '', actor: !!c.actor, time: c.at_ms == null ? '' : running(c.at_ms / 1000), text: c.text }))} what="chat" />}
+      {on === 'summary' && (
+        <>
+          {(state === 'pending' || state === 'dismissed') && (
+            <section className="rail-sec">
+              <p className="mv-notes">{state === 'pending' ? 'Only you see this' : 'Dismissed'}</p>
+              <div className="mv-review">
+                {state === 'pending' ? (
+                  <>
+                    <Button onClick={() => void press('calls.review', { meeting: id, action: 'dismiss' })}>Dismiss</Button>
+                    <Button variant="primary" onClick={() => void press('calls.review', { meeting: id, action: 'approve' })}>
+                      Share
+                    </Button>
+                  </>
+                ) : (
+                  <Button onClick={() => void press('calls.review', { meeting: id, action: 'restore' })}>Restore</Button>
+                )}
+              </div>
+            </section>
           )}
-        </section>
+          {mm?.started && (
+            <section className="rail-sec">
+              <Fact k="Day" v={dl(new Date(mm.started))} />
+              <Fact k="Time" v={clock(minutes(new Date(mm.started)))} />
+              {mm.duration_ms ? <Fact k="Length" v={lengthWords(mm.duration_ms / 60_000)} /> : null}
+              {state === 'live' && <Fact k="Seen by" v={mm.private ? 'Private' : 'Team'} />}
+              {mm.sent?.bot && <SentTo bot={mm.sent.bot} />}
+            </section>
+          )}
+          {mm?.media_url?.startsWith('https:') && (
+            <section className="rail-sec">
+              <h3>Recording</h3>
+              <Recording src={mm.media_url} />
+            </section>
+          )}
+          {lines.length > 0 && (
+            <section className="rail-sec">
+              <h3>Summary</h3>
+              <ul className="mv-list">
+                {lines.map((l, i) => (
+                  <li key={i}>{l}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+          <section className="rail-sec">
+            <h3>Agenda</h3>
+            {doc.length > 0 && (
+              <ul className="acts">
+                {doc.map((it) => (
+                  <Item key={it.id} meeting={id} it={it} canEdit={canEdit} />
+                ))}
+              </ul>
+            )}
+            <form
+              className="mv-add"
+              onSubmit={(e) => {
+                e.preventDefault();
+                add();
+              }}
+            >
+              <Field label="Add to the agenda" labelHidden placeholder="Add to the agenda" value={text} onValueChange={setText} lead="plus" />
+            </form>
+          </section>
+          {todo.length > 0 && (
+            <section className="rail-sec">
+              <h3>Action items</h3>
+              <ul className="acts">
+                {todo.map((it) => (
+                  <Item key={it.id} meeting={id} it={it} task canPush={!!items.data?.can_push} canEdit={canEdit} />
+                ))}
+              </ul>
+            </section>
+          )}
+          {(made.length > 0 || links.length > 0 || (canEdit && state === 'live')) && (
+            <section className="rail-sec">
+              <h3>Tasks</h3>
+              {made.map((t) => (
+                <Link key={t.id} to="/task/$task" params={{ task: t.id }} className="rail-row call-rail">
+                  <Icon name="tasks" />
+                  <span>{t.title}</span>
+                </Link>
+              ))}
+              {links.length > 0 && (
+                <ul className="acts">
+                  {links.map((t) => (
+                    <li key={t.task_id} className="act">
+                      <span />
+                      <Link to="/task/$task" params={{ task: t.task_id }} className="act-text">
+                        {t.title}
+                      </Link>
+                      <span />
+                      {canEdit ? <IconButton icon="close" label="Unlink" size="sm" quiet onClick={() => void press('calls.unlinkTask', { meeting: id, task: t.task_id })} /> : <span />}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {canEdit && state === 'live' && (
+                <form
+                  className="mv-add"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void link();
+                  }}
+                >
+                  <Field label="Link a task" labelHidden placeholder="Link a task" value={ref} onValueChange={setRef} lead="link" />
+                </form>
+              )}
+            </section>
+          )}
+          {mm && (mm.can_edit || mm.note || mm.notes) && (
+            <section className="rail-sec">
+              <h3>Notes</h3>
+              {mm.can_edit ? <Notes m={mm} /> : mm.note && <p className="mv-notes">{mm.note}</p>}
+              {mm.notes && (
+                <div className="mv-notes">
+                  {mm.notes
+                    .split('\n')
+                    .filter((l) => l.trim())
+                    .map((l, i) => (
+                      <p key={i}>{l}</p>
+                    ))}
+                </div>
+              )}
+            </section>
+          )}
+        </>
       )}
-      {m.data && <Transcript m={m.data} />}
+      {mm && (
+        <Dialog
+          open={deleting}
+          onOpenChange={setDeleting}
+          alert
+          title={`Delete ${mm.title}?`}
+          actions={
+            <>
+              <Button onClick={() => setDeleting(false)}>Cancel</Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  setDeleting(false);
+                  void press('calls.deleteMeeting', { meeting: id });
+                }}
+              >
+                Delete
+              </Button>
+            </>
+          }
+        />
+      )}
     </SidePanel>
   );
 }
 
+/** A shared meeting's ⋯ (meetings.ts: Team / Private, Share's agents and link, Delete). */
+function MeetingMenu({ m, canSend, onDelete }: { m: MeetingMore; canSend: boolean; onDelete: () => void }) {
+  const actors = useActors();
+  const nameOf = useNameOf();
+  const agents = actors.filter((a) => a.kind === 'agent');
+  const sent = m.sent?.bot;
+  const copy = () =>
+    void navigator.clipboard?.writeText(`${location.origin}/calendar?view=list&panel=${encodeURIComponent(`meeting:${m.id}`)}`).then(
+      () => toast({ text: 'Link copied' }),
+      () => toast({ text: "Couldn't copy", kind: 'failed' }),
+    );
+  return (
+    <Menu trigger={<IconButton icon="more" label="More" size="sm" />}>
+      {m.can_edit && <MenuItem label={m.private ? 'Show to team' : 'Make private'} onSelect={() => void press('calls.setPrivate', { meeting: m.id, private: !m.private })} />}
+      {canSend &&
+        (sent ? (
+          <MenuItem label="Sent" meta={nameOf(sent.startsWith('bot:') ? sent : `bot:${sent}`)} disabled onSelect={() => undefined} />
+        ) : (
+          agents.length > 0 && (
+            <MenuSub label="Send to agent">
+              {agents.map((a) => (
+                <MenuItem key={a.id} label={a.name} onSelect={() => void press('calls.sendMeeting', { meeting: m.id, agent: a.id })} />
+              ))}
+            </MenuSub>
+          )
+        ))}
+      <MenuItem label="Copy link" onSelect={copy} />
+      {m.can_edit && (
+        <>
+          <MenuRule />
+          <MenuItem label="Delete" onSelect={onDelete} />
+        </>
+      )}
+    </Menu>
+  );
+}
+
+function SentTo({ bot }: { bot: string }) {
+  const nameOf = useNameOf();
+  return <Fact k="Sent to" v={nameOf(bot.startsWith('bot:') ? bot : `bot:${bot}`)} />;
+}
+
+interface Line {
+  who?: string;
+  /** `who` is an actor ref to name. */
+  actor?: boolean;
+  time?: string;
+  text: string;
+}
+
 /** What was said (meetings.ts meetTranscriptHTML): its turns, with times only when the source kept them; else its text. */
-function Transcript({ m }: { m: Meeting }) {
+function transcriptRows(m: Meeting): Line[] {
   const turns = m.turns ?? [];
   const timed = turns.some((t) => t.start_ms);
-  const lines = turns.length ? [] : (m.voice_text || m.transcript_readable || '').split('\n').filter((l) => l.trim());
-  if (!turns.length && !lines.length) return null;
+  if (turns.length) return turns.map((t) => ({ who: t.speaker ?? '', time: timed ? running((t.start_ms ?? 0) / 1000) : '', text: t.text }));
+  return (m.voice_text || m.transcript_readable || '')
+    .split('\n')
+    .filter((l) => l.trim())
+    .map((text) => ({ text }));
+}
+
+const hitsIn = (text: string, q: string) => (q ? text.toLowerCase().split(q).length - 1 : 0);
+
+/** The words with each hit of `needle` in a <mark>; hit number `base + k` is the current one when it equals `now`. */
+function markIn(text: string, needle: string, base: number, now: number): { nodes: ReactNode; n: number } {
+  if (!needle) return { nodes: text, n: 0 };
+  const low = text.toLowerCase();
+  const nodes: ReactNode[] = [];
+  let from = 0;
+  let n = 0;
+  for (let i = low.indexOf(needle); i >= 0; i = low.indexOf(needle, i + needle.length)) {
+    nodes.push(text.slice(from, i));
+    nodes.push(
+      <mark key={i} className={base + n === now ? 'is-on' : undefined}>
+        {text.slice(i, i + needle.length)}
+      </mark>,
+    );
+    n += 1;
+    from = i + needle.length;
+  }
+  nodes.push(text.slice(from));
+  return { nodes, n };
+}
+
+/** The transcript or the chat (calls.js .ts-tools): search the words (Enter and Shift+Enter step through), copy them. */
+function Said({ rows, what }: { rows: readonly Line[]; what: 'transcript' | 'chat' }) {
+  const nameOf = useNameOf();
+  const [q, setQ] = useState('');
+  const [at, setAt] = useState(0);
+  const box = useRef<HTMLDivElement>(null);
+  const needle = what === 'transcript' ? q.trim().toLowerCase() : '';
+  const named = rows.map((r) => ({ ...r, who: r.actor && r.who ? nameOf(r.who) : r.who }));
+  const hits = needle ? named.reduce((n, r) => n + hitsIn(r.text, needle), 0) : 0;
+  const now = hits ? at % hits : -1;
+  useEffect(() => {
+    box.current?.querySelector('mark.is-on')?.scrollIntoView?.({ block: 'center' });
+  }, [now, needle]);
+  const copy = () =>
+    void navigator.clipboard?.writeText(named.map((r) => `${r.who ? `${r.who}${r.time ? ` [${r.time}]` : ''}: ` : ''}${r.text}`).join('\n')).then(
+      () => toast({ text: 'Copied' }),
+      () => toast({ text: "Couldn't copy", kind: 'failed' }),
+    );
+  // Each row's words with its hits marked; the hits are counted across rows so Enter steps through them all.
+  const bodies: ReactNode[] = [];
+  let seen = 0;
+  for (const r of named) {
+    const { nodes, n } = markIn(r.text, needle, seen, now);
+    bodies.push(nodes);
+    seen += n;
+  }
   return (
     <section className="rail-sec">
-      <h3>Transcript</h3>
-      <div className="cw-ts">
-        {turns.map((t, i) => (
-          <div key={i} className="msg ts">
-            <div className="msg-main">
-              {(t.speaker || timed) && (
+      <div
+        className="ts-tools"
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter' || !hits) return;
+          e.preventDefault();
+          setAt((a) => (a + (e.shiftKey ? hits - 1 : 1)) % hits);
+        }}
+      >
+        {what === 'transcript' && (
+          <Search
+            label="Search the transcript"
+            placeholder="Search"
+            value={q}
+            onValueChange={(v) => {
+              setQ(v);
+              setAt(0);
+            }}
+          />
+        )}
+        {needle && <span className="ts-hits">{`${hits ? now + 1 : 0}/${hits}`}</span>}
+        <span className="grow" />
+        <IconButton icon="copy" label={what === 'chat' ? 'Copy chat' : 'Copy transcript'} size="sm" onClick={copy} />
+      </div>
+      <div className="cw-ts" ref={box}>
+        {named.map((r, i) =>
+          r.who || r.time ? (
+            <div key={i} className="msg ts">
+              <div className="msg-main">
                 <div className="msg-meta">
-                  {t.speaker && <b>{t.speaker}</b>}
-                  {timed && <time>{running((t.start_ms ?? 0) / 1000)}</time>}
+                  {r.who && <b>{r.who}</b>}
+                  {r.time && <time>{r.time}</time>}
                 </div>
-              )}
-              <p>{t.text}</p>
+                <p>{bodies[i]}</p>
+              </div>
             </div>
-          </div>
-        ))}
-        {lines.map((l, i) => (
-          <p key={i}>{l}</p>
-        ))}
+          ) : (
+            <p key={i} className="ts">
+              {bodies[i]}
+            </p>
+          ),
+        )}
       </div>
     </section>
   );

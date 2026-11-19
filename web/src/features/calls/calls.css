@@ -412,3 +412,22 @@ button.act-text{padding:0;border:0;background:none;color:inherit;font-family:inh
 @media (max-height:420px){
   .cw.cw-small>.win-side{display:none}
 }
+
+/* ---------- a meeting's transcript and chat (calls.js .ts-tools): search the words, step through the hits, copy ---------- */
+.ts-tools{display:flex;align-items:center;gap:var(--s-2);margin-bottom:var(--s-1)}
+.ts-tools .search{flex:1;min-width:0}
+.ts-hits{font-size:var(--t-xs);color:var(--muted);font-variant-numeric:tabular-nums}
+.ts mark{background:var(--well-2);color:var(--ink);border-radius:var(--r-key)}
+.ts mark.is-on{background:var(--ink);color:var(--surface)}
+
+/* ---------------------------------------------------------------- a screen or a file on the stage (calls.css .shared) */
+.tile-strip{flex:none;display:flex;justify-content:center;gap:var(--s-2)}
+.tile.is-sm{width:var(--s-18);height:60px;border-radius:var(--r-ctl)}
+.shared{flex:1;min-height:0;display:flex;flex-direction:column;gap:var(--s-2);margin:0}
+.shared figcaption{display:flex;align-items:center;gap:var(--s-2);height:var(--s-6);padding:0 var(--s-1);font-size:var(--t-sm);color:var(--muted)}
+.shared figcaption b{color:var(--ink);font-weight:var(--w-strong)}
+.shot{flex:1;min-height:0;display:flex;flex-direction:column;border-radius:var(--r-card);background:var(--well);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}
+.shot>video{flex:1;min-height:0;width:100%;object-fit:contain}
+.shot>.lib{flex:1;min-height:0;overflow:auto}
+.stage-files{display:flex;flex-direction:column;gap:var(--s-2)}
+.stage-files .rail-row{width:100%;border:0;background:none;text-align:left;cursor:pointer}

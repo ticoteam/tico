@@ -14,11 +14,12 @@ import { Popover } from '@/kit/Popover';
 import { toast } from '@/kit/Toast';
 import { PageMore } from '@/pagekinds';
 import { CallBars, Dot, dot } from '@/tico/dot';
-import { CallSide } from './CallSide';
+import { BarMore, ShareControl, Shared } from './CallMore';
+import { CallSide, Transcript } from './CallSide';
 import { running } from './model';
 import { Face, inCall, press, SMALL_WINDOW, useCards, useMe, useNameOf, useNow, useOut, useSmallWindow, type InCall } from './parts';
 import { PeoplePick } from './PeoplePick';
-import { callQuery, notesQuery } from './queries';
+import { callItemsQuery, callQuery, itemKey, notesQuery } from './queries';
 import { callState, forget, isActive, levelOf, useCall, type CallState, type Phase } from './session';
 import './calls.css';
 
@@ -65,6 +66,7 @@ export function CallPage({ room }: CallPageProps) {
   const out = useOut(room) && !small;
   const cards = useCards() && !small;
   const back = useBack();
+  const me = useMe();
   useLetGoOnLeave(room);
   useJoinInSmallWindow(small, room, call.data, phase);
   const c = call.data;
@@ -109,6 +111,8 @@ export function CallPage({ room }: CallPageProps) {
         <IconButton icon="shrink" label={SMALL_WINDOW} onClick={() => void press('shell.openCallWindow', { id: room })} />
       )}
       <IconButton icon="link" label="Copy link" onClick={copyLink} />
+      {/* an agent in, and End for whoever started it */}
+      {on && !out && c?.provider !== 'google_meet' && <BarMore room={room} c={c} me={s.me ?? me} />}
     </Head>
   );
   if (out)
@@ -123,9 +127,9 @@ export function CallPage({ room }: CallPageProps) {
   return (
     <main className={kind} aria-label={c?.title || 'Call'} data-target={`page:/call/${room}`}>
       {head}
-      {ended ? <Ended room={room} small={small} /> : <Stage room={room} c={c} s={s} phase={phase} isTico={isTico} row={(cards || small) && !isTico} small={small} />}
+      {ended ? <Ended room={room} small={small} meeting={c?.meeting_id} /> : <Stage room={room} c={c} s={s} phase={phase} isTico={isTico} row={(cards || small) && !isTico} small={small} />}
       {(cards || small) && c && !ended && <CallSide room={room} />}
-      {!ended && <Controls room={room} s={s} phase={phase} onBack={cards || small ? undefined : back} />}
+      {!ended && <Controls room={room} c={c} s={s} phase={phase} onBack={cards || small ? undefined : back} />}
     </main>
   );
 }
@@ -241,6 +245,15 @@ function Stage({ room, c, s, phase, isTico, row, small }: { room: string; c: Cal
   );
   const isMe = (id: string) => id === s.me || (!live && id === me);
 
+  // A screen or a Tico file on the stage: it takes the room, everyone small under it.
+  if (live && !isTico && c?.stage)
+    return (
+      <>
+        <Shared c={c} s={s} who={who} me={me} />
+        {say}
+      </>
+    );
+
   if (isTico)
     return (
       <>
@@ -350,7 +363,8 @@ function captionOf(c: Call | undefined): { who: string; text: string } | null {
   return b?.caption ? { who: `bot:${b.slug}`, text: b.caption } : null;
 }
 
-function Controls({ room, s, phase, onBack }: { room: string; s: CallState; phase: Phase; onBack?: () => void }) {
+function Controls({ room, c, s, phase, onBack }: { room: string; c: Call | undefined; s: CallState; phase: Phase; onBack?: () => void }) {
+  const me = useMe();
   const on = phase === 'live' || phase === 'reconnecting';
   const meTalks = phase === 'live' && !!s.me && !s.muted && s.speaking.includes(s.me);
   if (!on)
@@ -395,6 +409,7 @@ function Controls({ room, s, phase, onBack }: { room: string; s: CallState; phas
           ))}
         </Menu>
       )}
+      {phase === 'live' && c?.provider !== 'google_meet' && <ShareControl room={room} c={c} s={s} me={me} />}
       {s.audioBlocked && (
         <button type="button" className="cc" aria-label="Play audio" title="Play audio" onClick={() => void press('calls.hear', {})}>
           <Icon name="play" />
@@ -420,11 +435,13 @@ const NOTES_EVERY = 4000;
 const NOTES_FOR = 3 * 60_000;
 
 /** In the small window nothing here leaves the call's page: a link would draw the whole app in it. */
-function Ended({ room, small }: { room: string; small: boolean }) {
+function Ended({ room, small, meeting }: { room: string; small: boolean; meeting: string | undefined }) {
   const [since] = useState(() => Date.now());
   const notes = useQuery({ ...notesQuery(room), refetchInterval: (q) => (q.state.data?.pending && Date.now() - since < NOTES_FOR ? NOTES_EVERY : false) });
-  const nameOf = useNameOf();
   const n = notes.data;
+  // tasks made from items here, and items hidden: this browser's own (old call-window.ts cwMade)
+  const done = useQuery(callItemsQuery(room)).data ?? {};
+  const items = (n?.items ?? []).filter((it) => done[itemKey(it)] !== '');
   return (
     <div className="win-stage">
       <div className="mv-body">
@@ -442,20 +459,42 @@ function Ended({ room, small }: { room: string; small: boolean }) {
               </ul>
             )}
           </section>
-          {n && n.items.length > 0 && (
+          {items.length > 0 && (
             <section className="mv-sec">
               <div className="mv-sec-head">
                 <h2 className="sec-name">Action items</h2>
               </div>
               <ul className="acts">
-                {n.items.map((it, i) => (
-                  <li key={i} className="act">
-                    <Face actor={it.owner} size={22} />
-                    <span className="act-text">{it.title}</span>
-                    <span className="row-age">{nameOf(it.owner)}</span>
-                    <span />
-                  </li>
-                ))}
+                {items.map((it) => {
+                  const made = done[itemKey(it)];
+                  const input = { id: room, owner: it.owner, title: it.title };
+                  return (
+                    <li key={itemKey(it)} className="act">
+                      <Face actor={it.owner} size={22} />
+                      <span className="act-text">{it.title}</span>
+                      {made ? (
+                        <>
+                          {small ? (
+                            <span />
+                          ) : (
+                            <Link to="/task/$task" params={{ task: made }} className="btn btn-sm btn-quiet">
+                              <Icon name="tasks" />
+                              Open task
+                            </Link>
+                          )}
+                          <span />
+                        </>
+                      ) : (
+                        <>
+                          <Button className="btn-sm" onClick={() => void press('calls.makeItemTask', input)}>
+                            Create task
+                          </Button>
+                          <IconButton icon="close" label="Hide" size="sm" quiet onClick={() => void press('calls.hideItem', input)} />
+                        </>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </section>
           )}
@@ -477,6 +516,14 @@ function Ended({ room, small }: { room: string; small: boolean }) {
                   </Link>
                 ),
               )}
+            </section>
+          )}
+          {meeting && (
+            <section className="mv-sec">
+              <div className="mv-sec-head">
+                <h2 className="sec-name">Transcript</h2>
+              </div>
+              <Transcript meeting={meeting} room={room} live={false} />
             </section>
           )}
           {!small && (

@@ -1,14 +1,16 @@
 import { Link } from '@tanstack/react-router';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { refusal, run } from '@/actions';
 import { useActor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
+import { Search } from '@/kit/Field';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon, type IconName } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
+import { useCards } from '@/kit/Popover';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 
@@ -260,3 +262,24 @@ export function useConfirmRemove() {
 export const RemoveItem = ({ onSelect, disabled }: { onSelect: () => void; disabled?: boolean }) => (
   <MenuItem label="Remove" icon="archive" onSelect={onSelect} disabled={disabled} />
 );
+
+/** The page's search (rules.js head ctl): a button that opens the field on a computer, the field itself on a phone (the
+    page kind gives it its own line under the head). The words go to the address a beat after typing stops. */
+export function Find({ label, value, onFind }: { label: string; value: string | undefined; onFind: (q: string | undefined) => void }) {
+  const cards = useCards();
+  const [open, setOpen] = useState(!!value);
+  const [words, setWords] = useState(value ?? '');
+  // Cleared or set from elsewhere (Tico, Back): the field follows the address.
+  const [seen, setSeen] = useState(value);
+  if (seen !== value) {
+    setSeen(value);
+    setWords(value ?? '');
+  }
+  useEffect(() => {
+    if (words.trim() === (value ?? '')) return;
+    const t = setTimeout(() => onFind(words.trim() || undefined), 250);
+    return () => clearTimeout(t);
+  }, [words, value, onFind]);
+  if (!open && !cards) return <IconButton icon="search" label="Search" onClick={() => setOpen(true)} />;
+  return <Search label={label} value={words} onValueChange={setWords} placeholder="Search" autoFocus={!cards} />;
+}

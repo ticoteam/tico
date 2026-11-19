@@ -29,6 +29,12 @@ import type {
   MeetingSourceList,
   ReviewSettings,
   ThreadView,
+  CallUpcoming,
+  ChangeCall,
+  MeetingTaskLinkBatch,
+  MeetingTaskLinks,
+  MeetingTaskRemoved,
+  StartCall,
 } from '@/api/schema';
 import { queryClient, quietRoot, write } from '@/data';
 
@@ -547,4 +553,227 @@ export async function logMeeting(m: LoggedMeeting): Promise<{ id: string }> {
   void queryClient.invalidateQueries({ queryKey: meetKeys.list });
   void queryClient.invalidateQueries({ queryKey: calKeys.all });
   return r;
+}
+
+/* ---------------------------------------------------------------- a meeting's details: who sees it, its agent, its tasks */
+
+/** What GET /api/v2/meetings/{id} also says: private or the team's, and the agent it was sent to (once). */
+export type MeetingMore = Meeting & {
+  private?: boolean;
+  sent?: { task?: string | null; bot?: string | null } | null;
+  delivery?: { destination?: string | null; status?: string | null } | null;
+};
+/** One line of the live meeting's chat (GET /api/v2/live-meetings/{id}: `chat`). */
+export interface MeetChat {
+  actor?: string | null;
+  role?: string | null;
+  at_ms?: number | null;
+  text: string;
+}
+
+const linkedKey = (id: string) => ['meetings', id, 'tasks'] as const;
+
+/** The tasks linked to a shared meeting, first 50. */
+export const linkedTasksQuery = (id: string) =>
+  queryOptions({
+    queryKey: linkedKey(id),
+    queryFn: ({ signal }) => api.get<MeetingTaskLinks>(`/api/v2/meetings/${enc(id)}/tasks?limit=50`, { signal }),
+  });
+
+/** Team (everyone signed in) or private (who was in it, its owner and the company's owner). */
+export function setMeetingPrivate(id: string, hidden: boolean): Promise<MeetingMore> {
+  const version = queryClient.getQueryData<Meeting>(meetKeys.one(id))?.version;
+  return write({
+    key: meetKeys.one(id),
+    optimistic: (d: MeetingMore | undefined) => d && { ...d, private: hidden },
+    send: (idempotencyKey) => api.post<MeetingMore>(`/api/v2/meetings/${enc(id)}/edit`, { private: hidden, version }, { idempotencyKey }),
+    settle: (_d: MeetingMore | undefined, m: MeetingMore) => m,
+  });
+}
+
+/** Send the meeting to an agent, once: it makes a task of it. The server takes the agent's id or slug. */
+export function sendMeeting(id: string, bot: string): Promise<{ id: string; bot: string; task: string | null; pending: boolean }> {
+  return write({
+    key: meetKeys.one(id),
+    optimistic: (d: MeetingMore | undefined) => d && { ...d, sent: { bot } },
+    send: (idempotencyKey) => api.post(`/api/meetings/${enc(id)}/send`, { bot_id: bot, instructions: '' }, { idempotencyKey }),
+  });
+}
+
+/** Take a meeting off every list (the server keeps a recoverable copy). */
+export async function deleteMeeting(id: string): Promise<void> {
+  const lists = queryClient.getQueriesData({ queryKey: meetKeys.list }).map(([k]) => k);
+  await write({
+    key: lists.length ? lists : [meetKeys.list],
+    optimistic: (d: MeetingList | undefined) => d && { ...d, meetings: d.meetings.filter((m) => m.id !== id), count: Math.max(0, d.count - 1) },
+    send: (idempotencyKey) => api.post<{ ok: boolean }>(`/api/v2/meetings/${enc(id)}/delete`, {}, { idempotencyKey }),
+  });
+  queryClient.removeQueries({ queryKey: meetKeys.one(id) });
+  void queryClient.invalidateQueries({ queryKey: calKeys.all });
+}
+
+/** Link a task (its id or number) to the meeting; a task the person cannot read answers 404 and links nothing. */
+export async function linkTask(id: string, task: string): Promise<MeetingTaskLinkBatch> {
+  const r = await write({
+    key: linkedKey(id),
+    optimistic: (d: MeetingTaskLinks | undefined) => d,
+    send: (idempotencyKey) => api.post<MeetingTaskLinkBatch>(`/api/v2/meetings/${enc(id)}/tasks`, { task_ids: [task] }, { idempotencyKey }),
+    settle: (_d: MeetingTaskLinks | undefined, b: MeetingTaskLinkBatch): MeetingTaskLinks => ({ tasks: b.tasks, next_cursor: b.next_cursor }),
+  });
+  if (r.results[0]?.status === 404) throw new Error('not_found: no task you can open by that number or link');
+  return r;
+}
+
+export function unlinkTask(id: string, task: string): Promise<MeetingTaskRemoved> {
+  return write({
+    key: linkedKey(id),
+    optimistic: (d: MeetingTaskLinks | undefined) => d && { ...d, tasks: d.tasks.filter((t) => t.task_id !== task) },
+    send: (idempotencyKey) => api.delete<MeetingTaskRemoved>(`/api/v2/meetings/${enc(id)}/tasks/${enc(task)}`, { idempotencyKey }),
+  });
+}
+
+/* ---------------------------------------------------------------- booked calls: book one, move it, call it off */
+
+/** Under callKeys.live: every `call.*` change reads it again. */
+const upcomingKey = ['calls', 'live', 'upcoming'] as const;
+
+/** The booked calls the person is in, soonest first, each with whether they may move it. */
+export const upcomingCallsQuery = queryOptions({
+  queryKey: upcomingKey,
+  queryFn: ({ signal }) => api.get<CallUpcoming>('/api/v2/calls/upcoming', { signal }),
+});
+
+/** The thread a call with these people and agents goes in: the DM with one, a new group with several. */
+async function threadFor(actors: readonly string[]): Promise<string> {
+  if (actors.length === 1) return (await api.get<ThreadView>(`/api/v2/threads/dm?with=${enc(actors[0] as string)}&create=true`)).id;
+  return (await api.post<ThreadView>('/api/v2/threads/dm', { members: actors })).id;
+}
+const botsOf = (actors: readonly string[]) => actors.filter((a) => a.startsWith('bot:')).map((a) => a.slice(4));
+
+/** A voice call now, with its title: nobody named is a call with Tico. */
+export async function startTitled(actors: readonly string[], title: string): Promise<Call> {
+  if (!actors.length) return startCall([]);
+  const thread = await threadFor(actors);
+  const bots = botsOf(actors);
+  const call = await api.post<Call>(`/api/v2/threads/${enc(thread)}/calls`, { provider: 'tico', ...(bots.length ? { bots } : {}), ...(title ? { title } : {}) });
+  queryClient.setQueryData(callKeys.one(call.id), call);
+  void queryClient.invalidateQueries({ queryKey: callKeys.live });
+  return call;
+}
+
+/** Book a voice call for later: the call and its calendar event; nothing opens. Its agents get their prep before it. */
+export async function scheduleCall(actors: readonly string[], title: string, start: Date, minutes: number): Promise<Call> {
+  const thread = await threadFor(actors);
+  const bots = botsOf(actors);
+  const body: StartCall = {
+    provider: 'tico',
+    ...(bots.length ? { bots } : {}),
+    ...(title ? { title } : {}),
+    starts_at: start.toISOString(),
+    ends_at: new Date(start.getTime() + minutes * 60_000).toISOString(),
+  };
+  const call = await api.post<Call>(`/api/v2/threads/${enc(thread)}/calls`, body);
+  queryClient.setQueryData(callKeys.one(call.id), call);
+  fresh();
+  void queryClient.invalidateQueries({ queryKey: upcomingKey });
+  return call;
+}
+
+/** Move a booked call: its calendar event first (everyone invited is told), then the call. */
+export async function moveCall(id: string, start: Date, minutes: number): Promise<Call> {
+  const change: ChangeCall = { starts_at: start.toISOString(), ends_at: new Date(start.getTime() + minutes * 60_000).toISOString() };
+  const call = await write({
+    key: upcomingKey,
+    optimistic: (d: CallUpcoming | undefined) =>
+      d && { calls: d.calls.map((c) => (c.id === id ? { ...c, scheduled_start: change.starts_at, scheduled_end: change.ends_at } : c)) },
+    send: (idempotencyKey) => api.patch<Call>(`/api/v2/calls/${enc(id)}`, change, { idempotencyKey }),
+  });
+  queryClient.setQueryData(callKeys.one(id), call);
+  fresh();
+  return call;
+}
+
+/** Call a booked call off for everyone: its calendar event goes first, so everyone invited is told. */
+export async function cancelCall(id: string): Promise<Call> {
+  const call = await write({
+    key: upcomingKey,
+    optimistic: (d: CallUpcoming | undefined) => d && { calls: d.calls.filter((c) => c.id !== id) },
+    send: (idempotencyKey) => api.post<Call>(`/api/v2/calls/${enc(id)}/end`, {}, { idempotencyKey }),
+  });
+  queryClient.setQueryData(callKeys.one(id), call);
+  fresh();
+  return call;
+}
+
+/* ---------------------------------------------------------------- on the call: the stage, agents, items after it */
+
+/** Show my screen or a Tico file on the call's stage (PUT /v2/calls/{id}/stage); the newest replaces what showed. */
+export async function setStage(id: string, show: { kind: 'screen' } | { kind: 'file'; file_id: string }): Promise<Call> {
+  const call = await api.put<Call>(`/api/v2/calls/${enc(id)}/stage`, show);
+  queryClient.setQueryData(callKeys.one(id), call);
+  return call;
+}
+
+/** Stop showing: the presenter's own, or the starter's (DELETE /v2/calls/{id}/stage). */
+export async function clearStage(id: string): Promise<void> {
+  const call = await write({
+    key: callKeys.one(id),
+    optimistic: (c: Call | undefined) => c && { ...c, stage: null },
+    send: (idempotencyKey) => api.delete<Call>(`/api/v2/calls/${enc(id)}/stage`, { idempotencyKey }, {}),
+  });
+  if (call) queryClient.setQueryData(callKeys.one(id), call);
+}
+
+/** Take an agent out of a call at once (DELETE /v2/calls/{id}/bots/{bot}); `addToCall` brings it back. */
+export async function takeOutAgent(id: string, bot: string): Promise<void> {
+  const call = await write({
+    key: callKeys.one(id),
+    optimistic: (c: Call | undefined) => c && { ...c, bots: c.bots.filter((b) => b !== bot) },
+    send: (idempotencyKey) => api.delete<Call>(`/api/v2/calls/${enc(id)}/bots/${enc(bot)}`, { idempotencyKey }, {}),
+  });
+  if (call) queryClient.setQueryData(callKeys.one(id), call);
+}
+
+/** Files to show on the stage: the newest, or those the words find (GET /v2/files, /v2/files/search). */
+export const stageFilesQuery = (text: string) =>
+  queryOptions({
+    queryKey: ['calls', 'stage-files', text.trim()] as const,
+    queryFn: async ({ signal }): Promise<{ id: string; title: string }[]> =>
+      text.trim().length > 1
+        ? (await api.get<{ results: { id: string; title: string }[] }>(`/api/v2/files/search?q=${enc(text.trim())}&limit=20`, { signal })).results
+        : (await api.get<{ files: { id: string; title: string }[] }>('/api/v2/files?limit=20', { signal })).files,
+    staleTime: 30_000,
+  });
+
+/** What this viewer did with a call's action items, in this browser only (old call-window.ts cwMade): a task made from
+    one (its id), or '' for one hidden. Keyed by the item's owner and title. */
+const itemsKey = (id: string) => `tico.call-items.${id}`;
+export const itemKey = (it: { owner: string; title: string }) => `${it.owner}\n${it.title}`;
+export const callItemsQuery = (id: string) =>
+  queryOptions({
+    queryKey: ['calls', id, 'items-done'] as const,
+    queryFn: (): Record<string, string> => {
+      try {
+        const v: unknown = JSON.parse(localStorage.getItem(itemsKey(id)) ?? '{}');
+        return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, string>) : {};
+      } catch {
+        return {};
+      }
+    },
+    staleTime: Infinity,
+  });
+export function keepItem(id: string, key: string, value: string): void {
+  const next = { ...(queryClient.getQueryData(callItemsQuery(id).queryKey) ?? {}), [key]: value };
+  queryClient.setQueryData(callItemsQuery(id).queryKey, next);
+  try {
+    localStorage.setItem(itemsKey(id), JSON.stringify(next));
+  } catch {
+    // a private window: kept for this visit
+  }
+}
+
+/** A task from an action item, tied to the call's meeting (POST /v2/tasks, as the old call window did). */
+export async function makeItemTask(meeting: string | null, title: string, owner: string): Promise<{ id: string; title: string }> {
+  const r = await api.post<{ task: { id: string; title: string } }>('/api/v2/tasks', { title, owner, ...(meeting ? { live_meeting_id: meeting } : {}) });
+  return r.task;
 }

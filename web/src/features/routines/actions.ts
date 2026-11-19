@@ -37,6 +37,7 @@ import {
   runRoutine,
   setHeartbeat,
   setJob,
+  setJobSchedule,
   setMaintenance,
   setReach,
   setRoutineLimit,
@@ -388,6 +389,36 @@ export const setJobAction = defineAction({
   run: (_ctx, i) => said(setJob(i.job, i.on)),
   did: (i) => (i.on ? 'Turned on' : 'Turned off'),
   target: (i) => ({ kind: 'job', id: i.job }),
+});
+
+export const JOB_PRESETS = ['15m', 'hourly', '4h', 'daily', 'business'] as const;
+
+export const setJobScheduleAction = defineAction({
+  id: 'routines.setJobSchedule',
+  title: 'Pick when a system job runs: a preset, or its daily time',
+  kind: 'change',
+  input: s.object({
+    job: s.string({ min: 1, max: 100 }),
+    preset: s.optional(s.oneOf(JOB_PRESETS)),
+    at: s.optional(s.string({ min: 5, max: 5, pattern: /^([01]\d|2[0-3]):[0-5]\d$/, what: 'a time, HH:MM' })),
+  }),
+  run: (_ctx, i) => said(setJobSchedule(i.job, { preset: i.preset, at: i.at })),
+  did: (i) => (i.at && !i.preset ? `Runs at ${i.at}` : 'Schedule changed'),
+  target: (i) => ({ kind: 'job', id: i.job }),
+});
+
+/** Search and filter the routines list; both live in the address. */
+export const ROUTINE_STATES = ['on', 'failed', 'hold', 'off'] as const;
+export type RoutineState = (typeof ROUTINE_STATES)[number];
+
+export const listRoutines = defineAction({
+  id: 'routines.list',
+  title: 'Search or filter the routines',
+  kind: 'view',
+  input: s.object({ q: s.optional(s.string({ max: 200 })), state: s.optional(s.oneOf(ROUTINE_STATES)) }),
+  run: ({ router }, i) => go(router, ROUTINES, { q: i.q?.trim() || undefined, state: i.state }),
+  did: () => 'Listed the routines',
+  target: () => ({ kind: 'tab', id: 'routines' }),
 });
 
 // ---------------------------------------------------------------- the board, inboxes and templates

@@ -5,8 +5,11 @@
 // inside the press, and sound a browser held back waits for "Play audio".
 import { useSyncExternalStore } from 'react';
 import type * as LiveKitModule from 'livekit-client';
-import type { DisconnectReason, Participant, RemoteTrack, Room, TranscriptionSegment } from 'livekit-client';
-import { freshCall, joinCall, leaveCall } from './queries';
+import type { DisconnectReason, LocalTrackPublication, Participant, RemoteParticipant, RemoteTrack, Room, TranscriptionSegment } from 'livekit-client';
+import type { Call } from '@/api/schema';
+import { ticoRoomQuery } from '@/conversation';
+import { queryClient } from '@/data';
+import { callKeys, clearStage, freshCall, joinCall, leaveCall } from './queries';
 
 type LiveKit = typeof LiveKitModule;
 let lk: LiveKit | null = null;
@@ -35,6 +38,14 @@ export interface CallState {
   /** The last words heard, when the server sends a transcript. */
   caption: { who: string; text: string } | null;
   startedAt: number | null;
+  /** My screen is going out to the call. */
+  sharing: boolean;
+  /** Whose shared screen this window is receiving. */
+  screen: string | null;
+  /** The bar shows what is said (Captions). */
+  captions: boolean;
+  /** A call with agents (not Tico's own): its chat, `thread:<id>`, beside the page while the bar shows; null once closed. */
+  chat: string | null;
 }
 
 const IDLE: CallState = {
@@ -51,6 +62,10 @@ const IDLE: CallState = {
   deviceId: null,
   caption: null,
   startedAt: null,
+  sharing: false,
+  screen: null,
+  captions: true,
+  chat: null,
 };
 const MIC_KEY = 'tico-next:call-mic';
 const VOICE_PREFIX = 'tico-recorder-';
@@ -70,6 +85,8 @@ let stream: MediaStream | null = null;
 /** Bumped by every prime and leave, so a join that was overtaken stops at its next step. */
 let gen = 0;
 let sink: HTMLElement | null = null;
+/** The shared screen coming in (one at a time: the stage shows the newest). */
+let screenTrack: RemoteTrack | null = null;
 
 export const callState = () => state;
 export function useCall(): CallState {
@@ -152,7 +169,7 @@ export async function join(callId: string): Promise<void> {
     const track = stream.getAudioTracks()[0];
     if (track) await r.localParticipant.publishTrack(track, { source: Track.Source.Microphone });
     if (g !== gen) return;
-    set({ phase: 'live', me: r.localParticipant.identity, startedAt: Date.now(), audioBlocked: !r.canPlaybackAudio });
+    set({ phase: 'live', me: r.localParticipant.identity, startedAt: Date.now(), audioBlocked: !r.canPlaybackAudio, chat: chatOf(j.call) });
     people(r);
     void devices();
   } catch {
@@ -168,7 +185,7 @@ export async function leave(): Promise<void> {
   const was = state.phase === 'live' || state.phase === 'reconnecting';
   gen += 1;
   teardown();
-  set({ phase: 'ended', speaking: [], caption: null });
+  set({ phase: 'ended', speaking: [], caption: null, sharing: false, screen: null, chat: null });
   if (id && was) await leaveCall(id).catch(() => undefined);
 }
 
@@ -226,6 +243,50 @@ export function levelOf(identity: string): () => number {
   return f;
 }
 
+/** The agents' chat beside the page: a call with agents, unless it is Tico's own (Tico is the Dot). */
+function chatOf(c: Call | undefined): string | null {
+  if (!c?.bots.length || !c.thread_id) return null;
+  return c.thread_id === queryClient.getQueryData(ticoRoomQuery.queryKey) ? null : `thread:${c.thread_id}`;
+}
+
+/** The browser can send a screen (a phone cannot; the desktop app says when it may not). */
+export const canShare = (): boolean =>
+  typeof navigator !== 'undefined' &&
+  typeof navigator.mediaDevices?.getDisplayMedia === 'function' &&
+  !(window as { ticoScreenCaptureUnavailable?: boolean }).ticoScreenCaptureUnavailable;
+
+/** Start or stop sending my screen. False when the person said no in the browser's picker. */
+export async function shareScreen(on: boolean): Promise<boolean> {
+  const r = room;
+  if (!r) return false;
+  if (!on) {
+    if (!state.sharing) return true;
+    set({ sharing: false });
+    await r.localParticipant.setScreenShareEnabled(false, { audio: false }).catch(() => undefined);
+    return true;
+  }
+  set({ sharing: true });
+  try {
+    await r.localParticipant.setScreenShareEnabled(true, { audio: false });
+    return true;
+  } catch (e) {
+    set({ sharing: false });
+    if (e instanceof DOMException && e.name === 'NotAllowedError') return false;
+    throw e;
+  }
+}
+
+/** Draw the shared screen (mine while I share, else the one coming in) in a video element; gives back its undo. */
+export function attachScreen(el: HTMLVideoElement): () => void {
+  const t = state.sharing && lk ? room?.localParticipant.getTrackPublication(lk.Track.Source.ScreenShare)?.track : screenTrack;
+  if (!t) return () => undefined;
+  t.attach(el);
+  return () => void t.detach(el);
+}
+
+export const setCaptions = (on: boolean): void => set({ captions: on });
+export const hideChat = (): void => set({ chat: null });
+
 async function devices(): Promise<void> {
   try {
     if (!lk) return;
@@ -279,7 +340,13 @@ function wire(r: Room, { DisconnectReason: Why, RoomEvent, Track }: LiveKit): vo
         .trim();
       if (mine() && text) set({ caption: { who: p?.identity ?? '', text } });
     })
-    .on(RoomEvent.TrackSubscribed, (t: RemoteTrack) => {
+    .on(RoomEvent.TrackSubscribed, (t: RemoteTrack, _pub: unknown, p?: RemoteParticipant) => {
+      if (t.kind === Track.Kind.Video && t.source === Track.Source.ScreenShare) {
+        if (!mine()) return;
+        screenTrack = t;
+        set({ screen: p?.identity ?? '' });
+        return;
+      }
       if (t.kind !== Track.Kind.Audio) return;
       if (!sink) {
         sink = document.createElement('div');
@@ -288,7 +355,22 @@ function wire(r: Room, { DisconnectReason: Why, RoomEvent, Track }: LiveKit): vo
       }
       sink.append(t.attach());
     })
-    .on(RoomEvent.TrackUnsubscribed, (t: RemoteTrack) => t.detach().forEach((el) => el.remove()));
+    .on(RoomEvent.TrackUnsubscribed, (t: RemoteTrack) => {
+      if (t === screenTrack) {
+        screenTrack = null;
+        if (mine()) set({ screen: null });
+        return;
+      }
+      t.detach().forEach((el) => el.remove());
+    })
+    // The browser's own "Stop sharing": my screen leaves the stage too.
+    .on(RoomEvent.LocalTrackUnpublished, (pub: LocalTrackPublication) => {
+      if (!mine() || pub.source !== Track.Source.ScreenShare || !state.sharing) return;
+      set({ sharing: false });
+      const id = state.callId;
+      const stage = id ? queryClient.getQueryData<Call>(callKeys.one(id))?.stage : null;
+      if (id && stage?.kind === 'screen' && stage.by === state.me) void clearStage(id).catch(() => undefined);
+    });
 }
 
 function teardown(): void {
@@ -298,6 +380,7 @@ function teardown(): void {
   mic = null;
   stream?.getTracks().forEach((t) => t.stop());
   stream = null;
+  screenTrack = null;
   levels.clear();
   if (r) void r.disconnect();
 }

@@ -1,5 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { RULE_TABS, RUNS_RANGE } from './actions';
+import { ROUTINE_STATES, RULE_TABS, RUNS_RANGE } from './actions';
 import type { ListeningSearch } from './ListeningPage';
 import { allRunsQuery, dueQuery, endpointsQuery, hooksQuery, matchesQuery, orgRulesQuery, reachQuery, routinesQuery, ruleGroupsQuery, RUN_RANGES, RUN_STATUSES, stageRulesQuery, teamsQuery, watchesQuery, watchQuery } from './queries';
 import type { RoutinesSearch } from './RoutinesPage';
@@ -26,6 +26,12 @@ export function validateRoutinesSearch(raw: Record<string, unknown>): RoutinesSe
   }
   const panel = text(raw.panel);
   if (panel && PANEL.test(panel)) out.panel = panel;
+  if (!out.tab) {
+    const q = text(raw.q);
+    if (q) out.q = q;
+    const state = ROUTINE_STATES.find((x) => x === raw.state);
+    if (state) out.state = state;
+  }
   return out;
 }
 
