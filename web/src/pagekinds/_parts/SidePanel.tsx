@@ -1,6 +1,8 @@
 import { useLayoutEffect, useSyncExternalStore, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { Icon } from '@/kit/Icon';
 import { Panel } from '@/kit/Panel';
+import { useCards } from '@/kit/Popover';
 
 export interface SidePanelProps {
   /** The thing open in the panel: its name in the head. */
@@ -20,16 +22,24 @@ export interface SidePanelProps {
   children: ReactNode;
 }
 
-/** A row opened as its own sheet right of the page (R24): the kit's panel with the name as a flight target. */
+/** A row opened as its own sheet right of the page (R24): the kit's panel with the name as a flight target. On a phone
+    it is a page pushed over the page (layout.md 8): a back arrow stands for the x. */
 export function SidePanel({ title, target, lead, actions, foot, onClose, className, children }: SidePanelProps) {
+  const cards = useCards();
   return (
     <Panel
+      x={!cards}
       label={title}
       onClose={onClose}
       foot={foot}
       className={className}
       head={
         <>
+          {cards && (
+            <button type="button" className="ib back pk-back" aria-label="Back" title="Back" onClick={() => onClose()}>
+              <Icon name="chevron" className="flip" />
+            </button>
+          )}
           {lead}
           <b data-target={target}>{title}</b>
           {actions && <span className="grow" />}

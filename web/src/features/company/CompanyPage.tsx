@@ -4,10 +4,8 @@ import { useState } from 'react';
 import { directoryQuery, meQuery, useActor } from '@/data';
 import { Sparkline } from '@/kit/Chart';
 import { FlowMark } from '@/kit/FlowMark';
-import { Icon } from '@/kit/Icon';
 import { FoldButton } from '@/kit/SectionHead';
 import { LatePill } from '@/kit/Pill';
-import { useCards } from '@/kit/Popover';
 import { fmtAge } from '@/lib';
 import { Dashboard, FiguresStrip, SidePanel, type Figure } from '@/pagekinds';
 import { Face, Go, PanelLink, usd } from './parts';
@@ -180,10 +178,8 @@ function Deck({ actor, n }: { actor: string; n: number }) {
   );
 }
 
-/** A stage, opened: every open task in it, the ones that wait on you first. On a phone it is a page pushed over the
-    Floor (layout.md 8): a back arrow in place of the x, clear of the status bar and of the cards at the bottom. */
+/** A stage, opened: every open task in it, the ones that wait on you first. */
 function StagePanel({ pipeline, stage, onClose }: { pipeline: Pipeline; stage: Stage; onClose: () => void }) {
-  const cards = useCards();
   const tasks = useQuery(stageTasksQuery(pipeline.id, stage.id));
   const me = useQuery(meQuery).data?.id;
   const mine = (t: { turn: { state: string; who: string | null } | null }) => t.turn?.state === 'person' && t.turn.who === me;
@@ -192,14 +188,6 @@ function StagePanel({ pipeline, stage, onClose }: { pipeline: Pipeline; stage: S
     <SidePanel
       title={stage.name}
       target={`stage:${stage.id}`}
-      className="co-stage"
-      lead={
-        cards && (
-          <button type="button" className="ib back pk-back" aria-label="Back to Company" title="Back to Company" onClick={onClose}>
-            <Icon name="chevron" className="flip" />
-          </button>
-        )
-      }
       onClose={onClose}
       foot={
         <Go to={`/tasks/${encodeURIComponent(pipeline.id)}`} className="btn">

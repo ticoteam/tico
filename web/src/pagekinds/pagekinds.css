@@ -247,6 +247,17 @@ html[data-layout="cards"] .pk .page-tabs .doc-tab{min-width:44px;justify-content
 html[data-layout="cards"] .pk-list .filter-row{display:none}
 html[data-layout="cards"] .pk-panel{left:0;width:auto;z-index:var(--z-overlay)}
 html[data-layout="cards"] .pk-panel>.side{display:flex}
+/* a side panel on a phone is a page pushed over the page (layout.md 8): SidePanel's back arrow stands for the x; the
+   head clears the status bar, rows are a finger tall, and the end (the foot, or the body when there is none) sits
+   above the cards resting at the bottom (--cards-h, phone.css: their height) */
+:where(html[data-layout="cards"]){
+  .pnl>.side-head{height:calc(var(--head-h) + var(--page-top));padding-top:var(--page-top);padding-left:var(--page-x)}
+  /* a panel with its own way back (a KPI back to its goal) keeps that one */
+  .pnl>.side-head>.pk-back:has(+.pnl-back){display:none}
+  .pnl .rail-sec>:is(a,button){min-height:var(--row);align-content:center}
+  .pnl>.pnl-foot{padding-bottom:calc(var(--cards-h) + var(--s-3))}
+  .pnl>.rail-body:last-child{padding-bottom:calc(var(--cards-h) + var(--s-5))}
+}
 html[data-layout="cards"] .pk .widgets{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:var(--s-4);padding:0 var(--s-2) var(--s-4) var(--page-x)}
 html[data-layout="cards"] .widget{padding:0 var(--s-3)}
 html[data-layout="cards"] .widget:nth-child(odd){padding-left:0;border-left:0}

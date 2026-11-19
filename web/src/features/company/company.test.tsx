@@ -98,9 +98,8 @@ describe('Floor card, on a phone @s271', () => {
     queryClient.setQueryData(floorQuery.queryKey, floor);
     show(<CompanyRoute />, '/company?panel=stage:p1:s2');
     const panel = await screen.findByRole('complementary', { name: 'Review' });
-    expect(panel.className).toContain('co-stage');
     expect(href(await within(panel).findByText('Check the gift notes'))).toBe('/tasks/p1/4');
-    fireEvent.click(within(panel).getByRole('button', { name: 'Back to Company' }));
+    fireEvent.click(within(panel).getByRole('button', { name: 'Back' }));
     await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Review' })).toBeNull());
   });
 
@@ -109,7 +108,7 @@ describe('Floor card, on a phone @s271', () => {
     queryClient.setQueryData(floorQuery.queryKey, floor);
     show(<CompanyPage search={{ panel: 'stage:p1:s2' }} />, '/company?panel=stage:p1:s2');
     const panel = await screen.findByRole('complementary', { name: 'Review' });
-    expect(within(panel).queryByRole('button', { name: 'Back to Company' })).toBeNull();
+    expect(within(panel).queryByRole('button', { name: 'Back' })).toBeNull();
     expect(within(panel).getByRole('button', { name: 'Close' })).toBeTruthy();
   });
 });

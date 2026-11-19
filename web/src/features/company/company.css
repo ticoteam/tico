@@ -298,12 +298,6 @@
   .co .two-col{grid-template-columns:minmax(0,1fr)}
   .co .two-col>.stage+.stage{box-shadow:none;margin-top:var(--s-1h);padding-top:var(--s-1h);border-top:1px solid var(--line)}
   .pnl .fld{height:44px}
-  /* a stage, opened: a page pushed over the Floor. Its back arrow stands for the x; it clears the status bar, and its
-     foot ("All tasks") sits above the cards resting at the bottom (--cards-h is the phone's: their height) */
-  .co-stage>.side-head{height:calc(var(--head-h) + var(--page-top));padding-top:var(--page-top);padding-left:var(--page-x)}
-  .co-stage>.side-head>.ib:last-child{display:none}
-  .co-stage .pt{min-height:var(--row);align-content:center}
-  .co-stage>.pnl-foot{padding-bottom:calc(var(--cards-h) + var(--s-3))}
 }
 
 /* ---------- Goals: a proposal that waits on you, an answer card under its row (company.css kp-ask) ---------- */

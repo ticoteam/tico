@@ -58,6 +58,12 @@ html:has(.ph),html:has(.ph) body{height:100%;overflow:hidden;overscroll-behavior
 .ph .pg-sub{color:var(--muted);font-size:var(--t-sm);margin:6px 0 0 8px;white-space:nowrap}
 .ph .pg-body{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:none;padding-bottom:calc(var(--cards-h) + 20px)}
 .ph.is-handle .pg-body{padding-bottom:20px}
+/* the page kinds' scrollers end the same way, so the last row clears the cards resting at the bottom: a page's body
+   (a board's inside its .board), a list beside its item, both sides of settings. A virtual list that fills one of
+   them is the real scroller, so the room moves onto it. With a handle in place of the cards, --cards-h is 0. */
+.ph>.pg :is(.page-body:not(.board-wrap),.board,.tl-list,.set-nav,.set-body){padding-bottom:calc(var(--cards-h) + 20px)}
+.ph>.pg :is(.page-body,.tl-list):has(>*>.vl-space){padding-bottom:0}
+.ph>.pg :is(.page-body,.tl-list)>:has(>.vl-space){padding-bottom:calc(var(--cards-h) + 20px)}
 .ph .pg-row2{flex:none;display:flex;align-items:center;gap:8px;height:44px;padding:0 12px 0 8px}
 .ph .p-tabs{flex:none;display:flex;gap:2px;overflow:auto;scrollbar-width:none;padding:0 6px;box-shadow:inset 0 -1px 0 var(--line)}
 /* stylelint-disable-next-line color-no-hex -- mask */
