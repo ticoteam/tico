@@ -345,7 +345,9 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
       counted: { s1: 1 },
     });
     show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
-    fireEvent.click(await screen.findByRole('button', { name: 'More tasks' }));
+    const more = await screen.findByRole('button', { name: 'More tasks' });
+    expect(within(screen.getByRole('heading', { name: /Doing/ })).getByText('1')).toBeTruthy();
+    fireEvent.click(more);
     expect(await screen.findByRole('link', { name: /Review the export/ })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'More tasks' })).toBeNull();
   });
