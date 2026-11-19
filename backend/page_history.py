@@ -1,3 +1,4 @@
+# pyright: strict
 """Page history: the pages a person opened in the app, kept KEEP_DAYS days so Tico knows where they have been and can
 tell what "this", "that one" and "the last thing" mean.
 
@@ -14,24 +15,43 @@ another agent reads a person's history only once that person can switch it on fo
 lists and is deleted at that person's next visit.
 """
 
-from typing import Any, Literal
+import sqlite3
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from fastapi import Request
 from pydantic import Field
 
-from . import hubdb as H
-from . import models as M
-from . import views
+from . import hubdb as _hubdb_untyped
+from . import views as _views_untyped
 from .api_contract import api_v2
+from .models import Contract, Empty
 from .store import Problem
+
+if TYPE_CHECKING:
+    from contextlib import AbstractContextManager
+
+    from fastapi import FastAPI
+
+    from .auth import Identity
+    from .store import Store
+
+_hubdb: Any = _hubdb_untyped
+_views: Any = _views_untyped
+now = cast("Callable[[], str]", _hubdb.now)
+new_id = cast("Callable[[], str]", _hubdb.new_id)
+shift = cast("Callable[..., str]", _hubdb.shift)
+human_only = cast("Callable[[Identity], None]", _views.human_only)
+Mutate = Callable[[Request, Contract, Callable[[sqlite3.Connection], dict[str, Any]]], Any]
 
 KEEP_DAYS = 30
 PAGE = 50
 PAGE_MAX = 100
-COLUMNS = "id, page, title, subject_type, subject_id, via, created_at"
+FIELDS = ("id", "page", "title", "subject_type", "subject_id", "via", "created_at")
+COLUMNS = ", ".join(FIELDS)
 
 
-class PageVisitCreate(M.Contract):
+class PageVisitCreate(Contract):
     page: str = Field(pattern=r"^/[^\s?#]*$", max_length=300)  # the address path, without the search
     title: str = Field(default="", max_length=200)  # the one line the app shows for the page
     subject_type: str | None = Field(default=None, pattern=r"^[a-z][a-z_]*$", max_length=40)  # task, thread, bot...
@@ -39,15 +59,15 @@ class PageVisitCreate(M.Contract):
     via: Literal["", "assistant"] = ""  # assistant: Tico opened the page for the person
 
 
-def visit(row: Any) -> dict[str, Any]:
-    return {key: row[key] for key in ("id", "page", "title", "subject_type", "subject_id", "via", "created_at")}
+def visit(row: sqlite3.Row) -> dict[str, Any]:
+    return {key: row[key] for key in FIELDS}
 
 
-def listing(c: Any, actor: str, page: str | None, limit: int, before: str | None) -> dict[str, Any]:
+def listing(c: sqlite3.Connection, actor: str, page: str | None, limit: int, before: str | None) -> dict[str, Any]:
     """One page of `actor`'s visits in the last KEEP_DAYS days, newest first. `next` is the `<created_at>|<id>` of the
     last visit shown, null when nothing older is left; `before` takes it back."""
     sql = f"SELECT {COLUMNS} FROM page_visits WHERE actor_id = ? AND created_at >= ?"
-    args: list[Any] = [actor, H.shift(H.now(), days=-KEEP_DAYS)]
+    args: list[str | int] = [actor, shift(now(), days=-KEEP_DAYS)]
     if before:
         at, mark, vid = before.partition("|")
         if not mark or not at or not vid:
@@ -58,16 +78,21 @@ def listing(c: Any, actor: str, page: str | None, limit: int, before: str | None
         under = page.rstrip("/") + "/"
         sql += " AND (page = ? OR substr(page, 1, ?) = ?)"
         args += [page, len(under), under]
-    rows = c.execute(sql + " ORDER BY created_at DESC, id DESC LIMIT ?", (*args, limit + 1)).fetchall()
+    rows: list[sqlite3.Row] = c.execute(
+        sql + " ORDER BY created_at DESC, id DESC LIMIT ?", (*args, limit + 1)
+    ).fetchall()
     shown = [visit(row) for row in rows[:limit]]
     last = shown[-1] if len(rows) > limit else None
     return {"visits": shown, "next": f"{last['created_at']}|{last['id']}" if last else None}
 
 
-def install(app: Any, store: Any, mutate: Any) -> None:
-    def person(request: Request) -> Any:
-        who = request.state.identity
-        views.human_only(who)
+def install(app: "FastAPI", store: "Store", mutate: Mutate) -> None:
+    def read() -> "AbstractContextManager[sqlite3.Connection]":
+        return cast("AbstractContextManager[sqlite3.Connection]", store.read())
+
+    def person(request: Request) -> "Identity":
+        who: Identity = request.state.identity
+        human_only(who)
         return who
 
     @app.get(
@@ -86,7 +111,7 @@ def install(app: Any, store: Any, mutate: Any) -> None:
     )
     def page_history(request: Request, page: str | None = None, limit: int = PAGE, before: str | None = None):
         who = person(request)
-        with store.read() as c:
+        with read() as c:
             return listing(c, who.actor, page, max(1, min(int(limit), PAGE_MAX)), before)
 
     @app.post(
@@ -98,11 +123,11 @@ def install(app: Any, store: Any, mutate: Any) -> None:
         if (body.subject_type is None) != (body.subject_id is None):
             raise Problem("kind", "Give subject_type and subject_id together, or neither", 422)
 
-        def work(c: Any) -> dict[str, Any]:
-            at, vid = H.now(), H.new_id()
+        def work(c: sqlite3.Connection) -> dict[str, Any]:
+            at, vid = now(), new_id()
             c.execute(
                 "DELETE FROM page_visits WHERE actor_id = ? AND created_at < ?",
-                (who.actor, H.shift(at, days=-KEEP_DAYS)),
+                (who.actor, shift(at, days=-KEEP_DAYS)),
             )
             c.execute(
                 f"INSERT INTO page_visits({COLUMNS}, actor_id) VALUES(?,?,?,?,?,?,?,?)",
@@ -129,7 +154,7 @@ def install(app: Any, store: Any, mutate: Any) -> None:
     def page_history_clear(request: Request):
         who = person(request)
 
-        def work(c: Any) -> dict[str, Any]:
+        def work(c: sqlite3.Connection) -> dict[str, Any]:
             return {"cleared": c.execute("DELETE FROM page_visits WHERE actor_id = ?", (who.actor,)).rowcount}
 
-        return mutate(request, M.Empty(), work)
+        return mutate(request, Empty(), work)
