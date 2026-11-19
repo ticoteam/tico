@@ -152,7 +152,7 @@ const newContext = async (browser: import('playwright').Browser, phone: boolean,
         same(v, tag + ', no Finance');
         const keys = v.painted.rows.filter(r => r.on).map(r => r.key);
         assert.deepEqual(keys.slice(0, 17), ['tasks', 'calendar', 'threads', 'updates', 'meetings', 'overview', 'Company pages', 'strategy',
-          'products', 'growth', 'automations', 'listening', 'rules', 'library', 'Library pages', 'docs', 'files'], tag + ': the order, from the first paint');
+          'products', 'growth', 'risk', 'automations', 'listening', 'rules', 'library', 'Library pages', 'docs', 'files'], tag + ': the order, from the first paint');
         assert.equal(await v.page.locator('#side a[data-nav="overview"]').evaluate(a => a.textContent!.trim()), 'Company', tag + ': Overview is Company');
         assert.ok(!keys.includes('connections'), tag + ': Connections is part of Tools');
         assert.ok(keys.includes('threads') && keys.includes('organisation'), tag + ': Threads and the Team section too');
@@ -215,7 +215,7 @@ const newContext = async (browser: import('playwright').Browser, phone: boolean,
       const keys = v.painted.rows.filter(r => r.on).map(r => r.key);
       assert.deepEqual(keys.slice(0, 9), ['tasks', 'calendar', 'threads', 'updates', 'meetings', 'overview', 'Company pages', 'library', 'Library pages'],
         tag + ': Meetings on its own, Company and Library folded from the first paint');
-      for (const nav of ['strategy', 'products', 'growth', 'automations', 'listening', 'rules', 'docs', 'files', 'skills', 'tools'])
+      for (const nav of ['strategy', 'products', 'growth', 'risk', 'automations', 'listening', 'rules', 'docs', 'files', 'skills', 'tools'])
         assert.equal(shows(v.painted, nav), false, `${tag}: ${nav} folded`);
       assert.deepEqual(await v.page.locator('#side .rd-lib-toggle').evaluateAll(els => els.map(el => el.getAttribute('aria-expanded'))), ['false', 'false'],
         tag + ': both chevrons say folded');

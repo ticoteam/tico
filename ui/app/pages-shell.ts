@@ -164,6 +164,50 @@ function productsRoute(r: string): boolean {
   if (key) void pageProduct(key); else void pageProducts();
   return true;
 }
+// app/risk.ts
+const RISK_ROUTE = '#/risk';
+// The redesign's router asks first (ui/app/redesign.ts): #/risk and #/risk/disputes are its tabs, #/risk/r/<slug> one
+// risk. A query (?matter=) opens a matter's facts beside the page.
+function riskRoute(r: string): boolean {
+  const [path = ''] = r.split('?');
+  if (!rdUnder(path, RISK_ROUTE)) return false;
+  const rest = path.slice(RISK_ROUTE.length).replace(/^\//, '');
+  if (rest.startsWith('r/') && rest.length > 2) {
+    let slug = rest.slice(2);
+    try { slug = decodeURIComponent(slug); } catch { /* an address typed by hand: use it as it is */ }
+    void pageRiskOne(slug);
+  } else {
+    void pageRisk(rest === 'disputes' ? 'disputes' : 'risks');
+  }
+  return true;
+}
+// Risk's nav row carries the Flow dot while a matter in the viewer's Needs you carries a risk (GET /v2/risks says so,
+// `waits`). It reads the risks again only when the tasks in Needs you change, and never while Needs you names none.
+// Here in the shell, not in risk.ts: the row shows on every page, and risk.ts loads with its page (ui/parts.json).
+const RISK_NAV = {wired: false, ids: '', run: 0};
+function riskNavWire(): void {
+  if (RISK_NAV.wired) return;
+  RISK_NAV.wired = true;
+  liveOn('needs-list', () => riskNavSync());
+  document.addEventListener('tico:roster', () => riskNavSync());
+  riskNavSync();
+}
+function riskNavSync(): void {
+  const ids = [...new Set((S.v2?.needs || []).map(n => String(n.task_id || '')).filter(Boolean))].sort().join(',');
+  if (ids === RISK_NAV.ids) return;
+  RISK_NAV.ids = ids;
+  const run = ++RISK_NAV.run;
+  if (!ids) { riskNavMark(false); return; }
+  void get<{risks: {waits?: boolean}[]}>('/v2/risks', {fresh: true})
+    .then(r => { if (run === RISK_NAV.run) riskNavMark(r.risks.some(x => x.waits)); })
+    .catch(() => { /* offline, or a server without risks: the mark stays as it is */ });
+}
+function riskNavMark(on: boolean): void {
+  const link = document.querySelector<HTMLElement>('#side a[data-nav="risk"]');
+  const had = link?.querySelector(':scope > .needs-mark');
+  if (on && link && !had) link.insertAdjacentHTML('beforeend', needsMarkHTML(12));
+  if (!on) had?.remove();
+}
 
 // app/mail.ts
 let MAIL_LOAD = 0, MAIL_SEARCH = 0;

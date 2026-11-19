@@ -510,6 +510,56 @@ def directory(world):
     fill(call, write, reviewer=f"human:{DANA_ID}")
 
 
+@seed("risk")
+def risk(world):
+    """Company › Risk (ui/tests/risk.cts): three risks Dana keeps and the matters under them. Customer theft claims is
+    live (Randazzo arrived today); Pro disputes is open (Flores is three weeks old), with one private dispute only Dana
+    and its owner read; Trademarks has none, so it is quiet. A rule guards the theft claims."""
+    from .harness import DANA, LEAD_ID
+
+    def call(method, path, body=None):
+        return _ok(world.api(method.lower(), "/api/v2/" + path, body, who=DANA), f"{method} {path}")
+
+    for label in ("Customer theft claims", "Pro disputes", "Trademarks"):
+        call("POST", "risks", {"label": label})
+    old = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=21)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    for title, risk_key, facts, private, aged in (
+        (
+            "Randazzo",
+            "risk:customer-theft-claims",
+            {"amount": 5_000_000, "claim": "jewelry", "forum": "Demand"},
+            False,
+            False,
+        ),
+        ("Murphy", "risk:customer-theft-claims", {"amount": 9_040_000, "forum": "AAA"}, False, True),
+        ("Flores", "risk:pro-disputes", {"forum": "Notice"}, False, True),
+        ("Sealed claim", "risk:pro-disputes", {"amount": 500_000, "forum": "Court"}, True, True),
+    ):
+        made = call(
+            "POST",
+            "tasks",
+            {
+                "owner": LEAD_ID,
+                "title": title,
+                "body": f"{title}: the facts are on the task.",
+                "labels": [risk_key],
+                **({"private": True} if private else {}),
+            },
+        )
+        tid = made["task"]["id"]
+        call("POST", f"tasks/{tid}/matter", {"kind": "dispute", "currency": "USD", **facts})
+        if aged:
+            with world.store.transaction() as c:
+                c.execute("UPDATE matters SET created_at=? WHERE task_id=?", (old, tid))
+                c.execute("UPDATE tasks SET created_at=? WHERE id=?", (old, tid))
+    rule = call(
+        "POST",
+        "rules",
+        {"kind": "internal", "text": "Every pro is checked before a first job.", "who": {"everyone": True}},
+    )
+    call("POST", "risks/risk:customer-theft-claims/links", {"linkable_type": "org_rule", "linkable_id": rule["id"]})
+
+
 @seed("priya-leads")
 def priya_leads(world):
     """Priya is the engineering manager on the chart: engineering-manager reports to her, so she is above the bots under it

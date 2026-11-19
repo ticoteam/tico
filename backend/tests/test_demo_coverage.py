@@ -48,6 +48,9 @@ PAGES = {
     "growth": page("growth/read", "channels"),
     "growth-retention": page("growth/read", "retention", detail="retention"),
     "finance": page("finance/transactions", "rows"),
+    # Company › Risk (ui/app/risk.ts): its risks, and the open disputes under them (backend/demo_sections/risk.py).
+    "risk": page("risks", "risks"),
+    "risk-disputes": page("matters", "matters", kind="dispute", open="true"),
     "rules": page("rules", "rules"),
     # The Rules section's tabs, one row each under Rules (ui/app/org-rules.ts reads).
     "rules-internal": page("rules", "rules", kind="internal"),

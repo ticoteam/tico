@@ -1206,7 +1206,14 @@ def _private_ladder_tasks(conn: "sqlite3.Connection", person: str, stage_asks: l
     return {str(row["id"]) for row in rows if _falls(conn, row, asks, visit_asks)}
 
 
-def needs(conn: "sqlite3.Connection", person: str, snoozed: str = "hide", *, own_work: bool = False) -> list[Row]:
+def needs(
+    conn: "sqlite3.Connection",
+    person: str,
+    snoozed: str = "hide",
+    *,
+    own_work: bool = False,
+    among: Callable[[list[str]], list[str]] | None = None,
+) -> list[Row]:
     """Needs you, for one person, oldest first: only what someone asks of them. Each OK or answer that names them is its
     own entry (`kind` "ask"). A task whose own work is theirs, with nothing asked of them, is not listed: it lives in
     Tasks, and so does a task of theirs that others depend on (its row says "Blocks #307"). A task the never-stuck
@@ -1227,10 +1234,18 @@ def needs(conn: "sqlite3.Connection", person: str, snoozed: str = "hide", *, own
     `snoozed` "keep" lists it too, with its `snoozed_until`, and "only" lists only those.
 
     `own_work` adds one entry (`kind` "task") for each task whose own work is theirs: not Needs you, but the load ask
-    ingest weighs before a bot hands a person more (backend/ask_ingest.py)."""
+    ingest weighs before a bot hands a person more (backend/ask_ingest.py).
+
+    `among` narrows the tasks read before any is worked out (it is given the candidates and returns those to keep):
+    Risk asks only about the tasks that carry a risk (backend/risk.py), and working out the rest would double its read."""
     if not is_human(person):
         return []
-    return _lists(conn, candidates(conn, person), person, snoozed=snoozed, own_work=own_work).get(person, [])
+    found = candidates(conn, person)
+    if among is not None:
+        found = among(found)
+        if not found:
+            return []
+    return _lists(conn, found, person, snoozed=snoozed, own_work=own_work).get(person, [])
 
 
 def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:

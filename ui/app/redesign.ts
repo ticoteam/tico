@@ -92,11 +92,11 @@ const rdInLibrary = (r: string): boolean => { const p = (r || '').split('?')[0] 
 function rdLibRemember(open: boolean): void { RD_LIB.mem = open; try { localStorage.setItem(RD_LIB_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
 function rdLibSaved() { try { return localStorage.getItem(RD_LIB_KEY) === 'open'; } catch { return RD_LIB.mem; } }
 const rdLibOpen = () => RD_LIB.inside || rdLibSaved();
-// Company folds the same way: folded unless opened here, opened while Strategy, Products, Finance, Growth, Automations,
-// Listening or Rules is showing (its own page, #/home, shows its row whatever the fold).
+// Company folds the same way: folded unless opened here, opened while Strategy, Products, Finance, Growth, Risk,
+// Automations, Listening or Rules is showing (its own page, #/home, shows its row whatever the fold).
 const RD_CO_KEY = 'tico.nav.company';
 const RD_CO = {inside: false, was: false, mem: false};
-const rdInCompany = (r: string): boolean => ['#/strategy', PRODUCTS_ROUTE, GR_ROUTE, FIN_ROUTE, RD_AUTOMATIONS, RD_LISTENING, RULES_ROUTE].some(base => rdUnder((r || '').split('?')[0] ?? '', base));
+const rdInCompany = (r: string): boolean => ['#/strategy', PRODUCTS_ROUTE, GR_ROUTE, FIN_ROUTE, RISK_ROUTE, RD_AUTOMATIONS, RD_LISTENING, RULES_ROUTE].some(base => rdUnder((r || '').split('?')[0] ?? '', base));
 function rdCoRemember(open: boolean): void { RD_CO.mem = open; try { localStorage.setItem(RD_CO_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
 function rdCoSaved() { try { return localStorage.getItem(RD_CO_KEY) === 'open'; } catch { return RD_CO.mem; } }
 const rdCoOpen = () => RD_CO.inside || rdCoSaved();
@@ -141,6 +141,7 @@ function redesignNavCurrent(nav: string | undefined): boolean {
   if (nav === 'strategy') return rdUnder(r, '#/strategy');
   if (nav === 'products') return rdUnder(r, PRODUCTS_ROUTE);
   if (nav === 'growth') return rdUnder(r, GR_ROUTE);
+  if (nav === 'risk') return rdUnder(r, RISK_ROUTE);
   if (nav === 'finance') return rdUnder(r, FIN_ROUTE);
   if (nav === 'rules') return rdUnder(r, RULES_ROUTE);
   if (nav === 'calendar') return rdUnder(r, CAL_ROUTE);
@@ -168,6 +169,7 @@ function redesignRoute(r: string): boolean {
   if (toolsRoute(r)) return true;   // Tools and every old address of what it holds (ui/app/tools.ts)
   if (rdUnder(r, BRAND_ROUTE)) { pageBrand(); return true; }   // ui/app/brand-page.ts
   if (rdUnder(r, GR_ROUTE)) { pageGrowth(); return true; }   // ui/app/growth-page.ts
+  if (riskRoute(r)) return true;   // Company › Risk (ui/app/risk.ts)
   if (rdUnder(r, RULES_ROUTE)) { pageRules(); return true; }   // ui/app/org-rules.ts
   if (productsRoute(r)) return true;   // Company › Products (ui/app/products.ts)
   if (skillsRoute(r)) return true;   // Library › Skills (ui/app/skills.ts)
@@ -189,6 +191,8 @@ function redesignAfterRoute() {
   skillsStop(S.route || '');
   directoryStop(S.route || '');
   productsStop(S.route || '');
+  riskStop(S.route || '');
+  riskNavWire();
   rdLibSync();
   financeStop();
   growthStop();

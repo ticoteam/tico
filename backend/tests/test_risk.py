@@ -300,6 +300,52 @@ def test_rules_and_documents_link_once_each(api):
     assert get(api, "risks/" + RISK)["sources"] == []
 
 
+def test_a_matter_that_waits_on_a_person_makes_its_risk_live_for_them_alone(api):
+    """Risk page (slice 2): live when an open matter waits on the viewer, as their Needs you has it; a linked active rule
+    shows as `has_rules`, never a count."""
+    from backend import question_marks as Q
+
+    post(api, "risks", {"label": "Customer theft claims"})
+    found = task(api, "Theft claim from Acme Homes")
+    label(api, found["id"], [RISK])
+    matter(api, found["id"], {"kind": "dispute"})
+    month_ago = H.shift(H.now(), days=-30)
+    with api.app.state.store.transaction() as c:
+        # Arrived a month ago: no longer new, so the risk is open, not live.
+        c.execute("UPDATE matters SET created_at=? WHERE task_id=?", (month_ago, found["id"]))
+        c.execute("UPDATE tasks SET created_at=? WHERE id=?", (month_ago, found["id"]))
+    seen = risk_of(api)
+    assert (seen["level"], seen["waits"], seen["has_rules"]) == ("open", False, False)
+    with api.app.state.store.transaction() as c:
+        Q.ask(c, "bot:ops", found["id"], ANA, "Which date did the cleaner come?")
+    seen = risk_of(api)
+    assert (seen["level"], seen["waits"]) == ("live", True)
+    # Ben reads the task too, but nothing waits on him: open for him.
+    ben = risk_of(api, "ben-test")
+    assert (ben["level"], ben["waits"]) == ("open", False)
+    assert get(api, "risks/" + RISK)["risk"]["waits"] is True
+    # A linked rule: shown to every teammate while active, and also on a risk with no matter at all.
+    post(api, "risks", {"label": "Data breach"})
+    with api.app.state.store.transaction() as c:
+        ts = H.now()
+        c.execute(
+            "INSERT INTO org_rules(id,kind,text,who,status,suggested_by,created_at,updated_at) "
+            "VALUES('rule_vet','internal','Vet every cleaner before a first job','{}','active',?,?,?)",
+            (ANA, ts, ts),
+        )
+    for key in (RISK, "risk:data-breach"):
+        post(api, f"risks/{key}/links", {"linkable_type": "org_rule", "linkable_id": "rule_vet"})
+    assert risk_of(api)["has_rules"] is True and risk_of(api, "priya-test")["has_rules"] is True
+    breach = risk_of(api, key="risk:data-breach")
+    assert (breach["has_rules"], breach["level"], breach["open"], breach["closed"]) == (True, "quiet", 0, 0)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE org_rules SET status='retired' WHERE id='rule_vet'")
+    assert risk_of(api)["has_rules"] is False
+    # The ask answered or the task done: nothing waits, and the risk is closed out to quiet.
+    post(api, f"tasks/{found['id']}/done", {"note": "Settled."})
+    assert (risk_of(api)["level"], risk_of(api)["waits"]) == ("quiet", False)
+
+
 def test_the_answers_match_the_contract_and_the_migration_runs_again(api):
     from importlib import import_module
 

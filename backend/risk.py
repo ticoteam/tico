@@ -33,6 +33,7 @@ from . import page_owners
 from . import rule_due as _rule_due
 from . import task_privacy as _privacy
 from . import teammate_access as _teammate_access
+from . import waiting_on as _waiting_on
 from .api_contract import api_v2, error
 from .entities import store as ES
 from .models import ID, Contract
@@ -45,6 +46,7 @@ OR = cast(Any, _org_rules)
 audit_log = cast(Any, _audit_log)
 privacy = cast(Any, _privacy)
 teammate_access = cast(Any, _teammate_access)
+waiting_on = cast(Any, _waiting_on)
 Row = dict[str, Any]
 
 KIND = "risk"
@@ -57,7 +59,7 @@ LINK_ROLES = {"org_rule": ("rule",), "entity": ("source", "covers")}
 # The Directory types each matter fact names.
 ENTITY_TYPES = {"party": ("person", "organization"), "place": ("place",), "product": ("product",)}
 COLUMNS = {"party": "party_entity_id", "place": "place_id", "product": "product_id"}
-NEW_DAYS = 7  # a matter that arrived this recently makes its risk live
+NEW_DAYS = 7  # a matter that arrived this recently makes its risk live; so does one that waits on the viewer
 LEVELS = ("live", "open", "quiet")
 LIMIT_DEFAULT = 50
 LIMIT_MAX = 200
@@ -177,24 +179,74 @@ CLAIMED_SQL = (
 )
 
 
+# The risks with an open matter among the given tasks (those waiting on the viewer), over the tasks the viewer reads.
+WAITS_SQL = (
+    "SELECT DISTINCT tt.tag_id AS risk_id FROM tags g JOIN task_tags tt ON tt.tag_id=g.id "
+    "JOIN {visible} t ON t.id=tt.task_id WHERE g.kind='risk'{only} AND t.status='open' AND tt.task_id IN ({marks})"
+)
+# The risks with an active rule linked (the page shows a rules mark, never a count).
+RULED_SQL = (
+    "SELECT DISTINCT l.risk_id FROM risk_links l JOIN org_rules r ON r.id=l.linkable_id "
+    "WHERE l.linkable_type='org_rule' AND r.status='active'{only}"
+)
+
+
+# Of the given tasks, those that carry a risk.
+RISKED_SQL = "SELECT DISTINCT tt.task_id FROM task_tags tt JOIN tags g ON g.id=tt.tag_id WHERE g.kind='risk' AND tt.task_id IN ({marks})"
+
+
+def _risked(c: Any, task_ids: list[str]) -> list[str]:
+    found: set[str] = set()
+    for part in H.chunks(task_ids):
+        found.update(str(r[0]) for r in c.execute(RISKED_SQL.format(marks=",".join("?" * len(part))), part))
+    return sorted(found)
+
+
+def waiting_on_viewer(c: Any, who: Any) -> set[str]:
+    """The tasks in `who`'s Needs you that ask something of them about the task itself: an ask or an OK, or a private
+    task to share. A Paused cause (`tasks`, a bot that cannot run) is about the bot, not the matter, so it leaves the
+    risk as it is. A bot has none: Needs you is a person's. Only tasks that carry a risk are worked out."""
+    if not H.is_human(who.actor):
+        return set()
+
+    def among(task_ids: list[str]) -> list[str]:
+        return _risked(c, task_ids)
+
+    items = cast(list[Row], waiting_on.needs(c, who.actor, among=among))
+    return {str(item["task_id"]) for item in items if item.get("task_id")}
+
+
 def standing(auth: Any, c: Any, who: Any, ids: list[str] | None = None) -> dict[str, Row]:
-    """{risk id: {open, closed, level, claimed, next_date, unconfirmed}} over the tasks and dates `who` reads."""
+    """{risk id: {open, closed, level, waits, has_rules, claimed, next_date, unconfirmed}} over the tasks and dates
+    `who` reads. A risk is live when an open matter waits on the viewer or arrived in the last NEW_DAYS, or a date is
+    unconfirmed or binding and soon; open with any open matter; else quiet."""
     visible = _visible_tasks(auth, c, who, "id, status, created_at")
     only, args = "", cast(list[str], [])
     if ids is not None:
         only = f" AND g.id IN ({','.join('?' * len(ids))})" if ids else " AND 0"
         args = list(ids)
+    waiting = sorted(waiting_on_viewer(c, who))
+    waits: set[str] = set()
+    for part in H.chunks(waiting):
+        sql = WAITS_SQL.format(visible=visible, only=only, marks=",".join("?" * len(part)))
+        waits.update(r["risk_id"] for r in c.execute(sql, [*args, *part]))
+    ruled = {r[0] for r in c.execute(RULED_SQL.format(only=only.replace("g.id", "l.risk_id")), args)}
     out: dict[str, Row] = {}
     for r in c.execute(STANDING_SQL.format(visible=visible, only=only), [_since(NEW_DAYS), *args]):
-        level = "live" if r["new"] else "open" if r["open"] else "quiet"
+        waiting_here = r["risk_id"] in waits
+        level = "live" if r["new"] or waiting_here else "open" if r["open"] else "quiet"
         out[r["risk_id"]] = {
             "open": r["open"],
             "closed": r["closed"],
             "level": level,
+            "waits": waiting_here,
+            "has_rules": r["risk_id"] in ruled,
             "claimed": [],
             "next_date": None,
             "unconfirmed": 0,
         }
+    for risk_id in ruled - out.keys():
+        out[risk_id] = {**EMPTY, "has_rules": True, "claimed": []}
     for r in c.execute(CLAIMED_SQL.format(visible=visible, only=only), args):
         if r["risk_id"] in out:
             out[r["risk_id"]]["claimed"].append({"currency": r["currency"] or "", "amount": r["amount"]})
@@ -206,7 +258,16 @@ def standing(auth: Any, c: Any, who: Any, ids: list[str] | None = None) -> dict[
     return out
 
 
-EMPTY: Row = {"open": 0, "closed": 0, "level": "quiet", "claimed": [], "next_date": None, "unconfirmed": 0}
+EMPTY: Row = {
+    "open": 0,
+    "closed": 0,
+    "level": "quiet",
+    "waits": False,
+    "has_rules": False,
+    "claimed": [],
+    "next_date": None,
+    "unconfirmed": 0,
+}
 
 
 # ----------------------------------------------------------------------------- obligations
