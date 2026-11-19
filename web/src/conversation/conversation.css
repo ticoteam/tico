@@ -1,0 +1,48 @@
+/* The chat parts the mocks keep in page files, copied as they are: pages/2-threads/threads.css (paragraphs, links,
+   the steps fold, the "New" break, a message being written), pages/14-acts/acts.css (a fault line, an answered
+   card) and pages/4-teammates/mates.css (an agent's page chat), spacing on the scale (1px and 3px became 0 and 2px).
+   Plus the message box as a real field. */
+
+.msg p+p,.msg ul+p{margin-top:var(--s-2)}
+.msg p+ul{margin-top:var(--s-1h)}
+.msg p b,.msg li b{font-weight:var(--w-strong)}
+.lnk{text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:3px;transition:text-decoration-color var(--dur-fast) var(--ease)}
+.lnk:hover{text-decoration-color:var(--ink)}
+.fold{display:flex;align-items:center;gap:var(--s-1h);height:22px;margin:0 0 var(--s-0);padding:0;border:0;background:none;color:var(--muted);font-size:var(--t-sm);position:relative}
+.fold .ico{width:12px;height:12px}
+.fold time{color:var(--faint);font-variant-numeric:tabular-nums}
+.day.is-new{color:var(--ink);font-weight:var(--w-strong)}
+.day.is-new::before,.day.is-new::after{background:var(--line-strong)}
+
+.did.is-fault{color:var(--ink);font-weight:var(--w-strong)}
+.did.is-fault .did-ico{color:var(--ink)}
+.did.is-fault{align-items:flex-start}
+.did.is-fault span:last-child{white-space:normal;overflow:visible;line-height:18px;padding-top:var(--s-0)}
+.ask-said{margin-top:var(--s-1h);font-size:var(--t-xs);color:var(--muted)}
+.msg p .fmark{margin-right:var(--s-0)}
+
+.chat-page .chat-body{padding:var(--s-3) var(--s-6)}
+.chat-page .chat-foot{padding:var(--s-1) var(--s-5) var(--s-5)}
+.chat-page .day:first-child{margin-top:auto}
+.chat-page .mine-col{max-width:72%}
+@media (max-width:760px){
+  .chat-page .chat-body{padding:var(--s-2) var(--s-4)}
+  .chat-page .mine-col{max-width:86%}
+}
+
+/* each row sits in the virtual list's placed box: its margins stay inside the box that is measured, and the shell's
+   gap between a did line and a message is kept across the boxes */
+.chat-body .vl-item{display:flow-root}
+.chat-body .vl-item:has(>.did)+.vl-item>.msg,.chat-body .vl-item:has(>.msg)+.vl-item>.did{margin-top:var(--s-3)}
+
+/* a message being written wraps in its box; it is never cut */
+.composer.is-typing{align-items:flex-end;padding-bottom:var(--s-1h);padding-top:var(--s-1h)}
+.composer.is-typing .composer-text{white-space:normal;overflow:visible;line-height:1.4;padding:var(--s-1h) 0;align-self:center}
+
+/* the message box is a textarea that grows with what is typed (the mock draws it as text) */
+textarea.composer-text{border:0;outline:0;background:none;padding:0;font-family:inherit;font-size:inherit;font-weight:inherit;font-feature-settings:inherit;line-height:inherit;color:var(--ink);resize:none;field-sizing:content;max-height:40dvh;overflow-y:auto;scrollbar-width:none}
+textarea.composer-text::placeholder{color:var(--muted)}
+.composer.is-typing textarea.composer-text{overflow-y:auto}
+/* iPhone Safari zooms into a field under 16px (platforms.md 2) */
+@media (pointer:coarse){textarea.composer-text{font-size:var(--t-md)}}
+.composer input[type=file]{display:none}
