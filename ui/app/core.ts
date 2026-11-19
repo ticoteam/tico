@@ -125,6 +125,176 @@ function patchLiveHTML(root: Element, html: string): boolean {
     PATCH_SRC.delete(root);
   return patchHTML(root, html);
 }
+// ---- the keyed patch (motionSwap in ui/app/motion.ts draws with it and animates what it reports).
+// patchHTML above matches top-level children by position. This matches elements by the key their markup carries
+// (`attr`, data-key unless the caller names another), anywhere under `root`: one set of keys for the whole box, so a
+// keyed row inside a keyed group is the same node when it moves to another group. An element whose markup is what it
+// was last drawn from is not touched at all (its node, focus, hover, selection, scroll and running animations stay);
+// one whose markup changed is patched in place, attribute by attribute and child by child; unkeyed children match by
+// position and kind. Keys must be unique in the markup: a second element with a key already used is drawn as new.
+/** A leaving element motion.ts keeps in the page while it fades: no longer the patch's to match, move or remove. */
+const PATCH_GHOSTS = new WeakSet<Node>();
+/** The markup each keyed element was last drawn from. */
+const KEYED_SRC = new WeakMap<Element, string>();
+/** A keyed build, read but not yet applied: how much of the box it changes is known before anything is written. */
+interface KeyedPlan {
+  root: Element; attr: string; fresh: DocumentFragment;
+  /** Each new keyed element's markup, read before the build takes its children. */
+  src: Map<Element, string>;
+  /** The elements in the box now, by key. */
+  old: Map<string, Element>;
+  keys: Set<string>;
+  /** Elements in the box whose key the new markup does not have. */
+  gone: Element[];
+  entered: number; changed: number;
+}
+/** What a keyed build did: the new keyed elements (the outermost of each new subtree), the keyed elements left in the
+ * box for the caller to take out (the outermost too), and how many kept elements were patched or moved. */
+interface KeyedDone { entered: Element[]; left: Element[]; changed: number; moved: number }
+function keyedPlan(root: Element, html: string, attr = 'data-key'): KeyedPlan {
+  const t = document.createElement('template');
+  t.innerHTML = html;
+  const old = new Map<string, Element>(), src = new Map<Element, string>(), keys = new Set<string>(), gone: Element[] = [];
+  for (const el of root.querySelectorAll(`[${attr}]`)) { const k = el.getAttribute(attr) ?? ''; if (old.has(k)) gone.push(el); else old.set(k, el); }
+  let entered = 0, changed = 0;
+  for (const el of t.content.querySelectorAll(`[${attr}]`)) {
+    const k = el.getAttribute(attr) ?? '', was = keys.has(k) ? undefined : old.get(k), s = el.outerHTML;
+    src.set(el, s);
+    if (keys.has(k)) { entered++; continue; }
+    keys.add(k);
+    if (was && was.localName !== el.localName) { old.delete(k); gone.push(was); entered++; }
+    else if (!was) entered++;
+    else if (KEYED_SRC.get(was) !== s) changed++;
+  }
+  for (const [k, el] of old) if (!keys.has(k)) gone.push(el);
+  return {root, attr, fresh: t.content, src, old, keys, gone, entered, changed};
+}
+// The positions (in `idx`, a list of old places, -1 for a node new to its parent) of the longest run already in order:
+// those nodes stay where they are and the rest are moved around them, the fewest moves a new order needs.
+function keyedKeep(idx: number[]): Set<number> {
+  const tails: number[] = [], prev: number[] = idx.map(() => -1);
+  idx.forEach((v, i) => {
+    if (v < 0) return;
+    let lo = 0, hi = tails.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if ((idx[tails[mid] ?? 0] ?? 0) < v) lo = mid + 1; else hi = mid; }
+    prev[i] = lo ? tails[lo - 1] ?? -1 : -1;
+    tails[lo] = i;
+  });
+  const keep = new Set<number>();
+  for (let i = tails[tails.length - 1] ?? -1; i >= 0; i = prev[i] ?? -1) keep.add(i);
+  return keep;
+}
+function keyedApply(plan: KeyedPlan): KeyedDone {
+  const {root, attr, src, old} = plan, has = `[${attr}]`;
+  const done: KeyedDone = {entered: [], left: [], changed: 0, moved: 0};
+  const used = new Set<Element>(), drop: ChildNode[] = [], focused = document.activeElement;
+  // moveBefore keeps a moved node's focus, hover and running animations; where the browser has none, insertBefore
+  // moves it and the focus is put back below.
+  const move = (parent: Element, node: ChildNode, ref: ChildNode | null): void => {
+    const p = parent as Element & {moveBefore?: (node: Node, ref: Node | null) => void};
+    if (p.moveBefore && node.isConnected && parent.isConnected) { try { p.moveBefore(node, ref); return; } catch { /* a node the browser will not move in place is inserted */ } }
+    parent.insertBefore(node, ref);
+  };
+  const place = (parent: Element, want: ChildNode[]): void => {
+    const at = new Map<ChildNode, number>();
+    parent.childNodes.forEach((n, i) => { at.set(n, i); });
+    const idx = want.map(n => n.parentNode === parent ? at.get(n) ?? -1 : -1);
+    if (idx.every((v, i) => v >= 0 && v > (i ? idx[i - 1] ?? -1 : -1))) return;
+    const keep = keyedKeep(idx);
+    let ref: ChildNode | null = null;
+    for (let w = want.length - 1; w >= 0; w--) {
+      const n = want[w];
+      if (!n) continue;
+      if (!keep.has(w)) { move(parent, n, ref); if (n instanceof Element && used.has(n)) done.moved++; }
+      ref = n;
+    }
+  };
+  const attrs = (was: Element, fresh: Element): void => {
+    // A row still arriving keeps its entrance: the class is motion.ts's, set on the element, never in the markup.
+    const arriving = was.classList.contains('m-enter');
+    for (const a of [...was.attributes]) if (!fresh.hasAttribute(a.name)) was.removeAttribute(a.name);
+    for (const a of [...fresh.attributes]) if (was.getAttribute(a.name) !== a.value) was.setAttribute(a.name, a.value);
+    if (arriving) was.classList.add('m-enter');
+    // A field shows what the markup says, as a fresh one would, unless someone is typing in it.
+    if (was instanceof HTMLInputElement && fresh instanceof HTMLInputElement) {
+      if (was !== focused && was.value !== fresh.value) was.value = fresh.value;
+      if (was.checked !== fresh.checked) was.checked = fresh.checked;
+    }
+  };
+  const make = (fresh: ChildNode, outer: boolean): ChildNode => {
+    if (!(fresh instanceof Element)) return document.adoptNode(fresh);
+    const s = src.get(fresh);
+    let el: Element;
+    if (!fresh.querySelector(has)) el = document.adoptNode(fresh);
+    // A new element around keyed ones: its shell is new, and its children are matched like any others, so a row
+    // moving into a group that was not there keeps its node.
+    else { el = document.adoptNode(fresh.cloneNode(false) as Element); kids(el, fresh, outer && s === undefined); }
+    if (s !== undefined) { KEYED_SRC.set(el, s); if (outer) done.entered.push(el); }
+    return el;
+  };
+  // A kept element's new keyed children are arrivals of their own (`outer`); a new element's arrive with it.
+  const morph = (was: ChildNode, fresh: ChildNode): void => {
+    if (!(was instanceof Element) || !(fresh instanceof Element)) { if (was.nodeValue !== fresh.nodeValue) was.nodeValue = fresh.nodeValue; return; }
+    if (was.isEqualNode(fresh)) return;
+    attrs(was, fresh);
+    kids(was, fresh, true);
+  };
+  const kids = (parent: Element, from: ParentNode, outer: boolean): void => {
+    const loose = [...parent.childNodes].filter(n => !PATCH_GHOSTS.has(n) && !(n instanceof Element && n.hasAttribute(attr)));
+    const want: ChildNode[] = [];
+    let u = 0;
+    for (const fresh of [...from.childNodes]) {
+      const s = fresh instanceof Element ? src.get(fresh) : undefined;
+      if (fresh instanceof Element && s !== undefined) {
+        const was = old.get(fresh.getAttribute(attr) ?? '');
+        if (!was || used.has(was)) { want.push(make(fresh, outer)); continue; }
+        used.add(was);
+        if (KEYED_SRC.get(was) !== s) { done.changed++; morph(was, fresh); KEYED_SRC.set(was, s); }
+        want.push(was);
+        continue;
+      }
+      let j = u;
+      while (j < loose.length && (loose[j]?.nodeType !== fresh.nodeType || loose[j]?.nodeName !== fresh.nodeName)) j++;
+      const was = loose[j];
+      if (!was) { want.push(make(fresh, outer)); continue; }
+      for (; u < j; u++) { const skipped = loose[u]; if (skipped) drop.push(skipped); }
+      u = j + 1;
+      morph(was, fresh);
+      want.push(was);
+    }
+    for (; u < loose.length; u++) { const rest = loose[u]; if (rest) drop.push(rest); }
+    place(parent, want);
+  };
+  kids(root, plan.fresh, true);
+  // Taken out last: a kept row has by now moved out of a group that is going.
+  for (const n of drop) n.remove();
+  const gone = new Set(plan.gone);
+  for (const el of plan.gone) {
+    if (!root.contains(el)) continue;
+    let p = el.parentElement;
+    while (p && p !== root && !gone.has(p)) p = p.parentElement;
+    if (p === root) done.left.push(el);
+  }
+  if (focused instanceof HTMLElement && focused !== document.activeElement && root.contains(focused)) focused.focus({preventScroll: true});
+  return done;
+}
+// A box drawn whole, with no patch: each keyed element's markup is remembered for the next build.
+function keyedFill(root: Element, html: string, attr = 'data-key'): void {
+  root.innerHTML = html;
+  for (const el of root.querySelectorAll(`[${attr}]`)) KEYED_SRC.set(el, el.outerHTML);
+}
+// ---- the kept view: show what was read last at once, then patch. A page that has been read before draws that read
+// in place of a skeleton while the fresh one is out, and draws the fresh one over it when it lands; drawn through
+// motionSwap, the rows that did not change stay as they are. keptWrite keeps a page's read under the view it was read
+// for (a filter, a tab); keptRead gives it back for that same view only, so one view's rows never stand in for another's.
+// The copies live in S.lastRead (ui/app/state.ts) and go when the page reloads.
+function keptWrite(page: string, view: string, value: unknown): void {
+  S.lastRead['kept:' + page] = {view, value};
+}
+function keptRead<T>(page: string, view: string): T | null {
+  const kept = S.lastRead['kept:' + page] as {view: string; value: T} | undefined;
+  return kept && kept.view === view ? kept.value : null;
+}
 // Bot text (final replies, status notes, playbooks) is untrusted: every render goes through safeMd.
 const md = (s: string): string => safeMd(s);
 // bucket objects are only reachable through the presign redirect; markdown may name them as s3:// URIs

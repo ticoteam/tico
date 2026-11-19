@@ -592,8 +592,6 @@ function tasksHeadPaint(state: TasksPageState) {
   tasksHidden(badge, !on.length); if (badge.textContent !== String(on.length)) badge.textContent = String(on.length);
   tasksHidden($('#task-bar'), !on.length && !state.archive);
 }
-/** What the page last drew in its body when it is not a pipeline's board: drawn again only when it changed. */
-const TASKS_DRAWN = new WeakMap<HTMLElement, string>();
 function tasksRender(state: TasksPageState | null) {
   const body = $('#task-body');
   if (!body || !state || TASKS_ST !== state) return;
@@ -619,7 +617,6 @@ function tasksRender(state: TasksPageState | null) {
     // The view keeps what is being done in it (a drag, a phone's stage) and draws itself again into the root it is bound
     // to: only the stages that changed (task-pipelines.ts).
     const opts = {layout: state.layout, q: state.q, filters: state.filters, phone: matchMedia(PHONE).matches, more: state.more};
-    TASKS_DRAWN.delete(body);
     if (hooks.draw) hooks.draw(body, p, state.tasks, opts);
     else body.innerHTML = hooks.html(p, state.tasks, opts);
     hooks.bind?.(body, p);
@@ -636,7 +633,9 @@ function tasksRender(state: TasksPageState | null) {
     : state.pipeline ? tasksPipelineHTML(state)
     : tasksViewOnly() ? tasksOwnHTML(state)
     : tasksYouHTML(state);
-  if (TASKS_DRAWN.get(body) !== html) { TASKS_DRAWN.set(body, html); body.innerHTML = html; }
+  // Rows and groups carry keys, so a live change patches the list in place: a row that did not change keeps its node
+  // (and its hover and focus), one that moved slides, a new one comes in and a gone one fades (motion.ts motionSwap).
+  motionSwap(body, html);
   tasksJumpPaint(state);
 }
 
@@ -698,8 +697,9 @@ function tasksJumpPaint(state: TasksPageState) {
   const html = t ? tasksJumpHTML(state, t) : '';
   if (el.dataset.drawn !== html) { el.dataset.drawn = html; el.innerHTML = html; }
   el.hidden = !t;
+  // The list's own rows are drawn hidden or not (tasksRow); a board's are set here.
   const rows = body.querySelectorAll('[data-task]') as NodeListOf<HTMLElement>;
-  for (const row of rows) row.hidden = !!t && row.dataset.task === t.id;
+  for (const row of rows) { const hide = !!t && row.dataset.task === t.id; if (row.hidden !== hide) row.hidden = hide; }
 }
 /** No Ask bar away from a pipeline's board (pipeline-ask.ts). */
 function tasksAskOff() {
@@ -709,8 +709,13 @@ function tasksAskOff() {
 function tasksRailOff() {
   if (typeof pipelineRailLeave === 'function') pipelineRailLeave();
 }
-const tasksGroupHTML = (name: string, rows: string[]) => !rows.length ? ''
-  : `<section class="tk-section"><h2 class="tk-group">${esc(name)} <span class="n">${rows.length}</span></h2>${rows.join('')}</section>`;
+/** A row or a group with the key the list is patched by (motionSwap): `g:` a group, `t:` a task, `n:` a Needs you item. */
+const tasksKeyed = (html: string, key: string, hide = false): string => html.replace(/^<\w+/, tag => `${tag} data-key="${esc(key)}"${hide ? ' hidden' : ''}`);
+/** A task's row, keyed; hidden when the search's own task is drawn first in its place (tasksJumpPaint). */
+const tasksRow = (state: TasksPageState, t: TaskBriefV3, opts?: TaskRowOptions): string =>
+  tasksKeyed(taskRowHTML(t, opts), 't:' + t.id, tasksJumpShown(state)?.id === t.id);
+const tasksGroupHTML = (name: string, rows: string[], key = name) => !rows.length ? ''
+  : `<section class="tk-section" data-key="g:${esc(key)}"><h2 class="tk-group">${esc(name)} <span class="n">${rows.length}</span></h2>${rows.join('')}</section>`;
 const tasksNone = (state: TasksPageState) => `<p class="empty muted">${state.q || taskFiltersOn(state.filters) ? 'No matches' : 'Nothing here'}</p>`;
 /** Which group of You an item is in: Answer (a bot's ❓, mentions, stuck tasks, an ask of a kind not known here),
     Review (OKs of a page or a draft) or Do. */
@@ -749,7 +754,7 @@ function needsRowHTML(it: NeedsEntry): string {
   const ask = it.ask, browser = needsBrowserRef(it);
   const who = it.kind === 'mention' || it.kind === 'question' ? it.from_id || '' : ask?.asked_by || it.task?.owner_id || (it.bots?.[0] ? 'bot:' + it.bots[0] : '');
   const tip = it.kind !== 'task' && needsTitle(it) !== it.line && !needsAsk(it) ? ` title="${esc(it.line)}"` : '';
-  return `<div class="tk-row" data-need="${esc(it.id)}" role="button" tabindex="0"${tip}>`
+  return `<div class="tk-row" data-key="n:${esc(it.id)}" data-need="${esc(it.id)}" role="button" tabindex="0"${tip}>`
     + `<span class="tk-two"><span class="tk-title">${esc(needsTitle(it))}</span>${needsAsk(it) ? `<span class="tk-ask">${esc(needsAsk(it))}</span>` : ''}</span>${it.task ? lateTagHTML(it.task) : ''}`
     + (browser ? `<button type="button" class="ghost small" data-need-browser="${esc(it.id)}">Open browser</button>` : '')
     + `<span class="tk-who">${who ? actorFace(who, 16) : ''}</span><span class="tk-age">${esc(needsSince(it))}</span></div>`;
@@ -781,7 +786,7 @@ function tasksYouHTML(state: TasksPageState): string {
   const of = (g: string) => shown.filter(it => needsGroup(it) === g).map(needsRowHTML);
   const chips = state.q.trim() || taskFiltersOn(state.filters) ? '' : tasksStageChipsHTML(state);
   return chips + tasksGroupHTML('Answer', of('answer')) + tasksGroupHTML('Review', of('review'))
-    + tasksGroupHTML('Do', [...of('do'), ...own.map(t => taskRowHTML(t, {look: 'you'}))]);
+    + tasksGroupHTML('Do', [...of('do'), ...own.map(t => tasksRow(state, t, {look: 'you'}))]);
 }
 /** A bot's read-only view in place of You: a line that Needs you is a person's list, then the bot's open tasks by stage,
     in the pipelines' order, then Other. */
@@ -793,21 +798,21 @@ function tasksOwnHTML(state: TasksPageState): string {
   const known = new Set<string>(), groups: string[] = [];
   for (const p of state.pipelines) for (const st of p.stages) {
     if (st.id) known.add(st.id);
-    groups.push(tasksGroupHTML(st.name, shown.filter(t => t.stage_id === st.id).map(t => taskRowHTML(t))));
+    groups.push(tasksGroupHTML(st.name, shown.filter(t => t.stage_id === st.id).map(t => tasksRow(state, t)), `${p.id}/${st.id}`));
   }
-  return note + groups.join('') + tasksGroupHTML('Other', shown.filter(t => !known.has(t.stage_id || '')).map(t => taskRowHTML(t)));
+  return note + groups.join('') + tasksGroupHTML('Other', shown.filter(t => !known.has(t.stage_id || '')).map(t => tasksRow(state, t)), '');
 }
 /** A pipeline's open tasks by stage, in the pipeline's order, until task-pipelines.ts draws it. */
 function tasksPipelineHTML(state: TasksPageState): string {
   const p = tasksPipeline(state), shown = state.tasks.filter(t => taskFilterMatch(t, state.q, state.filters));
   if (!p || !shown.length) return tasksNone(state);
   const known = new Set(p.stages.map(s => s.id));
-  return p.stages.map(s => tasksGroupHTML(s.name, shown.filter(t => t.stage_id === s.id).map(t => taskRowHTML(t)))).join('')
-    + tasksGroupHTML('Other', shown.filter(t => !known.has(t.stage_id || undefined)).map(t => taskRowHTML(t)));
+  return p.stages.map(s => tasksGroupHTML(s.name, shown.filter(t => t.stage_id === s.id).map(t => tasksRow(state, t)), s.id)).join('')
+    + tasksGroupHTML('Other', shown.filter(t => !known.has(t.stage_id || undefined)).map(t => tasksRow(state, t)), '');
 }
 function tasksArchiveHTML(state: TasksPageState): string {
   const shown = state.tasks.filter(t => taskFilterMatch(t, state.q, state.filters));
-  return shown.length ? shown.map(t => taskRowHTML(t, {look: 'archive'})).join('') : tasksNone(state);
+  return shown.length ? shown.map(t => tasksRow(state, t, {look: 'archive'})).join('') : tasksNone(state);
 }
 
 // ---- clicks

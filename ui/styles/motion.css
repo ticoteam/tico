@@ -1,25 +1,73 @@
-/* ui/styles/motion.css — State changes that move: menus and panels arriving, counts ticking, a task's check, a card
-   lifting under the pointer, and every fold chevron's turn (ui/app/motion.ts
-   drives the parts a stylesheet cannot see). Linked last, so its few rules win over the files' own.
-   Rules: 200ms at most (--dur-fast 120ms for most, --dur 180ms for larger surfaces), opacity and transform only
-   (the individual translate and scale properties, so an element's own transform is kept), only on a change of state,
-   never on a page's first paint, and nothing waits on an animation. All of it is off under reduced motion (the block
-   at the end); base.css's reduced-motion rule still shortens what other files animate. The sidebar's sliding current
-   row bar is in sidebar.css (its last block), the shared skeleton shimmer in skeleton.css. */
+/* ui/styles/motion.css — How the app moves: the shared classes every page uses (.m-enter, .m-leave, .m-pop, .m-press
+   and the few beside them), menus, dialogs and panels arriving, counts ticking, a task's check, a card lifting under
+   the pointer, and every fold chevron's turn. ui/app/motion.ts drives the parts a stylesheet cannot see (lists that
+   patch and slide, the page change, opening and closing). Linked last, so its few rules win over the files' own.
+   The numbers are the motion spec's: 120ms for a colour, a press or anything leaving, 180ms for something small
+   moving or arriving, --dur-slow (280ms) for a dialog or a toast, --dur-page (360ms) for a phone's sheet; --ease to
+   settle, --ease-in to leave, --spring to arrive with weight; --move-sm, --move and --move-lg for how far, --pop and
+   --press for how small. The tokens that are new carry their value as a fallback, so the numbers hold in both looks.
+   Rules: opacity and transform only (the individual translate and scale properties, so an element's own transform
+   is kept), only on a change of state, never on a page's first paint, and nothing waits on an animation. A page file
+   names no duration, easing or keyframe of its own: it uses these classes. Under reduced motion nothing travels
+   (the blocks at the end); base.css's rule still shortens what other files animate. The sidebar's sliding current-row
+   bar is in sidebar.css (its last block), the skeleton's breath in skeleton.css. */
 
-/* ---- menus and popovers: scale up from 96% at their anchor (motion.js sets transform-origin from the anchor for
-   the ones placed by script); a phone's menus are bottom sheets there and only fade (base.css). */
-@keyframes m-pop{from{opacity:0;scale:.96}}
+/* ---- the shared classes.
+   .m-enter   arrives: fades in and rises by --move (8px). A list row motionSwap adds rises --move-sm (4px), a toast
+              (.m-toast) and a dialog arrive on --spring in 280ms, a phone's sheet (.m-sheet) comes up its own height
+              in 360ms, a side column (.m-side) comes in from the side. motion.ts takes the class off when it is done.
+   .m-leave   the way out, 120ms: fades and sinks back (a list row only fades); a dialog and a sheet take 180ms.
+   .m-pop     a menu or popover: scales up from --pop (96%) with a fade, from its anchor (motion.ts sets the origin).
+   .m-fade    content that replaces a skeleton, or a card's body opening in place: a 120ms fade, nothing moves.
+   .m-press   a control that gives under a press: --press (97.5%) while held.
+   .m-tint    a row's hover tint: on at once, off in 120ms.
+   .m-slide   a thumb or an underline that slides to its new place in 180ms (.m-quick: 120ms, a switch's thumb). */
+@keyframes m-fade{from{opacity:0}}
+@keyframes m-fade-out{to{opacity:0}}
+@keyframes m-rise{from{opacity:0;translate:var(--m-x,0px) var(--m-y,var(--move,8px))}}
+@keyframes m-sink{to{opacity:0;translate:var(--m-x,0px) var(--m-y,var(--move,8px))}}
+@keyframes m-pop{from{opacity:0;scale:var(--pop,.96)}}
+@keyframes m-pop-out{to{opacity:0;scale:var(--pop,.96)}}
+@keyframes m-sheet-in{from{translate:0 100%}}
+@keyframes m-sheet-out{to{translate:0 100%}}
+.m-enter{animation:m-rise 180ms var(--ease) backwards}
+.m-leave{animation:m-sink 120ms var(--ease-in,cubic-bezier(.4,0,1,1)) forwards;pointer-events:none}
+.m-list .m-enter{--m-y:var(--move-sm,4px)}
+.m-list .m-leave{animation-name:m-fade-out}
+.m-side{--m-x:var(--move,8px);--m-y:0px}
+.m-toast.m-enter,dialog.m-enter{animation-duration:var(--dur-slow,280ms);animation-timing-function:var(--spring,cubic-bezier(.3,1.35,.5,1))}
+dialog.m-leave{animation-duration:180ms}
+dialog.m-leave::backdrop{animation:m-fade-out 180ms var(--ease-in,cubic-bezier(.4,0,1,1)) forwards}
+.m-sheet.m-enter{animation:m-sheet-in var(--dur-page,360ms) var(--ease) backwards}
+.m-sheet.m-leave{animation:m-sheet-out 180ms var(--ease-in,cubic-bezier(.4,0,1,1)) forwards}
+.m-pop{animation:m-pop 180ms var(--ease)}
+.m-pop.m-leave{animation:m-pop-out 120ms var(--ease-in,cubic-bezier(.4,0,1,1)) forwards}
+.m-fade{animation:m-fade 120ms var(--ease)}
+.m-press{transition:scale 120ms var(--ease)}
+.m-press:active{scale:var(--press,.975)}
+.m-tint{transition:background-color 120ms var(--ease),color 120ms var(--ease)}
+.m-tint:hover{transition-duration:0s}
+.m-slide{transition:translate 180ms var(--ease),scale 180ms var(--ease)}
+.m-slide.m-quick{transition-duration:120ms}
+
+/* ---- menus, popovers and dialogs as they are opened today, with no class of their own. A menu scales up from 96%
+   at its anchor in 180ms (motion.ts sets transform-origin from the anchor for the ones placed by script); a phone's
+   menus are bottom sheets there and only fade. A dialog and the scrim behind it fade in 180ms, so its box never moves. */
+:where(.tl-pop,.p-menu,.people-menu,.slash-menu,#account-menu,#new-version-pop,[popover]:popover-open){animation:m-fade 180ms var(--ease)}
+:where(.slash-menu,#account-menu,#new-version-pop){transform-origin:bottom center}
+:where(.p-menu,.people-menu){transform-origin:top right}
+:where(dialog[open]){animation:m-fade 180ms var(--ease)}
+:where(dialog[open])::backdrop{animation:m-fade 180ms var(--ease)}
 @media (min-width:761px){
   :where(.tl-pop,.p-menu,.people-menu,.slash-menu,#account-menu,#new-version-pop,#account-status-pop,
-    #team-add-menu,.dash-menu,.au-menu,.vcard-menu-list,.pg-menu-list,.ask-menu,[popover]:popover-open){animation:m-pop var(--dur-fast) var(--ease)}
+    #team-add-menu,.dash-menu,.au-menu,.vcard-menu-list,.pg-menu-list,.ask-menu,[popover]:popover-open){animation:m-pop 180ms var(--ease)}
   :where(#account-status-pop){transform-origin:bottom left}
   :where(.dash-menu,.pg-menu-list){transform-origin:top right}
   :where(.vcard-menu-list){transform-origin:bottom right}
   :where(.ask-menu){transform-origin:top center}
 }
 
-/* ---- drawers: a side panel slides 8px in from its edge as it fades (a dialog's own fade is base.css's). */
+/* ---- drawers: a side panel slides 8px in from its edge as it fades (a dialog's own fade is above). */
 @keyframes m-from-right{from{opacity:0;translate:8px 0}}
 :where(dialog.gpanel[open]){animation:m-from-right var(--dur) var(--ease)}
 
@@ -85,4 +133,14 @@
   .run-fold>summary::before,.settings-more>summary::before,.docs-browser summary::before,.docs-toc summary::after,
   .bt-fold .nav-icon,.lrn-subj .more .nav-icon,.upd-kids .nav-icon{transition:none!important}
   :is(a.card,button.card,.bcard,.au-card,.meet-tile,.rdo-card,.ob-tile):hover{translate:none}
+  :is(.m-press,.m-slide,.m-tint){transition:none!important}
+  .m-press:active{scale:none}
+  /* The shared classes still say that something came or went: a 120ms fade, with no travel. */
+  :is(.m-enter,.m-pop,.m-fade){animation:m-fade 120ms var(--ease) backwards!important}
+  .m-leave{animation:m-fade-out 120ms var(--ease) forwards!important}
 }
+/* The same for a page that asks for it whatever the system says (data-motion="reduce" on <html>, motion.ts motionStill). */
+[data-motion="reduce"] :is(.m-press,.m-slide,.m-tint){transition:none!important}
+[data-motion="reduce"] .m-press:active{scale:none}
+[data-motion="reduce"] :is(.m-enter,.m-pop,.m-fade){animation:m-fade 120ms var(--ease) backwards!important}
+[data-motion="reduce"] .m-leave{animation:m-fade-out 120ms var(--ease) forwards!important}

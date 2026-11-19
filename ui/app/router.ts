@@ -2,7 +2,7 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-let LAST_ROUTE = '', ROUTE_FADING = false, ROUTE_SEQ = 0, ROUTE_PENDING = '', ROUTE_FADE: ViewTransition | null = null;
+let LAST_ROUTE = '';
 // The page an address draws: its path, with every thread and New message one page (the rail stays while the pane
 // beside it changes).
 const routePage = (h: string | undefined): string => { const [p = ''] = String(h || '').split('?'); return p === THREADS_ROUTE || p === THREADS_NEW || p.startsWith(THREAD_ROUTE) ? THREADS_ROUTE : p; };
@@ -43,11 +43,8 @@ function route(hash: string = location.hash): void {
   // two-column grid) would lay the next page out in that grid. Each page adds its own again.
   const main = $('#main');
   main.className = '';
-  // A new page fades in (opacity only); a query change within the same page does not. A view transition
-  // (routeChanged) already cross-fades it, so this is the fallback for a browser without one.
+  // A new page, or a query change within the same page (a filter, an open row): only a new page starts at its top.
   const newPath = !from || routePage(from) !== routePage(S.route);
-  if (from && newPath && !ROUTE_FADING && main.animate && !matchMedia('(prefers-reduced-motion: reduce)').matches)
-    main.animate({opacity: [0, 1]}, {duration: 120, easing: 'cubic-bezier(.2,0,0,1)'});
   if (!isMarketRoute(S.route)) window.marketStop?.();
   if (!isStrategyRoute(S.route)) window.strategyStop?.();
   if (!isLensesRoute(S.route)) window.lensesStop?.();
@@ -188,84 +185,122 @@ function route(hash: string = location.hash): void {
   // A new page starts at its top; a query change (a filter, an open row) or a redraw keeps the reader's place.
   if (newPath) $('#main').scrollTop = 0;
 }
-// A move to another page cross-fades from the old page to the new one in 150ms (a view transition, ui/styles/base.css):
-// the browser holds the old page's picture while route() draws, so the switch never shows a half-drawn frame. A query
-// change, reduced motion, a hidden window and a browser without view transitions draw at once. An error in route()
-// still surfaces as an error (not a rejected transition).
+// A move to another page draws the new page at once and fades its content in (motionPage, ui/app/motion.ts): #main
+// alone, so the sidebar and the chat column never move or flash, and nothing sits over the page to take a press. A
+// query change draws with no fade. Then the reader is put where they should be: at the place they left on Back and
+// Forward, at the top of a page they went on to, with the keyboard's focus on the new page's title.
 function routeChanged(): void {
-  const path = (h: string | undefined): string => routePage(h || UPDATES), seq = ++ROUTE_SEQ;
   if (fileReviewOwns(location.hash)) { route(); return; }        // the review view opening or closing: no page fades
-  // The address changed again before its fade drew (a quick second click, a script): that address's page is drawn now
-  // and this one right after it, in this task and without a fade, as they would be without the fade. An address the
-  // first page writes for itself (Settings names its tab) gives way to the newer one.
-  if (ROUTE_PENDING) {
-    const was = ROUTE_PENDING, now = location.hash; ROUTE_PENDING = '';
-    route(was);
-    if (location.hash !== now) history.replaceState(history.state, '', now);
-    route(); return;
-  }
-  if (!LAST_ROUTE || path(location.hash) === path(LAST_ROUTE) || !document.startViewTransition || document.hidden
-    || matchMedia('(prefers-reduced-motion: reduce)').matches) { route(); return; }
-  ROUTE_PENDING = location.hash || UPDATES;
-  const fade = document.startViewTransition(() => {
-    if (seq !== ROUTE_SEQ) return;
-    ROUTE_PENDING = ''; ROUTE_FADING = true;
-    try { route(); } catch (e) { setTimeout(() => { throw e; }); } finally { ROUTE_FADING = false; }
-  });
-  ROUTE_FADE = fade;
-  fade.finished.finally(() => { if (ROUTE_FADE !== fade) return; ROUTE_FADE = null; routeFadeHover(); }).catch(() => {});
-  for (const done of [fade.ready, fade.updateCallbackDone, fade.finished]) done.catch(() => {});
+  const from = LAST_ROUTE, main: HTMLElement = $('#main');
+  const back = routeEntry(main);
+  const paged = !!from && routePage(location.hash || UPDATES) !== routePage(from);
+  if (!paged) { route(); return; }
+  motionPage(() => route());
+  if (back !== null && LAST_ROUTE !== from) routeScrollBack(main, back);
+  routeArrive(main);
 }
-// While a fade runs, Chrome gives the pointer to the root element, not the page under it, whatever pointer-events says
-// (ui/styles/base.css). So a press during the fade ends it at once and goes to what is under it: the press, and the
-// click it makes (which the browser gives to the root, where the press began). A pointer moved during the fade is told
-// where it is when the fade ends, so a tooltip or a hover shows without another move.
-/** A pointer or mouse event: the fields a pointer event has are read only when the event is one (a mouse event has none). */
-type Pointing = MouseEvent & Partial<PointerEvent>;
-let ROUTE_PRESS: Element | null = null, ROUTE_MOVE: Pointing | null = null;
-const routeMouse = (type: string, e: Pointing, el: Element): boolean => {
-  const init: PointerEventInit = {bubbles: true, cancelable: true, composed: true, view: window, detail: e.detail, button: e.button,
-    buttons: e.buttons, clientX: e.clientX, clientY: e.clientY, screenX: e.screenX, screenY: e.screenY,
-    ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey, metaKey: e.metaKey};
-  const pointer = type.startsWith('pointer');
-  if (pointer) Object.assign(init, {pointerId: e.pointerId, pointerType: e.pointerType, isPrimary: e.isPrimary,
-    width: e.width, height: e.height, pressure: e.pressure});
-  return el.dispatchEvent(pointer ? new PointerEvent(type, init) : new MouseEvent(type, init));
-};
-const routeUnder = (e: Pointing): Element | null => { const el = document.elementFromPoint(e.clientX, e.clientY); return el === document.documentElement ? null : el; };
-function routeFadeHover(): void {
-  const e = ROUTE_MOVE, el = e && routeUnder(e); ROUTE_MOVE = null;
-  if (e && el) for (const type of ['pointerover', 'mouseover', 'pointermove', 'mousemove']) routeMouse(type, e, el);
+// ---- the reader's place. Each history entry the app has drawn carries a number in its state, and the place the
+// page was scrolled to when it was left is kept by that number. An entry met again (Back, Forward) has its number, so
+// its place is put back; a new entry has none and starts at the top (route()). A page whose state is written over
+// without the number (history.replaceState(null, ...)) reads as new: it opens at the top.
+// A page scrolls in #main, or in a pane of its own (the Tasks list): the pane the reader last scrolled is kept by its
+// id, so a pane with no id is not put back.
+/** How far #main was scrolled, and the page's own pane (its id; '' for none) and how far that was. */
+interface RoutePlace { top: number; pane: string; paneTop: number }
+const ROUTE_SCROLL = new Map<number, RoutePlace>();
+let ROUTE_PANE: HTMLElement | null = null;
+document.addEventListener('scroll', ev => {
+  const el = ev.target;
+  if (el instanceof HTMLElement && el.id && el.id !== 'main' && el.closest('#main')) ROUTE_PANE = el;
+}, {capture: true, passive: true});
+// Numbers start from the clock: an entry numbered before a reload never shares one with an entry made after it.
+let ROUTE_ENTRY = 0, ROUTE_ENTRIES = Date.now();
+const routeEntryOf = (): number => Number((history.state as {nav?: unknown} | null)?.nav) || 0;
+function routeEntryMark(): void {
+  ROUTE_ENTRY = ++ROUTE_ENTRIES;
+  history.replaceState({...(history.state as object | null), nav: ROUTE_ENTRY}, '');
 }
-document.addEventListener('pointerdown', e => {
-  if (!e.isTrusted) return;
-  ROUTE_PRESS = null;
-  if (!ROUTE_FADE || e.target !== document.documentElement) return;
-  ROUTE_MOVE = null; ROUTE_FADE.skipTransition();
-  const el = routeUnder(e); if (!el) return;
-  ROUTE_PRESS = el; e.stopImmediatePropagation();
-  routeMouse('pointerdown', e, el);
-}, true);
-type ClickType = 'mousedown' | 'click' | 'auxclick' | 'dblclick' | 'contextmenu';
-const CLICK_TYPES: ClickType[] = ['mousedown', 'click', 'auxclick', 'dblclick', 'contextmenu'];
-for (const type of CLICK_TYPES) document.addEventListener(type, e => {
-  const el = ROUTE_PRESS;
-  if (!el || !e.isTrusted || e.target !== document.documentElement) return;
-  if (type !== 'mousedown') ROUTE_PRESS = null;
-  e.stopImmediatePropagation(); e.preventDefault();
-  const hit = routeUnder(e);
-  if (type !== 'mousedown' && !(hit && (el.contains(hit) || hit.contains(el)))) return;   // released somewhere else
-  if (routeMouse(type, e, el) && type === 'mousedown') {
-    // Only an HTML or SVG element has focus(): a focusable Element without it is left alone (the original threw there).
-    const target = el.closest('a[href],button,input,select,textarea,summary,[tabindex],[contenteditable]');
-    if (target instanceof HTMLElement || target instanceof SVGElement) target.focus({preventScroll: true});
+/** Keeps the place of the entry being left, and returns the place kept for the entry arrived at (null: a new entry). */
+function routeEntry(main: HTMLElement): RoutePlace | null {
+  const pane = ROUTE_PANE?.isConnected && ROUTE_PANE.scrollTop > 0 ? ROUTE_PANE : null;
+  if (ROUTE_ENTRY) ROUTE_SCROLL.set(ROUTE_ENTRY, {top: main.scrollTop, pane: pane?.id ?? '', paneTop: pane?.scrollTop ?? 0});
+  ROUTE_PANE = null;
+  const seen = routeEntryOf();
+  if (!seen) { routeEntryMark(); return null; }
+  ROUTE_ENTRY = seen;
+  return ROUTE_SCROLL.get(seen) ?? null;
+}
+if (routeEntryOf()) ROUTE_ENTRY = routeEntryOf(); else routeEntryMark();
+// Rows that are read after the page is drawn make it tall enough a moment later: the place is put back as they
+// land, until it is reached, the reader scrolls or presses, another page opens, or four seconds pass.
+let ROUTE_SEEK: (() => void) | null = null;
+function routeScrollBack(main: HTMLElement, place: RoutePlace): void {
+  ROUTE_SEEK?.();
+  const reach = (): boolean => {
+    main.scrollTop = place.top;
+    if (main.scrollTop < place.top - 1) return false;
+    if (!place.pane) return true;
+    const pane = document.getElementById(place.pane);
+    if (!pane || !main.contains(pane)) return false;
+    pane.scrollTop = place.paneTop;
+    return pane.scrollTop >= place.paneTop - 1;
+  };
+  if (reach()) return;
+  const types = ['wheel', 'touchstart', 'pointerdown', 'keydown'];
+  const seek = new MutationObserver(() => { if (reach()) stop(); });
+  const stop = (): void => {
+    seek.disconnect(); clearTimeout(timer); ROUTE_SEEK = null;
+    for (const type of types) window.removeEventListener(type, stop, true);
+  };
+  const timer = setTimeout(stop, 4000);
+  for (const type of types) window.addEventListener(type, stop, {capture: true, passive: true});
+  seek.observe(main, {childList: true, subtree: true});
+  ROUTE_SEEK = stop;
+}
+// ---- the focus. After a page change the keyboard's focus is on the new page's title (its h1, or #main when it has
+// none yet), so Tab goes on from the page and a screen reader says where it is; a page with no title yet is named in
+// a live region. No ring is drawn when a pointer made the change. A page that focuses something of its own keeps
+// it, and so does a field someone is typing in and an open dialog. A page drawn again as its rows arrive takes the
+// focused title with it: the new one is focused, until the reader presses a key or the pointer.
+let ROUTE_KEYS = false, ROUTE_FOCUS: (() => void) | null = null, ROUTE_SAY: HTMLElement | null = null;
+window.addEventListener('keydown', () => { ROUTE_KEYS = true; }, true);
+window.addEventListener('pointerdown', () => { ROUTE_KEYS = false; }, true);
+function routeArrive(main: HTMLElement): void {
+  ROUTE_FOCUS?.();
+  const keys = ROUTE_KEYS, types = ['pointerdown', 'keydown'];
+  const aim = (): void => {
+    const at = document.activeElement;
+    if (at instanceof HTMLElement && at !== document.body && at !== main && !main.contains(at)
+      && (at.isContentEditable || at.matches('input, textarea, select') || !!at.closest('dialog[open]'))) return;
+    if (at && at !== main && main.contains(at) && !at.hasAttribute('data-route-title')) return;
+    if (document.querySelector('dialog[open]:modal')) return;
+    const title = main.querySelector<HTMLElement>('h1') ?? main;
+    if (title === at) return;
+    if (!title.hasAttribute('tabindex')) title.tabIndex = -1;
+    title.toggleAttribute('data-route-title', true);
+    title.toggleAttribute('data-quiet-focus', !keys);
+    title.focus({preventScroll: true});
+    routeSay(title === main ? document.title : '');
+  };
+  const again = new MutationObserver(() => { const at = document.activeElement; if (!at || at === document.body || at === main) aim(); });
+  const stop = (): void => {
+    again.disconnect(); clearTimeout(timer); ROUTE_FOCUS = null;
+    for (const type of types) window.removeEventListener(type, stop, true);
+  };
+  const timer = setTimeout(stop, 4000);
+  for (const type of types) window.addEventListener(type, stop, {capture: true, passive: true});
+  again.observe(main, {childList: true, subtree: true});
+  ROUTE_FOCUS = stop;
+  aim();
+}
+function routeSay(text: string): void {
+  if (!ROUTE_SAY) {
+    ROUTE_SAY = document.createElement('div');
+    ROUTE_SAY.id = 'route-say';
+    ROUTE_SAY.setAttribute('role', 'status');
+    ROUTE_SAY.style.cssText = 'position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap';
+    document.body.appendChild(ROUTE_SAY);
   }
-}, true);
-// A scroll during the fade ends it too, so the page under the pointer scrolls, not the window.
-document.addEventListener('wheel', e => { if (ROUTE_FADE && e.target === document.documentElement) ROUTE_FADE.skipTransition(); }, {capture: true, passive: true});
-type MoveType = 'pointermove' | 'mousemove';
-const MOVE_TYPES: MoveType[] = ['pointermove', 'mousemove'];
-for (const type of MOVE_TYPES) document.addEventListener(type, e => {
-  if (ROUTE_FADE && e.isTrusted && e.target === document.documentElement) ROUTE_MOVE = e;
-}, true);
+  if (ROUTE_SAY.textContent !== text) ROUTE_SAY.textContent = text;
+}
 window.addEventListener('hashchange', routeChanged);

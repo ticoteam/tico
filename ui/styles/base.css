@@ -123,29 +123,12 @@ table,time,kbd,.age,.cnt,.count,.pill,.nav-badge,.tnum,[class*="-count"],input[t
 /* Icon glyphs are ligatures ("dynamic_feed"): until the icon font is in, a glyph would read as that word. They hold
    their box but stay invisible until ui/theme.ts marks the page html.icons-ready (the font settled, or 10s). */
 html:not(.icons-ready) :is(.nav-icon,.mobile-nav-icon,.ob-ms,.agent-mark,.person-mail-link,.av-glyph,.int-key){visibility:hidden}
-/* Motion (tokens.css: --dur-fast, --dur, --ease). Surfaces that appear on top fade in; rows answer a
-   hover with a quick tint. Only opacity and transform move, never layout. */
-@keyframes tico-pop{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:none}}
-@keyframes tico-fade{from{opacity:0}to{opacity:1}}
-/* menus settle from 98% on a desktop; dialogs, and a phone's menus (bottom sheets there), only fade, so their box never moves */
-:where(.tl-pop,.p-menu,.people-menu,.slash-menu,#account-menu,#new-version-pop,[popover]:popover-open){animation:tico-fade var(--dur) var(--ease)}
-@media (min-width:761px){:where(.tl-pop,.p-menu,.people-menu,.slash-menu,#account-menu,#new-version-pop,[popover]:popover-open){animation-name:tico-pop}}
-:where(dialog[open]){animation:tico-fade var(--dur) var(--ease)}
-:where(.slash-menu,#account-menu,#new-version-pop){transform-origin:bottom center}
-:where(.p-menu,.people-menu){transform-origin:top right}
-:where(dialog[open])::backdrop{animation:tico-fade var(--dur) var(--ease)}
+/* Motion. Rows answer a hover with a quick tint; what arrives, leaves or slides is ui/styles/motion.css's. */
 :where(.nav-link,.tree a.node,.inbox-list a,.tl-row,.mail-row,.meet-row,.kpi-line,.need-row,.req>summary,.settings-table tbody tr,
   .search-results li,.market-list a,.slash-row,.p-menu button,#docs-menu button,.people-menu button,.section-toggle,.section-head,
   button.ghost,button.primary){transition:background-color var(--dur-fast) var(--ease),border-color var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
-/* A page change cross-fades the window, opacity only (ui/app/router.ts routeChanged). The whole window, not #main
-   alone: a named #main reports as a layout shift when the fade ends. The fade's layer takes no pointer; Chrome still
-   gives a press during the fade to the root element, so the router ends the fade and passes the press on. */
-::view-transition{pointer-events:none}
-::view-transition-group(root){animation:none}
-::view-transition-old(root),::view-transition-new(root){animation-duration:min(var(--dur),150ms);animation-timing-function:var(--ease)}
 /* Reduced motion: no entrances, no spinners' travel, no smooth scrolling. State still changes, instantly. */
 @media (prefers-reduced-motion:reduce){
-  ::view-transition-group(*),::view-transition-old(*),::view-transition-new(*){animation:none!important}
   *,*::before,*::after{animation-duration:1ms!important;animation-iteration-count:1!important;transition-duration:1ms!important;scroll-behavior:auto!important}
 }
 /* A hidden or minimized window: every animation holds where it is until the window shows again (ui/app/avatars.ts). */

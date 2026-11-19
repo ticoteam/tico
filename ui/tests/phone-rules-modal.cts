@@ -22,6 +22,8 @@ const {audit} = require('./support/phone-rules.cts') as import('./support/phone-
       <dialog id="task-modal" aria-label="Task"><button>Close</button></dialog>
       <div id="cover" popover="manual">Cover</div>`);
     await page.addStyleTag({content: fs.readFileSync(path.join(__dirname, '../styles/base.css'), 'utf8')});
+    // A dialog's fade is the motion layer's (ui/styles/motion.css).
+    await page.addStyleTag({content: fs.readFileSync(path.join(__dirname, '../styles/motion.css'), 'utf8')});
     await page.evaluate(() => {
       const modal = document.querySelector<HTMLDialogElement>('#task-modal')!;
       modal.showModal();

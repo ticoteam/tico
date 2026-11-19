@@ -1,11 +1,239 @@
-/* ui/app/motion.ts — The state changes a stylesheet cannot see: the sidebar's sliding current-row bar, counts that
-   tick when their number changes, where a menu grows from, the check a task draws when it is marked done
+/* ui/app/motion.ts — How the app moves, the parts a stylesheet cannot do alone: lists that patch in place and slide
+   (motionSwap), the page change (motionPage), overlays opening and closing (motionOpen, motionClose), the sidebar's
+   sliding current-row bar, counts that tick when their number changes, where a menu grows from, the check a task draws
+   when it is marked done
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    Every effect here is short (styles/motion.css), moves only transform and opacity, waits on nothing, never plays on a
-   page's first paint, and is skipped under reduced motion. */
+   page's first paint, and is skipped under reduced motion. No other file tests for reduced motion, names a duration
+   or an easing, or starts an animation of its own: it calls these. */
 'use strict';
 
-const motionStill = (): boolean => matchMedia('(prefers-reduced-motion: reduce)').matches;
+// The one reduced-motion test: the system's setting, or data-motion="reduce" on <html> (a setting, a check).
+const motionStill = (): boolean => matchMedia('(prefers-reduced-motion: reduce)').matches || document.documentElement.dataset.motion === 'reduce';
+// The motion spec's numbers for what a script animates; styles/motion.css holds the same ones for the classes.
+const MOTION_FAST = 120, MOTION_DUR = 180, MOTION_SLOW = 280, MOTION_EASE = 'cubic-bezier(.2,0,0,1)';
+
+// ---- lists. motionSwap(root, html) is `root.innerHTML = html` for a list that is drawn again and again (a live
+// event, a poll, a filter): the elements that carry a key (data-key, or the attribute opts.key names) are matched by
+// it, wherever under root they are (core.ts keyedPatch). One whose markup is unchanged is left alone, the same node,
+// with its hover, focus, selection, scroll and running animations. One whose markup changed is patched in place. One
+// that moved slides from where it was (FLIP on translate, 180ms; 280ms into another group). A new one comes in with
+// .m-enter; one that is gone fades for 120ms where it was, inert, and then the rows below close up (180ms).
+// Groups: give the groups keys and their rows keys and call once on the box around them; it recurses, and the keys
+// of rows and groups share one set, so prefix them ("g:", "t:").
+// The DOM is what `html` says when the call returns, except for a second call for the same root before the next
+// paint: that one waits (the newest wins) and is built on a following frame, so a burst builds a list at most once a
+// frame. A leaving row stays in the page until its fade ends: wait for it to be gone before reading the list back.
+// Nothing moves on a first fill (an empty root, a skeleton, a box someone else drew), past opts.max changed rows (40),
+// in a hidden window or under reduced motion: the list is patched and that is all.
+const MOTION_MAX = 40;
+interface MotionNext { html: string; attr: string; max: number }
+/** What motionSwap knows of a box it draws: the markup and the children it last drew, the paint it drew them in, the
+ * markup waiting for the next frame, and the leaving rows still fading (with the key each had). */
+interface MotionList {
+  html: string | null; attr: string; keyed: boolean; nodes: ChildNode[];
+  paint: number; next: MotionNext | null; ghosts: Map<Element, string>;
+}
+/** Where a keyed element was before a build: its corner and bottom on the screen, and its parent. */
+interface MotionRect { x: number; y: number; bottom: number; parent: Element | null }
+const MOTION_LISTS = new WeakMap<Element, MotionList>();
+const MOTION_WAITING = new Set<Element>();
+const MOTION_FLIPS = new WeakMap<Element, Animation>();
+// Builds are counted by paint: MOTION_PAINT goes up once each frame has been drawn, and a root is built once per count.
+let MOTION_PAINT = 0, MOTION_TICKING = false;
+/** Every list build since the page loaded: the browser scripts hold "one build a frame" with it. */
+let MOTION_SWAP_BUILDS = 0;
+function motionSwap(root: Element, html: string, opts: {key?: string; max?: number} = {}): void {
+  let st = MOTION_LISTS.get(root);
+  if (!st) { st = {html: null, attr: 'data-key', keyed: false, nodes: [], paint: -1, next: null, ghosts: new Map()}; MOTION_LISTS.set(root, st); }
+  st.next = {html, attr: opts.key || 'data-key', max: opts.max ?? MOTION_MAX};
+  if (st.paint === MOTION_PAINT && !document.hidden) { MOTION_WAITING.add(root); motionFrame(); return; }
+  motionBuild(root, st);
+}
+// Each frame builds the lists that waited for it, then counts the paint in a task of its own, which runs once the
+// frame is drawn.
+function motionFrame(): void {
+  if (MOTION_TICKING) return;
+  MOTION_TICKING = true;
+  requestAnimationFrame(() => {
+    for (const root of [...MOTION_WAITING]) { const st = MOTION_LISTS.get(root); if (st && st.paint !== MOTION_PAINT) motionBuild(root, st); }
+    setTimeout(() => { MOTION_PAINT++; MOTION_TICKING = false; if (MOTION_WAITING.size) motionFrame(); });
+  });
+}
+// A hidden window draws no frames: what waited for one is built now, with no motion.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) for (const root of [...MOTION_WAITING]) { const st = MOTION_LISTS.get(root); if (st) motionBuild(root, st); }
+});
+const motionKids = (root: Element): ChildNode[] => [...root.childNodes].filter(n => !PATCH_GHOSTS.has(n));
+function motionBuild(root: Element, st: MotionList): void {
+  const next = st.next;
+  st.next = null; MOTION_WAITING.delete(root);
+  if (!next) return;
+  const kids = motionKids(root);
+  const owned = st.html !== null && kids.length === st.nodes.length && kids.every((n, i) => n === st.nodes[i]);
+  if (owned && st.html === next.html && st.attr === next.attr) return;
+  MOTION_SWAP_BUILDS++;
+  st.paint = MOTION_PAINT;
+  if (!document.hidden) motionFrame();
+  const {html, attr, max} = next, has = `[${attr}]`;
+  const moving = !motionStill() && !document.hidden && root.isConnected;
+  if (!owned || !st.keyed || st.attr !== attr) {
+    // A first fill: nothing to match, so nothing moves. Rows that replace a skeleton fade in, in the skeleton's place.
+    const loaded = moving && owned && !!root.querySelector(':scope > .skel, :scope > [aria-busy="true"]');
+    for (const ghost of st.ghosts.keys()) ghost.remove();
+    st.ghosts.clear();
+    keyedFill(root, html, attr);
+    Object.assign(st, {html, attr, nodes: [...root.childNodes], keyed: !!root.querySelector(has)});
+    if (loaded && st.keyed && root.animate) root.animate({opacity: [0, 1]}, {duration: MOTION_FAST, easing: MOTION_EASE});
+    return;
+  }
+  const plan = keyedPlan(root, html, attr);
+  // A row that is back while its old self still fades takes its place at once.
+  for (const [ghost, key] of st.ghosts) if (plan.keys.has(key)) { ghost.remove(); st.ghosts.delete(ghost); }
+  // Every place is read before anything is written; the new places are read once, after the caller has finished.
+  const first = moving && plan.entered + plan.changed + plan.gone.length <= max ? motionRects(root, has) : null;
+  const done = keyedApply(plan);
+  if (first && done.moved <= max) {
+    root.classList.add('m-list');
+    for (const el of done.entered) motionEnter(el);
+    motionLeave(root, st, done.left, attr);
+    queueMicrotask(() => motionFlip(root, has, first));
+  } else {
+    for (const el of done.left) el.remove();
+    for (const el of root.querySelectorAll(has)) MOTION_FLIPS.get(el)?.cancel();
+  }
+  Object.assign(st, {html, nodes: motionKids(root), keyed: !!root.querySelector(has)});
+}
+function motionRects(root: Element, has: string): Map<Element, MotionRect> {
+  const rects = new Map<Element, MotionRect>();
+  for (const el of root.querySelectorAll(has)) {
+    const r = el.getBoundingClientRect();
+    if (r.width || r.height) rects.set(el, {x: r.left, y: r.top, bottom: r.bottom, parent: el.parentElement});
+  }
+  return rects;
+}
+// Each kept element starts from where it was and settles where it is now. A slide still running is replaced by one
+// from where the element is on the screen, so a second change never jumps. An element inside a keyed one that slides
+// is carried by it and only makes up the difference; one off the screen before and after is left alone.
+function motionFlip(root: Element, has: string, first: Map<Element, MotionRect>): void {
+  if (!root.isConnected || document.hidden) return;
+  const els = [...root.querySelectorAll(has)];
+  for (const el of els) MOTION_FLIPS.get(el)?.cancel();
+  const last = els.map(el => el.getBoundingClientRect()), height = innerHeight;
+  const carried = new Map<Element, {x: number; y: number}>();
+  els.forEach((el, i) => {
+    const a = first.get(el), b = last[i], up = el.parentElement?.closest(has);
+    const base = (up && carried.get(up)) || {x: 0, y: 0};
+    carried.set(el, base);
+    if (!a || !b || !(b.width || b.height) || !el.animate) return;
+    const x = a.x - b.left - base.x, y = a.y - b.top - base.y;
+    if (Math.abs(x) < 0.5 && Math.abs(y) < 0.5) return;
+    if ((a.bottom < 0 || a.y > height) && (b.bottom < 0 || b.top > height)) return;
+    carried.set(el, {x: a.x - b.left, y: a.y - b.top});
+    MOTION_FLIPS.set(el, el.animate({translate: [`${x}px ${y}px`, '0px 0px']},
+      {duration: a.parent === el.parentElement ? MOTION_DUR : MOTION_SLOW, easing: MOTION_EASE, composite: 'add'}));
+  });
+}
+function motionEnter(el: Element): void {
+  const end = (ev: Event): void => {
+    if (ev.target !== el) return;
+    el.classList.remove('m-enter');
+    el.removeEventListener('animationend', end); el.removeEventListener('animationcancel', end);
+  };
+  el.classList.add('m-enter');
+  el.addEventListener('animationend', end); el.addEventListener('animationcancel', end);
+}
+// A leaving element stays where it was while it fades: it takes no press and no focus, is hidden from a screen reader
+// and has given up its key, so the next build does not see it. Its other attributes stay until it is gone.
+function motionLeave(root: Element, st: MotionList, left: Element[], attr: string): void {
+  if (!left.length) return;
+  for (const el of left) {
+    st.ghosts.set(el, el.getAttribute(attr) ?? '');
+    PATCH_GHOSTS.add(el);
+    for (const keyed of [el, ...el.querySelectorAll(`[${attr}]`)]) keyed.removeAttribute(attr);
+    el.setAttribute('inert', ''); el.setAttribute('aria-hidden', 'true');
+    el.classList.remove('m-enter'); el.classList.add('m-leave');
+  }
+  setTimeout(() => {
+    const here = left.filter(el => st.ghosts.delete(el) && el.isConnected);
+    if (!here.length) return;
+    const first = !motionStill() && !document.hidden && root.isConnected ? motionRects(root, `[${attr}]`) : null;
+    for (const el of here) el.remove();
+    if (first) queueMicrotask(() => motionFlip(root, `[${attr}]`, first));
+  }, MOTION_FAST);
+}
+
+// ---- the page change. Only router.ts calls motionPage(draw): the new page is drawn at once and its content, #main
+// alone, fades in for 120ms. The sidebar and the chat column are not part of it and no layer sits over the page, so a
+// press lands where it is aimed from the first frame. A second change restarts the fade; a draw that left the page as
+// it was (an address that sends on to another) does not fade.
+let MOTION_PAGE: Animation | null = null;
+function motionPage(draw: () => void): void {
+  const main: HTMLElement | null = $('#main'), was = main?.firstChild ?? null;
+  draw();
+  MOTION_PAGE?.cancel(); MOTION_PAGE = null;
+  if (!main || !main.animate || main.firstChild === was || motionStill() || document.hidden) return;
+  MOTION_PAGE = main.animate({opacity: [0, 1]}, {duration: MOTION_FAST, easing: MOTION_EASE});
+}
+
+// ---- overlays, sheets and the chat column. motionOpen(el) shows el (a dialog with showModal unless it is open, a
+// popover with showPopover, anything else by taking `hidden` off) and plays its entrance; motionClose(el) plays its
+// exit, hides it the same way and resolves. What plays is the stylesheet's (styles/motion.css): a menu, a listbox
+// or a popover pops from its anchor (.m-pop), a dialog rises, an element marked .m-sheet comes up from the bottom
+// edge, anything else fades and rises (.m-enter); .m-leave is the way out. An open during a close, or a close during
+// an open, plays the running animation backwards from where it is. Under reduced motion both are instant, and
+// motionClose resolves at once. An open during a close resolves that close with the element still shown.
+const MOTION_POPS = '[popover], [role="menu"], [role="listbox"], .m-pop';
+const MOTION_CLOSING = new WeakMap<HTMLElement, {stop: () => void; done: Promise<void>}>();
+const motionShown = (el: HTMLElement): boolean => el instanceof HTMLDialogElement ? el.open : el.hasAttribute('popover') ? el.matches(':popover-open') : !el.hidden;
+function motionShow(el: HTMLElement, on: boolean): void {
+  if (motionShown(el) === on) return;
+  if (el instanceof HTMLDialogElement) { if (on) el.showModal(); else el.close(); }
+  else if (el.hasAttribute('popover')) { if (on) el.showPopover(); else el.hidePopover(); }
+  else el.hidden = !on;
+}
+// The entrance or exit running on `el` itself (not one inside it).
+const motionRunning = (el: HTMLElement): Animation | undefined => el.getAnimations()
+  .find(a => a instanceof CSSAnimation && a.playState === 'running' && a.effect instanceof KeyframeEffect && a.effect.target === el);
+function motionOpen(el: HTMLElement): void {
+  const closing = MOTION_CLOSING.get(el);
+  if (closing) { closing.stop(); return; }
+  motionShow(el, true);
+  if (motionStill() || document.hidden) return;
+  el.classList.remove('m-leave');
+  if (el.matches(MOTION_POPS)) { el.classList.add('m-pop'); return; }
+  el.classList.add('m-enter');
+  const anim = motionRunning(el), end = (): void => el.classList.remove('m-enter');
+  if (anim) anim.onfinish = anim.oncancel = end; else end();
+}
+function motionClose(el: HTMLElement): Promise<void> {
+  const under = MOTION_CLOSING.get(el);
+  if (under) return under.done;
+  if (!motionShown(el)) return Promise.resolve();
+  if (motionStill() || document.hidden || !el.isConnected) { motionShow(el, false); return Promise.resolve(); }
+  let resolve = (): void => {}, over = false;
+  const done = new Promise<void>(r => { resolve = r; });
+  const opening = motionRunning(el);
+  if (opening) opening.reverse(); else el.classList.add('m-leave');
+  const anim = opening ?? motionRunning(el);
+  const settle = (): void => { over = true; clearTimeout(timer); MOTION_CLOSING.delete(el); resolve(); };
+  const end = (): void => {
+    if (over) return;
+    settle();
+    motionShow(el, false);
+    el.classList.remove('m-leave', 'm-enter');
+  };
+  // An animation a hidden window paused, or one the browser dropped, never ends: the close does not wait on it.
+  const timer = setTimeout(end, 600);
+  MOTION_CLOSING.set(el, {done, stop: () => {
+    if (over) return;
+    settle();
+    const back = (): void => el.classList.remove('m-leave', 'm-enter');
+    if (anim && anim.playState === 'running') { anim.onfinish = anim.oncancel = back; anim.reverse(); } else back();
+  }});
+  if (anim) anim.onfinish = anim.oncancel = end; else end();
+  return done;
+}
 
 // ---- counts. A badge's number set through countSet ticks when it changes from one number to another: the old one
 // slides up and out (drawn over the badge by ::before), the new one, the badge's own text, comes up from below. The
