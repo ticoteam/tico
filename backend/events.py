@@ -3910,10 +3910,13 @@ def install_runner(app, store, execution):
         cursor = after if after is not None and after >= 0 else now_seq
         from . import runner_versions
 
+        every, beat = keepalive_seconds(store), Beat(touch)
+        if contact_due:
+            beat.start()  # before the response, so a client that leaves at once still leaves its contact
+
         async def generate():
             nonlocal cursor
             leave = doorbell.reader(store)
-            every, beat = keepalive_seconds(store), Beat(touch)
             try:
                 yield "retry: 1000\n\n"
                 yield _frame(
@@ -3922,8 +3925,6 @@ def install_runner(app, store, execution):
                     {"seq": now_seq, "after": cursor, "release": runner_versions.desired().get("version", "")},
                     RUNNER_EVENTS,
                 )
-                if contact_due:
-                    beat.start()
                 deadline = time.monotonic() + RUNNER_LIFETIME_SECONDS
                 # Contact is due every keepalive whatever is sent, so last_seen never lapses.
                 quiet_since = time.monotonic()

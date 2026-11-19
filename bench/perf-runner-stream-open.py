@@ -1,6 +1,7 @@
 """Measures opening a computer's event stream (`GET /api/v2/runners/me/events`) while another writer holds the database's
 write lock for HOLD seconds, as on a busy hub: how long until the response starts and until `ready`, for a computer
-whose contact stamp is due (each of its streams reconnects every five minutes, the stamp's own interval).
+whose contact stamp is due (CONTACT_EVERY, ten seconds, has passed since its last), and until that stamp is written,
+with the stream still open. Keepalives, which stamp too, are later than all of that here.
 
     nice -n 10 .venv/bin/python bench/perf-runner-stream-open.py
 
@@ -27,23 +28,23 @@ from backend.tests.helpers.api_app import api_client
 
 HOLD = float(os.environ.get("HOLD", 1.5))
 RUNS = int(os.environ.get("RUNS", 5))
-E.KEEPALIVE_SECONDS = 0.5
+E.KEEPALIVE_SECONDS = 10  # after the opening stamp: the stamp timed is the opening's own
 
 
 def opened(port, token):
-    """(ms until the response started, ms until `ready`)."""
+    """(ms until the response started, ms until the whole `ready` frame, the open connection)."""
     began = time.perf_counter()
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
-    try:
-        conn.request("GET", "/api/v2/runners/me/events", headers={"Authorization": "Bearer " + token})
-        response = conn.getresponse()
-        started = time.perf_counter() - began
-        while True:
-            line = response.readline()
-            if not line or line.startswith(b"event: ready"):
-                return started * 1000, (time.perf_counter() - began) * 1000
-    finally:
-        conn.close()
+    conn.request("GET", "/api/v2/runners/me/events", headers={"Authorization": "Bearer " + token})
+    response = conn.getresponse()
+    started = time.perf_counter() - began
+    assert response.status == 200, (response.status, response.read()[:200])
+    lines = []
+    while not (lines[-2:] and lines[-1] == b"\n" and any(x.startswith(b"event: ready") for x in lines)):
+        line = response.readline()
+        assert line, "the stream ended before its ready frame"
+        lines.append(line)
+    return started * 1000, (time.perf_counter() - began) * 1000, conn
 
 
 def main():
@@ -88,12 +89,14 @@ def main():
                         holder.execute("BEGIN IMMEDIATE")
                         threading.Timer(HOLD, holder.rollback).start()
                     began = time.perf_counter()
-                    start, ready = opened(port, computer["token"])
+                    start, ready, conn = opened(port, computer["token"])
                     starts.append(start)
                     readies.append(ready)
-                    while not written() and time.perf_counter() - began < 30:
+                    while not written() and time.perf_counter() - began < 30:  # the stream still open
                         time.sleep(0.02)
-                    stamps.append((time.perf_counter() - began) * 1000 if written() else float("inf"))
+                    assert written(), "the open stream never wrote its contact"
+                    stamps.append((time.perf_counter() - began) * 1000)
+                    conn.close()
                     time.sleep(HOLD + 0.2)
                     if holder is not None:
                         holder.close()
