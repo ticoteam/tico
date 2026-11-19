@@ -39,6 +39,7 @@ from pydantic import ConfigDict, Field
 from clients import access_entry as access_entry_module
 
 from . import auth as auth_mod
+from . import read_cache as read_cache_module
 from . import tool_services as tool_services_module
 from .models import Contract
 from .store import H as hub_helpers
@@ -49,6 +50,7 @@ TS: Any = tool_services_module
 H: Any = hub_helpers
 access_entry: Any = access_entry_module
 auth_module: Any = auth_mod
+read_cache: Any = read_cache_module
 
 
 def _credentials() -> Any:
@@ -256,19 +258,23 @@ def _view(row: Any) -> Any:
 # ---- delivery
 
 
+KEY_TOOLS_SQL = "SELECT id, tool_id FROM credentials WHERE tool_id IS NOT NULL AND ciphertext IS NOT NULL"
+
+
+def _key_tools(c: Any) -> dict[Any, Any]:
+    """{credential id: tool id} of every stored key of a tool, read once per snapshot (backend/read_cache.py): the
+    runner's grants read it for each of a computer's bots. Outside a snapshot it is read each time, as before."""
+    return read_cache.value(
+        c, ("tool_settings.key_tools",), lambda: {r["id"]: r["tool_id"] for r in c.execute(KEY_TOOLS_SQL)}, shared=True
+    )
+
+
 def held_tools(c: Any, held: Any) -> Any:
     """The tools whose keys `held` (credential ids a subject holds an effective grant to) include a stored one."""
     if not held:
         return []
-    return sorted(
-        {
-            r["tool_id"]
-            for r in c.execute(
-                "SELECT id, tool_id FROM credentials WHERE tool_id IS NOT NULL AND ciphertext IS NOT NULL"
-            )
-            if r["id"] in held
-        }
-    )
+    tools = _key_tools(c)
+    return sorted({tools[k] for k in held if k in tools})
 
 
 def _settings_of(c: Any, tool_ids: Any) -> list[Any]:
@@ -307,6 +313,16 @@ def runtime_items(c: Any, held: Any, taken: Any = ()) -> list[dict[str, Any]]:
 def names(c: Any, held: Any) -> Any:
     """The variable names a subject holding `held` gets from settings (runner-credential-grants, bot_tools.granted)."""
     return sorted({row["name"] for row in _settings_of(c, held_tools(c, held))})
+
+
+def names_each(c: Any, helds: Any) -> list[Any]:
+    """`names` for each of `helds` (one set of credential ids per subject), in order, with every tool's settings read
+    in one pass rather than once per subject (runner-credential-grants: a computer's ~20 bots)."""
+    tools = [held_tools(c, held) for held in helds]
+    by_tool: dict[Any, set[Any]] = {}
+    for row in _settings_of(c, sorted({t for ids in tools for t in ids})):
+        by_tool.setdefault(row["tool_id"], set()).add(row["name"])
+    return [sorted({n for t in ids for n in by_tool.get(t, ())}) for ids in tools]
 
 
 # ---- a computer's files, and the keys stored before Settings
