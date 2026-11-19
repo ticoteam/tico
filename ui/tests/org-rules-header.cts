@@ -102,12 +102,14 @@ async function searchProblems(page: Page, width: number) {
   // a miss says what it saw (its width, its right edge, what is on top at its centre), as headerProblems does for a tab.
   const seen = await box.evaluate(el => {
     const r = el.getBoundingClientRect(), vw = document.documentElement.clientWidth, top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    return {find: !!el.closest('.ru-ph.ph-find'), width: Math.round(r.width), right: Math.round(r.right), vw, onTop: !!top && el.contains(top),
-      top: top ? top.tagName.toLowerCase() + [...top.classList].map(c => '.' + c).join('') : 'nothing'};
+    return {find: !!el.closest('.ru-ph.ph-find'), width: r.width, right: r.right, vw, onTop: !!top && el.contains(top),
+      top: top ? top.tagName.toLowerCase() + [...top.classList].map(c => '.' + c).join('') : ''};
   });
   const find = seen.find;
+  // The raw rectangle is compared, as before; it is rounded only in the message.
   if (seen.width < (find ? 28 : 100) || seen.right > seen.vw + 0.5 || !seen.onTop) {
-    bad.push(`the search is not in view on top${find ? ' (magnifier)' : ''}: ${seen.width}px wide, right edge ${seen.right} of ${seen.vw}, ${seen.onTop ? 'on top' : `covered by ${seen.top}`}`);
+    const what = seen.onTop ? 'on top' : seen.top ? `covered by ${seen.top}` : 'no element at its centre';
+    bad.push(`the search is not in view on top${find ? ' (magnifier)' : ''}: ${seen.width.toFixed(1)}px wide, right edge ${seen.right.toFixed(1)} of ${seen.vw}, ${what}`);
   }
   await box.click({timeout: t(3000)});
   if (find && await box.evaluate(el => el.getBoundingClientRect().width) < 200) bad.push('the magnifier did not open to a search box');
