@@ -225,7 +225,7 @@ class Protocol:
         ]
         if missing:
             return self._tool_error(
-                rid, {"error": "usage", "detail": f"{name} needs {', '.join(missing)}", "retryable": False}
+                rid, {"error": "usage", "detail": f"{name} needs {_described(missing, properties)}", "retryable": False}
             )
         if error := argument_error(args, entry["inputSchema"]):
             return self._tool_error(rid, {"error": "validation", "detail": error, "retryable": False})
@@ -264,3 +264,9 @@ class Protocol:
                 "isError": True,
             },
         }
+
+
+def _described(names, properties):
+    """`key (The finding's key: ...)`: each missing argument with its schema description, so the refusal says what to
+    give and where it is, not only its name."""
+    return ", ".join(f"{k} ({d})" if (d := properties.get(k, {}).get("description")) else k for k in names)

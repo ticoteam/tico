@@ -137,7 +137,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico card add {tasks_by_status|done_per_week|needs_you|spend|kpi|automation_runs|latest_pages|needs_attention|unread_threads|my_tasks|updates|growth_number|growth_funnel|growth_channels|growth_retention|growth_board|floor}\ntico card add: error: the following arguments are required: template",
+  "stderr": "Example: tico card add {tasks_by_status|done_per_week|needs_you|spend|kpi|automation_runs|latest_pages|needs_attention|unread_threads|my_tasks|updates|growth_number|growth_funnel|growth_channels|growth_retention|growth_board|floor}\ntemplate: The card\ntico card add: error: the following arguments are required: template",
   "exit": 64
  },
  {
@@ -300,7 +300,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico card update <card>\ntico card update: error: the following arguments are required: card",
+  "stderr": "Example: tico card update <card>\ncard: Card id, from `card list`\ntico card update: error: the following arguments are required: card",
   "exit": 64
  },
  {
@@ -422,7 +422,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico card remove <card>\ntico card remove: error: the following arguments are required: card",
+  "stderr": "Example: tico card remove <card>\ncard: Card id\ntico card remove: error: the following arguments are required: card",
   "exit": 64
  },
  {

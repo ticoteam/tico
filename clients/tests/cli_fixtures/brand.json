@@ -183,7 +183,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico brand check <file>\ntico brand check: error: the following arguments are required: file",
+  "stderr": "Example: tico brand check <file>\nfile: The draft, whole (on a command line, a file holding it, or - for standard input)\ntico brand check: error: the following arguments are required: file",
   "exit": 64
  },
  {
