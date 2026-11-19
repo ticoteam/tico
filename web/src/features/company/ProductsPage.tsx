@@ -172,8 +172,13 @@ function ProductRecord({ p }: { p: Product }) {
             <div className="chips">
               {p.agreements.map((a) => (
                 <span key={a.id} className="chip-file">
-                  {a.file ? (
-                    <a href={a.file.page ? `/library/${encodeURIComponent(a.file.id)}` : `/api/v2/files/${encodeURIComponent(a.file.id)}`} {...(!a.file.page && { target: '_blank', rel: 'noopener' })}>
+                  {a.file?.page ? (
+                    <Go to={`/library/${encodeURIComponent(a.file.id)}`}>
+                      <Icon name="file" />
+                      <span>{a.file.title || a.name}</span>
+                    </Go>
+                  ) : a.file ? (
+                    <a href={`/api/v2/files/${encodeURIComponent(a.file.id)}`} target="_blank" rel="noopener">
                       <Icon name="file" />
                       <span>{a.file.title || a.name}</span>
                     </a>
