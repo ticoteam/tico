@@ -233,3 +233,7 @@
   .lib .fv-side .fact,.lib .fv-ver,.lib .sp-side .fact{height:44px}
   .tools .tool .fact{grid-template-columns:112px minmax(0,1fr);height:44px}
 }
+
+/* ---------------------------------------------------------------- gap wave: a contact's rules, a place's marks */
+.pnl .rec-none{margin:0;padding:var(--s-1) 0;color:var(--muted)}
+.rec-pills{display:inline-flex;flex-wrap:wrap;gap:var(--s-1)}

@@ -158,7 +158,8 @@ describe('Files', () => {
     expect(await screen.findByText('Today')).toBeTruthy();
     expect(screen.getByText('Earlier')).toBeTruthy();
     expect(screen.getByText('Fresh plan').closest('a')?.getAttribute('href')).toBe('/library/files?file=f1');
-    fireEvent.click(screen.getByRole('button', { name: 'Filter by kind' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Filter' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Kind' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Images' }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ kind: 'image' }));
   });
@@ -210,7 +211,7 @@ describe('a doc', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Text' }), { target: { value: 'Two roles.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Make doc' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/library/d9'));
-    expect(writes(sent)).toEqual([{ url: '/api/v2/docs', method: 'POST', body: { title: 'Hiring plan', body: 'Two roles.', path: 'Company' } }]);
+    expect(writes(sent)).toEqual([{ url: '/api/v2/docs', method: 'POST', body: { title: 'Hiring plan', body: 'Two roles.', path: 'Company/hiring-plan.md' } }]);
   });
 });
 

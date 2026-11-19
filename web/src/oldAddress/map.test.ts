@@ -44,7 +44,7 @@ const CASES: [old: string, now: string | null][] = [
   ['#/tools/website/s_2', '/library/tools?tool=website:s_2'],
   ['#/tools/vendor/acme', '/library/tools?tool=vendor:acme'],
   ['#/tools/keys?show=credentials', '/library/tools'],
-  ['#/tools/key/k_1', '/library/tools'],
+  ['#/tools/key/k_1', '/library/tools?tool=key:k_1'],
   ['#/tools/webhooks', '/library/tools?kind=webhook'],
   ['#/tools/webhooks/wh_5', '/library/tools?tool=webhook:wh_5'],
   ['#/tools/mailbox/ops%40example.test', '/library/tools?tool=mailbox:ops%40example.test'],

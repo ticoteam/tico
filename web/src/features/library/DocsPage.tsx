@@ -15,7 +15,7 @@ import { toast } from '@/kit/Toast';
 import { List, PageMore, Section, SidePanel, type PageState, type PageTab } from '@/pagekinds';
 import { Foot, trimmed, useGo } from './AddTool';
 import { Face, Find, KindGlyph, OwnerButton, press, Who } from './parts';
-import { archivedDocsQuery, docsListQuery, IMPORT_MAX, IMPORT_TYPES, sourceDocsQuery, sourcesQuery, type DocRow } from './queries';
+import { archivedDocsQuery, docsListQuery, docsSearchQuery, IMPORT_MAX, IMPORT_TYPES, sourceDocsQuery, sourcesQuery, type DocHit, type DocRow } from './queries';
 import type { DocSource } from '@/api/schema';
 import type { DocsSearch } from './search';
 import './library.css';
@@ -85,6 +85,11 @@ function OwnDocs({ search }: { search: DocsSearch }) {
   const docs = archived ? gone : live;
   const sources = useQuery(sourcesQuery);
   const words = search.q?.toLowerCase() ?? '';
+  // Words to search for go to the server's search of the docs' text (docs-search.ts); until it answers, and in
+  // the archive, the loaded list is matched by title and path.
+  const full = !archived && /\w/.test(search.q ?? '');
+  const found = useQuery({ ...docsSearchQuery(search.q?.trim() ?? ''), enabled: full });
+  const hits = full ? found.data : undefined;
   const rows = (docs.data?.docs ?? []).filter((d) => !words || d.title.toLowerCase().includes(words) || d.path.toLowerCase().includes(words));
 
   const groups = new Map<string, DocRow[]>();
@@ -96,7 +101,7 @@ function OwnDocs({ search }: { search: DocsSearch }) {
   let state: PageState = 'ready';
   if (docs.isError) state = 'fault';
   else if (!docs.data) state = 'loading';
-  else if (!docs.data.docs.length) state = 'empty';
+  else if (!docs.data.docs.length && !hits?.length) state = 'empty';
 
   return (
     <List
@@ -118,7 +123,17 @@ function OwnDocs({ search }: { search: DocsSearch }) {
       empty={{ title: archived ? 'Nothing archived' : 'No docs yet' }}
       onRetry={() => void docs.refetch()}
       sections={
-        rows.length ? (
+        hits ? (
+          hits.length ? (
+            <Section name="Found" count={hits.length}>
+              {hits.map((h) => (
+                <HitLine key={`${h.type}:${h.id}`} hit={h} row={docs.data?.docs.find((d) => d.id === h.id)} />
+              ))}
+            </Section>
+          ) : (
+            <Empty title="Nothing matches" />
+          )
+        ) : rows.length ? (
           <>
             <div className={archived ? 'doc-cols is-gone' : 'doc-cols'} aria-hidden="true">
               <span />
@@ -165,6 +180,33 @@ function DocLine({ d, archived }: { d: DocRow; archived: boolean }) {
     </Row>
   );
 }
+
+/** A search hit: a team doc as its list row; an outside doc opens here, read as it was; a linked page where it lives. */
+function HitLine({ hit, row }: { hit: DocHit; row: DocRow | undefined }) {
+  if (hit.type === 'internal' && row) return <DocLine d={row} archived={false} />;
+  const href = hit.type === 'internal' ? docHref(hit.id) : hit.type === 'external' ? `/library/ext:${encodeURIComponent(hit.id)}` : hit.url;
+  const under =
+    hit.type === 'external' ? hit.source_title : hit.type === 'internal' ? folder(hit.path).filter(Boolean).join(' / ') : hostOf(hit.url);
+  return (
+    <Row className="lrow drow" title={hit.title} href={href} target={`doc:${hit.id}`}>
+      <span className="lead" />
+      <span className="doc-name">
+        <span className="row-title">{hit.title}</span>
+      </span>
+      <span className="tie">{under && <span>{under}</span>}</span>
+      <span />
+      <span className="row-age" />
+    </Row>
+  );
+}
+
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return '';
+  }
+};
 
 /* ---------------------------------------------------------------- external sources */
 

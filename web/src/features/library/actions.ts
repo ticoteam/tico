@@ -82,6 +82,31 @@ import {
 } from './queries';
 import type { PolicyUpdate, ToolIndex } from '@/api/schema';
 import { viewing } from './viewing';
+import { startResearch } from './queries';
+import {
+  addMailboxAccess,
+  checkInboxes,
+  checkMailbox,
+  deleteKey,
+  deleteWebsite,
+  grantKey,
+  linkSlack,
+  removeAccount,
+  removeMailboxAccess,
+  resumeSlack,
+  revokeKey,
+  rotateKey,
+  setAccountAccess,
+  setEveryoneReads,
+  setInboxReaders,
+  setMailboxLevel,
+  setSeenBy,
+  shareMailbox,
+  stopMailbox,
+  storeKey,
+  unlinkSlack,
+  was,
+} from './toolKeys';
 
 /* Every view and change on the Library pages: Docs, a doc, Files, Skills, Tools, Contacts. Anything that sets a secret,
    adds a file from the person's own disk or answers an approval is the person's own (`tico: false`). */
@@ -188,9 +213,16 @@ export const docsSave = defineAction({
   id: 'docs.save',
   title: 'Save a doc',
   kind: 'change',
-  input: s.object({ doc: id, version: s.number({ int: true, min: 1 }), title: s.optional(s.string({ min: 1, max: 300 })), body: s.optional(text(200_000)) }),
+  // `path`: where the doc lives (its folders and file name); a new one moves it.
+  input: s.object({
+    doc: id,
+    version: s.number({ int: true, min: 1 }),
+    title: s.optional(s.string({ min: 1, max: 300 })),
+    body: s.optional(text(200_000)),
+    path: s.optional(s.string({ min: 1, max: 300 })),
+  }),
   run: async ({ router }, i) => {
-    await saveDoc(i.doc, { version: i.version, title: i.title, body: i.body });
+    await saveDoc(i.doc, { version: i.version, title: i.title, body: i.body, path: i.path });
     await set(router, { edit: undefined }, true);
   },
   did: () => 'Saved',
@@ -1229,4 +1261,350 @@ export const toolsCheckLetters = defineAction({
   run: () => checkLetters(),
   did: () => 'Checked',
   target: () => ({ kind: 'tool-set', id: 'letters-out' }),
+});
+
+// ---------------------------------------------------------------- gap wave: a doc's Research, Files' filters
+
+/** The Librarian researches the web for a doc, or one section of it, and adds what it finds with its sources: one task
+   to it (old docs-editor.ts research). Ordinary work: open to Tico. */
+export const docsResearch = defineAction({
+  id: 'docs.research',
+  title: 'Have the Librarian research for a doc',
+  kind: 'change',
+  input: s.object({ doc: id, section: s.optional(text(300)), instructions: s.string({ min: 1, max: 4000 }) }),
+  run: async (_ctx, i) => (await startResearch({ target: i.doc, section: i.section || undefined, instructions: i.instructions.trim() })).task_id,
+  did: () => 'Research started',
+  target: (i) => ({ kind: 'page', id: `/library/${i.doc}` }),
+});
+
+const FILE_WORDS = ['kind', 'role', 'agent', 'writer', 'linked', 'team', 'task'] as const;
+const FILE_FLAGS = ['pinned', 'archived'] as const;
+
+/** Narrow Files (old library-files.ts filters), or search them (`q`): each one given is set, an empty one ('', 0,
+   false) is taken off, and `clear` takes the filters off. What is not given stays. */
+export const filesFilter = defineAction({
+  id: 'files.filter',
+  title: 'Filter Files',
+  kind: 'view',
+  input: s.object({
+    q: s.optional(text(200)),
+    kind: s.optional(text(40)),
+    role: s.optional(text(60)),
+    agent: s.optional(text(200)),
+    writer: s.optional(text(200)),
+    linked: s.optional(text(200)),
+    team: s.optional(text(200)),
+    task: s.optional(text(200)),
+    days: s.optional(s.number({ int: true, min: 0, max: 3650 })),
+    pinned: s.optional(s.boolean()),
+    archived: s.optional(s.boolean()),
+    clear: s.optional(s.boolean()),
+  }),
+  run: ({ router }, i) => {
+    const change: Record<string, string | number | undefined> = {};
+    if (i.q !== undefined) change.q = i.q.trim() || undefined;
+    for (const k of FILE_WORDS) if (i.clear || i[k] !== undefined) change[k] = i.clear ? undefined : i[k] || undefined;
+    if (i.clear || i.days !== undefined) change.days = i.clear ? undefined : i.days || undefined;
+    for (const k of FILE_FLAGS) if (i.clear || i[k] !== undefined) change[k] = !i.clear && i[k] ? 1 : undefined;
+    return on(router, '/library/files') ? set(router, change, true) : go(router, '/library/files', change);
+  },
+  target: () => ({ kind: 'page', id: '/library/files' }),
+});
+
+// ---------------------------------------------------------------- tools: stored keys, mailboxes, who reads and sees a tool
+
+/* The Tools gap rows (s787 s788 s865 s866 s867 s908 s909 s926). Tightening stays Tico's (taking access away, a lower
+   level, a check, stopping); storing or showing a secret, giving access or a higher level, opening a tool wider, and
+   anything that cannot be undone are the person's own. */
+
+const subjectIn = s.string({ min: 1, max: 220 });
+
+/** Tools narrowed to who has access: a team (`group:<id>`) or a teammate (`human:<id>`, `bot:<id>`); none shows all. */
+export const toolsFilterWho = defineAction({
+  id: 'tools.filterWho',
+  title: 'Filter tools by who has access',
+  kind: 'view',
+  input: s.object({ who: s.optional(subjectIn) }),
+  run: ({ router }, i) => (on(router, '/library/tools') ? set(router, { who: i.who }, true) : go(router, '/library/tools', { who: i.who })),
+  target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+/** A new value for a stored key no tool holds. The value is only sent. */
+export const toolsRotateKey = defineAction({
+  id: 'tools.rotateKey',
+  title: 'Rotate a stored key',
+  kind: 'change',
+  // Storing a secret is the person's own.
+  tico: false,
+  input: s.object({ credential: id, value: s.string({ min: 1, max: 100_000 }) }),
+  run: (ctx, i) => {
+    const key = was.vault(ctx.queryClient)?.credentials.find((k) => k.id === i.credential);
+    if (!key) throw new Error('That key is not open');
+    return rotateKey(key, i.value);
+  },
+  did: () => 'Rotated',
+  target: (i) => ({ kind: 'tool', id: `key:${i.credential}` }),
+});
+
+/** A key a declared tool names that the vault does not hold yet. */
+export const toolsStoreKey = defineAction({
+  id: 'tools.storeKey',
+  title: 'Store a key',
+  kind: 'change',
+  // Storing a secret is the person's own.
+  tico: false,
+  input: s.object({
+    name: s.string({ min: 1, max: 150 }),
+    env: s.string({ max: 100, pattern: /^$|^[A-Z_][A-Z0-9_]*$/, what: 'a variable name' }),
+    source: text(500),
+    kind: s.oneOf(['api_key', 'token'] as const),
+    value: s.string({ min: 1, max: 100_000 }),
+  }),
+  run: (_ctx, { value, ...key }) => storeKey({ ...key, secret: value }),
+  did: (i) => `Stored ${i.name}`,
+  target: () => null,
+});
+
+export const toolsGrantKey = defineAction({
+  id: 'tools.grantKey',
+  title: 'Give someone a stored key',
+  kind: 'change',
+  // Giving someone a stored key is a right only the person gives.
+  tico: false,
+  input: s.object({ credential: id, subject: subjectIn }),
+  run: (_ctx, i) => grantKey(i.credential, i.subject),
+  did: () => 'Added',
+  target: (i) => ({ kind: 'tool-who', id: `key:${i.credential}` }),
+});
+
+/** Taking a key away: Tico may. */
+export const toolsRevokeKey = defineAction({
+  id: 'tools.revokeKey',
+  title: 'Take a stored key away from someone',
+  kind: 'change',
+  input: s.object({ credential: id, grant: id }),
+  run: (_ctx, i) => revokeKey(i.credential, i.grant),
+  did: () => 'Removed',
+  target: (i) => ({ kind: 'tool-who', id: `key:${i.credential}` }),
+});
+
+export const toolsDeleteKey = defineAction({
+  id: 'tools.deleteKey',
+  title: 'Delete a stored key',
+  kind: 'change',
+  // The key and every grant of it go for good: it cannot be undone.
+  tico: false,
+  input: s.object({ credential: id }),
+  run: async ({ router }, i) => {
+    await deleteKey(i.credential);
+    await go(router, '/library/tools', {}, true);
+  },
+  did: () => 'Deleted',
+  target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+/* A mailbox. */
+
+const levelIn = s.oneOf(['read', 'read_write'] as const);
+
+export const toolsAddMailboxAccess = defineAction({
+  id: 'tools.addMailboxAccess',
+  title: 'Give someone a mailbox',
+  kind: 'change',
+  // Giving someone a mailbox is a right only the person gives.
+  tico: false,
+  input: s.object({ mailbox: id, type: s.oneOf(['person', 'bot'] as const), who: id, level: levelIn }),
+  run: (_ctx, i) => addMailboxAccess(i.mailbox, i.type, i.who, i.level),
+  did: () => 'Added',
+  target: (i) => ({ kind: 'tool-who', id: `mailbox:${i.mailbox}` }),
+});
+
+export const toolsSetMailboxAccess = defineAction({
+  id: 'tools.setMailboxAccess',
+  title: "Change someone's level on a mailbox",
+  kind: 'change',
+  input: s.object({ mailbox: id, access: id, level: s.oneOf(['read', 'read_write', 'none'] as const) }),
+  // Tico may lower a level or take it away, never raise one.
+  can: (ctx, i) =>
+    ctx.via !== 'tico' ||
+    LEVEL[i.level] <= LEVEL[was.mailbox(ctx.queryClient, i.mailbox)?.accesses.find((a) => a.id === i.access)?.level ?? 'none'],
+  run: (_ctx, i) => (i.level === 'none' ? removeMailboxAccess(i.mailbox, i.access) : setMailboxLevel(i.mailbox, i.access, i.level)),
+  did: (i) => (i.level === 'none' ? 'Removed' : 'Changed'),
+  target: (i) => ({ kind: 'tool-who', id: `mailbox:${i.mailbox}` }),
+});
+
+/** Google asked again, and the mailbox read again. */
+export const toolsCheckMailbox = defineAction({
+  id: 'tools.checkMailbox',
+  title: 'Check a mailbox',
+  kind: 'change',
+  input: s.object({ mailbox: id }),
+  run: (_ctx, i) => checkMailbox(i.mailbox),
+  did: (_i, out) => out?.text ?? 'Checked',
+  target: (i) => ({ kind: 'tool-connect', id: `mailbox:${i.mailbox}` }),
+});
+
+export const toolsShareMailbox = defineAction({
+  id: 'tools.shareMailbox',
+  title: 'Make a mailbox a shared inbox',
+  kind: 'change',
+  // A shared inbox is opened to the company: a right only the person gives.
+  tico: false,
+  input: s.object({ mailbox: id }),
+  run: (_ctx, i) => shareMailbox(i.mailbox),
+  did: () => 'Shared',
+  target: (i) => ({ kind: 'tool', id: `mailbox:${i.mailbox}` }),
+});
+
+/** Tico stops reading and sending from it. */
+export const toolsStopMailbox = defineAction({
+  id: 'tools.stopMailbox',
+  title: 'Stop using a mailbox',
+  kind: 'change',
+  input: s.object({ mailbox: id }),
+  run: async ({ router }, i) => {
+    await stopMailbox(i.mailbox);
+    await go(router, '/library/tools', {}, true);
+  },
+  did: () => 'Stopped',
+  target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+/* A Tico address or number. */
+
+export const toolsSetInboxReaders = defineAction({
+  id: 'tools.setInboxReaders',
+  title: 'Choose who reads an address or number',
+  kind: 'change',
+  input: s.object({ inbox: id, audience: s.oneOf(['company', 'team'] as const), group: s.optional(id) }),
+  // Tico may narrow it from everyone to one team, never open it wider.
+  can: (ctx, i) => ctx.via !== 'tico' || (i.audience === 'team' && was.inbox(ctx.queryClient, i.inbox)?.audience === 'company'),
+  run: (_ctx, i) => setInboxReaders(i.inbox, i.audience, i.group ?? null),
+  did: () => 'Saved',
+  target: (i) => ({ kind: 'tool', id: `tico:${i.inbox}` }),
+});
+
+/** The inbound connection read again. */
+export const toolsCheckInbox = defineAction({
+  id: 'tools.checkInbox',
+  title: 'Check the connection for addresses and numbers',
+  kind: 'change',
+  input: s.object({}),
+  run: () => checkInboxes(),
+  did: (_i, out) => out?.text ?? 'Checked',
+  target: () => null,
+});
+
+/* A website. */
+
+export const toolsRemoveAccount = defineAction({
+  id: 'tools.removeAccount',
+  title: 'Remove an account from a website',
+  kind: 'change',
+  // The login and its grants go for good: it cannot be undone.
+  tico: false,
+  input: s.object({ tool: id, account: id }),
+  run: (_ctx, i) => removeAccount(i.tool, i.account),
+  did: () => 'Removed',
+  target: (i) => site(i.tool),
+});
+
+export const toolsDeleteWebsite = defineAction({
+  id: 'tools.deleteWebsite',
+  title: 'Delete a website tool',
+  kind: 'change',
+  // The website, its logins and their grants go for good: it cannot be undone.
+  tico: false,
+  input: s.object({ tool: id }),
+  run: async ({ router }, i) => {
+    await deleteWebsite(i.tool);
+    await go(router, '/library/tools', {}, true);
+  },
+  did: () => 'Deleted',
+  target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+export const toolsSetAccountAccess = defineAction({
+  id: 'tools.setAccountAccess',
+  title: 'Change who may use a website account',
+  kind: 'change',
+  input: s.object({ tool: id, account: id, subject: subjectIn, on: s.boolean() }),
+  // Tico may take a login away, never give one.
+  can: (ctx, i) => ctx.via !== 'tico' || !i.on,
+  run: (_ctx, i) => setAccountAccess(i.tool, i.account, i.subject, i.on),
+  did: (i) => (i.on ? 'Added' : 'Removed'),
+  target: (i) => site(i.tool),
+});
+
+/* Who sees an API tool or a website. */
+
+export const toolsSetEveryoneReads = defineAction({
+  id: 'tools.setEveryoneReads',
+  title: 'Let every agent read a tool',
+  kind: 'change',
+  input: s.object({ tool: id, on: s.boolean() }),
+  // Tico may turn it off, never on: on gives every agent the tool.
+  can: (ctx, i) => ctx.via !== 'tico' || !i.on,
+  run: (_ctx, i) => setEveryoneReads(i.tool, i.on),
+  did: (i) => (i.on ? 'Everyone can read' : 'Only those listed'),
+  target: (i) => ({ kind: 'tool-who', id: i.tool }),
+});
+
+const seenList = s.object({ people: s.array(subjectIn, { max: 500 }), teams: s.array(subjectIn, { max: 500 }), bots: s.array(subjectIn, { max: 500 }) });
+
+export const toolsSetSeenBy = defineAction({
+  id: 'tools.setSeenBy',
+  title: 'Choose who can see a tool',
+  kind: 'change',
+  input: s.object({ kind: s.oneOf(['api', 'website'] as const), tool: id, audience: s.nullable(seenList) }),
+  // Tico may make it Only listed or take someone off the list, never show it to everyone or add someone.
+  can: (ctx, i) => {
+    if (ctx.via !== 'tico') return true;
+    if (!i.audience) return false;
+    const t = i.kind === 'api' ? was.api(ctx.queryClient, i.tool) : was.website(ctx.queryClient, i.tool);
+    if (!t) return false;
+    if (!t.private) return true;
+    const a = t.audience ?? {};
+    return !adds(i.audience.people, a.people ?? []) && !adds(i.audience.teams, a.teams ?? []) && !adds(i.audience.bots, a.bots ?? []);
+  },
+  run: (_ctx, i) => setSeenBy(i.kind, i.tool, i.audience),
+  did: (i) => (i.audience ? 'Only listed' : 'Everyone'),
+  target: (i) => ({ kind: 'tool-seen', id: i.tool }),
+});
+
+/* Slack: threads linked to Slack channels. */
+
+export const toolsLinkSlack = defineAction({
+  id: 'tools.linkSlack',
+  title: 'Link a thread to a Slack channel',
+  kind: 'change',
+  // A linked channel reads the thread: an audience only the person opens.
+  tico: false,
+  input: s.object({ thread: id, channel: s.string({ min: 1, max: 200 }), history: s.boolean() }),
+  run: (_ctx, i) => linkSlack(i.thread, i.channel.trim(), i.history),
+  did: () => 'Asked',
+  target: () => ({ kind: 'tool', id: 'slack' }),
+});
+
+/** Nothing more goes to the channel: Tico may. */
+export const toolsUnlinkSlack = defineAction({
+  id: 'tools.unlinkSlack',
+  title: 'Unlink a thread from Slack',
+  kind: 'change',
+  input: s.object({ link: id }),
+  run: (_ctx, i) => unlinkSlack(i.link),
+  did: () => 'Unlinked',
+  target: () => ({ kind: 'tool', id: 'slack' }),
+});
+
+export const toolsResumeSlack = defineAction({
+  id: 'tools.resumeSlack',
+  title: 'Check a Slack link again',
+  kind: 'change',
+  // A link that passes starts sending the thread to its channel again: an audience only the person opens.
+  tico: false,
+  input: s.object({ link: id }),
+  run: (_ctx, i) => resumeSlack(i.link),
+  did: () => 'Checked',
+  target: () => ({ kind: 'tool', id: 'slack' }),
 });

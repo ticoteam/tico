@@ -39,9 +39,32 @@ export interface FilesSearch {
   task?: string;
   file?: string;
   v?: number;
+  /** The Filter menu's narrowing (old library-files.ts): `task` above narrows the list too. */
+  role?: string;
+  agent?: string;
+  writer?: string;
+  linked?: string;
+  team?: string;
+  days?: number;
+  pinned?: 1;
+  archived?: 1;
 }
 export const filesSearch = (raw: Record<string, unknown>): FilesSearch =>
-  clean({ kind: str(raw.kind), q: str(raw.q), task: str(raw.task), file: str(raw.file), v: num(raw.v) });
+  clean({
+    kind: str(raw.kind),
+    q: str(raw.q),
+    task: str(raw.task),
+    file: str(raw.file),
+    v: num(raw.v),
+    role: str(raw.role),
+    agent: str(raw.agent),
+    writer: str(raw.writer),
+    linked: str(raw.linked),
+    team: str(raw.team),
+    days: num(raw.days),
+    pinned: flag(raw.pinned),
+    archived: flag(raw.archived),
+  });
 
 /**
  * `skill` (a name) or `proposal` (an id) open in the page. `connect`: Connect Claude Code, `setup` for the steps or the
@@ -72,6 +95,8 @@ export interface ToolsSearch {
   kind?: string;
   needs?: 1;
   github?: GithubReturn | 'other';
+  /** Who has access: a team (`group:<id>`) or a teammate (`human:<id>`, `bot:<id>`). */
+  who?: string;
 }
 export const toolsSearch = (raw: Record<string, unknown>): ToolsSearch =>
   clean({
@@ -80,6 +105,7 @@ export const toolsSearch = (raw: Record<string, unknown>): ToolsSearch =>
     kind: str(raw.kind),
     needs: flag(raw.needs),
     github: raw.github === undefined ? undefined : (GITHUB_RETURNS.find((w) => w === raw.github) ?? ('other' as const)),
+    who: str(raw.who),
   });
 
 /** `type`: person, organization, place...; `link`: only those with that link to us (customer_of...); `panel`: the

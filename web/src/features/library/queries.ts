@@ -43,6 +43,7 @@ import type {
   WebhookShown,
 } from '@/api/schema';
 import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
+import type { DocsSearchResults, Group, LibrarianResearch, LibrarianResearchFiled } from '@/api/schema';
 
 /* Every Library call. Docs, files, skills, tools and contacts have no live topic (backend/events.py): they are read
    again after the person's own writes, on reconnect, and when a page opens on data older than a minute. Letters have
@@ -142,12 +143,12 @@ export function createDoc(input: { title: string; body: string; path?: string })
 }
 
 /** Save a doc's text or title. `version` is the one the person was editing: the server refuses a stale one (409). */
-export function saveDoc(id: string, change: { version: number; body?: string; title?: string }) {
+export function saveDoc(id: string, change: { version: number; body?: string; title?: string; path?: string }) {
   const at = new Date().toISOString();
   // The open doc and its row in the list both change at once; a list holds `docs`, a doc does not.
   const show = (cur: Doc | InternalDocList | undefined) => {
     if (!cur) return cur;
-    if ('docs' in cur) return { ...cur, docs: cur.docs.map((d) => (d.id === id ? { ...d, title: change.title ?? d.title, updated_at: at } : d)) };
+    if ('docs' in cur) return { ...cur, docs: cur.docs.map((d) => (d.id === id ? { ...d, title: change.title ?? d.title, path: change.path ?? d.path, updated_at: at } : d)) };
     return { ...cur, ...change, version: change.version + 1, updated_at: at };
   };
   return write<InternalDocResult>({
@@ -1277,3 +1278,126 @@ export const checkLetters = () =>
     queryClient.setQueryData(lettersSettingsQuery.queryKey, r);
     return r;
   });
+
+/* ---------------------------------------------------------------- gap wave: Docs search and Research, Files filters, a
+   contact's rules and a place */
+
+/** One hit of the server's docs search: a team doc (by its words, with an excerpt), an outside doc, or a linked page. */
+export type DocHit = DocsSearchResults['results'][number];
+
+/** The team's docs by their words, best first (GET /api/v2/docs/search; the old Docs page's search box). */
+export const docsSearchQuery = (words: string) =>
+  queryOptions({
+    queryKey: ['docs', 'search', words],
+    queryFn: ({ signal }) => api.get<DocsSearchResults>(`/api/v2/docs/search${q({ q: words, limit: 30 })}`, { signal }).then((r) => r.results),
+    enabled: /\w/.test(words),
+    ...quiet,
+  });
+
+/** The Librarian researches the web and adds what it finds, cited, to a doc or one section of it: one task to it. */
+export const startResearch = (body: LibrarianResearch) =>
+  api.post<LibrarianResearchFiled>('/api/v2/librarian/research', body, { idempotencyKey: crypto.randomUUID() });
+
+/** What Files may be narrowed by, as the address carries it (`agent` is a bot id, `writer` and `linked` actor or target
+    ids, `days` back from now). The server's names: backend/file_library.py listing. */
+export interface FileFilters {
+  kind?: string;
+  role?: string;
+  agent?: string;
+  writer?: string;
+  linked?: string;
+  team?: string;
+  task?: string;
+  days?: number;
+  pinned?: 1;
+  archived?: 1;
+}
+const MORE_FILTERS = ['role', 'agent', 'writer', 'linked', 'team', 'task', 'days', 'pinned', 'archived'] as const;
+
+/** Files by every filter. With the kind alone it is `filesQuery(kind)`'s key, so the route's first read is the page's. */
+export const filesListQuery = (f: FileFilters) => {
+  const rest = Object.fromEntries(MORE_FILTERS.filter((k) => f[k] !== undefined).map((k) => [k, f[k]]));
+  const kind = f.kind ?? '';
+  return infiniteQueryOptions({
+    queryKey: Object.keys(rest).length ? ['files', 'list', kind, rest] : ['files', 'list', kind],
+    queryFn: ({ pageParam }) =>
+      api.get<FileLibrary>(
+        `/api/v2/files${q({
+          limit: 100,
+          kind,
+          role: f.role,
+          bot: f.agent,
+          writer: f.writer,
+          linked: f.linked,
+          team: f.team,
+          task: f.task,
+          since: f.days ? new Date(Date.now() - f.days * 86_400_000).toISOString() : undefined,
+          pinned: f.pinned ? true : undefined,
+          archived: f.archived ? true : undefined,
+          cursor: pageParam,
+        })}`,
+      ),
+    initialPageParam: '',
+    getNextPageParam: (last) => (last.has_more && last.next_cursor ? last.next_cursor : undefined),
+    ...quiet,
+  });
+};
+
+/** The file search with the filters it takes (kind, role, linked, writer); none is `fileSearchQuery`'s key. */
+export const filesFindQuery = (text: string, f: FileFilters) => {
+  const by = { kind: f.kind, role: f.role, linked: f.linked, writer: f.writer };
+  const on = Object.values(by).some(Boolean);
+  return queryOptions({
+    queryKey: on ? ['files', 'search', text, by] : ['files', 'search', text],
+    queryFn: ({ signal }) => api.get<{ results: Array<{ id: string; title: string }> }>(`/api/v2/files/search${q({ q: text, limit: 50, ...by })}`, { signal }),
+    enabled: text.trim().length > 1,
+    ...quiet,
+  });
+};
+
+/** The teams, for the Files filter. */
+export const filesTeamsQuery = queryOptions({
+  queryKey: ['files', 'teams'],
+  queryFn: ({ signal }) => api.get<Group[] | { groups: Group[] }>('/api/v2/groups', { signal }).then((r) => (Array.isArray(r) ? r : r.groups)),
+  ...quiet,
+});
+
+/** A rule that applies to a contact, with the path it comes by (backend/entities/routes.py contacts_rules). */
+export interface ContactRule {
+  id?: string;
+  text: string;
+  cite?: string | null;
+  effect?: string | null;
+  path?: string[] | null;
+  reason?: string | null;
+}
+export const contactRulesQuery = (ref: string) =>
+  queryOptions({
+    queryKey: ['contacts', 'rules', ref],
+    queryFn: () => api.get<{ rules?: ContactRule[] }>(`/api/v2/entities/rules${q({ ref })}`).then((r) => r.rules ?? []),
+    ...quiet,
+  });
+
+/** Our own company in Contacts and the places it operates in; null while it is not in Contacts (a 404). */
+export interface Us {
+  id: string;
+  name: string;
+  operates_in: Array<{ id: string; name: string }>;
+}
+export const usQuery = queryOptions({
+  queryKey: ['contacts', 'self'],
+  queryFn: () =>
+    api.get<Us>('/api/v2/entities/self').catch((e: unknown) => {
+      if ((e as { status?: number } | null)?.status === 404) return null;
+      throw e;
+    }),
+  ...quiet,
+});
+
+/** A place's own words on its card (backend/entities/store.py card), and a link as the card sends it in full. */
+export interface PlaceInfo {
+  kind: string;
+  governing_body: string;
+  shared: boolean;
+}
+export type CardLink = Card['links'][number] & { link_key?: string; from_entity_id?: string; inverse_name?: string | null };

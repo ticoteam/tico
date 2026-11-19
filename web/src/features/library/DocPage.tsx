@@ -1,12 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useBlocker, useNavigate } from '@tanstack/react-router';
+import { useRef, useState } from 'react';
 import { refusal, run } from '@/actions';
 import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
+import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
+import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { Document, PageMore, type PageState } from '@/pagekinds';
 import { headings, Markdown } from '@/kit/Markdown';
@@ -44,6 +47,7 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
   // A locked doc changes only by an owner (docs-page.ts canChange; the server lets agent administrators too).
   const owner = useQuery(meQuery).data?.role === 'owner';
   const canChange = !!doc && (owner || !doc.locked);
+  const [researching, setResearching] = useState(false);
   // Keyed by the doc, not its version: a save's shown version and its rollback must not reset what the person typed.
   if (editing && doc) return <EditDoc key={doc.id} doc={doc} />;
 
@@ -82,6 +86,7 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
             <IconButton icon="edit" label="Edit" onClick={() => void press('docs.open', { doc: id, edit: true })} data-target={`doc-edit:${id}`} />
           )}
           <OwnerButton page="docs" phone />
+          {researching && doc && <ResearchDialog doc={doc} onClose={() => setResearching(false)} />}
         </>
       }
       more={
@@ -95,6 +100,7 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
                 onSelect={() => void press('docs.lock', { doc: id, version: doc.version, locked: !doc.locked }, doc.locked ? 'Not unlocked' : 'Not locked')}
               />
             )}
+            {canChange && <MenuItem label="Research" onSelect={() => setResearching(true)} />}
             <MenuItem label="Archive" onSelect={() => void press('docs.archive', { doc: id, version: doc.version, archived: true }, 'Not archived')} />
           </PageMore>
         )
@@ -151,15 +157,33 @@ function EditDoc({ doc: shown }: { doc: Doc }) {
   // reads the newer one), and a Save again must still be refused if someone else changed it.
   const [doc] = useState(shown);
   const [title, setTitle] = useState(doc.title);
+  const [path, setPath] = useState(doc.path);
   const [body, setBody] = useState(doc.body);
   const [busy, setBusy] = useState(false);
+  // Leaving with changes asks first (docs-editor.ts dirty guard); a save on its way out is not leaving them.
+  const saving = useRef(false);
+  const dirty = title.trim() !== doc.title || path.trim() !== doc.path || body !== doc.body;
+  const guard = useBlocker({
+    shouldBlockFn: ({ current, next }) => !saving.current && (next.pathname !== current.pathname || !(next.search as { edit?: unknown }).edit),
+    enableBeforeUnload: dirty,
+    disabled: !dirty,
+    withResolver: true,
+  });
   const save = async () => {
     setBusy(true);
+    saving.current = true;
     const r = await run(
       'docs.save',
-      { doc: doc.id, version: doc.version, title: title.trim() !== doc.title ? title.trim() : undefined, body: body !== doc.body ? body : undefined },
+      {
+        doc: doc.id,
+        version: doc.version,
+        title: title.trim() !== doc.title ? title.trim() : undefined,
+        body: body !== doc.body ? body : undefined,
+        path: path.trim() && path.trim() !== doc.path ? path.trim() : undefined,
+      },
       { via: 'click' },
     );
+    saving.current = false;
     setBusy(false);
     if (!r.ok) toast(/stale|conflict|version/.test(r.error ?? '') ? { text: 'Someone changed it meanwhile. Copy your text and open it again.', kind: 'failed' } : refusal(r, 'Not saved'));
   };
@@ -172,7 +196,26 @@ function EditDoc({ doc: shown }: { doc: Doc }) {
       body={
         <div className="doc-edit">
           <Field label="Title" value={title} onValueChange={setTitle} />
+          <Field label="Path" value={path} onValueChange={setPath} autoComplete="off" />
           <textarea className="doc-text t-read" aria-label="Text" value={body} onChange={(e) => setBody(e.target.value)} spellCheck />
+          {guard.status === 'blocked' && (
+            <Dialog
+              open
+              alert
+              onOpenChange={(o) => !o && guard.reset()}
+              title="Discard changes?"
+              actions={
+                <>
+                  <Button variant="quiet" onClick={guard.reset}>
+                    Keep editing
+                  </Button>
+                  <Button variant="primary" onClick={guard.proceed}>
+                    Discard
+                  </Button>
+                </>
+              }
+            />
+          )}
         </div>
       }
       foot={
@@ -196,7 +239,7 @@ function NewDoc() {
   const [busy, setBusy] = useState(false);
   const make = async () => {
     setBusy(true);
-    const ok = await press('docs.create', { title: title.trim(), body, path: path.trim() || undefined }, 'Not made');
+    const ok = await press('docs.create', { title: title.trim(), body, path: filePath(path, title) }, 'Not made');
     if (!ok) setBusy(false);
   };
   return (
@@ -223,6 +266,67 @@ function NewDoc() {
         </>
       }
     />
+  );
+}
+
+/** The server takes `path` as the doc's file (`Company` would be `Company.md`), so a folder gets the file name the
+    server would give the title by itself (backend docs slugify): "Company" and "Hiring plan" is
+    `Company/hiring-plan.md`. A path that already names its file is kept. */
+function filePath(folder: string, title: string): string | undefined {
+  const f = folder.trim().replace(/^\/+|\/+$/g, '');
+  if (!f) return undefined;
+  if (/\.md$/i.test(f)) return f;
+  const slug = title.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'doc';
+  return `${f}/${slug}.md`;
+}
+
+const WHOLE = 'page';
+
+/** The Librarian researches the web for this doc, or one section of it, and adds what it finds with its sources
+    (docs-editor.ts research): one task to it, open from the toast. */
+function ResearchDialog({ doc, onClose }: { doc: Doc; onClose: () => void }) {
+  const sections = headings(doc.body);
+  const [section, setSection] = useState(WHOLE);
+  const [what, setWhat] = useState('');
+  const [busy, setBusy] = useState(false);
+  const navigate = useNavigate();
+  const start = async () => {
+    setBusy(true);
+    const heading = sections.find((h) => h.id === section)?.text;
+    const r = await run('docs.research', { doc: doc.id, section: heading, instructions: what.trim() }, { via: 'click' });
+    setBusy(false);
+    if (!r.ok) {
+      toast(r.error === 'librarian_off' ? { text: 'Research is off', kind: 'failed' } : refusal(r, 'Not started'));
+      return;
+    }
+    const task = typeof r.out === 'string' ? r.out : undefined;
+    toast({ text: 'Research started', action: task ? { label: 'Open', run: () => void navigate({ to: '/task/$task', params: { task } }) } : undefined });
+    onClose();
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title="Research"
+      actions={
+        <>
+          <Button variant="quiet" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" busy={busy} disabled={!what.trim() || busy} onClick={() => void start()}>
+            Start research
+          </Button>
+        </>
+      }
+    >
+      <Select
+        label="Section"
+        options={[{ value: WHOLE, label: 'Whole page' }, ...sections.map((h) => ({ value: h.id, label: h.text }))]}
+        value={section}
+        onValueChange={setSection}
+      />
+      <Field label="What to find" value={what} onValueChange={setWhat} area autoFocus />
+    </Dialog>
   );
 }
 

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { refusal, run } from '@/actions';
 import type { ApiTool, LetterOut, ToolIndexRow, WebsiteTool } from '@/api/schema';
 import { directoryQuery, meQuery } from '@/data';
@@ -18,7 +18,7 @@ import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
 import { GithubConnection } from '@/features/start/exports';
 import { BrowserDialog } from '@/features/team/exports';
-import { FilterRow, ItemHead, ListAndItem, PageMore, Section, type PageState } from '@/pagekinds';
+import { FilterRow, ListAndItem, PageMore, Section, type PageState } from '@/pagekinds';
 import { AddAccountDialog, AddDialog, AddMenu, ReplaceLoginDialog, type Adding } from './AddTool';
 import {
   CodeDialog,
@@ -38,7 +38,6 @@ import {
   inboxesQuery,
   inboxMessagesQuery,
   lettersQuery,
-  mailboxQuery,
   mailQuery,
   toolsQuery,
   vendorQuery,
@@ -48,40 +47,36 @@ import {
 } from './queries';
 import { GoogleSection, LettersInSettings, LettersOutSection, MayDo, NumberRequests, PostalAddresses, SendingSection, SharedInboxDialog } from './ToolSettings';
 import { useGithubReturn } from './githubReturn';
+import {
+  AccountAccess,
+  CentralOnly,
+  CheckInbox,
+  DeleteWebsiteConfirm,
+  EveryoneReads,
+  hasWho,
+  InboxReaders,
+  KeyView,
+  MailboxView,
+  RemoveAccountConfirm,
+  SeenBy,
+  ServiceView,
+  SlackLinks,
+  subjectOf,
+  WhoMenu,
+} from './ToolMore';
+import { teamsQuery, vaultQuery, type StoredKey } from './toolKeys';
 import type { ToolsSearch } from './search';
+import { bad, Code, Dim, KIND, LEVEL, Shell, stateOf, toolHref, Who } from './ToolShell';
 import './library.css';
+
+export { KIND } from './ToolShell';
 
 /* Tools (tools.js toolsScreen, detail): the list of tools beside the open one. A vendor with several tools is one row;
    its page lists them. Every tool has one layout: what it is, how it connects, who may use it, what it can do, recent
    use. A lock means Tico holds the key. A key is only ever sent, never shown: its row shows a mask. */
 
-export const KIND: Record<string, string> = {
-  api: 'API',
-  mcp: 'MCP server',
-  website: 'Website',
-  mailbox: 'Email',
-  tico: 'Tico address',
-  number: 'Phone number',
-  address: 'Mailing address',
-  slack: 'Slack',
-  github: 'GitHub',
-  meetings: 'Meetings',
-  listening: 'Listening',
-  webhook: 'Outgoing webhook',
-  declared: 'Key',
-  vendor: 'Service',
-};
-
-/** A tool's address, keeping the list's filter. */
-const toolHref = (id: string, s: ToolsSearch = {}) => {
-  const p = new URLSearchParams();
-  if (s.kind) p.set('kind', s.kind);
-  if (s.needs) p.set('needs', '1');
-  p.set('tool', id);
-  return `/library/tools?${p.toString()}`;
-};
 const held = (r: ToolIndexRow) => r.kind === 'api' && r.delivery === 'proxy';
-const bad = (r: { needs_you: boolean; status: { tone: string; text: string } }) => (r.needs_you || r.status.tone === 'fail' ? r.status.text : null);
+const host = (url: string) => url.replace(/^https?:\/\//, '').split('/')[0];
 
 /** The rows the filter keeps: one kind, and (with `needs`) only those that need someone. */
 export const narrow = (rows: ToolIndexRow[], s: Pick<ToolsSearch, 'kind' | 'needs'>) =>
@@ -118,27 +113,59 @@ export function entries(rows: ToolIndexRow[]): Entry[] {
       });
     } else out.push({ id: r.id, name: r.name, kind: r.kind, row: r, inUse: r.who_total > 0, problem: bad(r) });
   }
-  // Something wrong first, then by name.
-  return out.sort((a, b) => Number(!!b.problem) - Number(!!a.problem) || a.name.localeCompare(b.name));
+  return out.sort(order);
 }
+
+/** Something wrong first, then by name. */
+const order = (a: Entry, b: Entry) => Number(!!b.problem) - Number(!!a.problem) || a.name.localeCompare(b.name);
+
+/** A stored key no tool holds: its own row, a Key, in use while it is given to someone. */
+export const keyEntry = (k: StoredKey): Entry => ({ id: `key:${k.id}`, name: k.name, kind: 'key', inUse: k.grants.length > 0, problem: k.stored ? null : 'No value' });
 
 export function ToolsPage({ search }: { search: ToolsSearch }) {
   const tools = useQuery(toolsQuery);
   const githubProblem = useGithubReturn(search);
   const [words, setWords] = useState(search.q ?? '');
   const w = words.trim().toLowerCase();
+  // Keys no tool holds, for those who may see the vault (anyone else gets none, quietly).
+  const loose = (useQuery(vaultQuery).data?.credentials ?? []).filter((k) => !k.tool_id);
+  const teams = useQuery(teamsQuery).data ?? [];
+  const dir = useQuery(directoryQuery).data;
+  const same = (x: string) => dir?.byId[x]?.id ?? x;
+  const who = search.who;
   const rows = narrow(tools.data?.rows ?? [], search).filter(
-    (r) => !w || r.name.toLowerCase().includes(w) || r.detail.toLowerCase().includes(w) || (r.vendor_name ?? '').toLowerCase().includes(w),
+    (r) =>
+      (!w || r.name.toLowerCase().includes(w) || r.detail.toLowerCase().includes(w) || (r.vendor_name ?? '').toLowerCase().includes(w)) &&
+      (!who || hasWho((r.who as ToolIndexRow['who'] | undefined)?.map(subjectOf) ?? [], who, teams, same)),
   );
-  const all = entries(rows);
+  const keys = loose.filter(
+    (k) =>
+      (!search.kind || search.kind === 'key') &&
+      (!search.needs || !k.stored) &&
+      (!w || [k.name, k.env, k.source].some((x) => (x ?? '').toLowerCase().includes(w))) &&
+      (!who || hasWho(k.grants.map((g) => g.subject), who, teams, same)),
+  );
+  const all = [...entries(rows), ...keys.map(keyEntry)].sort(order);
   const open = search.tool;
   const [adding, setAdding] = useState<Adding | null>(null);
-  const none = !!tools.data && !tools.data.rows.length;
-  const kinds = [...new Set((tools.data?.rows ?? []).map((r) => r.kind))].sort((a, b) => (KIND[a] ?? a).localeCompare(KIND[b] ?? b));
+  const none = !!tools.data && !tools.data.rows.length && !loose.length;
+  const kinds = [...new Set([...(tools.data?.rows ?? []).map((r) => r.kind as string), ...(loose.length ? ['key'] : [])])].sort((a, b) =>
+    (KIND[a] ?? a).localeCompare(KIND[b] ?? b),
+  );
   const filter = (change: { kind?: string; needs?: boolean }) => void press('tools.filter', change);
+  const filterWho = (next?: string) => void press('tools.filterWho', next ? { who: next } : {});
+  // Who has access: the teams, then everyone a tool or a key is given to.
+  const people = new Map<string, string>();
+  // `who` may be missing from an older index row.
+  for (const r of tools.data?.rows ?? []) for (const p of (r.who as ToolIndexRow['who'] | undefined) ?? []) if (p.kind !== 'group') people.set(same(subjectOf(p)), p.name);
+  for (const k of loose)
+    for (const g of k.grants) if (/^(human|bot):/.test(g.subject)) people.set(same(g.subject), dir?.byId[g.subject]?.name ?? g.subject);
+  const whoList = [...people].map(([subject, name]) => ({ subject, name })).sort((a, b) => a.name.localeCompare(b.name));
+  const whoName = who && (who.startsWith('group:') ? teams.find((g) => `group:${g.id}` === who)?.name : (people.get(same(who)) ?? dir?.byId[who]?.name));
   const filters = [
     ...(search.needs ? [{ label: 'Needs you', onClear: () => filter({ kind: search.kind }) }] : []),
     ...(search.kind ? [{ label: KIND[search.kind] ?? search.kind, onClear: () => filter({ needs: !!search.needs }) }] : []),
+    ...(who ? [{ label: whoName || 'Who has access', onClear: () => filterWho() }] : []),
   ];
 
   let state: PageState = 'ready';
@@ -181,12 +208,20 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
         actions={
           <>
             <Menu trigger={<IconButton icon="filter" label="Filter tools" on={filters.length > 0} />}>
-              <MenuItem label="All tools" on={!filters.length} onSelect={() => filter({})} />
+              <MenuItem
+                label="All tools"
+                on={!filters.length}
+                onSelect={() => {
+                  filter({});
+                  if (who) filterWho();
+                }}
+              />
               <MenuItem label="Needs you" on={!!search.needs} onSelect={() => filter({ kind: search.kind, needs: !search.needs })} />
               <MenuRule />
               {kinds.map((k) => (
                 <MenuItem key={k} label={KIND[k] ?? k} on={k === search.kind} onSelect={() => filter({ kind: k === search.kind ? undefined : k, needs: !!search.needs })} />
               ))}
+              <WhoMenu who={who} teams={teams} people={whoList} onPick={filterWho} />
             </Menu>
             <AddMenu trigger={<IconButton icon="plus" label="Add tool" />} onPick={setAdding} />
             <PageMore>
@@ -263,6 +298,8 @@ function Tool({ id, row, problem }: { id: string; row: ToolIndexRow | undefined;
   if (kind === 'api') return <ApiToolView id={key} row={row} />;
   if (kind === 'website') return <WebsiteView id={key} row={row} />;
   if (kind === 'vendor') return <VendorView vendor={key} />;
+  if (kind === 'key' && key) return <KeyView cid={key} />;
+  if (kind === 'declared' && row) return <ServiceView row={row} />;
   if (kind === 'mailbox' && (row as { mailbox_id?: string } | undefined)?.mailbox_id)
     return <MailboxView id={(row as unknown as { mailbox_id: string }).mailbox_id} row={row as ToolIndexRow} />;
   if (kind === 'mailbox' && !key) return <EmailView />;
@@ -271,79 +308,6 @@ function Tool({ id, row, problem }: { id: string; row: ToolIndexRow | undefined;
   if (kind === 'address') return <AddressView row={row} />;
   if (kind === 'webhook' && key) return <WebhookView id={key} row={row} />;
   return <PlainView row={row} kind={kind} problem={problem} />;
-}
-
-interface ShellProps {
-  name: string;
-  kind: string;
-  mcp?: boolean;
-  lock?: boolean;
-  problem?: string | null;
-  fill?: ReactNode;
-  state?: 'loading' | 'fault' | 'no-access' | 'ready';
-  onRetry?: () => void;
-  target: string;
-  /** "⋯": what else may change on it. */
-  more?: ReactNode;
-  /** The name renames in place. */
-  onRename?: (name: string) => void;
-  children?: ReactNode;
-}
-
-/** The open tool's head and its scrolling body (tools.css `.tool-head`, `.tool-body`). */
-function Shell({ name, kind, mcp, lock, problem, fill, state = 'ready', onRetry, target, more, onRename, children }: ShellProps) {
-  return (
-    <section className="tool" aria-label={name}>
-      <ItemHead
-        title={name}
-        target={target}
-        more={more}
-        onRename={onRename}
-        back={{ to: '/library/tools', label: 'Tools' }}
-        lead={<KindTile kind={kind} mcp={mcp} big />}
-        actions={
-          <>
-            {lock && <Held />}
-            {problem && <Pill>{problem}</Pill>}
-            <OwnerButton page="tools" />
-            {fill}
-          </>
-        }
-      />
-      <div className="conv-body tool-body" data-scroll>
-        {state === 'loading' ? null : state === 'fault' ? (
-          <Empty title={`${name} did not load`} icon="alert">
-            {onRetry && <Button onClick={onRetry}>Try again</Button>}
-          </Empty>
-        ) : state === 'no-access' ? (
-          <Empty title="This tool is not shared with you" icon="lock" />
-        ) : (
-          children
-        )}
-      </div>
-    </section>
-  );
-}
-
-const stateOf = (q: { isError: boolean; error: unknown; data: unknown }) =>
-  q.isError ? ((q.error as { status?: number } | null)?.status === 403 ? 'no-access' : 'fault') : q.data ? 'ready' : 'loading';
-
-const Code = ({ children }: { children: ReactNode }) => <code className="fact-code">{children}</code>;
-const Dim = ({ children }: { children: ReactNode }) => <span className="fact-n">{children}</span>;
-const host = (url: string) => url.replace(/^https?:\/\//, '').split('/')[0];
-
-const LEVEL_WORDS: Record<string, string> = { read: 'Read', read_write: 'Read and write' };
-const LEVEL = (l: string) => LEVEL_WORDS[l] ?? l;
-
-function Who({ actor, name, right, at }: { actor: string | null; name: string; right?: ReactNode; at?: string | null }) {
-  return (
-    <div className="row wrow" title={name}>
-      <Face actor={actor} name={name} />
-      <span className="row-title">{name}</span>
-      {right}
-      {at ? <Ago at={at} className="row-age" /> : <span className="row-age" />}
-    </div>
-  );
 }
 
 /* ---------------------------------------------------------------- an API or MCP tool */
@@ -478,6 +442,7 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
               target={`tool-who:${id}`}
               actions={t.can_manage && <AddWho tool={id} taken={t.access.map((a) => a.subject)} />}
             >
+              {t.everyone_reads?.enforceable && <EveryoneReads tool={id} on={t.everyone_reads.on} can={t.can_manage} />}
               {t.access.map((a) => (
                 <Who
                   key={a.subject}
@@ -508,6 +473,7 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
               ))}
             </Section>
           )}
+          <SeenBy kind="api" tool={id} t={t} />
           {mcp && mcp.names.length > 0 && <McpNames names={mcp.names} />}
           {t.recent.length > 0 && (
             <Section name="Recent use" target={`tool-recent:${id}`}>
@@ -612,7 +578,7 @@ const VERB: Record<WebsiteTool['recent'][number]['verb'], string> = {
   upload: 'Uploaded to',
 };
 
-type SiteDialog = { is: 'sites' } | { is: 'password' | 'code'; account: string };
+type SiteDialog = { is: 'sites' | 'delete' } | { is: 'password' | 'code'; account: string } | { is: 'remove'; account: string; name: string };
 
 /** Who may use an API tool, one more: a teammate not listed yet, at Read (tools-api.ts taWhoCard's Add). Its level
    changes on its row after. */
@@ -633,8 +599,6 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
   const q = useQuery(websiteToolQuery(id));
   const t = q.data;
   const name = t?.tool.name ?? row?.name ?? 'Website';
-  const people = new Map<string, { subject: string; name: string }>();
-  for (const a of t?.accounts ?? []) for (const p of a.access) people.set(p.subject, p);
   const lock = !!t?.accounts.some((a) => a.has_password);
   const [adding, setAdding] = useState(false);
   const [replacing, setReplacing] = useState<WebsiteTool['accounts'][number] | null>(null);
@@ -646,6 +610,13 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
       kind="website"
       lock={lock}
       onRename={t?.can_manage ? (next) => void press('tools.editWebsite', { tool: id, name: next }, 'Not renamed') : undefined}
+      more={
+        t?.can_manage && (
+          <PageMore>
+            <MenuItem label="Delete website" onSelect={() => setDialog({ is: 'delete' })} />
+          </PageMore>
+        )
+      }
       problem={t?.status.tone === 'fail' ? t.status.label : null}
       state={stateOf(q)}
       onRetry={() => void q.refetch()}
@@ -659,6 +630,7 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
               <LabelValue label={t.tool.sites.length > 1 ? 'Sites' : 'Site'} onEdit={t.can_manage ? () => setDialog({ is: 'sites' }) : undefined}>
                 <Code>{t.tool.sites.join(', ')}</Code>
               </LabelValue>
+              <CentralOnly tool={id} on={t.tool.central_only} can={t.can_manage} />
             </Facts>
           </Section>
           <Section name="How it connects" actions={<IconButton icon="plus" label="Add account" onClick={() => setAdding(true)} />}>
@@ -674,10 +646,16 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
                       Open browser
                     </Button>
                   )}
-                  {a.can_use && (a.has_password || a.has_totp) && (
+                  {((a.can_use && (a.has_password || a.has_totp)) || a.can_remove) && (
                     <Menu trigger={<IconButton icon="more" label={`${a.username || 'Account'} options`} size="sm" />}>
-                      {a.has_password && <MenuItem label="Show password" onSelect={() => setDialog({ is: 'password', account: a.id })} />}
-                      {a.has_totp && <MenuItem label="Show sign-in code" onSelect={() => setDialog({ is: 'code', account: a.id })} />}
+                      {a.can_use && a.has_password && <MenuItem label="Show password" onSelect={() => setDialog({ is: 'password', account: a.id })} />}
+                      {a.can_use && a.has_totp && <MenuItem label="Show sign-in code" onSelect={() => setDialog({ is: 'code', account: a.id })} />}
+                      {a.can_remove && (
+                        <>
+                          <MenuRule />
+                          <MenuItem label="Remove account" onSelect={() => setDialog({ is: 'remove', account: a.id, name: a.username || a.holder?.name || 'Account' })} />
+                        </>
+                      )}
                     </Menu>
                   )}
                 </LabelValue>
@@ -699,18 +677,15 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
               )}
             </Facts>
           </Section>
-          {people.size > 0 && (
-            <Section name="Who may use it" count={people.size}>
-              {[...people.values()].map((p) => (
-                <Who key={p.subject} actor={p.subject} name={p.name} />
-              ))}
-            </Section>
-          )}
+          <AccountAccess tool={id} t={t} />
+          <SeenBy kind="website" tool={id} t={t} />
           {adding && <AddAccountDialog tool={id} onClose={() => setAdding(false)} />}
           {replacing && <ReplaceLoginDialog tool={id} account={replacing} onClose={() => setReplacing(null)} />}
           {dialog?.is === 'sites' && <SitesDialog tool={id} sites={t.tool.sites} onClose={() => setDialog(null)} />}
           {dialog?.is === 'password' && <RevealDialog credential={dialog.account} title="Password" onClose={() => setDialog(null)} />}
           {dialog?.is === 'code' && <CodeDialog tool={id} account={dialog.account} onClose={() => setDialog(null)} />}
+          {dialog?.is === 'remove' && <RemoveAccountConfirm tool={id} account={dialog.account} name={dialog.name} onClose={() => setDialog(null)} />}
+          {dialog?.is === 'delete' && <DeleteWebsiteConfirm tool={id} name={name} onClose={() => setDialog(null)} />}
           {browsing && <BrowserDialog tool={id} account={browsing} title={name} onClose={() => setBrowsing(null)} />}
           {t.recent.length > 0 && (
             <Section name="Recent use">
@@ -756,56 +731,6 @@ function VendorView({ vendor }: { vendor: string }) {
 }
 
 /* ---------------------------------------------------------------- a mailbox */
-
-function MailboxView({ id, row }: { id: string; row: ToolIndexRow }) {
-  const q = useQuery(mailboxQuery(id));
-  const m = q.data?.mailbox;
-  const agents = (q.data?.accesses ?? []).filter((a) => a.grantee_type === 'bot').map((a) => ({ id: a.grantee_id, name: a.name }));
-  const more = (
-    <PageMore>
-      <MenuItem label="Email settings" onSelect={() => void press('tools.open', { tool: 'mailbox' })} />
-    </PageMore>
-  );
-  return (
-    <Shell name={m?.address ?? row.name} kind="mailbox" problem={bad(row)} more={more} state={stateOf(q)} onRetry={() => void q.refetch()} target={`tool:${row.id}`}>
-      {q.data && m && (
-        <>
-          <Section name="What it is">
-            <Facts>
-              <LabelValue label="Kind">{KIND.mailbox}</LabelValue>
-              <LabelValue label="Address">
-                <Code>{m.address}</Code>
-              </LabelValue>
-              <LabelValue label="Mailbox">{m.kind === 'shared' ? 'Shared' : `${m.person_name}'s`}</LabelValue>
-            </Facts>
-          </Section>
-          <Section name="How it connects">
-            <Facts>
-              <LabelValue label="Through">{m.provider}</LabelValue>
-              <LabelValue label="State">{row.status.text}</LabelValue>
-              {m.synced_at && <LabelValue label="Synced">{when(m.synced_at)}</LabelValue>}
-              {m.sync_error && <LabelValue label="Problem">{m.sync_error}</LabelValue>}
-            </Facts>
-          </Section>
-          {q.data.accesses.length > 0 && (
-            <Section name="Who may use it" count={q.data.accesses.length}>
-              {q.data.accesses.map((a) => (
-                <Who
-                  key={`${a.grantee_type}:${a.grantee_id}`}
-                  actor={a.grantee_type === 'admins' ? null : `${a.grantee_type === 'person' ? 'human' : 'bot'}:${a.grantee_id}`}
-                  name={a.name}
-                  right={<span className="lvl">{LEVEL(a.level)}</span>}
-                />
-              ))}
-            </Section>
-          )}
-          <MayDo may={q.data.may} />
-          <SendingSection agents={agents} />
-        </>
-      )}
-    </Shell>
-  );
-}
 
 /** Email itself, before or beside any one mailbox: the Google connection, what agents may do and send. */
 function EmailView() {
@@ -860,7 +785,7 @@ function InboxView({ inbox, row, number }: { inbox: string; row: ToolIndexRow | 
           <LabelValue label={number ? 'Number' : 'Address'}>
             <Code>{box?.address ?? row?.detail ?? ''}</Code>
           </LabelValue>
-          {box?.audience && <LabelValue label="For">{box.audience === 'company' ? 'The company' : 'One team'}</LabelValue>}
+          {box && <InboxReaders box={box} />}
           {box?.used_for && <LabelValue label="Used for">{box.used_for}</LabelValue>}
         </Facts>
       </Section>
@@ -869,6 +794,7 @@ function InboxView({ inbox, row, number }: { inbox: string; row: ToolIndexRow | 
           <LabelValue label="Through">Tico</LabelValue>
           <LabelValue label="State">{row?.status.text ?? box?.state ?? ''}</LabelValue>
         </Facts>
+        <CheckInbox />
       </Section>
       {(messages.data?.length ?? 0) > 0 && (
         <Section name="Recent use">
@@ -1100,6 +1026,7 @@ function PlainView({ row, kind, problem }: { row: ToolIndexRow | undefined; kind
           ))}
         </Section>
       )}
+      {row.kind === 'slack' && <SlackLinks />}
     </Shell>
   );
 }

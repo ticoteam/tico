@@ -158,7 +158,7 @@ function toolsAddress(rest: string, q: URLSearchParams): string {
   if (head === 'website' && id) return tool(`website:${name}`);
   // Keys was its own page; a key has no page of its own now: the tool when named, else the list.
   if (head === 'keys') return id && id !== 'credentials' ? tool(name) : toolsList(q);
-  if (head === 'key') return '/library/tools';
+  if (head === 'key') return id ? tool(`key:${name}`) : '/library/tools';
   if (head === 'webhooks') return id ? tool(`webhook:${name}`) : at('/library/tools', { kind: 'webhook' });
   if (head === 'mailbox' && id) return tool(`mailbox:${name}`);
   // A Tico inbox's address is the same for a number and an email inbox (backend/api_tools.py); the page draws both.

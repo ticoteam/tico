@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { useState, type FocusEvent, type FormEvent, type KeyboardEvent } from 'react';
+import { useState, type FocusEvent, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Empty } from '@/kit/Empty';
 import { Field } from '@/kit/Field';
@@ -10,6 +10,7 @@ import { Link } from '@/kit/Link';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Table, Td, Th, Tr } from '@/kit/Table';
 import { FilterRow, List, RecordPanel, Section, type PageState, type PageTab } from '@/pagekinds';
+import { ContactRules, PlaceFacts, PlaceSections, useUs } from './ContactPlace';
 import { Face, Find, More, OwnerButton, press, Who } from './parts';
 import {
   attributesQuery,
@@ -197,6 +198,9 @@ function ContactPanel({ id, search }: { id: string; search: ContactsSearch }) {
   const close = () => void press('contacts.open', { contact: null });
   const save = (key: string) => (value: string) => void press('contacts.update', { contact: id, type: c?.type ?? 'person', key, value }, 'Not saved');
   const [past, setPast] = useState<Attribute | null>(null);
+  const us = useUs(c);
+  const href = (other: string, type?: string) => panelHref(search, other, type);
+  const place = c?.type === 'place';
 
   return (
     <RecordPanel
@@ -225,6 +229,7 @@ function ContactPanel({ id, search }: { id: string; search: ContactsSearch }) {
                   onHistory={() => setPast(a)}
                 />
               ))}
+              {place && <PlaceFacts c={c} us={us} href={href} />}
               {relationsOf(c).length > 0 && <LabelValue label="Relationship">{relationsOf(c).map(relation).join(', ')}</LabelValue>}
               {c.owner && (
                 <LabelValue label="Owner">
@@ -240,7 +245,7 @@ function ContactPanel({ id, search }: { id: string; search: ContactsSearch }) {
         c && (
           <>
             {past && <FactHistory contact={id} field={past} onClose={() => setPast(null)} />}
-            <CardSections c={c} search={search} />
+            <CardSections c={c} search={search} place={place && <PlaceSections c={c} us={us} href={href} />} />
           </>
         )
       }
@@ -306,11 +311,14 @@ function FactLine({ label, value, onSave }: { label: string; value: string; onSa
   );
 }
 
-function CardSections({ c, search }: { c: Card; search: ContactsSearch }) {
+/** The summary, the rules that apply, then the links: as one list, or a place's own (Bodies, Inside, Located here). */
+function CardSections({ c, search, place }: { c: Card; search: ContactsSearch; place?: ReactNode }) {
   return (
     <>
       {c.summary && <p className="rec-summary t-read">{c.summary}</p>}
-      {c.links.length > 0 && (
+      <ContactRules id={c.id} />
+      {place}
+      {!place && c.links.length > 0 && (
         <Section name="Links" count={c.links.length}>
           {c.links.map((l) => (
             <Link key={l.id} className="row lrow" href={panelHref(search, l.other_id, l.other_type)} title={l.other_name}>
