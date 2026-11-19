@@ -793,7 +793,12 @@ async function rkProducts(form: HTMLFormElement, m: RkMatter | null, run: number
   const pick = form.querySelector<HTMLSelectElement>('[name=product]');
   if (!pick) return;
   let list: {id: string; name: string}[];
-  try { list = (await get<{products: {id: string; name: string}[]}>('/v2/products', {fresh: true})).products; } catch { return; }
+  try { list = (await get<{products: {id: string; name: string}[]}>('/v2/products', {fresh: true})).products; } catch {
+    // An unread list says so, so an empty select is not taken for no products; the other facts still save.
+    const err = form.querySelector<HTMLElement>('[data-error]');
+    if (err && rkLive(run) && pick.isConnected) { err.textContent = 'Products could not be read.'; err.hidden = false; }
+    return;
+  }
   if (!rkLive(run) || !pick.isConnected) return;
   const chosen = pick.value, own = m?.product;
   const extra = own && !list.some(p => p.id === own.id) ? [own] : [];
