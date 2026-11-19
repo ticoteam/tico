@@ -57,6 +57,15 @@ COPY scripts/build-ui.cjs scripts/
 COPY ui ui
 RUN node scripts/build-ui.cjs
 
+# The new web app at /next (web/, served by backend/web_routes.py): its own lock, built by Vite into build/web.
+FROM node AS web-build
+ENV PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY web ./
+RUN npm run build
+
 FROM download AS gh
 RUN fetch-tool gh /out
 
@@ -101,6 +110,7 @@ ARG TICO_REPOSITORY
 WORKDIR /opt/tico
 COPY . /opt/tico
 COPY --from=ui-build /src/build/ui /opt/tico/build/ui
+COPY --from=web-build /src/build/web /opt/tico/build/web
 # Deployed task completion needs the source commit, not just the version label.
 RUN python - <<'PY'
 import json
