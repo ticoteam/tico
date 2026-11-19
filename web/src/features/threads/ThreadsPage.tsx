@@ -1,208 +1,56 @@
-import { useInfiniteQuery, useQuery, useSuspenseInfiniteQuery } from '@tanstack/react-query';
-import { Link, useNavigate } from '@tanstack/react-router';
-import { useState } from 'react';
-import { Conversation, Message, MessageBones } from '@/conversation';
+import { useQuery } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
+import { Conversation } from '@/conversation';
 import { callCard } from '@/features/calls/exports';
-import { Ago } from '@/kit/Ago';
-import { Button } from '@/kit/Button';
-import { Count } from '@/kit/Count';
 import { Empty } from '@/kit/Empty';
-import { SettledSearch } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { MenuItem } from '@/kit/Menu';
-import { Row, ThreadRow } from '@/kit/Row';
-import { VirtualList } from '@/kit/VirtualList';
-import { ItemHead, ListAndItem, PageMore, type PageTab } from '@/pagekinds';
-import { Browse } from './Browse';
-import { isDm, othersOf, rowsOf, unreadOf, type Thread } from './model';
+import { ItemHead, type PageTab } from '@/pagekinds';
 import { NewMessage, NewMessageFoot, useNewDraft } from './NewMessage';
-import { Face, press, useMe, useTitle } from './people';
-import { catchUpQuery, threadListQuery, threadQuery, threadSearchQuery, type CatchUpItem, type SearchHit } from './queries';
+import { press, useTitle } from './people';
+import { threadQuery } from './queries';
 import { ThreadHead } from './ThreadHead';
 import './threads.css';
 
-/** The list's tabs: Threads, Mail and Messaging are one place. `here` keeps Threads on while a thread is open.
-    Threads counts what Catch up holds; the server has no unread count for mail or texts. */
+/** Mail and Messaging's tabs: the sources of Threads, beside the threads themselves (whose list is the menu's). */
 export function useThreadTabs(here: string): PageTab[] {
-  const n = useQuery(catchUpQuery).data?.count;
   return [
-    { label: 'Threads', to: here, target: 'tab:threads', count: n || undefined },
+    { label: 'Threads', to: here, target: 'tab:threads' },
     { label: 'Mail', to: '/threads/mail', target: 'tab:mail' },
     { label: 'Messaging', to: '/threads/messaging', target: 'tab:messaging' },
   ];
 }
 
-export const NewButton = () => <IconButton icon="edit" label="New message" data-phone onClick={() => void press('threads.compose', {})} />;
+export const NewButton = () => <IconButton icon="message" label="Message" data-phone onClick={() => void press('threads.compose', {})} />;
 
 export interface ThreadsPageProps {
-  /** What the reading column holds: Catch up, New message, or the thread `thread`. */
-  pane: 'catch-up' | 'new' | 'thread';
+  /** What the page holds: the thread `thread`, New message, or nothing open yet. */
+  pane: 'thread' | 'new' | 'none';
   thread?: string;
-  /** The search words in the address (`?q=`). */
-  q?: string;
-  /** Something is open in the reading column (a phone shows it instead of the list). */
-  open?: boolean;
 }
 
-const SEARCH_WAIT_MS = 200;
-
-/** Threads: the list of threads and DMs, newest first, with Catch up on top; the open one beside it. */
-export function ThreadsPage({ pane, thread, q = '', open = false }: ThreadsPageProps) {
-  const list = useSuspenseInfiniteQuery(threadListQuery);
-  const draft = useNewDraft();
-  const tabs = useThreadTabs(pane === 'thread' && thread ? `/threads/${encodeURIComponent(thread)}` : pane === 'new' ? '/threads/new' : '/threads');
-  const [browsing, setBrowsing] = useState(false);
-  const navigate = useNavigate();
-
-  const all = rowsOf(list.data);
-  const keep = q ? `?q=${encodeURIComponent(q)}` : '';
-  const more = () => {
-    if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
-  };
-
-  const listNode = q ? (
-    <Found q={q} open={thread} keep={keep} />
-  ) : (
-    <>
-      <CatchUpRow selected={pane === 'catch-up'} />
-      <VirtualList
-        className="tl-vl"
-        label="Threads"
-        items={all}
-        getKey={(t) => t.id}
-        estimateSize={35}
-        onReachEnd={more}
-        renderItem={(t) => <ListRow t={t} selected={t.id === thread} />}
-      />
-    </>
-  );
-
-  const item =
-    pane === 'thread' && thread ? (
-      { itemHead: <ThreadHead id={thread} />, conversation: <ThreadConversation id={thread} />, itemLabel: 'Thread' }
-    ) : pane === 'new' ? (
-      { itemHead: <NewHead />, item: <NewMessage draft={draft} />, foot: <NewMessageFoot draft={draft} />, itemLabel: 'New message' }
-    ) : (
-      { itemHead: <CatchUpHead />, item: <CatchUpBody />, itemLabel: 'Catch up' }
-    );
-
+/** Threads: one open conversation. Its list is anchored in the menu's Threads tab (plan/threads-team.html). */
+export function ThreadsPage({ pane, thread }: ThreadsPageProps) {
+  const label = pane === 'new' ? 'New message' : 'Thread';
   return (
-    <>
-    <ListAndItem
-      title="Threads"
-      path="/threads"
-      actions={<NewButton />}
-      more={
-        <PageMore>
-          <MenuItem label="Browse threads" icon="search" onSelect={() => setBrowsing(true)} />
-          <MenuItem label="Learned" icon="spark" onSelect={() => void press('learned.open', {})} />
-        </PageMore>
-      }
-      search={
-        <SettledSearch
-          label="Find a thread"
-          placeholder="Find a thread"
-          value={q}
-          onSettle={(next) => void navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, q: next || undefined }) as never, replace: true })}
-          wait={SEARCH_WAIT_MS}
-          wide
-        />
-      }
-      tabs={tabs}
-      list={listNode}
-      listLabel="Threads"
-      open={open}
-      state={all.length === 0 && !open && !q ? 'empty' : 'ready'}
-      empty={{ title: 'No threads yet', action: <Button onClick={() => void press('threads.compose', {})}>New message</Button> }}
-      {...item}
-    />
-    {browsing && <Browse onClose={() => setBrowsing(false)} />}
-    </>
+    <main className="pane page page-thread pk pk-split is-open" aria-label={label}>
+      <section className="conv" aria-label={label}>
+        {pane === 'thread' && thread ? (
+          <>
+            <ThreadHead id={thread} />
+            <ThreadConversation id={thread} />
+          </>
+        ) : pane === 'new' ? (
+          <NewPane />
+        ) : (
+          <div className="conv-body">
+            <Empty icon="threads" title="No thread open" />
+          </div>
+        )}
+      </section>
+    </main>
   );
 }
-
-/** The server's search: one row per thread, newest hit first; each row keeps the words in its address. */
-function Found({ q, open, keep }: { q: string; open?: string; keep: string }) {
-  const found = useInfiniteQuery(threadSearchQuery(q));
-  const seen = new Set<string>();
-  const rows: SearchHit[] = [];
-  for (const h of found.data?.pages.flatMap((p) => p.hits) ?? [])
-    if (!seen.has(h.thread_id)) {
-      seen.add(h.thread_id);
-      rows.push(h);
-    }
-  if (found.isPending) return null;
-  if (found.isError)
-    return (
-      <Empty icon="alert" title="Search did not load">
-        <Button onClick={() => void found.refetch()}>Try again</Button>
-      </Empty>
-    );
-  if (!rows.length) return <Empty icon="search" title="No threads match" />;
-  return (
-    <VirtualList
-      className="tl-vl"
-      label="Threads found"
-      items={rows}
-      getKey={(h) => h.thread_id}
-      estimateSize={35}
-      onReachEnd={() => {
-        if (found.hasNextPage && !found.isFetchingNextPage) void found.fetchNextPage();
-      }}
-      renderItem={(h) => (
-        <ThreadRow
-          title={h.title || 'Thread'}
-          href={`/threads/${encodeURIComponent(h.thread_id)}${keep}`}
-          selected={h.thread_id === open}
-          at={h.created_at ?? new Date(0)}
-          kind="threads"
-          target={`thread:${h.thread_id}`}
-        />
-      )}
-    />
-  );
-}
-
-function ListRow({ t, selected }: { t: Thread; selected: boolean }) {
-  const me = useMe();
-  const title = useTitle(t);
-  const other = isDm(t) ? othersOf(t, me)[0] : undefined;
-  const home = t.audience === 'home' && typeof t.home?.actor === 'string' ? t.home.actor : undefined;
-  const face = other ?? home;
-  const n = unreadOf(t);
-  return (
-    <ThreadRow
-      title={title}
-      href={`/threads/${encodeURIComponent(t.id)}`}
-      selected={selected}
-      unread={n > 0 || !!t.me?.activity}
-      at={t.last_message_at ?? t.created_at ?? new Date(0)}
-      count={n}
-      kind={t.task_id ? 'tasks' : 'threads'}
-      avatar={face ? <Face actor={face} /> : undefined}
-      target={`thread:${t.id}`}
-    />
-  );
-}
-
-/** The first row: what is new across every thread. */
-function CatchUpRow({ selected }: { selected: boolean }) {
-  const { data } = useQuery(catchUpQuery);
-  const n = data?.count ?? 0;
-  return (
-    <Row className="tl-row tl-catch" title="Catch up" href="/threads/catch-up" selected={selected} unread={n > 0} target="page:/threads/catch-up">
-      <span className="tl-kind">
-        <Icon name="inbox" />
-      </span>
-      <span className="row-title">Catch up</span>
-      <span className="row-age" />
-      <span className="tl-slot">{n > 0 && <Count n={n} label={`${n} new`} />}</span>
-    </Row>
-  );
-}
-
-/* ---------------------------------------------------------------- one thread */
 
 function ThreadConversation({ id }: { id: string }) {
   const { data } = useQuery(threadQuery(id));
@@ -210,99 +58,31 @@ function ThreadConversation({ id }: { id: string }) {
   return <Conversation id={id} variant="page" title={title || undefined} card={callCard} canPost={data?.me?.can_post !== false} />;
 }
 
-/* ---------------------------------------------------------------- Catch up */
+/* ---------------------------------------------------------------- New message */
 
-const BACK = { to: '/threads', label: 'Threads' };
-
-function CatchUpHead() {
-  const { data } = useQuery(catchUpQuery);
-  const ids = data?.items.map((i) => i.thread.id) ?? [];
-  const [browsing, setBrowsing] = useState(false);
+function NewPane() {
+  const draft = useNewDraft();
   return (
     <>
       <ItemHead
-        title="Catch up"
-        target="page:/threads/catch-up"
-        back={BACK}
+        title="New message"
+        target="page:/threads/new"
         actions={
-          <>
-            {!!data?.count && <Count n={data.count} className="conv-n" label={`${data.count} new`} />}
-            {ids.length > 0 && (
-              <Button variant="primary" onClick={() => void press('threads.markRead', { threads: ids })}>
-                Mark read
-              </Button>
-            )}
-          </>
-        }
-        more={
-          <PageMore>
-            <MenuItem label="Browse threads" icon="search" onSelect={() => setBrowsing(true)} />
-          </PageMore>
+          <Link className="ib" to="/threads" aria-label="Close" title="Close">
+            <Icon name="close" />
+          </Link>
         }
       />
-      {browsing && <Browse onClose={() => setBrowsing(false)} />}
-    </>
-  );
-}
-
-function CatchUpBody() {
-  const { data, isPending, isError, refetch } = useQuery(catchUpQuery);
-  if (isPending) return <MessageBones label="Loading Catch up" className="lt-bones" />;
-  if (isError)
-    return (
-      <Empty icon="alert" title="Catch up did not load">
-        <Button onClick={() => void refetch()}>Try again</Button>
-      </Empty>
-    );
-  if (data.items.length === 0) return <Empty title="Nothing new" />;
-  // The server sends 20 at most; the rest come in as these are read.
-  const rest = data.count - data.items.length;
-  return (
-    <div className="cu-list">
-      {data.items.map((it) => (
-        <CatchUpGroup key={it.thread.id} it={it} />
-      ))}
-      {rest > 0 && <p className="tl-more">{rest} more</p>}
-    </div>
-  );
-}
-
-function CatchUpGroup({ it }: { it: CatchUpItem }) {
-  const me = useMe();
-  const title = useTitle(it.thread);
-  const last = it.messages.at(-1)?.created_at ?? it.thread.last_message_at ?? new Date(0);
-  return (
-    <section className="cu" aria-label={title}>
-      <Link className="row tl-row cu-head" to="/threads/$thread" params={{ thread: it.thread.id }} data-target={`thread:${it.thread.id}`}>
-        <span className="tl-kind">
-          <Icon name={it.thread.task_id ? 'tasks' : 'threads'} />
-        </span>
-        <span className="row-title">{title}</span>
-        <Ago at={last} className="row-age" />
-        <span className="tl-slot">{it.new_count > 0 && <Count n={it.new_count} label={`${it.new_count} new`} />}</span>
-      </Link>
-      <div className="cu-msgs">
-        {it.messages.map((m, i) => (
-          <Message key={m.id} m={m} variant="page" me={me} cont={i > 0 && it.messages[i - 1]?.sender_id === m.sender_id} card={callCard} />
-        ))}
+      <div className="conv-body" data-scroll>
+        <div className="conv-col">
+          <NewMessage draft={draft} />
+        </div>
       </div>
-    </section>
-  );
-}
-
-/* ---------------------------------------------------------------- New message */
-
-function NewHead() {
-  return (
-    <ItemHead
-      title="New message"
-      target="page:/threads/new"
-      back={BACK}
-      actions={
-        <Link className="ib" to="/threads" aria-label="Close" title="Close">
-          <Icon name="close" />
-        </Link>
-      }
-    />
+      <footer className="conv-foot">
+        <div className="conv-col">
+          <NewMessageFoot draft={draft} />
+        </div>
+      </footer>
+    </>
   );
 }

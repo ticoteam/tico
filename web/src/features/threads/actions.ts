@@ -113,7 +113,7 @@ export const markThreadsRead = defineAction({
   input: s.object({ threads: s.array(thread, { max: 100 }) }),
   run: (_ctx, { threads }) => readAll(threads),
   did: () => 'Marked read',
-  target: () => ({ kind: 'page', id: '/threads/catch-up' }),
+  target: () => ({ kind: 'page', id: '/threads' }),
 });
 
 export const removePersonAction = defineAction({

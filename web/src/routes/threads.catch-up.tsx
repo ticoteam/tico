@@ -1,15 +1,8 @@
-import { createFileRoute } from '@tanstack/react-router';
-import { ThreadsPage } from '@/features/threads/exports';
-import { loadThreads, threadsSearch } from '@/features/threads/routing';
+import { createFileRoute, redirect } from '@tanstack/react-router';
 
+/* Catch up is Tico's now (its chip on Tico's box): an old link lands on Threads. */
 export const Route = createFileRoute('/threads/catch-up')({
-  validateSearch: threadsSearch,
-  loaderDeps: ({ search }) => ({ q: search.q }),
-  loader: ({ deps: { q }, context: { queryClient } }) => loadThreads(queryClient, { q, catchUp: true }),
-  component: CatchUpRoute,
+  beforeLoad: () => {
+    throw redirect({ to: '/threads', replace: true });
+  },
 });
-
-function CatchUpRoute() {
-  const { q } = Route.useSearch();
-  return <ThreadsPage pane="catch-up" q={q} open />;
-}

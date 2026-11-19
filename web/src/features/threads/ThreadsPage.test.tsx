@@ -8,7 +8,8 @@ import { ItemHead } from '@/pagekinds';
 import type { Thread, ThreadList } from './model';
 import { renameThread, threadKeys } from './queries';
 import { ThreadHead } from './ThreadHead';
-import { ThreadsPage } from './ThreadsPage';
+import { MenuThreads } from './MenuThreads';
+import { TeamThread } from './TeamThread';
 import { UpdatesPage } from './UpdatesPage';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -62,20 +63,24 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-describe('Threads @s156', () => {
-  it('lists threads newest first, each row opening its own address, under Catch up', async () => {
+describe('The menu\'s Threads list @s156', () => {
+  it('lists conversations newest first, bold when new, the Dot where one asks you, no counts, no tasks', async () => {
     serve(() => ({ status: 200, body: {} }));
-    queryClient.setQueryData(threadKeys.list, seeded());
-    queryClient.setQueryData(threadKeys.catchUp, { count: 2, items: [] });
-    show(<ThreadsPage pane="catch-up" />, '/threads');
+    const task = { ...thread('k1', 'Fix the build', 1, 2), task_id: 'k1' };
+    queryClient.setQueryData(threadKeys.list, { pages: [{ rows: [thread('t1', 'Launch plan', 2, 3), thread('t2', 'Hiring', 30), task], next: null }], pageParams: [null] });
+    show(<MenuThreads asks={new Set(['t2'])} />, '/threads/t2');
     const launch = await screen.findByTitle('Launch plan');
     expect(launch.getAttribute('href')).toBe('/threads/t1');
-    expect(launch.className).toContain('is-unread');
-    expect(screen.getByTitle('Hiring').getAttribute('href')).toBe('/threads/t2');
-    const catchUp = screen.getAllByTitle('Catch up').find((el) => el.tagName === 'A');
-    expect(catchUp?.getAttribute('href')).toBe('/threads/catch-up');
-    expect(catchUp?.textContent).toContain('2');
-    expect(screen.getByRole('button', { name: 'New message' })).toBeTruthy();
+    expect(launch.className).toContain('is-new');
+    expect(launch.querySelector('.dot')).toBeNull();
+    expect(launch.textContent).toBe('Launch plan');
+    const hiring = screen.getByTitle('Hiring');
+    expect(hiring.className).not.toContain('is-new');
+    expect(hiring.getAttribute('aria-current')).toBe('page');
+    expect(hiring.querySelector('.dot')?.getAttribute('aria-label')).toBe('Asks you');
+    expect(screen.queryByTitle('Fix the build')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Mail' }).getAttribute('href')).toBe('/threads/mail');
+    expect(screen.getByRole('link', { name: 'Messaging' }).getAttribute('href')).toBe('/threads/messaging');
   });
 
   it('shows a rename at once and takes it back when the server refuses it', async () => {
@@ -84,8 +89,7 @@ describe('Threads @s156', () => {
       method === 'PATCH' ? new Promise<Reply>((r) => (refuse = () => r({ status: 403, body: { detail: 'no' } }))) : { status: 200, body: {} },
     );
     queryClient.setQueryData(threadKeys.list, seeded());
-    queryClient.setQueryData(threadKeys.catchUp, { count: 0, items: [] });
-    show(<ThreadsPage pane="catch-up" />, '/threads');
+    show(<MenuThreads asks={new Set()} />, '/threads');
     await screen.findByTitle('Hiring');
     let done!: Promise<unknown>;
     act(() => {
@@ -100,29 +104,40 @@ describe('Threads @s156', () => {
     expect(await screen.findByTitle('Hiring')).toBeTruthy();
     expect(screen.queryByTitle('Hiring plan')).toBeNull();
   });
+});
 
-  it('finds threads with the server search, keeping the words in each row address', async () => {
+describe('A team\'s thread', () => {
+  it('opens the team\'s Home and sets its teammates\' updates among its messages as cards', async () => {
     const asked: string[] = [];
+    const home = { ...thread('h1', 'Growth', 5), audience: 'home', home: { actor: 'group:g1' }, me: { can_post: true } };
+    const ups = [
+      { id: 'u1', bot: 'gm', kind: 'weekly', headline: 'Orders 1,284. Cedar beds sold out.', body: 'Orders 1,284. Cedar beds sold out.', replies: 2, created_at: at(30) },
+      { id: 'u2', bot: 'ops', kind: 'daily', body: 'Not this team', created_at: at(20) },
+    ];
     serve((url) => {
       asked.push(url);
-      return url.includes('/threads/search')
-        ? { status: 200, body: { hits: [{ thread_id: 't9', message_id: 'm1', title: 'Pricing', excerpt: 'the launch price' }], next_cursor: null } }
-        : { status: 200, body: {} };
+      if (url.includes('/api/v2/groups')) return { status: 200, body: [{ id: 'g1', name: 'Growth', parent: '', people: [], bots: ['gm'] }] };
+      if (url.includes('/threads/home/')) return { status: 200, body: home };
+      if (url.includes('/api/v2/updates')) return { status: 200, body: { updates: ups, unread: 1, next_before: null } };
+      if (url.includes('/timeline')) return { status: 200, body: { messages: [{ id: 'm1', seq: 1, sender_id: 'human:jo', body: 'Proofs are in.', created_at: at(40) }, { id: 'm2', seq: 2, sender_id: 'human:jo', body: 'Page 6 fixed.', created_at: at(10) }], next_cursor: null, read_marks: {} } };
+      return { status: 200, body: {} };
     });
-    queryClient.setQueryData(threadKeys.list, seeded());
-    queryClient.setQueryData(threadKeys.catchUp, { count: 0, items: [] });
-    show(<ThreadsPage pane="catch-up" q="launch price" />, '/threads?q=launch%20price');
-    const hit = await screen.findByTitle('Pricing');
-    expect(hit.getAttribute('href')).toBe('/threads/t9?q=launch%20price');
-    expect(asked.some((u) => u.includes('/api/v2/threads/search?q=launch+price'))).toBe(true);
-    expect(screen.queryByTitle('Hiring')).toBeNull();
-  });
-
-  it('says so when there are no threads yet', async () => {
-    serve(() => ({ status: 200, body: { count: 0, items: [] } }));
-    queryClient.setQueryData(threadKeys.list, { pages: [{ rows: [], next: null }], pageParams: [null] });
-    show(<ThreadsPage pane="catch-up" />, '/threads');
-    expect(await screen.findByRole('heading', { name: 'No threads yet' })).toBeTruthy();
+    const actors = [
+      { id: 'bot:gm', kind: 'agent', name: 'Growth Manager', slug: 'gm', team: 'Growth' },
+      { id: 'bot:ops', kind: 'agent', name: 'Ops', slug: 'ops', team: 'Engineering' },
+      { id: 'human:jo', kind: 'person', name: 'Jonas Lind', team: 'Growth' },
+    ];
+    queryClient.setQueryData(['directory'], { actors, byId: Object.fromEntries(actors.map((a) => [a.id, a])) });
+    show(<TeamThread who="team:Growth" />, '/team/team%3AGrowth');
+    const card = await screen.findByText('Orders 1,284. Cedar beds sold out.');
+    expect(card.closest('a')?.getAttribute('href')).toBe('/updates?open=u1');
+    expect(card.closest('.kcard')?.textContent).toContain('Weekly update');
+    expect(screen.queryByText('Not this team')).toBeNull();
+    expect(asked.some((u) => u.includes('/api/v2/threads/home/group%3Ag1'))).toBe(true);
+    // the update sits between the two messages, by time
+    const order = [...document.querySelectorAll('.msg')].map((m) => m.textContent ?? '');
+    expect(order.findIndex((t) => t.includes('Proofs'))).toBeLessThan(order.findIndex((t) => t.includes('Orders')));
+    expect(order.findIndex((t) => t.includes('Orders'))).toBeLessThan(order.findIndex((t) => t.includes('Page 6')));
   });
 });
 

@@ -1,23 +1,26 @@
 import { Link, useLocation, type LinkProps } from '@tanstack/react-router';
-import { useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
+import { useState, type ReactElement, type ReactNode } from 'react';
 import { Avatar } from '@/kit/Avatar';
 import { Icon, type IconName } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { FlowMark } from '@/kit/FlowMark';
 import { Menu as Drop } from '@/kit/Menu';
+import { usePref } from '@/prefs';
 import { usePhoneCards } from './phone';
 import { useSheet } from './Sheet';
 import './Menu.css';
 
 /* The menu: a port of PK.menu and its rail in the design's system/shell.js, with the mock's classes.
-   Calendar holds Meetings, so there is no Meetings row. Pages a person cannot open are not drawn. */
+   Calendar holds Meetings, so there is no Meetings row. Pages a person cannot open are not drawn. Under the places,
+   the conversation area (plan/threads-team.html): two small tabs, Team | Threads, with Message and Call beside them.
+   No counts there: bold is new, and the Dot marks a conversation that asks you. */
 
-export type MenuRowId = 'tasks' | 'calendar' | 'threads' | 'updates' | 'company' | 'library';
+export type MenuRowId = 'tasks' | 'calendar' | 'company' | 'library';
+export type MenuTalk = 'team' | 'threads';
 
 export interface MenuCounts {
   /* what waits on you, shown in the Dot's shape on Tasks */
   flow?: number;
-  threads?: number;
-  updates?: number;
   /* the next meeting's time, beside Calendar ("2:30 PM") */
   next?: string;
   /* Tico support's replies not read yet, on the "?" */
@@ -32,12 +35,14 @@ export interface MenuMate {
   kind: 'person' | 'agent';
   to: string;
   live?: boolean;
+  /* their chat with you asks you something */
   needs?: boolean;
 }
 export interface MenuTeam {
   id: string;
   name: string;
   to: string;
+  /* its own thread asks you something (a teammate's ask rises to the team while it is shut) */
   needs?: boolean;
   members: MenuMate[];
 }
@@ -69,15 +74,18 @@ export interface MenuProps {
      your name links to your page */
   accountMenu?: ReactNode;
   onPickCompany?: () => void;
-  onAddTeammate?: () => void;
   onHelp?: () => void;
+  /* the Threads tab's list: every conversation you are in, newest first, and the sources at its foot */
+  threads?: ReactNode;
+  /* a Dot on a tab: something in that list asks you */
+  asks?: Partial<Record<MenuTalk, boolean>>;
+  onMessage?: () => void;
+  onCall?: () => void;
 }
 
 const ROWS: { id: MenuRowId; label: string; icon: IconName }[] = [
   { id: 'tasks', label: 'Tasks', icon: 'tasks' },
   { id: 'calendar', label: 'Calendar', icon: 'calendar' },
-  { id: 'threads', label: 'Threads', icon: 'threads' },
-  { id: 'updates', label: 'Updates', icon: 'updates' },
   { id: 'company', label: 'Company', icon: 'company' },
   { id: 'library', label: 'Library', icon: 'library' },
 ];
@@ -96,14 +104,11 @@ const FACES = 5;
 function Face({ m, size }: { m: MenuMate; size: 16 | 22 | 28 }) {
   return <Avatar decorative kind={m.kind} name={m.name} initials={m.short} hue={m.hue} size={size} live={m.live} />;
 }
-function FlowMark() {
-  return (
-    <span className="dot flow" style={{ '--d': '12px' } as CSSProperties} role="img" aria-label="Waits on you">
-      <i />
-      <b />
-    </span>
-  );
-}
+const Asks = ({ size }: { size?: number }) => <FlowMark size={size} label="Asks you" />;
+const TALK: { id: MenuTalk; label: string }[] = [
+  { id: 'team', label: 'Team' },
+  { id: 'threads', label: 'Threads' },
+];
 
 /* a control that opens a kit menu of the given rows, or the bare control when there are none */
 function dropIf(rows: ReactNode, trigger: ReactElement, side: 'top' | 'bottom' | 'right', align: 'start' | 'end') {
@@ -126,6 +131,8 @@ export function Menu(p: MenuProps) {
   const openTeam = p.openTeam ?? p.teams.find(t => path.startsWith(t.to) || t.members.some(m => m === onMate))?.id;
   const [shut, setShut] = useState<Record<string, boolean>>({});
   const [closedPath, setClosedPath] = useState<string>();
+  // Your last tab stays.
+  const [talk, setTalk] = usePref<MenuTalk>('menu.talk.v1', 'team');
   const isOpen = (t: MenuTeam) => (t.id in shut ? !shut[t.id] : t.id === openTeam);
   const rows = ROWS.filter(r => can(r.id));
   const c = p.counts ?? {};
@@ -150,24 +157,20 @@ export function Menu(p: MenuProps) {
         </header>
         <div className="nav-scroll">
           <div className="nav-items">
-            {rows.map(r => {
-              const n = r.id === 'threads' ? c.threads : r.id === 'updates' ? c.updates : undefined;
-              return (
-                <Link key={r.id} className="nav-item" to={to(`/${r.id}`)} activeProps={ACTIVE} aria-label={r.label} title={r.label}>
-                  <span className="slot-ico">
-                    <Icon name={r.icon} />
-                    {n ? <i className="slot-n">{n}</i> : null}
-                  </span>
-                </Link>
-              );
-            })}
+            {rows.map(r => (
+              <Link key={r.id} className="nav-item" to={to(`/${r.id}`)} activeProps={ACTIVE} aria-label={r.label} title={r.label}>
+                <span className="slot-ico">
+                  <Icon name={r.icon} />
+                </span>
+              </Link>
+            ))}
           </div>
           {faces.length ? (
             <div className="tree">
               {faces.map(m => (
                 <Link key={m.id} className="tree-row" to={to(m.to)} activeProps={ACTIVE} aria-label={m.name} title={m.name}>
                   <Face m={m} size={22} />
-                  {m.needs ? <FlowMark /> : null}
+                  {m.needs ? <Asks /> : null}
                 </Link>
               ))}
             </div>
@@ -210,8 +213,6 @@ export function Menu(p: MenuProps) {
         </span>
       );
     if (id === 'calendar' && c.next) return <span className="nav-next">{c.next}</span>;
-    if (id === 'threads' && c.threads) return <span className="count">{c.threads}</span>;
-    if (id === 'updates' && c.updates) return <span className="count">{c.updates}</span>;
     if (hasKids)
       return (
         <span className={`nav-chev${expanded ? ' is-open' : ''}`}>
@@ -278,69 +279,74 @@ export function Menu(p: MenuProps) {
       })}
     </div>
   );
-  const tree = (
-    <div className="tree">
-      <div className="tree-head">
-        <span>Team</span>
-        <IconButton icon="plus" label="Add a teammate" size="sm" onClick={p.onAddTeammate} />
-      </div>
-      <Link className="tree-row" to={to(p.me.to)} activeProps={ACTIVE}>
-        <Face m={p.me} size={22} />
-        <span className="tree-name">{p.me.name}</span>
-      </Link>
-      {p.teams.map(t =>
-        isOpen(t) ? (
-          [
-            <Link
-              key={t.id}
-              className="tree-team is-open"
-              to={to(t.to)}
-              activeProps={ACTIVE}
-              activeOptions={{ exact: true }}
-              aria-expanded="true"
-              onClick={e => {
-                if (path === t.to) {
-                  e.preventDefault();
-                  setShut(s => ({ ...s, [t.id]: true }));
-                }
-              }}
-            >
-              <span className="tree-chev">
-                <Icon name="chevron" />
-              </span>
-              <span className="tree-name">{t.name}</span>
-            </Link>,
-            ...t.members.map(m => (
-              <Link key={m.id} className="tree-row" to={to(m.to)} activeProps={ACTIVE}>
-                <Face m={m} size={22} />
-                <span className="tree-name">{m.name}</span>
-                {m.needs ? <FlowMark /> : null}
-              </Link>
-            )),
-          ]
-        ) : (
+  const tabs = (
+    <div className="cat" role="tablist" aria-label="Conversations">
+      {TALK.map(x => (
+        <button key={x.id} type="button" role="tab" aria-selected={talk === x.id} className={talk === x.id ? 'is-on' : undefined} onClick={() => setTalk(x.id)}>
+          {x.label}
+          {p.asks?.[x.id] && talk !== x.id ? <Asks size={8} /> : null}
+        </button>
+      ))}
+      <span className="acts">
+        <IconButton icon="message" label="Message" size="sm" quiet onClick={p.onMessage} />
+        <IconButton icon="call" label="Call" size="sm" quiet onClick={p.onCall} />
+      </span>
+    </div>
+  );
+  /* Team: the teams, each folding to its faces; open, its teammates. A team opens its thread, a teammate your chat
+     with them. The chevron always folds or opens it, wherever you are. */
+  const team = (
+    <div className="ca-list" role="tabpanel" aria-label="Team">
+      {p.teams.map(t => {
+        const open = isOpen(t);
+        const head = (
           <Link
             key={t.id}
-            className="tree-team"
+            className={`tree-team${open ? ' is-open' : ''}`}
             to={to(t.to)}
             activeProps={ACTIVE}
             activeOptions={{ exact: true }}
-            aria-expanded="false"
-            onClick={() => setShut(s => ({ ...s, [t.id]: false }))}
+            aria-expanded={open}
+            onClick={e => {
+              const onChev = (e.target as Element).closest('.tree-chev');
+              if (onChev || (open && path === t.to)) e.preventDefault();
+              setShut(s => ({ ...s, [t.id]: onChev || (open && path === t.to) ? open : false }));
+            }}
           >
             <span className="tree-chev">
               <Icon name="chevron" />
             </span>
             <span className="tree-name">{t.name}</span>
-            {t.needs ? <FlowMark /> : null}
-            <span className="faces">
-              {t.members.slice(0, FACES).map(m => (
-                <Face key={m.id} m={m} size={16} />
-              ))}
-            </span>
+            {(t.needs || (!open && t.members.some(m => m.needs))) ? <Asks /> : null}
+            {open ? null : (
+              <span className="faces">
+                {t.members.slice(0, FACES).map(m => (
+                  <Face key={m.id} m={m} size={16} />
+                ))}
+              </span>
+            )}
           </Link>
-        ),
-      )}
+        );
+        if (!open) return head;
+        return [
+          head,
+          <div key={`${t.id}-org`} className="org">
+            {t.members.map(m => (
+              <Link key={m.id} className="tree-row" to={to(m.to)} activeProps={ACTIVE}>
+                <Face m={m} size={22} />
+                <span className="tree-name">{m.name}</span>
+                {m.needs ? <Asks /> : null}
+              </Link>
+            ))}
+          </div>,
+        ];
+      })}
+    </div>
+  );
+  const tree = (
+    <div className="ca">
+      {tabs}
+      {talk === 'team' ? team : p.threads}
     </div>
   );
   const foot = (

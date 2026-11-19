@@ -11,8 +11,8 @@ import { AssetRecovery, PlanLock } from '@/features/notices/exports';
 import { StartScreen, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
 import { flowGroups, flowQuery, pipelinesQuery, roadmapPipeline } from '@/features/tasks/routing';
-import { teamSlug, whoHref } from '@/features/team/routing';
-import { catchUpQuery, updateListQuery } from '@/features/threads/routing';
+import { groupsQuery, teamSlug, whoHref } from '@/features/team/routing';
+import { asksOf, catchUpQuery, threadListQuery, type Asks } from '@/features/threads/routing';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
 import { Empty } from '@/kit/Empty';
@@ -91,6 +91,9 @@ const FirstRun = lazy(() => import('@/features/start/exports').then((m) => ({ de
 const SupportChat = lazy(() => import('@/features/support/exports').then((m) => ({ default: m.SupportChat })));
 const TeammateChat = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.TeammateChat })));
 const ChatSheet = lazy(() => import('@/features/threads/exports').then((m) => ({ default: m.ChatSheet })));
+const MenuThreads = lazy(() => import('@/features/threads/exports').then((m) => ({ default: m.MenuThreads })));
+const TeamThread = lazy(() => import('@/features/threads/exports').then((m) => ({ default: m.TeamThread })));
+const StartCall = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.StartCall })));
 
 /** Mounted from the first time `on` holds, and kept after: its code loads only once it is needed, and what it shows
     can still close in its own way (a dialog's last step stays drawn while it closes). */
@@ -168,7 +171,8 @@ function App() {
   // answer is read from the directory, so an agent's status line does not redraw the shell.
   const who = top === 'team' && a ? decodeURIComponent(a) : '';
   const known = useDirectory((d) => (who ? isTeammate(who, (key) => d.byId[key], me.data?.id) : false));
-  const isActor = (w: string) => !w.startsWith('team:') && (known ?? isTeammate(w, undefined, me.data?.id));
+  // a team's page is its thread stretching, its page beside it, as a teammate's is their chat
+  const isActor = (w: string) => w.startsWith('team:') || (known ?? isTeammate(w, undefined, me.data?.id));
   const arrangement = arrangementFor(at.path, at.chat ? { chat: at.chat } : {}, isActor);
 
   // One stream, once the person is known and Tico's room is drawn (its follow then rides the first connection).
@@ -232,7 +236,7 @@ function App() {
     );
   } else if (arrangement === 'agent' && a) {
     widgets = page;
-    page = <TeammateSheet who={decodeURIComponent(a)} />;
+    page = decodeURIComponent(a).startsWith('team:') ? <TeamSheet who={decodeURIComponent(a)} /> : <TeammateSheet who={decodeURIComponent(a)} />;
     chat = undefined;
   }
   // A call with agents: their chat beside the page while the call bar shows, until it is closed.
@@ -254,7 +258,7 @@ function App() {
         </Later>
         <Frame
           arrangement={callChat ? 'chat' : arrangement}
-          tico={<TicoSheet />}
+          tico={<TicoSheet foot={<CatchUpChip />} />}
           menu={<AppMenu note={status === 'offline' ? <OfflineBar held={held} /> : null} />}
           page={page}
           chat={chat}
@@ -305,12 +309,15 @@ const mate = (a: Actor): MenuMate => ({
   live: a.working,
 });
 
-function teamsOf(d: Directory, meId: string | undefined): MenuTeam[] {
+function teamsOf(d: Directory, meId: string | undefined, asks: Asks, homeOf: (team: string) => string | undefined): MenuTeam[] {
+  // a DM names an agent by its id or slug; the directory knows both
+  const asking = new Set([...asks.mates].map((x) => d.byId[x]?.id ?? x));
   const by = new Map<string, MenuTeam>();
   for (const a of d.actors) {
     if (!a.team || a.id === meId) continue;
-    const t = by.get(a.team) ?? { id: a.team, name: a.team, to: `/team/${encodeURIComponent(teamSlug(a.team))}`, members: [] };
-    t.members.push(mate(a));
+    const home = homeOf(a.team);
+    const t = by.get(a.team) ?? { id: a.team, name: a.team, to: `/team/${encodeURIComponent(teamSlug(a.team))}`, needs: !!home && asks.homes.has(home), members: [] };
+    t.members.push({ ...mate(a), needs: asking.has(a.id) });
     by.set(a.team, t);
   }
   return [...by.values()];
@@ -325,35 +332,76 @@ function AppMenu({ note }: { note: ReactNode }) {
   const { data: me } = useQuery(meQuery);
   const { data: config } = useQuery(configQuery);
   const self = useActor(me?.id);
-  const teams = useDirectory((d) => teamsOf(d, me?.id));
+  const { data: catchUp } = useQuery(catchUpQuery);
+  const { data: list } = useInfiniteQuery(threadListQuery);
+  const { data: groups } = useQuery(groupsQuery);
+  const asks = asksOf(catchUp, list?.pages.flatMap((p) => p.rows) ?? [], me?.id);
+  const homeOf = (team: string) => {
+    const g = groups?.find((x) => x.name === team);
+    return g && `group:${g.id}`;
+  };
+  const teams = useDirectory((d) => teamsOf(d, me?.id, asks, homeOf));
   const { data: pipelines } = useQuery(pipelinesQuery);
   const { data: flow } = useQuery(flowQuery);
-  const { data: catchUp } = useQuery(catchUpQuery);
-  const { data: updates } = useInfiniteQuery(updateListQuery('all'));
   const { data: support } = useQuery(supportUnreadQuery);
   const companies = useCompanies();
+  const [calling, setCalling] = useState(false);
   const name = config?.company_name || config?.app_name || '';
   const meMate: MenuMate = self
     ? mate(self)
     : { id: me?.id ?? 'me', name: me?.email ?? '', short: short(me?.email ?? ''), hue: 0, kind: 'person', to: `/team/${encodeURIComponent(bare(me?.id ?? ''))}` };
   return (
-    <Menu
-      company={{ name, mark: name.slice(0, 1).toUpperCase() }}
-      me={meMate}
-      teams={teams ?? []}
-      pipelines={pipelines && [
-        ...pipelines.map((p) => ({ id: p.id, name: p.name, to: `/tasks/${encodeURIComponent(p.id)}` })),
-        // the Features pipeline read as horizons: only a company that has one gets the line
-        ...(roadmapPipeline(pipelines) ? [{ id: 'roadmap', name: 'Roadmap', to: '/roadmap' }] : []),
-      ]}
-      counts={{ flow: some(flow?.count), threads: some(catchUp?.count), updates: some(updates?.pages[0]?.unread), support: some(support) }}
-      note={note}
-      onSearch={() => openSearch()}
-      onAddTeammate={press('shell.addTeammate')}
-      onHelp={press('support.open')}
-      companyMenu={<CompanyRows name={name} all={companies} />}
-      accountMenu={<AccountRows me={meMate} email={me?.email ?? ''} />}
-    />
+    <>
+      <Menu
+        company={{ name, mark: name.slice(0, 1).toUpperCase() }}
+        me={meMate}
+        teams={teams ?? []}
+        pipelines={pipelines && [
+          ...pipelines.map((p) => ({ id: p.id, name: p.name, to: `/tasks/${encodeURIComponent(p.id)}` })),
+          // the Features pipeline read as horizons: only a company that has one gets the line
+          ...(roadmapPipeline(pipelines) ? [{ id: 'roadmap', name: 'Roadmap', to: '/roadmap' }] : []),
+        ]}
+        counts={{ flow: some(flow?.count), support: some(support) }}
+        threads={
+          <Suspense fallback={null}>
+            <MenuThreads asks={asks.threads} />
+          </Suspense>
+        }
+        asks={{ team: asks.mates.size > 0 || (teams ?? []).some((t) => t.needs), threads: asks.threads.size > 0 }}
+        note={note}
+        onSearch={() => openSearch()}
+        onHelp={press('support.open')}
+        onMessage={press('threads.compose')}
+        onCall={() => setCalling(true)}
+        companyMenu={<CompanyRows name={name} all={companies} />}
+        accountMenu={<AccountRows me={meMate} email={me?.email ?? ''} />}
+      />
+      <Later on={calling}>
+        <StartCall open={calling} onOpenChange={setCalling} sheet />
+      </Later>
+    </>
+  );
+}
+
+/* Tico's chip over its box (plan/threads-team.html "Catch up"): while something is new, one tap asks Tico to catch
+   you up, through Tico's own chat. It goes once pressed, until something else comes in. */
+const CATCH_UP = 'Catch me up';
+function CatchUpChip() {
+  const { data } = useQuery(catchUpQuery);
+  const [asked, setAsked] = useState<number | null>(null);
+  if (!data?.count || asked === data.count) return null;
+  return (
+    <button
+      type="button"
+      className="qchip"
+      onClick={() => {
+        setAsked(data.count);
+        void run('tico.ask', { text: CATCH_UP }, { via: 'click' });
+      }}
+    >
+      <Icon name="archive" />
+      Catch up
+    </button>
   );
 }
 
@@ -459,6 +507,35 @@ function TeammateSheet({ who }: { who: string }) {
       />
       <Suspense fallback={null}>
         <TeammateChat who={who} />
+      </Suspense>
+    </Sheet>
+  );
+}
+
+/* A team's own page: its thread stretching (updates and meetings are cards in it), its faces in the head, the team's
+   page beside it. */
+function TeamSheet({ who }: { who: string }) {
+  const name = who.slice(who.indexOf(':') + 1);
+  const faces = useDirectory((d) => d.actors.filter((a) => a.team === name).slice(0, 5)) ?? [];
+  return (
+    <Sheet kind="chat" label={name}>
+      <SheetHead
+        kind="side"
+        title={name}
+        lead={
+          <span className="head-ic">
+            <Icon name="people" />
+          </span>
+        }
+      >
+        <span className="faces">
+          {faces.map((a) => (
+            <Avatar key={a.id} decorative kind={a.kind} name={a.name} initials={short(a.name)} hue={a.hue ?? 0} size={16} />
+          ))}
+        </span>
+      </SheetHead>
+      <Suspense fallback={null}>
+        <TeamThread who={who} />
       </Suspense>
     </Sheet>
   );

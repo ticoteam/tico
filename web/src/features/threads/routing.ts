@@ -1,9 +1,8 @@
-import type { QueryClient } from '@tanstack/react-query';
-import { catchUpQuery, learnedQuery, viewersQuery, threadListQuery, threadQuery, threadSearchQuery, updateListQuery, updateQuery, type UpdateTab } from './queries';
+import { isCancelledError, type QueryClient } from '@tanstack/react-query';
+import { learnedQuery, viewersQuery, threadListQuery, threadQuery, updateListQuery, updateQuery, type UpdateTab } from './queries';
 
 /* What the routes read before they draw, and their search params. The page's main read throws to the router's fault
-   page; a side read (a search, Catch up, the open thread) is waited for but never throws: its own part of the page
-   says it did not load. */
+   page; a side read (the open thread) is waited for but never throws: its own part of the page says it did not load. */
 
 // The reads the routes and the shell's counts use. No components here: the first load imports this file (through
 // the routes and the root), and a page comes through exports.ts with its route.
@@ -21,17 +20,14 @@ export {
 
 const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined);
 
-export interface ThreadsSearch {
-  /** The list's search words. */
-  q?: string;
-}
-export const threadsSearch = (s: Record<string, unknown>): ThreadsSearch => ({ q: text(s.q) });
+export { asksOf, type Asks } from './model';
 
-export function loadThreads(qc: QueryClient, o: { q?: string; catchUp?: boolean; thread?: string }) {
+/** A thread's page: the list (the menu's Threads tab) and the open thread. The menu reads the list too: its observer
+    can detach during mount while the route still waits on the read, which cancels it; the route reads again. */
+export function loadThreads(qc: QueryClient, o: { thread?: string } = {}) {
+  const list = () => qc.ensureInfiniteQueryData(threadListQuery);
   return Promise.all([
-    qc.ensureInfiniteQueryData(threadListQuery),
-    o.q && qc.prefetchInfiniteQuery(threadSearchQuery(o.q.trim())),
-    o.catchUp && qc.prefetchQuery(catchUpQuery),
+    list().catch((error: unknown) => (isCancelledError(error) ? list() : Promise.reject(error))),
     o.thread && qc.prefetchQuery(threadQuery(o.thread)),
   ]);
 }

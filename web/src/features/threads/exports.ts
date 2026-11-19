@@ -1,10 +1,13 @@
-// Threads, the second chat, Mail, Messaging and Updates. The only file other code imports from this feature.
+// Threads, the menu's Threads list, a team's thread, the second chat, Mail, Messaging and Updates. The only file other
+// code imports from this feature.
 export { ThreadsPage, type ThreadsPageProps } from './ThreadsPage';
 export { MailPage, MessagingPage, type MailPageProps, type MessagingPageProps } from './MailPage';
 export { UpdatesPage, type UpdatesPageProps } from './UpdatesPage';
 export { ChatSheet, type ChatSheetProps } from './ChatSheet';
 export { LearnedPage } from './LearnedPage';
-export { threadsSearch, loadThreads, updatesSearch, loadUpdates, loadLearned, type ThreadsSearch, type UpdatesSearch } from './routing';
+export { loadThreads, updatesSearch, loadUpdates, loadLearned, type UpdatesSearch } from './routing';
+export { MenuThreads, type MenuThreadsProps } from './MenuThreads';
+export { TeamThread, type TeamThreadProps } from './TeamThread';
 export {
   threadListQuery,
   threadQuery,

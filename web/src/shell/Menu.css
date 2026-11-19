@@ -16,3 +16,49 @@ button.me{border:0;padding:0;background:none;font:inherit;color:inherit;cursor:p
 .acct-me em{font-style:normal;font-size:var(--t-sm);color:var(--muted)}
 .acct-line{height:var(--ctl);display:flex;align-items:center;justify-content:space-between;padding:0 var(--s-1) 0 var(--s-2)}
 .help-slot>.slot-n{left:18px;top:-6px;pointer-events:none}
+
+/* The conversation area (plan/threads-team.html .ca): two small underline tabs, Team | Threads, with Message and Call
+   at their right; under them the open tab's list, which scrolls on its own; Mail and Messaging stay at its foot. */
+.nav-scroll:has(>.ca){display:flex;flex-direction:column}
+.nav-scroll>.nav-items{flex:none}
+.ca{flex:1;min-height:0;display:flex;flex-direction:column;margin:var(--s-3h) var(--s-2) 0}
+.cat{height:var(--ctl);flex:none;display:flex;align-items:center;gap:var(--s-3h);padding:0 0 0 var(--s-2);margin-bottom:var(--s-1h);border-bottom:1px solid var(--line)}
+.cat>[role="tab"]{height:var(--ctl);border:0;padding:0;background:none;font:inherit;font-size:var(--t-sm);color:var(--muted);display:inline-flex;align-items:center;gap:var(--s-1);position:relative;cursor:pointer}
+.cat>[role="tab"]:hover{color:var(--ink)}
+.cat>[role="tab"].is-on{color:var(--ink);font-weight:var(--w-strong)}
+.cat>[role="tab"].is-on::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;border-radius:var(--r-chip);background:var(--ink)}
+.cat>[role="tab"]:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
+.cat .acts{margin-left:auto;display:flex}
+.ca-list{flex:1;min-height:var(--s-18);overflow:auto;scrollbar-width:none;display:grid;grid-template-columns:minmax(0,1fr);gap:calc(var(--s-0) / 2);align-content:start;padding-bottom:var(--s-2);margin:0;border-top:0}
+/* stylelint-disable-next-line color-no-hex -- mask */
+.ca-list{-webkit-mask-image:linear-gradient(#000 calc(100% - 22px),transparent);mask-image:linear-gradient(#000 calc(100% - 22px),transparent)}
+.ca .tree-team{font-size:inherit;font-weight:var(--w-text)}
+.ca .tree-row.is-new,.ca .tree-team.is-new{color:var(--ink);font-weight:var(--w-strong)}
+.ca .tree-row{color:var(--ink-2)}
+.ca .tree-ic{width:22px;display:grid;place-items:center;color:var(--muted);flex:none}
+.ca .tree-ic .ico{width:16px;height:16px}
+.ca-more{border:0;background:none;font:inherit;color:var(--muted);text-align:left;cursor:pointer}
+/* a team's teammates hang from it on a thin line */
+.org{position:relative;margin-left:var(--s-5);padding-left:var(--s-2);display:grid;gap:calc(var(--s-0) / 2)}
+.org::before{content:"";position:absolute;left:0;top:0;bottom:15px;border-left:1px solid var(--line-strong)}
+.org>.tree-row{position:relative}
+.org>.tree-row::before{content:"";position:absolute;left:-8px;top:15px;width:7px;border-top:1px solid var(--line-strong)}
+.ca-src{flex:none;border-top:1px solid var(--line);padding:var(--s-1) 0 var(--s-1h);display:grid;gap:calc(var(--s-0) / 2)}
+.grp{height:var(--ctl-sm);display:flex;align-items:center;gap:var(--s-1h);padding:0 var(--s-2h) 0 var(--s-2);border-radius:var(--r-row);color:var(--ink-2);font-weight:var(--w-strong)}
+.grp:hover{background:var(--well-2)}
+.grp.is-active{background:var(--selected);color:var(--ink)}
+.grp>.ico{width:13px;height:13px;color:var(--faint)}
+
+/* a team's thread: the team's mark and faces in its head */
+.head-ic{width:22px;display:grid;place-items:center;color:var(--muted);flex:none}
+.head-ic .ico{width:16px;height:16px}
+
+/* Tico's Catch up chip, over its box */
+.qchip{align-self:start;display:inline-flex;align-items:center;gap:var(--s-1h);height:30px;padding:0 var(--s-3);border:0;border-radius:var(--r-pill);background:var(--well-2);color:var(--ink-2);font:inherit;font-size:var(--t-sm);cursor:pointer}
+.qchip .ico{width:14px;height:14px;color:var(--muted)}
+.qchip:hover{color:var(--ink)}
+.qchip:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
+.phone .cat>[role="tab"]{font-size:var(--t-md)}
+/* on a phone the whole card scrolls: the list is not a scroller of its own */
+.m-scroll .ca{flex:none}
+.m-scroll .ca-list{overflow:visible;-webkit-mask-image:none;mask-image:none}

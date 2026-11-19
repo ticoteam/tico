@@ -7,8 +7,9 @@ import { taskDetailQuery } from '@/features/task/exports';
 import { Count } from '@/kit/Count';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { MenuItem } from '@/kit/Menu';
+import { MenuItem, MenuRule } from '@/kit/Menu';
 import { ItemHead, PageMore } from '@/pagekinds';
+import { Browse } from './Browse';
 import { AddPeople, Members } from './Members';
 import { isDm, othersOf } from './model';
 import { Face, press, useMe, useTitle } from './people';
@@ -23,7 +24,7 @@ export function ThreadHead({ id }: { id: string }) {
   const me = useMe();
   const title = useTitle(t) || 'Thread';
   const [editing, setEditing] = useState(false);
-  const [open, setOpen] = useState<'people' | 'add' | 'settings' | 'outline' | null>(null);
+  const [open, setOpen] = useState<'people' | 'add' | 'settings' | 'outline' | 'browse' | null>(null);
   const close = () => setOpen(null);
   const people = t ? othersOf(t, me) : [];
   const manage = t?.me?.can_manage !== false;
@@ -35,6 +36,9 @@ export function ThreadHead({ id }: { id: string }) {
       <MenuItem label="People" icon="people" onSelect={() => setOpen('people')} />
       <MenuItem label="Outline" icon="list" onSelect={() => setOpen('outline')} />
       <MenuItem label="Settings" icon="gear" onSelect={() => setOpen('settings')} />
+      <MenuRule />
+      <MenuItem label="Browse threads" icon="search" onSelect={() => setOpen('browse')} />
+      <MenuItem label="Learned" icon="spark" onSelect={() => void press('learned.open', {})} />
     </PageMore>
   );
 
@@ -43,7 +47,6 @@ export function ThreadHead({ id }: { id: string }) {
       <ItemHead
         title={title}
         target={`thread:${id}`}
-        back={{ to: '/threads', label: 'Threads' }}
         lead={other ? <Face actor={other} /> : undefined}
         actions={
           t && (
@@ -75,6 +78,7 @@ export function ThreadHead({ id }: { id: string }) {
       {t && open === 'people' && <Members thread={t} onClose={close} onAdd={() => setOpen('add')} />}
       {t && open === 'add' && <AddPeople thread={t} have={new Set([...(me ? [me] : []), ...people])} onClose={close} />}
       {t && open === 'settings' && <Settings thread={t} onClose={close} />}
+      {open === 'browse' && <Browse onClose={close} />}
       <Outline id={id} open={open === 'outline'} onOpenChange={(o) => setOpen(o ? 'outline' : null)} />
     </>
   );

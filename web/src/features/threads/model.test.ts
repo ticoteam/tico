@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { byDay, letterRows, senderName, titleOf, toPage, type Letter, type Thread } from './model';
+import { asksOf, byDay, letterRows, senderName, titleOf, toPage, type Letter, type Thread } from './model';
 
 const at = (min: number) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
 const row = (id: string, min: number, extra: Partial<Thread> = {}): Thread => ({
@@ -49,5 +49,19 @@ describe('names', () => {
   it('groups updates by day, newest day first', () => {
     const u = (id: string, day: string) => ({ id, bot: 'ops', kind: 'daily', day, created_at: `${day}T09:00:00Z` });
     expect(byDay([u('a', '2026-01-01'), u('b', '2026-01-02')]).map((g) => g.day)).toEqual(['2026-01-02', '2026-01-01']);
+  });
+});
+
+describe('what asks you', () => {
+  it('is a thread Catch up flags as a mention, or a DM not read; never a task; a DM names its teammate', () => {
+    const dm = row('d1', 3, { audience: 'personal', dm_with: [{ actor: 'human:me' }, { actor: 'bot:gm' }], me: { unread: 1 } });
+    const read = row('d2', 4, { audience: 'personal', dm_with: [{ actor: 'bot:qa' }], me: { unread: 0 } });
+    const team = row('h1', 5, { audience: 'home', home: { actor: 'group:g1' } });
+    const task = row('k1', 6, { task_id: 'k1' });
+    const quiet = row('q1', 7);
+    const a = asksOf({ items: [{ thread: team, mention: true }, { thread: task, mention: true }, { thread: quiet, mention: false }] }, [dm, read, quiet], 'human:me');
+    expect([...a.threads].sort()).toEqual(['d1', 'h1']);
+    expect([...a.mates]).toEqual(['bot:gm']);
+    expect([...a.homes]).toEqual(['group:g1']);
   });
 });

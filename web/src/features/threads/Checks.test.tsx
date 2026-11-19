@@ -110,7 +110,7 @@ describe('A thread @s157', () => {
   it('shows its messages under its name and sends from the box', async () => {
     serve((url, method) => (method === 'POST' && url.endsWith('/threads/t1/messages') ? ok(msg('m3', 'human:me', 'On it')) : undefined));
     seedThread(thread(), [msg('m1', 'bot:qa', 'The build is ready for review.'), msg('m2', 'human:ana', 'Looking now.')]);
-    show(<ThreadsPage pane="thread" thread="t1" open />, '/threads/t1');
+    show(<ThreadsPage pane="thread" thread="t1" />, '/threads/t1');
     expect(await screen.findByText('The build is ready for review.')).toBeTruthy();
     expect(screen.getByText('Looking now.')).toBeTruthy();
     const box = screen.getByRole('textbox', { name: 'Message Launch plan' });
@@ -122,7 +122,7 @@ describe('A thread @s157', () => {
   it('has no box where the person may only read', async () => {
     serve();
     seedThread(thread({ me: { can_manage: false, can_post: false } }), [msg('m1', 'bot:qa', 'Closed for now.')]);
-    show(<ThreadsPage pane="thread" thread="t1" open />, '/threads/t1');
+    show(<ThreadsPage pane="thread" thread="t1" />, '/threads/t1');
     expect(await screen.findByText('Closed for now.')).toBeTruthy();
     expect(screen.queryByRole('textbox', { name: 'Message Launch plan' })).toBeNull();
   });
@@ -134,9 +134,8 @@ describe('A chat with an agent @s605', () => {
     const dm = thread({ id: 't4', title: '', audience: 'personal', root_id: 't4', members: { members: [{ actor: 'human:me' }, { actor: 'bot:qa' }] } });
     queryClient.setQueryData(threadKeys.list, { pages: [{ rows: [dm], next: null }], pageParams: [null] });
     seedThread(dm, [msg('m1', 'bot:qa', 'Morning. Two tests failed overnight.', 't4')]);
-    show(<ThreadsPage pane="thread" thread="t4" open />, '/threads/t4');
+    show(<ThreadsPage pane="thread" thread="t4" />, '/threads/t4');
     expect(await screen.findByText('Morning. Two tests failed overnight.')).toBeTruthy();
-    expect(screen.getAllByTitle('QA').find((el) => el.tagName === 'A')?.getAttribute('href')).toBe('/threads/t4');
     expect(screen.getByRole('textbox', { name: 'Message QA' })).toBeTruthy();
   });
 });
@@ -144,7 +143,7 @@ describe('A chat with an agent @s605', () => {
 describe('New message @s158', () => {
   it('picks a teammate, sends the first message and lands in the new thread', async () => {
     serve((url, method) => (method === 'POST' && url.endsWith('/threads/dm') ? ok(thread({ id: 't5', title: '' })) : undefined));
-    const router = show(<ThreadsPage pane="new" open />, '/threads/new');
+    const router = show(<ThreadsPage pane="new" />, '/threads/new');
     fireEvent.change(await screen.findByRole('textbox', { name: 'To' }), { target: { value: 'ana' } });
     fireEvent.click(within(screen.getByRole('listbox', { name: 'Suggestions' })).getByRole('option', { name: /Ana Ruiz/ }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Message Ana Ruiz' }), { target: { value: 'Lunch at noon?' } });
@@ -155,7 +154,7 @@ describe('New message @s158', () => {
 
   it('keeps the words in the box when a rule holds the message', async () => {
     serve((url, method) => (method === 'POST' && url.endsWith('/threads/dm') ? ok({ held: true }) : undefined));
-    const router = show(<ThreadsPage pane="new" open />, '/threads/new');
+    const router = show(<ThreadsPage pane="new" />, '/threads/new');
     fireEvent.change(await screen.findByRole('textbox', { name: 'To' }), { target: { value: 'ana' } });
     fireEvent.click(screen.getByRole('option', { name: /Ana Ruiz/ }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Message Ana Ruiz' }), { target: { value: 'Lunch at noon?' } });
@@ -167,25 +166,9 @@ describe('New message @s158', () => {
 
   it('offers a named thread that matches the words', async () => {
     serve();
-    show(<ThreadsPage pane="new" open />, '/threads/new');
+    show(<ThreadsPage pane="new" />, '/threads/new');
     fireEvent.change(await screen.findByRole('textbox', { name: 'To' }), { target: { value: 'launch' } });
     expect(screen.getByRole('option', { name: /Launch plan/ }).getAttribute('href')).toBe('/threads/t1');
-  });
-});
-
-describe('Catch up @s179', () => {
-  it('shows what is new, thread by thread, and Mark read reads every one', async () => {
-    serve();
-    queryClient.setQueryData(threadKeys.catchUp, {
-      count: 2,
-      items: [{ thread: thread(), messages: [msg('m1', 'bot:qa', 'Ready for review.'), msg('m2', 'human:ana', 'Looking now.')], new_count: 2 }],
-    });
-    show(<ThreadsPage pane="catch-up" open />, '/threads/catch-up');
-    const group = await screen.findByRole('region', { name: 'Launch plan' });
-    expect(within(group).getByText('Ready for review.')).toBeTruthy();
-    expect(within(group).getByRole('link', { name: /Launch plan/ }).getAttribute('href')).toBe('/threads/t1');
-    fireEvent.click(screen.getByRole('button', { name: 'Mark read' }));
-    await waitFor(() => expect(sent('POST', '/api/v2/threads/t1/read-all')).toBeTruthy());
   });
 });
 
@@ -517,24 +500,11 @@ describe('Learned @s213', () => {
   });
 });
 
-describe('Threads head and Catch up @s156 @s179', () => {
-  it('counts Catch up on the Threads tab, writes with a pencil, and Mark read is the filled button', async () => {
+describe('Threads, no thread open @s156', () => {
+  it('says no thread is open; its list is the menu\'s', async () => {
     serve();
-    queryClient.setQueryData(threadKeys.catchUp, { count: 25, items: [{ thread: thread(), messages: [msg('m1', 'bot:qa', 'Ready.')], new_count: 1 }] });
-    show(<ThreadsPage pane="catch-up" open />, '/threads/catch-up');
-    expect(await screen.findByText('24 more')).toBeTruthy();
-    expect(screen.getByRole('link', { name: /^Threads/ }).textContent).toContain('25');
-    expect(screen.getByRole('button', { name: 'New message' }).textContent).toBe('');
-    expect(screen.getByRole('button', { name: 'Mark read' }).className).toContain('fill');
-  });
-
-  it('offers New message when there are no threads yet', async () => {
-    serve();
-    queryClient.setQueryData(threadKeys.list, { pages: [{ rows: [], next: null }], pageParams: [null] });
-    const router = show(<ThreadsPage pane="catch-up" />, '/threads');
-    expect(await screen.findByRole('heading', { name: 'No threads yet' })).toBeTruthy();
-    fireEvent.click(screen.getAllByRole('button', { name: 'New message' }).find((b) => b.textContent === 'New message')!);
-    await waitFor(() => expect(router.state.location.pathname).toBe('/threads/new'));
+    show(<ThreadsPage pane="none" />, '/threads');
+    expect(await screen.findByRole('heading', { name: 'No thread open' })).toBeTruthy();
   });
 });
 

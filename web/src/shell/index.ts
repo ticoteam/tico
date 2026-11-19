@@ -5,7 +5,7 @@ export { PageFault } from './PageFault';
 export { tabTitle, useTabTitle } from './title';
 export type { SheetProps, SheetHeadProps, SheetControls } from './Sheet';
 export { Menu } from './Menu';
-export type { MenuProps, MenuTeam, MenuMate, MenuCompany, MenuCounts, MenuRowId } from './Menu';
+export type { MenuProps, MenuTeam, MenuMate, MenuCompany, MenuCounts, MenuRowId, MenuTalk } from './Menu';
 export { useArrangement, arrangementFor, isTeammate } from './arrangement';
 export { layout, modeFor, press, C, SPEC, ARR } from './layout';
 export type { Arrangement, ArrangementSpec, Saved, SheetId, SheetLayout, SheetState, Layout } from './layout';
