@@ -49,7 +49,7 @@ def test_identical_reads_at_once_compute_once(monkeypatch):
 def test_an_answer_serves_again_until_it_is_older_than_the_window(monkeypatch):
     now = [100.0]
     monkeypatch.setattr(shared_reads, "clock", lambda: now[0])
-    monkeypatch.setattr(shared_reads, "FRESH_SECONDS", 1.0)
+    monkeypatch.setenv("TICO_READ_CACHE_SECONDS", "1")
 
     async def run():
         reads, (calls, compute) = shared_reads.SharedReads(), _counting()
@@ -88,5 +88,21 @@ def test_a_streamed_answer_is_never_handed_to_another_request():
         key = shared_reads.key_of(_request(), "/api/v2/threads/rail")
         await asyncio.gather(*(reads.answer(key, 0, compute) for _ in range(3)))
         assert len(calls) == 3
+
+    asyncio.run(run())
+
+
+def test_a_callers_own_write_drops_their_kept_answers():
+    async def run():
+        store = SimpleNamespace()
+        reads, (calls, compute) = shared_reads.of(store), _counting()
+        key = shared_reads.key_of(_request(), "/api/v2/threads/rail")
+        await reads.answer(key, 0, compute)
+        shared_reads.wrote(store, _request(method="POST", who="human:ben"))  # someone else's write: kept
+        await reads.answer(key, 0, compute)
+        assert len(calls) == 1
+        shared_reads.wrote(store, _request(method="POST"))
+        await reads.answer(key, 0, compute)
+        assert len(calls) == 2
 
     asyncio.run(run())

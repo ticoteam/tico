@@ -25,7 +25,17 @@ from .json_response import TAGGED
 # Reads that change something when they are read (a "seen" mark, a shown-email record, a stream) are never shared.
 UNSHARED = frozenset({"/api/v2/events", "/api/v2/email/sends/{sid}"})
 UNSHARED_PLACES = frozenset({"growth"})
-FRESH_SECONDS = float(os.environ.get("TICO_READ_CACHE_SECONDS", "1"))  # how long one person's answer serves the same request again; 0 = only while it is being computed
+
+
+def fresh_seconds() -> float:
+    """How long one person's answer serves the same request again (TICO_READ_CACHE_SECONDS, default 1); 0 shares an
+    answer only while it is being computed."""
+    try:
+        return max(0.0, float(os.environ.get("TICO_READ_CACHE_SECONDS", "1")))
+    except ValueError:
+        return 1.0
+
+
 KEPT_BYTES = 64 * 1024 * 1024  # answers kept at once, for every caller together
 KEPT_ONE = 8 * 1024 * 1024  # a bigger answer is shared only while it is being computed
 
@@ -116,7 +126,7 @@ class SharedReads:
         slot = self._slots.get(key)
         if slot is None:
             slot = self._slots[key] = _Slot()
-        if slot.kept is not None and slot.kept_seq >= seq and now - slot.kept_at <= FRESH_SECONDS:
+        if slot.kept is not None and slot.kept_seq >= seq and now - slot.kept_at <= fresh_seconds():
             self.reused += 1
             return copy(slot.kept)
         if slot.running is not None and slot.running_seq >= seq:
@@ -186,12 +196,20 @@ class SharedReads:
             return copy(response)
         return response if owner else await compute()
 
+    def forget(self, who: str) -> None:
+        """Drop the answers kept for this caller (repr of the identity): after their own write, their next read is
+        fresh, so what they just did shows at once."""
+        for key, slot in list(self._slots.items()):
+            if key[3] == who and slot.kept is not None:
+                self._kept_bytes -= len(slot.kept.body)
+                slot.kept = None
+
     def _prune(self, now: float) -> None:
         if now - self._pruned < 1.0:
             return
         self._pruned = now
         for key, slot in list(self._slots.items()):
-            if slot.kept is not None and now - slot.kept_at > FRESH_SECONDS:
+            if slot.kept is not None and now - slot.kept_at > fresh_seconds():
                 self._kept_bytes -= len(slot.kept.body)
                 slot.kept = None
             if slot.kept is None and slot.running is None and slot.waiting is None:
@@ -204,6 +222,15 @@ def of(store: Any) -> SharedReads:
     if existing is None:
         existing = store.shared_reads = SharedReads()
     return existing
+
+
+def wrote(store: Any, request: Any) -> None:
+    """A request that may change something: the caller's kept answers go, so their own change shows at once."""
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return
+    who = getattr(request.state, "identity", None)
+    if who is not None:
+        of(store).forget(repr(who))
 
 
 async def answer(store: Any, request: Any, route: str, compute: Compute) -> Response:

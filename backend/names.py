@@ -243,7 +243,9 @@ def install_route_class(app, store):
 
                 # A person's identical reads are computed once (backend/shared_reads.py); each request then gets its
                 # own validators and wire encoding.
-                return await compress(request, await shared_reads.answer(store, request, self.path, answer))
+                response = await compress(request, await shared_reads.answer(store, request, self.path, answer))
+                shared_reads.wrote(store, request)
+                return response
 
             return named_response
 

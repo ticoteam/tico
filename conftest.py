@@ -15,6 +15,8 @@ os.environ["TICO_RUNNER_CONTAINER_PROBE"] = "off"
 os.environ["TICO_START_JOBS"] = "inline"
 # Every test's database is thrown away, so no commit waits for the disk (hubdb.synchronous).
 os.environ["TICO_SQLITE_SYNC"] = "off"
+# Tests read right after writing as other callers: the 1 s read cache (backend/shared_reads.py) only shares in-flight reads here.
+os.environ["TICO_READ_CACHE_SECONDS"] = "0"
 # Bots start `nearby` (backend/reach.py), and most test companies put their bots on no chart, so tests about
 # something else start them open. The reach tests (backend/tests/test_reach*.py) clear this and test the default.
 os.environ["TICO_REACH_DEFAULT"] = "open"
