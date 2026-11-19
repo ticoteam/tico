@@ -34,8 +34,8 @@ const RK_KINDS: readonly [string, string][] = [['dispute', 'Dispute'], ['request
 const RK_BASIS: Readonly<Record<string, string>> = {law: 'Law', order: 'Order', agency: 'Agency', contract: 'Contract', ours: 'Ours', asked: 'Asked', theirs: 'Theirs'};
 const RK_BINDING: ReadonlySet<string> = new Set(['law', 'order', 'agency', 'contract']);   // as backend/rule_due.py BINDING
 const RK_DUE_GROUPS: readonly [RkDue['group'], string][] = [['unconfirmed', 'Unconfirmed'], ['next', 'Next 14 days'], ['later', 'Later'], ['past', 'Past 30 days']];
-const RK_CAT_DATES = 6;
-const RK_DETAIL_DATES = 200;      // as backend/risk.py LIMIT_MAX: the most dates a risk's page read holds          // a live risk shows this many of its dates; the rest are on its page
+const RK_CAT_DATES = 6;           // a live risk shows this many of its dates; the rest are on its page
+const RK_DETAIL_DATES = 200;      // as backend/risk.py LIMIT_MAX: the most dates a risk's page read holds
 const RK_POLL_MS = 3 * 60000;    // dates with no task send no event: the ones on screen are read again this often
 let RKP: RkPage | null = null;   // the page on screen: a late answer for a page left behind draws nothing
 let RK_RUN = 0;
@@ -777,12 +777,27 @@ function rkFormHTML(m: RkMatter | null, close: string): string {
       <label><span>Kind</span><select name="kind"><option value="">—</option>${RK_KINDS.map(([k, w]) => `<option value="${k}"${m?.kind === k ? ' selected' : ''}>${w}</option>`).join('')}</select></label>
       <label><span>Party</span><span class="rk-party"><input name="party_q" type="search" autocomplete="off" placeholder="Contacts" aria-label="Party" value="${esc(m?.party?.name || '')}">
         <input name="party" type="hidden" value="${esc(m?.party_entity_id || '')}"><span class="rk-found" data-rk-found hidden></span></span></label>
+      <label><span>Product</span><select name="product"><option value="">—</option>${m?.product ? rkOption(m.product, m.product.id) : ''}</select></label>
       <label><span>Amount</span><span class="rk-amt"><input name="amount" inputmode="decimal" autocomplete="off" aria-label="Amount" value="${esc(amount)}">
         <input name="currency" maxlength="3" autocomplete="off" aria-label="Currency" value="${esc((m?.currency || 'USD').toUpperCase())}"></span></label>
       <label><span>Forum</span><input name="forum" maxlength="200" autocomplete="off" value="${esc(m?.forum || '')}"></label>
       <p class="rk-err" data-error hidden></p>
       <div class="rk-foot"><a class="btn ghost" href="${esc(close)}">Cancel</a><button type="submit" class="primary">Save</button></div>
     </form>`;
+}
+const rkOption = (o: {id: string; name: string}, chosen: string): string =>
+  `<option value="${esc(o.id)}"${o.id === chosen ? ' selected' : ''}>${esc(o.name)}</option>`;
+// The Product choices: our products, read when the form opens. Until then (or if they cannot be read) the select holds
+// the matter's own product, so a save never clears it unasked.
+async function rkProducts(form: HTMLFormElement, m: RkMatter | null, run: number): Promise<void> {
+  const pick = form.querySelector<HTMLSelectElement>('[name=product]');
+  if (!pick) return;
+  let list: {id: string; name: string}[];
+  try { list = (await get<{products: {id: string; name: string}[]}>('/v2/products', {fresh: true})).products; } catch { return; }
+  if (!rkLive(run) || !pick.isConnected) return;
+  const chosen = pick.value, own = m?.product;
+  const extra = own && !list.some(p => p.id === own.id) ? [own] : [];
+  pick.innerHTML = '<option value="">—</option>' + [...list, ...extra].map(p => rkOption(p, chosen)).join('');
 }
 // Minor units from what was typed ("1,240.50" is 124050), or null for a blank, or NaN for anything else.
 function rkMinor(typed: string): number | null {
@@ -796,6 +811,7 @@ function rkFormBind(side: HTMLElement, tid: string, m: RkMatter | null, run: num
   const err = side.querySelector<HTMLElement>('[data-error]'), found = side.querySelector<HTMLElement>('[data-rk-found]');
   if (!form || !err || !found) return;
   const q = form.querySelector<HTMLInputElement>('[name=party_q]'), pid = form.querySelector<HTMLInputElement>('[name=party]');
+  void rkProducts(form, m, run);
   let ask = 0, timer: ReturnType<typeof setTimeout> | null = null;
   q?.addEventListener('input', () => {
     if (pid) pid.value = '';
@@ -829,12 +845,13 @@ function rkFormBind(side: HTMLElement, tid: string, m: RkMatter | null, run: num
     if (amount !== null && !/^[A-Z]{3}$/.test(currency)) return fail('Currency is three letters.');
     if (text('party_q') && !text('party')) return fail('Pick a party from Contacts.');
     // Only the facts that changed: a party the viewer may not see reads as none, and saving another fact keeps it.
-    const was = {kind: m?.kind || '', party: m?.party_entity_id || '', amount: m?.amount ?? null, currency: (m?.currency || '').toUpperCase(), forum: m?.forum || ''};
+    const was = {kind: m?.kind || '', party: m?.party_entity_id || '', amount: m?.amount ?? null, currency: (m?.currency || '').toUpperCase(), forum: m?.forum || '', product: m?.product_id || ''};
     const body: Record<string, unknown> = {};
     if (text('kind') !== was.kind) body['kind'] = text('kind') || null;
     if (text('party') !== was.party && (text('party') || text('party_q') !== (m?.party?.name || ''))) body['party_entity_id'] = text('party') || null;
     if (amount !== was.amount || (amount !== null && currency !== was.currency)) { body['amount'] = amount; body['currency'] = amount === null ? null : currency; }
     if (text('forum') !== was.forum) body['forum'] = text('forum') || null;
+    if (text('product') !== was.product) body['product_id'] = text('product') || null;
     if (!Object.keys(body).length) { location.hash = rkWith('matter', ''); return; }
     if (m) body['version'] = m.version;
     const go = form.querySelector<HTMLButtonElement>('[type=submit]');

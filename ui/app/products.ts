@@ -38,8 +38,9 @@ let PR_MATTERS: { key: string; rows: PrMatter[] } | null = null;   // the matter
 let PR_RUN = 0;   // never reset, so a page opened after leaving Products never takes an earlier page's answer
 
 const prHref = (key: string): string => PRODUCTS_ROUTE + '/' + encodeURIComponent(key);
-// A risk shows by name: Risk has no page of its own to open yet.
-const prRisks = (p: Product): string => p.risks.map(r => esc(r.label)).join(', ');
+// A risk opens its page on Risk (#/risk/r/<slug>, the slug its key after risk:).
+const prRiskLink = (r: PrRisk): string => `<a href="${RISK_ROUTE}/r/${encodeURIComponent(r.key.replace(/^risk:/, ''))}">${esc(r.label)}</a>`;
+const prRisks = (p: Product): string => p.risks.map(prRiskLink).join(', ');
 const prLive = (run: number): boolean => PRP !== null && PRP.run === run;
 const prErr = (e: unknown): string => `<p class="err" data-pr-error>${esc(errorMessage(e, 'Something went wrong.'))}</p>`;
 const prWord = (field: PrChoice, key: string | null): string => key ? (PR_CHOICES[field].find(([k]) => k === key)?.[1] ?? key) : '';
@@ -170,7 +171,7 @@ function prDraw(root: HTMLElement, p: Product): void {
 function prRiskCards(p: Product): string {
   const matters = PR_MATTERS?.key === p.key ? PR_MATTERS.rows : [];
   const risks = p.risks.length ? `<section class="card dir-card" data-pr-risks><header><h2>Risks</h2></header>
-    <ul class="pr-items">${p.risks.map(r => `<li><span class="pr-item">${esc(r.label)}</span></li>`).join('')}</ul></section>` : '';
+    <ul class="pr-items">${p.risks.map(r => `<li><span class="pr-item">${prRiskLink(r)}</span></li>`).join('')}</ul></section>` : '';
   const rows = matters.map(m => {
     const closed = m.task.status !== 'open';
     return `<li data-pr-matter="${esc(m.task.id)}"${closed ? ' class="muted"' : ''}><span class="pr-item"><a href="#/task/${encodeURIComponent(m.task.id)}">${esc(m.task.title || m.task.label || m.task.id)}</a></span>
