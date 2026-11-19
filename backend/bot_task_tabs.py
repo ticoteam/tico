@@ -73,6 +73,8 @@ FIELDS = {
     "label": "label",
 }
 WAITING = ("any", "person", "bot", "me", "not_me")
+# A row saved before Pipelines v3 names its field by the old word.
+RENAMED = {"step": "stage", "type": "pipeline"}
 
 
 def personal(settings, bot):
@@ -94,16 +96,24 @@ def may_edit(c, auth, settings, who, bot):
     return who.role == "owner" or auth.bot_manager(c, who, bot)
 
 
+def renamed(rows):
+    return [{**r, "field": RENAMED.get(r["field"], r["field"])} for r in rows]
+
+
 def legacy(tab):
     """A tab as stored before filters had rows (Task-list tabs 2/3: types, states, whom it waits on, over the bot's
-    own tasks), as the rows that show the same tasks."""
+    own tasks), as the rows that show the same tasks; a row's old field name (RENAMED) as its new one."""
     if tab.get("builtin"):
         out = {"builtin": tab["builtin"], "name": tab["name"], "show_count": tab.get("show_count", True)}
         if tab["builtin"] in DEFAULT_CONDITIONS:
-            out["conditions"] = tab.get("conditions", DEFAULT_CONDITIONS[tab["builtin"]])
+            out["conditions"] = renamed(tab.get("conditions", DEFAULT_CONDITIONS[tab["builtin"]]))
         return out
     if "conditions" in tab:
-        return {"name": tab["name"], "show_count": tab.get("show_count", True), "conditions": tab["conditions"]}
+        return {
+            "name": tab["name"],
+            "show_count": tab.get("show_count", True),
+            "conditions": renamed(tab["conditions"]),
+        }
     rows = [{"field": "assigned_to", "value": "this_bot"}, {"field": "status", "value": list(tab.get("states") or [])}]
     if tab.get("types"):
         rows.append({"field": "pipeline", "value": list(tab["types"])})

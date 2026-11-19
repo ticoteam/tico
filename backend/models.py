@@ -2292,8 +2292,8 @@ class BotTaskCondition(Contract):
 
     field: Literal[
         "status",
-        "step",
-        "type",
+        "stage",
+        "pipeline",
         "assigned_to",
         "asked_by",
         "waiting_on",
