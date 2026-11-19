@@ -9,6 +9,8 @@ import { ContactsPage, shown } from './ContactsPage';
 import { cardQuery, contactsQuery, countsQuery, proposalsQuery, removeKey, saveFact, skillsQuery, skillUsageQuery, typesQuery, apiToolQuery, type Card } from './queries';
 import { diffLines, mainText, SkillsPage } from './SkillsPage';
 import { entries } from './ToolsPage';
+import { nameFromUrl, ReplaceLoginDialog } from './AddTool';
+import { replaceLogin } from './queries';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
@@ -176,5 +178,30 @@ describe('Skills', () => {
     const links = (await screen.findAllByText('triage')).map(href);
     expect(links).toEqual(['/library/skills?proposal=p1', '/library/skills?skill=triage']);
     expect(screen.queryByRole('tab')).toBeNull();
+  });
+});
+
+describe('Add tool', () => {
+  it('names an MCP server from its address', () => {
+    expect(nameFromUrl('https://mcp.acme.com/sse')).toBe('Acme');
+    expect(nameFromUrl('not an address')).toBe('');
+  });
+
+  it('sends only the login fields that changed, and null to take the authenticator off', async () => {
+    const sent: unknown[] = [];
+    vi.stubGlobal('fetch', async (_url: string, init?: RequestInit) => {
+      sent.push(JSON.parse(String(init?.body)));
+      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    await replaceLogin('w1', 'a1', { totp: null });
+    expect(sent).toEqual([{ totp: null }]);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ReplaceLoginDialog tool="w1" account={{ id: 'a1', username: 'ops@example.com', has_password: true, has_totp: true } as never} onClose={() => {}} />
+      </QueryClientProvider>,
+    );
+    // A stored password is never read back: the field starts empty.
+    expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('');
+    expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
   });
 });

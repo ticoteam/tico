@@ -43,9 +43,9 @@ export {
 const quietly = (...reads: Promise<unknown>[]) =>
   Promise.all(reads.map((r) => r.catch(() => undefined))).then(() => undefined);
 
-export const loadDocs = (qc: QueryClient) => quietly(qc.ensureQueryData(docsListQuery));
-export const loadDoc = (qc: QueryClient, doc: string) =>
-  doc === 'sources' ? quietly(qc.ensureQueryData(sourcesQuery)) : doc.startsWith('ext:') ? quietly() : quietly(qc.ensureQueryData(docQuery(doc)));
+// Both Docs tabs show both counts.
+export const loadDocs = (qc: QueryClient) => quietly(qc.ensureQueryData(docsListQuery), qc.ensureQueryData(sourcesQuery));
+export const loadDoc = (qc: QueryClient, doc: string) => (doc === 'new' || doc.startsWith('ext:') ? quietly() : quietly(qc.ensureQueryData(docQuery(doc))));
 export const loadFiles = (qc: QueryClient, s: Pick<FilesSearch, 'kind' | 'file'>) =>
   quietly(s.file ? qc.ensureQueryData(fileQuery(s.file)) : qc.ensureInfiniteQueryData(filesQuery(s.kind ?? '')));
 export const loadSkills = (qc: QueryClient, s: Pick<SkillsSearch, 'skill' | 'proposal'>) =>

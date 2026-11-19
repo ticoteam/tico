@@ -16,6 +16,7 @@ import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
 import { ItemHead, ListAndItem, Section, type PageState } from '@/pagekinds';
+import { AddAccountDialog, AddDialog, AddMenu, ReplaceLoginDialog, type Adding } from './AddTool';
 import { Face, Held, KindTile, More, OwnerButton, press, when } from './parts';
 import {
   apiToolQuery,
@@ -100,6 +101,8 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
   );
   const all = entries(rows);
   const open = search.tool;
+  const [adding, setAdding] = useState<Adding | null>(null);
+  const none = !!tools.data && !tools.data.rows.length;
 
   let state: PageState = 'ready';
   if (tools.isError) state = 'fault';
@@ -133,44 +136,53 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
     );
 
   return (
-    <ListAndItem
-      title="Tools"
-      path="/library/tools"
-      className="lib tools"
-      open={!!open}
-      state={state}
-      onRetry={() => void tools.refetch()}
-      search={<Search label="Find a tool" value={words} onValueChange={setWords} placeholder="Find a tool" wide />}
-      list={
-        tools.data && !tools.data.rows.length ? (
-          <Empty title="No tools yet" />
-        ) : all.length ? (
-          <div className="tools-list">
-            {group(
-              'In use',
-              all.filter((e) => e.inUse),
-            )}
-            {group(
-              'Available',
-              all.filter((e) => !e.inUse),
-            )}
-          </div>
-        ) : (
-          <Empty title="Nothing matches" />
-        )
-      }
-      conversation={open ? <Tool id={open} row={tools.data?.rows.find((r) => r.id === open)} /> : <NoTool />}
-    />
+    <>
+      <ListAndItem
+        title="Tools"
+        path="/library/tools"
+        className="lib tools"
+        actions={<AddMenu trigger={<IconButton icon="plus" label="Add tool" />} onPick={setAdding} />}
+        open={!!open}
+        state={state}
+        onRetry={() => void tools.refetch()}
+        search={<Search label="Find a tool" value={words} onValueChange={setWords} placeholder="Find a tool" wide />}
+        list={
+          none ? (
+            <Empty title="No tools yet" />
+          ) : all.length ? (
+            <div className="tools-list">
+              {group(
+                'In use',
+                all.filter((e) => e.inUse),
+              )}
+              {group(
+                'Available',
+                all.filter((e) => !e.inUse),
+              )}
+            </div>
+          ) : (
+            <Empty title="Nothing matches" />
+          )
+        }
+        conversation={open ? <Tool id={open} row={tools.data?.rows.find((r) => r.id === open)} /> : <NoTool none={none} onAdd={setAdding} />}
+      />
+      {adding && <AddDialog adding={adding} onClose={() => setAdding(null)} />}
+    </>
   );
 }
 
-function NoTool() {
+function NoTool({ none, onAdd }: { none: boolean; onAdd: (a: Adding) => void }) {
   return (
     <section className="tool is-empty" aria-label="Tools">
       <header className="conv-head tool-head">
         <span className="grow" />
         <OwnerButton page="tools" />
       </header>
+      {none && (
+        <Empty title="No tools yet">
+          <AddMenu trigger={<Button variant="primary">Add tool</Button>} onPick={onAdd} />
+        </Empty>
+      )}
     </section>
   );
 }
@@ -491,6 +503,8 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
   const people = new Map<string, { subject: string; name: string }>();
   for (const a of t?.accounts ?? []) for (const p of a.access) people.set(p.subject, p);
   const lock = !!t?.accounts.some((a) => a.has_password);
+  const [adding, setAdding] = useState(false);
+  const [replacing, setReplacing] = useState<WebsiteTool['accounts'][number] | null>(null);
   return (
     <Shell
       name={name}
@@ -511,11 +525,14 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
               </LabelValue>
             </Facts>
           </Section>
-          <Section name="How it connects">
+          <Section name="How it connects" actions={<IconButton icon="plus" label="Add account" onClick={() => setAdding(true)} />}>
             <Facts>
               {t.accounts.map((a) => (
                 <LabelValue key={a.id} label="Account">
-                  {a.username || a.holder?.name || 'Account'} <Dim>{a.kind === 'shared' ? 'Shared' : 'Own'}</Dim>
+                  {a.username || a.holder?.name || 'Account'} <Dim>{a.kind === 'shared' ? 'Shared' : 'Own'}</Dim>{' '}
+                  <Button variant="quiet" onClick={() => setReplacing(a)}>
+                    Replace login
+                  </Button>
                 </LabelValue>
               ))}
               {t.accounts.some((a) => a.has_password) && (
@@ -542,6 +559,8 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
               ))}
             </Section>
           )}
+          {adding && <AddAccountDialog tool={id} onClose={() => setAdding(false)} />}
+          {replacing && <ReplaceLoginDialog tool={id} account={replacing} onClose={() => setReplacing(null)} />}
           {t.recent.length > 0 && (
             <Section name="Recent use">
               {t.recent.map((r) => (

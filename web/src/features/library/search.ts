@@ -8,18 +8,21 @@ const num = (v: unknown) => {
 const flag = (v: unknown) => (v === 1 || v === '1' || v === true || v === 'true' ? (1 as const) : undefined);
 const clean = <T extends object>(o: T): T => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
 
+/** `tab=sources`: External sources, the second tab; `panel`: the source open beside them. */
 export interface DocsSearch {
   q?: string;
+  tab?: 'sources';
+  panel?: string;
 }
-export const docsSearch = (raw: Record<string, unknown>): DocsSearch => clean({ q: str(raw.q) });
+export const docsSearch = (raw: Record<string, unknown>): DocsSearch =>
+  clean({ q: str(raw.q), tab: raw.tab === 'sources' ? ('sources' as const) : undefined, panel: str(raw.panel) });
 
-/** A doc (`edit`, an old version `v`), and External sources (`panel`: the source open beside the list). */
+/** A doc: `edit`, or an old version `v`. */
 export interface DocSearch {
   edit?: 1;
   v?: number;
-  panel?: string;
 }
-export const docSearch = (raw: Record<string, unknown>): DocSearch => clean({ edit: flag(raw.edit), v: num(raw.v), panel: str(raw.panel) });
+export const docSearch = (raw: Record<string, unknown>): DocSearch => clean({ edit: flag(raw.edit), v: num(raw.v) });
 
 /** `kind`: one library kind; `task`: where an upload lands; `file` (and `v`): the file open in the page. */
 export interface FilesSearch {

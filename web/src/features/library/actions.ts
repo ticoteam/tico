@@ -1,8 +1,12 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import { defineAction, s, type Schema } from '@/actions';
 import {
+  addAccount,
+  addApiTool,
   addKey,
+  addMcp,
   addNote,
+  addWebsite,
   approveProposal,
   cancelLetter,
   checkTool,
@@ -10,9 +14,11 @@ import {
   decideDevice,
   declineProposal,
   docsListQuery,
+  probeMcp,
   refreshSource,
   removeKey,
   replaceKey,
+  replaceLogin,
   restoreDoc,
   saveDoc,
   saveFact,
@@ -83,9 +89,8 @@ export const docsList = defineAction({
   title: 'Open Docs',
   kind: 'view',
   input: s.object({ tab: s.optional(s.oneOf(['docs', 'sources'] as const)), q: s.optional(text(200)), source: s.optional(id) }),
-  // External sources are the second tab of Docs, at their own address so the tab row can tell them apart.
-  run: ({ router }, i) => (i.tab === 'sources' || i.source ? go(router, '/library/sources', { panel: i.source }) : go(router, '/library/docs', { q: i.q }, true)),
-  target: (i) => ({ kind: 'page', id: i.tab === 'sources' || i.source ? '/library/sources' : '/library/docs' }),
+  run: ({ router }, i) => (i.tab === 'sources' || i.source ? go(router, '/library/docs', { tab: 'sources', panel: i.source }) : go(router, '/library/docs', { q: i.q }, true)),
+  target: (i) => ({ kind: 'page', id: i.tab === 'sources' || i.source ? '/library/docs?tab=sources' : '/library/docs' }),
 });
 
 export const docsNew = defineAction({
@@ -325,6 +330,136 @@ export const toolsSetAccess = defineAction({
   run: (_ctx, i) => setAccess(i.tool, i.subject, i.level),
   did: (i) => (i.level === 'none' ? 'Removed' : 'Changed'),
   target: (i) => ({ kind: 'tool-who', id: i.tool }),
+});
+
+/* Adding a tool. Tico may add one when nothing secret is typed (an API's address, an MCP server it signs in to); a
+   token, a client secret or a password is the person's own. Each add opens the new tool. */
+
+const opened = (router: AnyRouter, tool: string) => go(router, '/library/tools', { tool });
+
+export const toolsAddApi = defineAction({
+  id: 'tools.addApi',
+  title: 'Add an API',
+  kind: 'change',
+  input: s.object({
+    name: s.string({ min: 1, max: 120 }),
+    service: s.optional(text(80)),
+    base_url: s.optional(text(500)),
+    auth_scheme: s.string({ min: 1, max: 80, pattern: /^(bearer|basic_user|basic_password|(header|query):[\w-]+)$/ }),
+    check_path: s.optional(text(500)),
+  }),
+  run: async ({ router }, i) => opened(router, `api:${(await addApiTool(i)).id}`),
+  did: (i) => `Added ${i.name}`,
+  target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+/** An MCP server with its own sign-in: Tico may add it; signing in is the person's (`tools.connect`). */
+export const toolsAddMcp = defineAction({
+  id: 'tools.addMcp',
+  title: 'Add an MCP server',
+  kind: 'change',
+  input: s.object({ name: s.string({ min: 1, max: 80 }), url: s.string({ min: 1, max: 500 }), client_id: s.optional(text(500)) }),
+  run: async ({ router }, i) => {
+    const f = await probeMcp(i.url);
+    if (!f.oauth) throw new Error('This server takes a token');
+    if (!f.dcr && !i.client_id) throw new Error('This server needs a client id');
+    await opened(router, `api:${(await addMcp({ ...i, auth: 'oauth' })).id}`);
+  },
+  did: (i) => `Added ${i.name}`,
+  target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+/** An MCP server with a token or a client secret the person types. Sign-in goes on to the provider's page. */
+export const toolsAddMcpWithKey = defineAction({
+  id: 'tools.addMcpWithKey',
+  title: 'Add an MCP server with a key',
+  kind: 'change',
+  tico: false,
+  input: s.object({
+    name: s.string({ min: 1, max: 80 }),
+    url: s.string({ min: 1, max: 500 }),
+    auth: s.oneOf(['token', 'oauth'] as const),
+    token: s.optional(s.string({ max: 100_000 })),
+    header: s.optional(text(60)),
+    client_id: s.optional(text(500)),
+    client_secret: s.optional(s.string({ max: 2000 })),
+  }),
+  run: async ({ router }, i) => {
+    const r = await addMcp(i);
+    if (i.auth === 'oauth') window.location.assign((await startSignIn(r.id)).authorize_url);
+    else await opened(router, `api:${r.id}`);
+  },
+  did: (i) => `Added ${i.name}`,
+  target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+const login = {
+  username: s.optional(text(250)),
+  password: s.optional(s.string({ max: 2000 })),
+  totp: s.optional(s.string({ max: 2000 })),
+  holder: s.optional(id),
+  all_bots: s.optional(s.boolean()),
+};
+
+/** Only the site: Tico may add it. A login on it is the person's. */
+export const toolsAddWebsite = defineAction({
+  id: 'tools.addWebsite',
+  title: 'Add a website',
+  kind: 'change',
+  input: s.object({ site: s.string({ min: 1, max: 300 }), central_only: s.optional(s.boolean()) }),
+  run: async ({ router }, i) => opened(router, `website:${(await addWebsite(i.site, i.central_only ?? false)).id}`),
+  did: (i) => `Added ${i.site}`,
+  target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+export const toolsAddWebsiteWithLogin = defineAction({
+  id: 'tools.addWebsiteWithLogin',
+  title: 'Add a website with a login',
+  kind: 'change',
+  tico: false,
+  input: s.object({ site: s.string({ min: 1, max: 300 }), central_only: s.optional(s.boolean()), ...login }),
+  run: async ({ router }, { site, central_only, ...l }) => {
+    const tool = (await addWebsite(site, central_only ?? false)).id;
+    // A refused login keeps the site: adding the account again is all that is left.
+    await opened(router, `website:${tool}`);
+    await addAccount(tool, l);
+  },
+  did: (i) => `Added ${i.site}`,
+  target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+export const toolsAddAccount = defineAction({
+  id: 'tools.addAccount',
+  title: 'Add an account to a website',
+  kind: 'change',
+  tico: false,
+  input: s.object({ tool: id, ...login }),
+  run: async (_ctx, { tool, ...l }) => {
+    await addAccount(tool, l);
+  },
+  did: () => 'Added the account',
+  target: (i) => ({ kind: 'tool', id: `website:${i.tool}` }),
+});
+
+/** Only the fields typed are sent. A stored password or authenticator key is never read back. */
+export const toolsReplaceLogin = defineAction({
+  id: 'tools.replaceLogin',
+  title: 'Replace a website login',
+  kind: 'change',
+  tico: false,
+  input: s.object({
+    tool: id,
+    account: id,
+    username: s.optional(text(250)),
+    password: s.optional(s.string({ min: 1, max: 2000 })),
+    totp: s.optional(s.string({ min: 1, max: 2000 })),
+    remove_totp: s.optional(s.boolean()),
+  }),
+  run: async (_ctx, { tool, account, remove_totp, ...change }) => {
+    await replaceLogin(tool, account, remove_totp ? { ...change, totp: null } : change);
+  },
+  did: () => 'Replaced the login',
+  target: (i) => ({ kind: 'tool', id: `website:${i.tool}` }),
 });
 
 export const toolsCancelLetter = defineAction({

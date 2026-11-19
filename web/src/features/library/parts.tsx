@@ -174,6 +174,11 @@ export function KindTile({ kind, mcp, big }: { kind: string; mcp?: boolean; big?
   );
 }
 
+/** A tool kind's glyph alone, for a menu row (tools.js addMenu). */
+export function ToolGlyph({ kind }: { kind: string }) {
+  return kind === 'mcp' ? GLYPH.mcp : GLYPH[TOOL_GLYPH[kind] ?? 'key'];
+}
+
 /** A file's or source's kind as a lead glyph. */
 export function KindGlyph({ kind }: { kind: string }) {
   if (kind === 'image' || kind === 'media') return <Icon name="square" />;

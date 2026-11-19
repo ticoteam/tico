@@ -83,6 +83,24 @@ describe('tasks', () => {
   });
 });
 
+describe('read-again topics', () => {
+  it('mark the letters list stale on a letters event', () => {
+    queryClient.setQueryData(['letters'], []);
+    FakeEventSource.last.feed(frame(901, 'letters', { seq: 901, actor: 'human:p1', at: AT }));
+    flushFrame();
+    expect(queryClient.getQueryState(['letters'])?.isInvalidated).toBe(true);
+  });
+
+  it('mark a call and the live and ringing lists stale on a call change in the threads topic', () => {
+    for (const k of [['calls', 'c1'], ['calls', 'c1', 'notes'], ['calls', 'live'], ['calls', 'ringing'], ['calls', 'c2']]) queryClient.setQueryData(k, {});
+    FakeEventSource.last.feed(frame(901, 'threads', { seq: 901, actor: 'human:p1', at: AT, thread_id: 'th1', kind: 'call.updated', call_id: 'c1' }));
+    flushFrame();
+    const stale = (k: string[]) => queryClient.getQueryState(k)?.isInvalidated;
+    expect([stale(['calls', 'c1']), stale(['calls', 'c1', 'notes']), stale(['calls', 'live']), stale(['calls', 'ringing'])]).toEqual([true, true, true, true]);
+    expect(stale(['calls', 'c2'])).toBe(false);
+  });
+});
+
 describe('messages', () => {
   const key = ['thread', 'th1', 'timeline'];
 

@@ -15,7 +15,7 @@ import { Link } from '@/kit/Link';
 import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
 import { Document, List, type PageState } from '@/pagekinds';
-import { Markdown } from './markdown';
+import { Markdown } from '@/kit/Markdown';
 import { Face, Find, OwnerButton, press, when, Who } from './parts';
 import {
   deviceCodeQuery,

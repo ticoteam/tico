@@ -6,7 +6,7 @@ import { Fault } from '@/kit/Fault';
 import { Icon } from '@/kit/Icon';
 import { Dot } from '@/tico/dot';
 import { clock, took } from './dates';
-import { Markdown } from './Markdown';
+import { Markdown } from '@/kit/Markdown';
 import { proposalQuery } from './queries';
 import type { Attachment, ChatMessage, LiveRun, Variant } from './types';
 
@@ -145,7 +145,7 @@ export function Message({ m, variant, me, cont, onRetry }: MessageProps) {
         <div className="mine-col">
           {text && (
             <div className="bubble">
-              <Markdown text={text} />
+              <Markdown text={text} compact />
             </div>
           )}
           <Files files={files} pending={!!m.pending} />
@@ -176,7 +176,7 @@ export function Message({ m, variant, me, cont, onRetry }: MessageProps) {
             <time dateTime={m.created_at}>{clock(m.created_at)}</time>
           </div>
         )}
-        {text && <Markdown text={text} />}
+        {text && <Markdown text={text} compact />}
         <Steps run={m.run} />
         <Files files={files} pending={false} />
         {aid && <Proposal aid={aid} />}
@@ -202,7 +202,7 @@ export function LiveRow({ r, variant, text }: { r: LiveRun; variant: Variant; te
         <div className="msg-meta">
           <b>{who.name}</b>
         </div>
-        {text ? <Markdown text={text} tail={r.ended ? null : dots} /> : <p>{r.doing === 'work' ? 'Working' : 'Thinking'}{dots}</p>}
+        {text ? <Markdown text={text} compact tail={r.ended ? null : dots} /> : <p>{r.doing === 'work' ? 'Working' : 'Thinking'}{dots}</p>}
       </div>
     </div>
   );

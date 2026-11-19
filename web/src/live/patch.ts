@@ -495,7 +495,7 @@ export function applyThreadEvents(batch: ThreadEvent[]): void {
 // ---------------------------------------------------------------- the built-in patchers
 
 let installed = false;
-/** Tasks and messages patch rows in place; calendar, setup, meeting items and presence only mark keys stale. */
+/** Tasks and messages patch rows in place; calendar, setup, letters, meeting items and presence only mark keys stale. */
 export function installPatchers(): void {
   if (installed) return;
   installed = true;
@@ -503,6 +503,8 @@ export function installPatchers(): void {
   onTopic<MessageEvent>('messages', patchMessages);
   onRefetch('calendar', () => [['calendar']]);
   onRefetch('setup', () => [['setup']]);
+  // A letter out changed: Tools' mailing address reads its list again.
+  onRefetch('letters', () => [['letters']]);
   // What waits on the person changed: Flow's list and the start page's read again.
   onRefetch('needs', () => [['flow'], ['needs']]);
   onTopic<BotEvent>('bots', patchDirectory);
@@ -511,4 +513,9 @@ export function installPatchers(): void {
   onRefetch<{ area?: string }>('setup', (e) => (e.area === 'org' ? [keys.directory()] : []));
   onRefetch<{ meeting_id?: string }>('meeting_items', (e) => [e.meeting_id ? ['meetings', e.meeting_id] : ['meetings']]);
   onRefetch<{ place?: string }>('presence', (e) => [e.place ? ['presence', e.place] : ['presence']]);
+  // A call changed (`call.*` with `call_id` on the threads topic, meet-calls-contract.md): it, its notes, and the live
+  // and ringing lists read again.
+  onRefetch<{ kind?: string; call_id?: string }>('threads', (e) =>
+    e.call_id && e.kind?.startsWith('call.') ? [['calls', e.call_id], ['calls', 'live'], ['calls', 'ringing']] : [],
+  );
 }

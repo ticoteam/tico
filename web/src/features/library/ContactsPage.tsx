@@ -7,9 +7,8 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Link } from '@/kit/Link';
-import { Menu, MenuItem } from '@/kit/Menu';
 import { Table, Td, Th, Tr } from '@/kit/Table';
-import { List, RecordPanel, Section, type PageState } from '@/pagekinds';
+import { List, RecordPanel, Section, type PageState, type PageTab } from '@/pagekinds';
 import { Face, Find, More, OwnerButton, press, Who } from './parts';
 import { attributesQuery, cardQuery, contactThreadsQuery, contactsQuery, countsQuery, typesQuery, type Attribute, type Card, type ContactRow, type FactValue } from './queries';
 import type { ContactsSearch } from './search';
@@ -51,35 +50,21 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
   else if (!list.data) state = 'loading';
   else if (!rows.length && !search.q && !(counts.data ?? []).some((c) => c.count > 0)) state = 'empty';
 
-  // People, organizations, places: one at a time, picked in the head (the tab row cannot tell addresses apart by search).
-  const pick = kinds.length > 1 && (
-    <Menu
-      align="start"
-      trigger={
-        <button type="button" className="btn btn-quiet ver-pick" data-target="contacts:type">
-          {kind?.plural_name ?? 'People'}
-          <Icon name="chevdown" />
-        </button>
-      }
-    >
-      {kinds.map((k) => (
-        <MenuItem
-          key={k.key}
-          label={k.plural_name}
-          meta={countOf(k.key)?.toLocaleString('en-US')}
-          on={k.key === type}
-          onSelect={() => void press('contacts.list', { type: k.key === 'person' ? undefined : k.key })}
-        />
-      ))}
-    </Menu>
-  );
+  // People, organizations, places: one tab each (records.js contactsPage). People is the page with no `type`.
+  const tabs: PageTab[] = kinds.map((k) => ({
+    label: k.plural_name,
+    to: '/library/contacts',
+    search: k.key === 'person' ? undefined : { type: k.key },
+    count: countOf(k.key),
+    target: `tab:contacts:${k.key}`,
+  }));
 
   return (
     <List
       title="Contacts"
       path="/library/contacts"
       className="lib"
-      after={pick}
+      tabs={tabs.length > 1 ? tabs : undefined}
       actions={
         <>
           <Find label="Search contacts" value={search.q} onFind={(q) => void press('contacts.list', { type: search.type, q })} />

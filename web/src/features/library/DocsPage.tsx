@@ -21,7 +21,7 @@ const docHref = (id: string) => `/library/${encodeURIComponent(id)}`;
 function tabs(docs: number | undefined, sources: number | undefined): PageTab[] {
   return [
     { label: 'Docs', to: '/library/docs', count: docs, target: 'tab:docs' },
-    { label: 'External sources', to: '/library/sources', count: sources, target: 'tab:sources' },
+    { label: 'External sources', to: '/library/docs', search: { tab: 'sources' }, count: sources, target: 'tab:sources' },
   ];
 }
 
@@ -35,6 +35,10 @@ function folder(path: string): [string, string] {
 const newDoc = () => void press('docs.new', {});
 
 export function DocsPage({ search }: { search: DocsSearch }) {
+  return search.tab === 'sources' ? <SourcesPage panel={search.panel} /> : <OwnDocs search={search} />;
+}
+
+function OwnDocs({ search }: { search: DocsSearch }) {
   const docs = useQuery(docsListQuery);
   const sources = useQuery(sourcesQuery);
   const words = search.q?.toLowerCase() ?? '';
@@ -116,7 +120,7 @@ function DocLine({ d }: { d: DocRow }) {
 
 const BAD: Partial<Record<DocSource['status'], string>> = { failed: 'Failed', access_needed: 'Needs access', empty: 'Empty' };
 
-export function SourcesPage({ panel }: { panel?: string }) {
+function SourcesPage({ panel }: { panel?: string }) {
   const docs = useQuery(docsListQuery);
   const sources = useQuery(sourcesQuery);
   const list = sources.data?.sources ?? [];
@@ -129,7 +133,7 @@ export function SourcesPage({ panel }: { panel?: string }) {
   return (
     <List
       title="Docs"
-      path="/library/sources"
+      path="/library/docs?tab=sources"
       className="lib"
       tabs={tabs(docs.data?.docs.length, sources.data?.sources.length)}
       actions={<OwnerButton page="docs" />}
@@ -143,7 +147,7 @@ export function SourcesPage({ panel }: { panel?: string }) {
               key={s.id}
               className="lrow srow"
               title={s.title}
-              href={`/library/sources?panel=${encodeURIComponent(s.id)}`}
+              href={`/library/docs?tab=sources&panel=${encodeURIComponent(s.id)}`}
               selected={s.id === panel}
               target={`source:${s.id}`}
             >

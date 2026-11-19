@@ -21,9 +21,13 @@ import type {
   ToolIndex,
   ToolIndexRow,
   ToolVendor,
+  WebsiteAccountCreate,
+  WebsiteAccountUpdate,
   WebsiteTool,
+  WebsiteToolCreate,
+  WebsiteToolCreated,
 } from '@/api/schema';
-import { QUIET_STALE_MS, quietRoot, write } from '@/data';
+import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
 
 /* Every Library call. Docs, files, skills, tools and contacts have no live topic (backend/events.py): they are read
    again after the person's own writes, on reconnect, and when a page opens on data older than a minute. Letters have
@@ -489,6 +493,64 @@ export function checkTool(tool: string) {
 
 /** One-tap connect: the server gives the provider's sign-in address, and its callback brings the person back. */
 export const startSignIn = (tool: string) => api.post<{ authorize_url: string }>(`/api/v2/api-tools/${enc(tool)}/sign-in`, {});
+
+/* Adding a tool: the server makes it and answers its id; the list reads again. */
+
+const made = async (send: Promise<{ id: string }>, keys: readonly unknown[][] = []) => {
+  const r = await send;
+  await Promise.all([toolsQuery.queryKey, ...keys].map((queryKey) => queryClient.invalidateQueries({ queryKey })));
+  return r;
+};
+
+/** What an MCP server asks for: a token, its own sign-in (`dcr`: it registers us itself), or nothing. */
+export interface McpProbe {
+  url: string;
+  token: boolean;
+  oauth: boolean;
+  dcr: boolean;
+  open: boolean;
+  server?: string | null;
+}
+export const probeMcp = (url: string) => api.post<McpProbe>('/api/v2/mcp-tools/probe', { url });
+
+export interface McpAdd {
+  name: string;
+  url: string;
+  auth: 'token' | 'oauth';
+  token?: string;
+  header?: string;
+  client_id?: string;
+  client_secret?: string;
+}
+export const addMcp = (body: McpAdd) => made(api.post<{ id: string }>('/api/v2/mcp-tools', body));
+
+export interface ApiAdd {
+  name: string;
+  service?: string;
+  base_url?: string;
+  auth_scheme: string;
+  check_path?: string;
+}
+export const addApiTool = (body: ApiAdd) => made(api.post<{ id: string }>('/api/v2/api-tools', body));
+
+/** A login: a shared one for every agent, or one person's or agent's own (`holder`). No password: signed in by hand. */
+export interface LoginAdd {
+  username?: string;
+  password?: string;
+  totp?: string;
+  holder?: string;
+  all_bots?: boolean;
+}
+export const addWebsite = (site: string, centralOnly: boolean) =>
+  made(api.post<WebsiteToolCreated>('/api/v2/website-tools', { sites: [site], central_only: centralOnly } satisfies WebsiteToolCreate));
+export const addAccount = (tool: string, login: LoginAdd) =>
+  made(api.post<{ id: string }>(`/api/v2/website-tools/${enc(tool)}/accounts`, login satisfies WebsiteAccountCreate), [['tools', 'website', tool]]);
+/** Only what changed is sent; `totp: null` takes the authenticator off. */
+export const replaceLogin = (tool: string, account: string, change: WebsiteAccountUpdate) =>
+  made(
+    api.patch<unknown>(`/api/v2/website-tools/${enc(tool)}/accounts/${enc(account)}`, change).then(() => ({ id: account })),
+    [['tools', 'website', tool]],
+  );
 
 export function setAccess(tool: string, subject: string, level: 'read' | 'read_write' | 'none') {
   return write<unknown>({

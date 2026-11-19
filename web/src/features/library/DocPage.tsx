@@ -8,22 +8,20 @@ import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { toast } from '@/kit/Toast';
 import { Document, type PageState } from '@/pagekinds';
-import { SourcesPage } from './DocsPage';
-import { headings, Markdown } from './markdown';
+import { headings, Markdown } from '@/kit/Markdown';
 import { Face, OwnerButton, press, when } from './parts';
 import { docQuery, docVersionQuery, docVersionsQuery, externalDocQuery, type Doc } from './queries';
 import type { DocSearch } from './search';
 import './library.css';
 
 /* One doc (files.js docPage): its text at the reading measure, an outline beside it, the version in the head. Editing
-   is in place: the text becomes a plain text box and the foot holds Cancel and Save. `/library/new` is a new doc,
-   `/library/sources` the second tab of Docs, and `/library/ext:<id>` a doc read from an outside source. */
+   is in place: the text becomes a plain text box and the foot holds Cancel and Save. `/library/new` is a new doc, and
+   `/library/ext:<id>` a doc read from an outside source. */
 
 const CRUMB = [{ label: 'Docs', to: '/library/docs' }];
 
 export function DocPage({ doc, search }: { doc: string; search: DocSearch }) {
   if (doc === 'new') return <NewDoc />;
-  if (doc === 'sources') return <SourcesPage panel={search.panel} />;
   if (doc.startsWith('ext:')) return <OutsideDoc id={doc.slice(4)} />;
   return <OneDoc id={doc} search={search} />;
 }
@@ -211,7 +209,7 @@ function OutsideDoc({ id }: { id: string }) {
     <Document
       title={doc?.title ?? 'Outside doc'}
       path={`/library/ext:${id}`}
-      crumb={[...CRUMB, ...(doc ? [{ label: doc.source_title, to: `/library/sources?panel=${encodeURIComponent(doc.source_id)}` }] : [])]}
+      crumb={CRUMB}
       className="lib"
       actions={
         doc?.citation_url && (
