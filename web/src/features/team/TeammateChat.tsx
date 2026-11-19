@@ -1,26 +1,26 @@
 import { useQuery } from '@tanstack/react-query';
-import { Conversation, ticoRoomQuery } from '@/conversation';
+import { Conversation } from '@/conversation';
 import { meQuery, useActor } from '@/data';
 import { Empty } from '@/kit/Empty';
 import { dmQuery } from './queries';
 
 /**
- * The chat with a teammate, the wide sheet of their page: the direct thread with them (made the first time), or
- * Tico's room on my own page. Only the root route can place it (the frame's chat place), so it is exported.
+ * The chat with a teammate, the wide sheet of their page: the direct thread with them (made the first time). Only the
+ * root route can place it (the frame's chat place), so it is exported. On my own page there is none: I do not chat with
+ * myself, and my assistant is Tico at the far left of every page (threads.js: the Assistant's own page is gone).
  */
 export function TeammateChat({ who }: { who: string }) {
   const byKey = useActor(who);
   const byPerson = useActor(`human:${who}`);
   const actor = byKey ?? byPerson;
-  const { data: me } = useQuery(meQuery);
-  const mine = !!actor && actor.id === me?.id;
-  const dm = useQuery({ ...dmQuery(actor?.id ?? ''), enabled: !!actor && !mine });
-  const room = useQuery({ ...ticoRoomQuery, enabled: mine });
-  const id = mine ? room.data : dm.data;
-  if (!actor) return null;
-  if (dm.isError || room.isError) return <Empty icon="alert" title="The chat did not load" />;
-  if (!id) return null;
-  return <Conversation id={id} variant="page" title={actor.name} actor={actor.id} />;
+  const me = useQuery(meQuery);
+  // Until I know who I am, any teammate could be me: the server refuses a DM with yourself (422).
+  const other = !!actor && !!me.data && actor.id !== me.data.id;
+  const dm = useQuery({ ...dmQuery(actor?.id ?? ''), enabled: other });
+  if (!other) return null;
+  if (dm.isError) return <Empty icon="alert" title="The chat did not load" />;
+  if (!dm.data) return null;
+  return <Conversation id={dm.data} variant="page" title={actor.name} actor={actor.id} />;
 }
 
 /** An agent's chat, by its slug. */

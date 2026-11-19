@@ -94,8 +94,14 @@
 .tpl-check{display:grid}
 .tpl-check .ico{stroke-width:2.2}
 
-/* ---------- the page answers to its own width, not the window's ---------- */
-.rec{container:rec/inline-size}
+/* ---------- the page answers to its own width, not the window's ----------
+   Both names: `page` is the sheet's own (pagekinds.css lays the figures two by two under 480 px on it), `rec` the mock's. */
+.rec{container:page rec/inline-size}
+
+/* ---------- a section's link to the whole list, on one line ---------- */
+.sec-link{height:var(--ctl-sm);display:inline-flex;align-items:center;gap:var(--s-0);padding:0 var(--s-1) 0 var(--s-2);border-radius:var(--r-chip);font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
+.sec-link .ico{width:12px;height:12px}
+.sec-link:hover{background:var(--well);color:var(--ink)}
 
 /* ---------- a computer's mark: a plain tile ---------- */
 .comp-av{width:var(--a);height:var(--a);flex:none;display:grid;place-items:center;border-radius:var(--r-block);background:var(--well-2);color:var(--ink-2)}
