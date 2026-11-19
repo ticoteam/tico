@@ -1,13 +1,13 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
 import type { TaskRequirement } from '@/api/schema';
 import type * as conversations from '@/conversation';
 import { sendMessage } from '@/conversation';
-import { queryClient } from '@/data';
+import { keys, queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { decisionName, effectOf } from './model';
 import type { TaskData } from './queries';
@@ -33,7 +33,7 @@ vi.mock('@/conversation', async (orig) => ({
 type Conversations = typeof conversations;
 type Reply = { status?: number; body: unknown };
 const sent: { url: string; body: Record<string, unknown> }[] = [];
-let reply: (url: string, method: string) => Reply | null = () => null;
+let reply: (url: string, method: string) => Reply | Promise<Reply> | null = () => null;
 
 const req = (more: Partial<TaskRequirement> = {}) =>
   ({ requirement_id: 'r1', kind: 'ok', line: 'Send this email?', met: false, may: ['ok', 'no'], shows: ['email:s1'], asked_by: 'bot:lo', answer: null, standing: 'waiting', who: 'human:me', ...more }) as TaskRequirement;
@@ -91,7 +91,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     if (method !== 'GET') sent.push({ url: String(url), body: typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {} });
-    const r = reply(String(url), method) ?? base(String(url));
+    const r = await (reply(String(url), method) ?? base(String(url)));
     return new Response(JSON.stringify(r.body), { status: r.status ?? 200, headers: { 'Content-Type': 'application/json' } });
   });
 });
@@ -164,6 +164,43 @@ describe('the thing is the first tab', () => {
 });
 
 describe('the decision', () => {
+  it('clears the request-changes draft when a different approval starts waiting', async () => {
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const chat = await screen.findByRole('region', { name: 'Chat with Legal Owner' });
+    fireEvent.click(within(await decision()).getByRole('button', { name: 'Request changes' }));
+    fireEvent.change(within(chat).getByRole('textbox', { name: 'What should change?' }), { target: { value: 'Update the email subject' } });
+
+    const next = req({ requirement_id: 'r2', shows: [], line: 'Check the brief?' });
+    act(() => {
+      queryClient.setQueryData<TaskData>(keys.tasks.detail('t1'), (t) => t && { ...t, version: t.version + 1, to_leave: [next] });
+    });
+
+    expect(await within(chat).findByText('Check the brief?')).toBeTruthy();
+    const box = within(chat).getByRole('region', { name: 'The decision' });
+    expect(within(box).queryByRole('textbox', { name: 'What should change?' })).toBeNull();
+    expect(within(chat).getByRole('textbox', { name: 'Message Legal Owner' })).toBeTruthy();
+    fireEvent.click(within(box).getByRole('button', { name: 'Request changes' }));
+    expect(within(box).getByRole('textbox', { name: 'What should change?' })).toHaveProperty('value', '');
+  });
+
+  it('keeps the decision being sent in view while a second approval waits', async () => {
+    const next = req({ requirement_id: 'r2', shows: [], line: 'Check the brief?' });
+    shown = task({ to_leave: [req(), next] });
+    let respond!: (r: Reply) => void;
+    reply = (url, method) =>
+      method === 'POST' && url.endsWith('/asks/r1/ok')
+        ? new Promise((resolve) => { respond = resolve; })
+        : null;
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const box = await decision();
+    fireEvent.click(await ready(box));
+    await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/tasks/t1/asks/r1/ok'));
+    expect(within(box).getByText('Email to Dana Ruiz')).toBeTruthy();
+    expect(within(box).queryByText('Check the brief?')).toBeNull();
+    await act(async () => respond({ body: { task: task({ to_leave: [req({ met: true, may: [] }), next] }) } }));
+    expect(await screen.findByText('Check the brief?')).toBeTruthy();
+  });
+
   it('names the email, who asks and what Approve does; the head is quiet and Details sits under ⋯ @approvals', async () => {
     show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
     expect(await screen.findByRole('heading', { level: 1, name: 'Reply to the late-delivery claim' })).toBeTruthy();
