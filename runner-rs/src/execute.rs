@@ -1633,7 +1633,9 @@ impl Runner {
                 return;
             }
             let waiting = self.state.outbox.waiting(&aid);
-            let shown = self.first_posted.lock().unwrap().contains(&aid);
+            // A voice call's text is never paced: speech waits on each sentence.
+            let shown = !self.unpaced.lock().unwrap().contains(&aid)
+                && self.first_posted.lock().unwrap().contains(&aid);
             let now = Instant::now();
             // Counted in before the window is taken, so a turn that starts streaming paces with itself included.
             let recheck = active.update(now, waiting.count > 0, pacer.last_post());
@@ -1692,8 +1694,12 @@ impl Runner {
         let mut model = String::new();
         let mut text_block = false;
         let mut clock = voice::VoiceClock::default();
+        // The poll runs beside the session's output, so a slow poll never holds back a frame.
+        let mut input_poll = None;
+        let mut poll_began = Instant::now();
         loop {
             if let Some(grace) = restart.take() {
+                input_poll = None;
                 resident.stop_for_restart(grace).await?;
                 let state = self.voice_inputs(d.aid, "restart").await?;
                 if state.is_null() || state["closed"] == true {
@@ -1738,6 +1744,7 @@ impl Runner {
                         warming = false;
                         let Some(turn) = active.take() else { continue };
                         if !canceled {
+                            clock.text();
                             let answer = text_of(&frame["result"]);
                             let answer = voice_answer(&spoken, &answer);
                             self.voice_event(d, "message", json!({
@@ -1778,15 +1785,19 @@ impl Runner {
                     active = None;
                     restart = Some(Duration::ZERO);
                 }
-                _ = inputs.wait(d.aid, call_id), if interrupt_at.is_none() => {
+                _ = inputs.wait(d.aid, call_id), if input_poll.is_none() && interrupt_at.is_none() => {
                     if d.flags.lost.load(Ordering::SeqCst) || d.flags.stopped.load(Ordering::SeqCst) {
                         meter.add(&resident.take_usage().1);
                         return Err(Fail::runtime("Voice session lease ended"));
                     }
                     let phase = if warming || active.is_some() { "busy" } else { "ready" };
-                    let polled = Instant::now();
-                    let input = self.voice_inputs(d.aid, phase).await?;
-                    let poll_ms = u64::try_from(polled.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    poll_began = Instant::now();
+                    input_poll = Some(Box::pin(self.voice_inputs(d.aid, phase)));
+                }
+                input = voice::in_flight(&mut input_poll) => {
+                    input_poll = None;
+                    let input = input?;
+                    let poll_ms = u64::try_from(poll_began.elapsed().as_millis()).unwrap_or(u64::MAX);
                     if input.is_null() || input["closed"] == true {
                         meter.add(&resident.take_usage().1);
                         return Ok(());
@@ -1809,8 +1820,6 @@ impl Runner {
                     let question = voice_question(&input["turn"], &mut notes_stamp);
                     resident.send(&question).await?;
                     clock = voice::VoiceClock::sent(Some(poll_ms));
-                    // Each question's first text goes up at once, as a turn's first text does (upload_pace).
-                    self.first_posted.lock().unwrap().remove(d.aid);
                     spoken.clear();
                     model.clear();
                     text_block = false;
@@ -2902,6 +2911,7 @@ impl Runner {
                 return Err(Fail::runtime(CONTINUE_LOST));
             }
             if voice_call {
+                self.unpaced.lock().unwrap().insert(aid.clone());
                 let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, fresh: None };
                 let primer = text_of(&attempt["message"]["body"]);
                 let meeting = &attempt["message"]["refs"]["live_meeting"];

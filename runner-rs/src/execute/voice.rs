@@ -77,10 +77,10 @@ struct Turn {
 }
 
 impl Turn {
-    fn new(question: Option<String>) -> Self {
+    fn new(question: Option<String>, poll_ms: Option<u64>) -> Self {
         Self {
             id: None,
-            clock: VoiceClock::sent(None),
+            clock: VoiceClock::sent(poll_ms),
             question,
             spoken: String::new(),
             answer: String::new(),
@@ -89,7 +89,7 @@ impl Turn {
     }
 }
 
-async fn in_flight<F: Future>(future: &mut Option<Pin<Box<F>>>) -> F::Output {
+pub(super) async fn in_flight<F: Future>(future: &mut Option<Pin<Box<F>>>) -> F::Output {
     match future {
         Some(future) => future.as_mut().await,
         None => pending().await,
@@ -177,13 +177,14 @@ impl Runner {
                 format!("For call replies, {brief}.\n{primer}")
             };
             starting = Some(Box::pin(begin(primer)));
-            Some(Turn::new(None))
+            Some(Turn::new(None, None))
         };
         let mut last = String::new();
         let mut interrupt_at = None;
         let mut closing = false;
         let mut warmed = start.resumed;
         let mut input_poll = None;
+        let mut poll_began = time::Instant::now();
         loop {
             tokio::select! {
                 ack = in_flight(&mut starting) => {
@@ -276,6 +277,9 @@ impl Runner {
                             }
                             turn.next_message = true;
                             turn.answer = text_of(&ev["text"]);
+                            if !turn.answer.is_empty() {
+                                turn.clock.text();
+                            }
                         }
                     }
                 }
@@ -290,11 +294,13 @@ impl Runner {
                         return Err(Fail::runtime("Voice session lease ended"));
                     }
                     let phase = if active.is_some() || starting.is_some() { "busy" } else { "ready" };
+                    poll_began = time::Instant::now();
                     input_poll = Some(Box::pin(self.voice_inputs(d.aid, phase)));
                 }
                 input = in_flight(&mut input_poll) => {
                     input_poll = None;
                     let input = input?;
+                    let poll_ms = u64::try_from(poll_began.elapsed().as_millis()).unwrap_or(u64::MAX);
                     closing = input.is_null() || input["closed"] == true || d.flags.stopped.load(Ordering::SeqCst);
                     if let Some(turn) = &active {
                         let revoked = turn.question.as_ref().is_some_and(|id| input["turn"]["id"] != *id);
@@ -313,9 +319,7 @@ impl Runner {
                             let prompt = voice_question(&input["turn"], &mut notes_stamp);
                             last.clone_from(&question);
                             starting = Some(Box::pin(begin(prompt)));
-                            active = Some(Turn::new(Some(question)));
-                            // Each question's first text goes up at once, as a turn's first text does (upload_pace).
-                            self.first_posted.lock().unwrap().remove(d.aid);
+                            active = Some(Turn::new(Some(question), Some(poll_ms)));
                         }
                     }
                 }

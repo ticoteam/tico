@@ -97,6 +97,8 @@ pub struct Runner {
     flush_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<i64>>>>,
     /// Attempts whose first streamed text has reached the server (one timing mark each).
     pub first_posted: Mutex<HashSet<String>>,
+    /// Voice call attempts: their text goes up as it is written, never paced (speech waits on it).
+    pub unpaced: Mutex<HashSet<String>>,
     /// Turns streaming on this runner and recent upload times: how long later text waits (crate::upload_pace).
     pub upload_load: crate::upload_pace::Load,
     pub upload_bounds: crate::upload_pace::Bounds,
@@ -216,6 +218,7 @@ impl Runner {
             accounts: AtomicBool::new(false),
             flush_locks: Mutex::new(HashMap::new()),
             first_posted: Mutex::new(HashSet::new()),
+            unpaced: Mutex::new(HashSet::new()),
             upload_load: crate::upload_pace::Load::default(),
             upload_bounds: crate::upload_pace::ADAPTIVE,
             assignments: Mutex::new(Arc::new(vec![])),
@@ -465,6 +468,7 @@ impl Runner {
         self.flush_locks.lock().unwrap().remove(aid);
         self.state.outbox.forget(aid);
         self.first_posted.lock().unwrap().remove(aid);
+        self.unpaced.lock().unwrap().remove(aid);
     }
 
     /// Send a result under `complete:{aid}`. This runner's server floor takes every field it sends, so
