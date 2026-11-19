@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts import release_checks
+from scripts import main_red, release_checks
 
 
 @pytest.fixture
@@ -60,6 +60,9 @@ def test_isolation_uses_the_candidate_image_only_after_successful_builds(tmp_pat
             def tail(self):
                 return 'synthetic build failure'
 
+            def failed_tests(self):
+                return ['FAILED runner_support/tests/test_build.py::test_image - synthetic']
+
         monkeypatch.setattr(release_checks, 'Check', Check)
         assert release_checks.release(SimpleNamespace(previous=None)) == (0 if builds_ok else 1)
         output = capsys.readouterr().out
@@ -99,6 +102,10 @@ def test_isolation_uses_the_candidate_image_only_after_successful_builds(tmp_pat
         else:
             assert 'isolation' not in calls
             assert 'isolation: not run' in output
+            # The failed part's FAILED lines reach the job log ahead of its tail, where main_red finds them.
+            report = output.split('--- build-runner (last lines of', 1)[1]
+            assert report.index('FAILED runner_support') < report.index('synthetic build failure')
+            assert main_red.failing_tests(output) == ['runner_support/tests/test_build.py::test_image']
             assert '| isolation | - | - | not run |' in output
             assert (tmp_path / 'images-ready').read_text() == 'failed'
     assert release_checks.BUDGET_SECONDS == 480 and release_checks.DEFAULT_BUDGET_SECONDS == 300
@@ -116,6 +123,23 @@ def test_a_test_step_that_passes_nothing_fails(tmp_path):
     assert run('4 skipped in 0.5s') == 1  # all skipped: the step proved nothing
     assert run('no tests ran in 0.4s') == 1
     assert run('4 skipped in 0.5s', tests=False) == 0  # a non-test step is judged by its exit code alone
+
+
+def test_a_failed_part_names_its_failed_tests_even_above_the_tail(tmp_path):
+    import sys
+
+    node = 'runner_support/tests/test_isolation_docker.py::test_isolation'
+    runner_log = [f'runner log line {i}' for i in range(200)]
+    output = '\n'.join(
+        ['test session starts', 'E   AssertionError: runner failed', *runner_log]
+        + [f'\x1b[31mFAILED\x1b[0m {node} - AssertionError: runner failed', *runner_log, '1 failed in 9.0s']
+    )
+    script = f'import sys; sys.stdout.write({output!r}); sys.exit(1)'
+    check = release_checks.Check('isolation', [sys.executable, '-c', script], tmp_path, {}, tests=True)
+    assert check.join() == 1
+    assert node not in check.tail()  # the summary line sits above the last 40 lines
+    assert check.failed_tests() == [f'FAILED {node} - AssertionError: runner failed']
+    assert main_red.failing_tests('\n'.join(check.failed_tests())) == [node]
 
 
 @pytest.mark.parametrize(
