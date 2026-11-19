@@ -33,6 +33,11 @@ def model_spec(model: str | None) -> dict[str, Any] | None:
     return None
 
 
+def accepts_runner(spec: dict[str, Any], capabilities: list[str]) -> bool:
+    required = harnesses.harness_caps(spec.get("harness"), spec["runtime"]).get("voice_session_runner")
+    return CAPABILITY in capabilities and (not required or required in capabilities)
+
+
 def note_stamp(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
@@ -75,10 +80,16 @@ def ensure(c: Any, settings: Any, row: Any, bot: str) -> bool:
     runner = c.execute(
         "SELECT r.capabilities FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?", (bot,)
     ).fetchone()
-    if not runner or CAPABILITY not in json.loads(runner[0] or "[]"):
+    capabilities: list[str] = json.loads(runner[0] or "[]") if runner else []
+    if CAPABILITY not in capabilities:
         return False
     raw = c.execute(BS.ONE_SQL, (bot,)).fetchone()
-    if not raw or not model_spec(providers.bot_choice(c, settings, shared_bots.follow(c, bot, json.loads(raw[0])))[1]):
+    spec = (
+        model_spec(providers.bot_choice(c, settings, shared_bots.follow(c, bot, json.loads(raw[0])))[1])
+        if raw
+        else None
+    )
+    if not spec or not accepts_runner(spec, capabilities):
         return False
     from . import call_notes
 
@@ -248,3 +259,22 @@ def finish(c: Any, rid: str, aid: str) -> None:
         "SELECT * FROM live_meeting_turns WHERE meeting_id=? AND voice_attempt=? AND status='claimed'", (rid, aid)
     ).fetchall():
         live_meetings._finish_pass(c, rid, turn, "voice_session_ended")
+
+
+def recover(c: Any, attempt: Any) -> bool:
+    """Requeue the resident lease after a computer restart, settling its in-flight question once."""
+    spec = model_spec(attempt["handed_model"] or attempt["model"])
+    if not spec or not harnesses.harness_caps(spec.get("harness"), spec["runtime"]).get("voice_session_runner"):
+        return False
+    ref = c.execute(
+        "SELECT json_extract(m.refs,'$.live_meeting.voice_call') FROM jobs j JOIN messages m ON m.id=j.message_id "
+        "WHERE j.id=? AND j.attempt_id=? AND m.sender_id=?",
+        (attempt["job_id"], attempt["id"], H.TICO_ACTOR),
+    ).fetchone()
+    if not ref or not ref[0]:
+        return False
+    row = standing(c, ref[0], attempt["bot_id"], attempt["job_id"])
+    if not row:
+        return False
+    finish(c, row["live_meeting_id"], attempt["id"])
+    return True

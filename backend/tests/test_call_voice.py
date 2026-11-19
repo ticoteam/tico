@@ -18,8 +18,9 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from backend import call_media, call_voice, calls, live_meetings, threads
+from backend import call_media, call_sessions, call_voice, calls, live_meetings, providers, threads
 from backend import bot_settings as BS
+from backend.run_diagnostics import RESTART_TEXT
 from backend.store import H
 from backend.tests.helpers.api import assign, get, headers, post, put, ready, runner
 from backend.tests.helpers.call_media import CONFIG, fake_rtc, wait_until  # noqa: F401 - pytest discovers the RTC fixture
@@ -38,7 +39,7 @@ from backend.tests.helpers.calls import (
 from backend.tests.helpers.live_meetings import live  # noqa: F401
 from backend.tests.helpers.new_bot_flows import create_bot
 from backend.tests.helpers.credentials import setup as credential_setup
-from backend.tests.helpers.model_subscriptions import add, company, give, machine, on
+from backend.tests.helpers.model_subscriptions import add, codex_file, company, give, machine, on
 from backend.tests.helpers.models_preset import connected, on_tico
 
 SPEECH = array("h", [3000, -3000] * 160).tobytes()  # 20 ms of speech at 16 kHz
@@ -507,6 +508,42 @@ def test_voice_uses_the_bots_model_with_low_effort_and_concise_output(meet, resi
     task = _claim(meet, worker, "ops")
     assert task["task"]["id"] == followup["id"]
     assert [task["config"][key] for key in keys] == [model, "high", "Explanatory"]
+
+
+@pytest.mark.parametrize("recovered", ["reported", "expired"])
+def test_codex_call_recovers_the_resident_job_without_replaying_its_question(meet, recovered):
+    credential_setup(meet)
+    company(meet)
+    model = providers.recommended("openai")["id"]
+    on(meet, "ops", "codex", model)
+    caps = ("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1", "voice_session_resume_v1")
+    assert not call_sessions.accepts_runner(call_sessions.model_spec(model), list(caps[:-1]))
+    worker = machine(meet, caps=caps)
+    give(meet, worker, "codex", add(meet, kind="codex_login", secret=codex_file())["id"])
+    token = worker["token"]
+    call = start_call(meet, _dm(meet), bots=["ops"])
+    attempt = _claim(meet, worker, "ops")
+    assert attempt["message"]["refs"]["live_meeting"]["voice_call"] == call["id"]
+    assert (attempt["config"]["model"], attempt["config"]["reasoning_effort"]) == (model, "medium")
+    _complete(meet, worker, _claim(meet, worker, "ops"), "Prepared for the call.")
+    _speak(meet, call["id"], 0)
+    path = f"attempts/{attempt['id']}"
+    turn = post(meet, f"{path}/inputs", {}, token)["call_voice"]["turn"]
+    if recovered == "reported":
+        post(meet, f"{path}/complete", {"outcome": "interrupted", "text": RESTART_TEXT, "last_seq": 0}, token)
+    else:
+        with meet.app.state.store.transaction() as c:
+            c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (H.shift(H.now(), seconds=-1), attempt["id"]))
+            meet.app.state.execution.expire(c, attempt_ids=[attempt["id"]])
+    assert _turns(meet, call["meeting_id"])[0]["status"] == "skipped"
+    restarted = _claim(meet, worker, "ops")
+    assert restarted["id"] != attempt["id"] and restarted["message"]["id"] == attempt["message"]["id"]
+    resumed = post(meet, f"attempts/{restarted['id']}/inputs", {}, token)["call_voice"]
+    assert resumed == {"closed": False}
+    meet.app.state.calls.voice.tick()
+    _speak(meet, call["id"], 3500, text="Ops, when should we meet next?")
+    another = post(meet, f"attempts/{restarted['id']}/inputs", {}, token)["call_voice"]["turn"]
+    assert another["id"] != turn["id"]
 
 
 def test_call_end_stops_a_leased_resident_before_it_can_start(meet):

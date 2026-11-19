@@ -29,6 +29,9 @@ use crate::runner::{describe, Runner};
 use crate::util::{log, mark, text_of, truthy};
 use crate::wire::{decode, StartPlaceAnswer};
 
+mod voice;
+use voice::{voice_answer, voice_question};
+
 const RENEW_INTERVAL: Duration = Duration::from_secs(10);
 const VOICE_CONTEXT_TOKENS: i64 = 24_000;
 const VOICE_INTERRUPT_WAIT: Duration = Duration::from_secs(2);
@@ -1663,7 +1666,7 @@ impl Runner {
         Ok(answer["call_voice"].take())
     }
 
-    async fn voice_session(
+    async fn claude_voice_session(
         &self,
         d: &Drive<'_>,
         claude: &ClaudeHost,
@@ -1687,6 +1690,7 @@ impl Runner {
         let mut restart = None;
         let mut spoken = String::new();
         let mut model = String::new();
+        let mut text_block = false;
         loop {
             if let Some(grace) = restart.take() {
                 resident.stop_for_restart(grace).await?;
@@ -1730,15 +1734,7 @@ impl Runner {
                         let Some(turn) = active.take() else { continue };
                         if !canceled {
                             let answer = text_of(&frame["result"]);
-                            let final_text = answer.trim();
-                            let streamed = spoken.trim();
-                            let answer = if final_text.starts_with(streamed) {
-                                final_text.to_owned()
-                            } else if streamed.ends_with(final_text) {
-                                streamed.to_owned()
-                            } else {
-                                format!("{streamed}\n\n{final_text}")
-                            };
+                            let answer = voice_answer(&spoken, &answer);
                             self.voice_event(d, "message", json!({
                                 "voice_turn": turn, "text": answer, "model": model, "final": true,
                             })).await?;
@@ -1751,8 +1747,15 @@ impl Runner {
                             model = text_of(&frame["message"]["model"]);
                         }
                         if let Some(text) = hosts::claude::voice_delta(&frame) {
+                            text_block = true;
                             spoken.push_str(text);
                             self.voice_event(d, "delta", json!({"voice_turn": turn, "text": text})).await?;
+                        } else if frame["type"] == "stream_event" && frame["parent_tool_use_id"].is_null()
+                            && frame["event"]["type"] == "content_block_stop" && std::mem::take(&mut text_block)
+                            && voice::needs_sentence_boundary(&spoken)
+                        {
+                            spoken.push(' ');
+                            self.voice_event(d, "delta", json!({"voice_turn": turn, "text": " "})).await?;
                         }
                     }
                 }
@@ -1793,17 +1796,11 @@ impl Runner {
                     if warming || turn.is_empty() || turn == last {
                         continue;
                     }
-                    let utterance = text_of(&input["turn"]["text"]);
-                    let mut question = format!("Participant utterance:\n{utterance}");
-                    let notes = text_of(&input["turn"]["notes"]);
-                    let stamp = crate::gitrun::sha256_hex(notes.as_bytes());
-                    if notes_stamp != stamp {
-                        question = format!("Updated call notes (context only):\n{notes}\n\n{question}");
-                        notes_stamp = stamp;
-                    }
+                    let question = voice_question(&input["turn"], &mut notes_stamp);
                     resident.send(&question).await?;
                     spoken.clear();
                     model.clear();
+                    text_block = false;
                     last.clone_from(&turn);
                     active = Some(turn);
                 }
@@ -2326,6 +2323,7 @@ impl Runner {
         let mut drove = Drove::interrupted();
         let mut fresh: Option<Fresh> = None;
         let mut redactor: Option<Arc<Redactor>> = None;
+        let mut voice_scope = None;
         let mut capture: Option<Arc<crate::capture::Capture>> = None;
         let mut started_at = String::new();
         let mut memory_before = String::new();
@@ -2699,6 +2697,13 @@ impl Runner {
                 self.make_host(&bot, &runtime, &env, selected.as_ref(), tx)?
             };
             let h = host.insert(made);
+            if voice_call && matches!(h, Host::Codex(_)) {
+                let call_id = text_of(&refs["live_meeting"]["voice_call"]);
+                let job = text_of(&attempt["job_id"]);
+                let scope = format!("call-voice:{call_id}:{job}:{conv}");
+                previous = self.state.session(&bot, &scope, &session_runtime)?;
+                voice_scope = Some(scope);
+            }
             h.track_allocation(flags.harness_allocated.clone());
             h.set_attempt(&aid);
             if let Some(c) = &capture {
@@ -2765,7 +2770,7 @@ impl Runner {
                 // The turn after a failed one for prompt-too-long: compact the saved thread first (one-shot flag). A
                 // continuation compacts only the thread it continues; another one is left as it is for CONTINUE_LOST.
                 let other = !continuing.is_empty() && prev != &continuing && thread.as_deref() != Some(continuing.as_str());
-                if resumed && !other && truthy(config.get("compact_first")) && !truthy(refs.get("command")) {
+                if resumed && !voice_call && !other && truthy(config.get("compact_first")) && !truthy(refs.get("command")) {
                     let th = thread.clone().unwrap_or_default();
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                     match self.compact_saved(&aid, h, &th, effort.as_deref(), &runtime, &text_of(&config["harness"]), rx, segments.last_mut().map(|s| &mut s.meter)).await {
@@ -2884,18 +2889,35 @@ impl Runner {
                 return Err(Fail::runtime(CONTINUE_LOST));
             }
             if voice_call {
-                let Host::Claude(claude) = &*h else {
-                    return Err(Fail::runtime("The voice session host is unavailable"));
-                };
                 let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, fresh: None };
                 let primer = text_of(&attempt["message"]["body"]);
                 let stamp = text_of(&attempt["message"]["refs"]["live_meeting"]["notes_stamp"]);
-                let meter = &mut segments.last_mut().expect("the primary segment was added").meter;
+                let segment = segments.last_mut().expect("the primary segment was added");
                 self.during_drain(&aid, async {
-                    tokio::time::timeout_at(d.limit.into(), self.voice_session(&d, claude, &primer, stamp, meter))
-                        .await.map_err(|_| Fail::runtime(format!("Timeout: {}", d.limit_name)))?
+                    tokio::time::timeout_at(d.limit.into(), async {
+                        match (&*h, voice_scope.as_deref()) {
+                            (Host::Claude(claude), _) => {
+                                self.claude_voice_session(&d, claude, &primer, stamp, &mut segment.meter).await?;
+                                drove.outcome = "completed".into();
+                            }
+                            (Host::Codex(codex), Some(scope)) => {
+                                let start = voice::Start { primer: &primer, notes_stamp: stamp, scope, resumed, replacing: previous.is_some() };
+                                match self.codex_voice_session(&d, codex, rx, start, segment).await? {
+                                    voice::End::Closed => {
+                                        drop_session(&self.state, &bot, scope, &session_runtime, &th).await?;
+                                        if let Some(old) = previous.as_deref().filter(|old| *old != th) {
+                                            drop_session(&self.state, &bot, scope, &session_runtime, old).await?;
+                                        }
+                                        drove.outcome = "completed".into();
+                                    }
+                                    voice::End::Restart => drove.yielded = true,
+                                }
+                            }
+                            _ => return Err(Fail::runtime("The voice session host is unavailable")),
+                        }
+                        Ok(())
+                    }).await.map_err(|_| Fail::runtime(format!("Timeout: {}", d.limit_name)))?
                 }).await?;
-                drove.outcome = "completed".into();
                 return Ok(());
             }
             // A resumed thread already holds the repo rules unless they changed since it was given them, or a
@@ -3065,6 +3087,10 @@ impl Runner {
                 self.note_session(&aid, &bot, session.as_ref());
             }
             let persisted = async {
+                // Resident calls keep their provider state under the call's own job, outside ordinary conversation history.
+                if voice_call {
+                    return Ok(());
+                }
                 if let Some(f) = fresh
                     .as_ref()
                     .filter(|f| f.confirmed.lock().unwrap().is_none())
@@ -3644,6 +3670,12 @@ impl Runner {
                 if ev["kind"] == "_diagnostics_drained" {
                     break;
                 }
+                if voice_scope.is_some()
+                    && ev["kind"] == "tokens"
+                    && ev["thread_id"].as_str() == thread.as_deref()
+                {
+                    segments.last_mut().unwrap().meter.add(&ev);
+                }
                 if ev["process_exit"] == true {
                     let clean = redactor
                         .as_ref()
@@ -3656,6 +3688,18 @@ impl Runner {
         // The Gateway's reset, read before a kept pi takes the relay with it.
         let gateway_reset = vault.relay.as_ref().and_then(|relay| relay.limit_reset());
         if let Some(h) = &host {
+            if drove.outcome == "interrupted" && !drove.yielded {
+                // A deadline or drain can cancel the voice loop while a turn is still active.
+                if let (Some(_), Host::Codex(codex), Some(th)) = (&voice_scope, h, &thread) {
+                    if let Some(active) = codex.active_turn(th) {
+                        let _ = tokio::time::timeout(
+                            VOICE_INTERRUPT_WAIT,
+                            codex.interrupt(th, &active),
+                        )
+                        .await;
+                    }
+                }
+            }
             if let (Some(th), Some(t)) = (&thread, &turn) {
                 if drove.outcome == "interrupted" {
                     let _ = h.interrupt(th, t).await;
@@ -3697,6 +3741,12 @@ impl Runner {
             while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
                 if ev["kind"] == "_diagnostics_drained" {
                     break;
+                }
+                if voice_scope.is_some()
+                    && ev["kind"] == "tokens"
+                    && ev["thread_id"].as_str() == thread.as_deref()
+                {
+                    segments.last_mut().unwrap().meter.add(&ev);
                 }
             }
         }
@@ -5857,11 +5907,25 @@ mod tests {
         }
     }
 
+    struct VoiceFixture {
+        turns: Arc<[Value]>,
+        stream: Option<Arc<VoiceStreamFixture>>,
+    }
+
+    #[derive(Default)]
+    struct VoiceStreamFixture {
+        idle_attempt: &'static str,
+        held: AtomicBool,
+        busy_poll: Notify,
+        first_sentence: Notify,
+        release_poll: Notify,
+    }
+
     async fn recording_server_start_window(
         hold: Option<Arc<Notify>>,
         revoke_start: Option<bool>,
         window: Option<Arc<Mutex<StartWindow>>>,
-        voice_turns: Option<Arc<[Value]>>,
+        voice: Option<Arc<VoiceFixture>>,
     ) -> (
         String,
         Arc<Mutex<Vec<(String, String, Value)>>>,
@@ -5880,7 +5944,7 @@ mod tests {
                 let kept = kept.clone();
                 let hold = hold.clone();
                 let window = window.clone();
-                let voice_turns = voice_turns.clone();
+                let voice = voice.clone();
                 tokio::spawn(async move {
                     let mut request = Vec::new();
                     let mut buffer = [0u8; 8192];
@@ -5932,47 +5996,70 @@ mod tests {
                                 .any(|(_, p, _)| p.ends_with("/started"))
                     });
                     // Events are acknowledged up to the last one sent, as the server does.
-                    let answer = match (body["events"].as_array().and_then(|e| e.last()), voice_turns.as_deref()) {
+                    let answer = match (body["events"].as_array().and_then(|e| e.last()), voice.as_deref()) {
                         (Some(last), _) => json!({"ack_seq": last["seq"]}),
                         (None, _) if model.is_some() => model.unwrap().1,
                         (None, _) if rejected => json!({"error": {"code": "start_wait", "detail": "Synthetic reservation expired"}}),
                         (None, _) if path.ends_with("/start-place") => json!({"reserved": !waiting}),
                         (None, _) if path.contains("/credential-runtime") => granted(&text).unwrap_or_else(|| json!({})),
-                        (None, Some(turns)) if path.contains("/inputs?voice=") => {
+                        (None, Some(voice)) if path.contains("/inputs?voice=") => {
                             let seen = kept.lock().unwrap();
                             let events = seen.iter().filter(|(_, p, _)| p.ends_with("/events"))
                                 .flat_map(|(_, _, b)| b["events"].as_array().into_iter().flatten());
                             let mut completed = 0;
                             let mut stalled = false;
+                            let mut ending = false;
                             for event in events {
                                 if event["kind"] == "message" && event["payload"]["final"] == true {
                                     completed += 1;
                                 }
                                 stalled |= event["kind"] == "delta" && event["payload"]["text"] == "Stalled";
+                                ending |= event["kind"] == "delta" && event["payload"]["text"] == "Ending";
                             }
                             let next = completed + usize::from(stalled);
-                            let payload = if next >= turns.len() {
+                            let payload = if ending || next >= voice.turns.len() {
                                 json!({"closed": true})
                             } else if path.ends_with("voice=restart") {
                                 json!({"closed": false, "primer": "Reply exactly READY. Recent transcript from the server.",
                                        "notes_stamp": crate::gitrun::sha256_hex(b"Current call notes.")})
-                            } else if path.ends_with("voice=busy") && stalled && completed == 2 {
+                            } else if path.ends_with("voice=busy") && stalled && completed == 2
+                                || voice.stream.as_ref().is_some_and(|s| path.contains(s.idle_attempt)) {
                                 json!({"closed": false})
                             } else {
-                                json!({"closed": false, "turn": turns[next]})
+                                json!({"closed": false, "turn": voice.turns[next]})
                             };
                             json!({"messages": [], "call_voice": payload})
                         },
                         (None, _) => json!({}),
                     }
                     .to_string();
-                    let holding = {
+                    let (holding, hold_busy_poll) = {
                         let mut seen = kept.lock().unwrap();
                         let holding = path.ends_with("/inputs")
                             && seen.iter().filter(|(_, p, _)| p == &path).count() == 1;
+                        let stream = voice.as_ref().and_then(|v| v.stream.as_ref());
+                        let hold_busy_poll = stream.is_some_and(|stream| {
+                            path.ends_with("voice=busy")
+                                && seen.iter().any(|(_, p, _)| p.ends_with("voice=ready"))
+                                && !stream.held.swap(true, Ordering::SeqCst)
+                        });
+                        if let Some(stream) = stream {
+                            if body["events"].as_array().into_iter().flatten().any(|e| {
+                                e["kind"] == "delta"
+                                    && e["payload"]["voice_turn"] == "turn-0"
+                                    && e["payload"]["text"] == " "
+                            }) {
+                                stream.first_sentence.notify_one();
+                            }
+                        }
                         seen.push((method, path, body));
-                        holding
+                        (holding, hold_busy_poll)
                     };
+                    if hold_busy_poll {
+                        let stream = voice.as_ref().unwrap().stream.as_ref().unwrap();
+                        stream.busy_poll.notify_one();
+                        stream.release_poll.notified().await;
+                    }
                     if holding {
                         if let Some(hold) = hold {
                             hold.notified().await;
@@ -8402,16 +8489,18 @@ for line in sys.stdin:
         std::fs::create_dir_all(dir.join("projects")).unwrap();
         let path = dir.join("runner.json");
         std::fs::write(&path, json!({"url": url, "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        (runner_from(&dir), dir)
+    }
+
+    fn runner_from(dir: &Path) -> Arc<Runner> {
+        let path = dir.join("runner.json");
         let config = crate::config::Config::load(&path).unwrap();
         let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
-        (
-            Arc::new(Runner::new(
-                config,
-                client,
-                crate::state::State::open(&dir.join("state")).unwrap(),
-            )),
-            dir,
-        )
+        Arc::new(Runner::new(
+            config,
+            client,
+            crate::state::State::open(&dir.join("state")).unwrap(),
+        ))
     }
 
     fn posted(seen: &Mutex<Vec<(String, String, Value)>>, end: &str) -> usize {
@@ -9569,8 +9658,12 @@ print(json.dumps({'type':'result','subtype':'success','result':'Sent the Acme in
             .enumerate()
             .map(|(n, text)| json!({"id": format!("turn-{n}"), "text": text, "notes": notes}))
             .collect::<Vec<_>>();
+        let voice = Arc::new(VoiceFixture {
+            turns: turns.into(),
+            stream: None,
+        });
         let (url, seen, server) =
-            recording_server_start_window(None, None, None, Some(turns.into())).await;
+            recording_server_start_window(None, None, None, Some(voice)).await;
         let (runner, dir) = runner_at(&url, "voice-context");
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
         let script = dir.join("synthetic_voice.py");
@@ -9608,6 +9701,8 @@ for line in sys.stdin:
         delta('Stalled')
         continue
     delta(' Agreed.')
+    if prompt.endswith('First question'):
+        send({'type':'stream_event', 'event':{'type':'content_block_stop'}})
     send({'type':'stream_event', 'event':{'type':'message_delta', 'usage':{'output_tokens':10}}})
     send({'type':'result', 'result':'Agreed. Tomorrow.',
         'usage':{'input_tokens':4,'cache_read_input_tokens':100000+cached,'output_tokens':10}})
@@ -9682,6 +9777,212 @@ for line in sys.stdin:
         assert_eq!(
             finals,
             ["turn-0", "turn-1", "turn-3"].map(|turn| (turn.into(), "Agreed. Tomorrow.".into()))
+        );
+        let first_deltas = seen
+            .iter()
+            .filter(|(_, path, _)| path.ends_with("/events"))
+            .flat_map(|(_, _, body)| body["events"].as_array().into_iter().flatten())
+            .filter(|e| e["kind"] == "delta" && e["payload"]["voice_turn"] == "turn-0")
+            .map(|e| text_of(&e["payload"]["text"]))
+            .collect::<Vec<_>>();
+        assert_eq!(first_deltas, [" Agreed.", " "]);
+        server.abort();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn codex_voice_streams_interrupts_and_resumes_the_call() {
+        use tokio::io::AsyncWriteExt;
+
+        let _controls = RunControls;
+        let idle = "a-voice-codex-idle";
+        let stream = Arc::new(VoiceStreamFixture {
+            idle_attempt: idle,
+            ..Default::default()
+        });
+        let turns = ["First question", "Second question", "Stall", "Next question", "End the call"]
+            .into_iter()
+            .enumerate()
+            .map(|(n, text)| json!({"id": format!("turn-{n}"), "text": text, "notes": "Current call notes."}))
+            .collect::<Vec<_>>();
+        let voice = Arc::new(VoiceFixture {
+            turns: turns.into(),
+            stream: Some(stream.clone()),
+        });
+        let (url, seen, server) =
+            recording_server_start_window(None, None, None, Some(voice)).await;
+        let (runner, dir) = runner_at(&url, "voice-codex");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        crate::util::write_script(
+            &dir.join("codex"),
+            include_str!("../tests/fixtures/codex/voice.py"),
+        );
+        let gate = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        std::fs::write(
+            dir.join("stream-gate"),
+            gate.local_addr().unwrap().port().to_string(),
+        )
+        .unwrap();
+        let path = format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        HOST_CODEX.with(|env| *env.borrow_mut() = Some([("PATH".into(), path)].into()));
+        let token = format!("run-codex-voice-{}", uuid::Uuid::new_v4().simple());
+        grants().lock().unwrap().insert(
+            token.clone(),
+            json!({"subscriptions": [{
+                "id": "voice-test", "runtime": "codex", "kind": "codex_login", "file": "auth.json",
+                "value": "{\"tokens\":{}}", "revision": 1, "billing": "subscription"
+            }]}),
+        );
+        let attempt = |aid| {
+            room_attempt(
+                aid,
+                json!({
+                    "token": token, "credential_vault": true, "job_id": "resident-voice-job",
+                    "message": {"body": "You are Ops. Reply exactly READY to warm up.", "sender_id": "keeper",
+                        "refs": {"live_meeting": {"voice_call": "call-2", "notes_stamp": crate::gitrun::sha256_hex(b"")}}},
+                    "config": {"runtime": "codex", "harness": "codex", "model": "synthetic", "session": "task", "reasoning_effort": "medium"}
+                }),
+            )
+        };
+        let initial = "a-voice-codex";
+        let resumed = "a-voice-codex-resumed";
+        let room = format!("{}:subscription:voice-test", session_key(&attempt(initial)));
+        runner
+            .state
+            .save_session("ops", &room, "codex", "ordinary-thread")
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let result = runner.clone().execute(attempt(initial));
+            let release = async {
+                let (mut socket, _) = gate.accept().await.unwrap();
+                stream.busy_poll.notified().await;
+                socket.write_all(b"y").await.unwrap();
+                // The hub holds the busy poll until it gets the complete commentary sentence.
+                stream.first_sentence.notified().await;
+                stream.release_poll.notify_one();
+                socket.write_all(b"z").await.unwrap();
+            };
+            tokio::try_join!(result, async {
+                release.await;
+                Ok(())
+            })
+            .unwrap();
+        })
+        .await
+        .expect("the interrupted voice session ended");
+        let first = completion(&seen, initial);
+        assert_eq!(first["outcome"], "interrupted", "{first}");
+        assert_eq!(first["yielded"], true);
+        assert_eq!(first["usage"]["input_tokens"], 300);
+        assert_eq!(first["usage"]["cached_tokens"], 100);
+        assert_eq!(first["usage"]["output_tokens"], 16);
+        assert_eq!(
+            runner
+                .state
+                .session("ops", &room, "codex")
+                .unwrap()
+                .as_deref(),
+            Some("ordinary-thread")
+        );
+        drop(runner);
+
+        std::fs::write(dir.join("exit-idle"), b"").unwrap();
+        let runner = runner_from(&dir);
+        tokio::time::timeout(Duration::from_secs(15), runner.execute(attempt(idle)))
+            .await
+            .expect("the app server exited while the resumed session was idle")
+            .unwrap();
+        assert_eq!(completion(&seen, idle)["yielded"], true);
+
+        let runner = runner_from(&dir);
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            runner.clone().execute(attempt(resumed)),
+        )
+        .await
+        .expect("the resumed voice session ended")
+        .unwrap();
+        let second = completion(&seen, resumed);
+        assert_eq!(second["outcome"], "completed", "{second}");
+        assert_eq!(second["usage"]["input_tokens"], 150);
+        assert_eq!(second["usage"]["cached_tokens"], 50);
+        assert_eq!(second["usage"]["output_tokens"], 8);
+        assert_eq!(second["usage"]["billing"], "subscription");
+        assert_eq!(posted(&seen, "/started"), 3);
+        assert_eq!(
+            runner
+                .state
+                .session("ops", &room, "codex")
+                .unwrap()
+                .as_deref(),
+            Some("ordinary-thread")
+        );
+
+        let calls: Vec<(String, Value)> = std::fs::read_to_string(dir.join("calls.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let thread = |method: &'static str| {
+            calls
+                .iter()
+                .filter(move |(name, _)| name == method)
+                .map(|(_, params)| params)
+        };
+        assert_eq!(thread("initialize").count(), 3);
+        assert_eq!(thread("thread/start").count(), 1);
+        assert_eq!(thread("thread/start").next().unwrap()["model"], "synthetic");
+        assert_eq!(
+            thread("thread/resume")
+                .map(|p| p["threadId"].clone())
+                .collect::<Vec<_>>(),
+            [json!("call-thread"), json!("call-thread")]
+        );
+        assert_eq!(
+            thread("turn/interrupt")
+                .map(|p| p["turnId"].clone())
+                .collect::<Vec<_>>(),
+            ["codex-turn-4", "codex-turn-6"]
+        );
+        let prompts = thread("turn/start")
+            .map(|p| {
+                assert_eq!(p["effort"], "medium");
+                assert_eq!(p["threadId"], "call-thread");
+                p["input"][0]["text"].as_str().unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(prompts.len(), 6);
+        assert!(prompts[0].contains("answer in one or two short spoken sentences"));
+        assert!(prompts[0].contains("Reply exactly READY"));
+        assert!(prompts[1..]
+            .iter()
+            .all(|text| text.contains("Participant utterance:")));
+        assert!(prompts[4].contains("Current call notes."));
+        let seen = seen.lock().unwrap();
+        let finals = seen
+            .iter()
+            .filter(|(_, path, _)| path.ends_with("/events"))
+            .flat_map(|(_, _, body)| body["events"].as_array().into_iter().flatten())
+            .filter(|e| e["kind"] == "message")
+            .map(|e| {
+                (
+                    text_of(&e["payload"]["voice_turn"]),
+                    text_of(&e["payload"]["text"]),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            finals,
+            [
+                ("turn-0", "Agreed.\n\nTomorrow."),
+                ("turn-1", "Agreed. Tomorrow."),
+                ("turn-3", "Agreed. Tomorrow.")
+            ]
+            .map(|(turn, text)| (turn.into(), text.into()))
         );
         server.abort();
         std::fs::remove_dir_all(dir).unwrap();

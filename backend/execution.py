@@ -4166,6 +4166,15 @@ class Execution:
                 }
                 if row["job_id"] in canceled:
                     state = "canceled"
+                voice_restart = (
+                    row["state"] == "running"
+                    and state == "uncertain"
+                    and not row["stop_requested_at"]
+                    and not row["capped"]
+                    and call_sessions.recover(c, row)
+                )
+                if voice_restart:
+                    state = retry_state = "queued"
                 c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), row["id"]))
                 from .performance import stamp_attempt
 
@@ -4277,6 +4286,10 @@ class Execution:
                         self.stopped(c, row, job["conversation_id"], held=held_back)
                 elif state == "canceled":
                     settle_status(c, row["bot_id"], "idle", "", claimed=row["created_at"])
+                elif voice_restart:
+                    settle_status(
+                        c, row["bot_id"], "idle", "Resuming the call after a lost lease", claimed=row["created_at"]
+                    )
                 elif row["state"] == "leased" and state == "queued":
                     settle_status(
                         c,
@@ -5118,6 +5131,11 @@ class Execution:
         voice_reply = False
         subscribed = None
         if live_ref and call_sessions.is_voice(c, live_ref.get("meeting_id")):
+            spec = call_sessions.model_spec(handed[1])
+            if voice_call and spec and not call_sessions.accepts_runner(spec, caps):
+                c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
+                call_sessions.dispatch_pending(c, live_ref["meeting_id"], row["bot_id"])
+                return {"attempt": None, "dropped": True}
             voice_reply = True
             config = {
                 **{
@@ -5130,7 +5148,7 @@ class Execution:
             }
             subscribed = model_subscriptions.for_claim(c, runner, config, bot=row["bot_id"])
             if (
-                not call_sessions.model_spec(handed[1])
+                not spec
                 or gateway_connection.is_tico(handed[1])
                 or "model_subscriptions_v1" not in caps
                 or not any(
@@ -7380,6 +7398,12 @@ class Execution:
         # rather than blocking the bot behind an uncertain job until a person clears it.
         retryable = body.outcome != "completed" and body.retryable and not limited and not stopped
         yielded = body.outcome == "interrupted" and body.yielded and not stopped
+        voice_restart = (
+            body.outcome == "interrupted"
+            and not stopped
+            and (yielded or body.text == RESTART_TEXT)
+            and call_sessions.recover(c, row)
+        )
         # The general case of the same thing: a turn that failed having streamed nothing at all,
         # no text, no tool, no token count, only the runtime's own error. When a runtime
         # answered every turn of several bots with "Internal error" at the first event, the
@@ -7459,7 +7483,9 @@ class Execution:
             hold.setdefault('failed_fallback', {})[row['bot_id']] = fallback_mark(json.loads(config_row[0] or '{}'))
             login_holds._save(c, hold)
         timeout_cut = run_limit_minutes(c, aid)
-        requeue = not rejected_acted if rejected else limited or retryable or silent or yielded or reset_wait
+        requeue = (
+            not rejected_acted if rejected else limited or retryable or silent or yielded or reset_wait or voice_restart
+        )
         if timeout_cut:
             requeue = False  # every run-budget cut goes through the same effect and consecutive-cut judgement
         if quota_acted or (
@@ -8130,6 +8156,8 @@ class Execution:
                 f"Fallback ended without output; queued work resumes at {hold['until'][11:16]} UTC",
                 claimed=row['created_at'],
             )
+        elif voice_restart:
+            settle_status(c, row["bot_id"], "idle", "Resuming the call", claimed=row["created_at"])
         elif yielded:
             # Paused for an update: it is back in the queue and continues next, so the bot is idle with the pause
             # line, not crashed until the continuation starts.
@@ -8179,7 +8207,13 @@ class Execution:
         # A Gateway outage holds the Gateway's login for its doubling wait and is Tico's, not the bot's: no run backoff.
         outage = silent and tico_code == gateway.UNAVAILABLE
         self.account_failure(
-            c, row, body, aid, conv, failure, counts=not (stopped or limited or busy or yielded or outage)
+            c,
+            row,
+            body,
+            aid,
+            conv,
+            failure,
+            counts=not (stopped or limited or busy or yielded or outage or voice_restart),
         )
         if not stopped and timeout_cut:
             self.auto_reconcile(c, attempt_id=aid)

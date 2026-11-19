@@ -234,12 +234,14 @@ question is dropped with a note (`<bot> missed a question`) 30 seconds after it 
 own transcript and chat routes ask through the same queue, so they never open a second question. A question heard 30
 seconds or more before it was transcribed (a slow Gateway) is not asked; a 1:1 call shows `Please repeat that`.
 
-**The answer.** When a bot joins, a current runner starts a Claude Code session on the bot's computer with the
+**The answer.** When a bot joins, a current runner starts a Claude Code or Codex session on the bot's computer with the
 company subscription. Its first model request warms the bot's identity, the call notes and the voice instructions.
 Each bot in the call holds a normal lease and uses one `turns_at_once` slot for the whole call (five slots on Shared).
 Each question goes to the resident session, with updated notes when they change. At 24,000 context tokens the runner
-starts a fresh process with the primer and a short excerpt of the recent call transcript.
-Each bot uses its own model at medium effort with Claude Code’s Concise output style. Follow-up tasks use the bot’s usual settings.
+re-primes Claude Code with a short excerpt of the recent call transcript. Codex keeps an app-server thread for the call
+and resumes it on the same computer after a restart. If Codex cannot resume the thread, the runner warms a fresh one
+with a transcript recap. Each bot uses its own model at medium effort. Claude Code uses its Concise output style and
+Codex is prompted for one or two short sentences. Follow-up tasks use the bot’s usual settings.
 
 The bot answers in plain spoken sentences, in about 80 words or fewer. It uses what it knows and its call notes.
 The bot can use its usual tools and permissions. People read the transcript and chat through the call thread's
