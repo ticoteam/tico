@@ -1202,3 +1202,35 @@ def test_a_failed_thread_link_pass_is_logged_scrubbed_and_reported_as_an_error(g
         out = gateway.tick()
     assert f"Slack thread links failed: {LOCKED}" in caplog.text
     assert out["threads"] == {"error": "OperationalError"}
+
+
+# ----------------------------------------------------------------------------- start-up on a busy hub
+def test_a_locked_database_at_start_up_is_waited_out_not_fatal(monkeypatch, caplog):
+    stopping = threading.Event()
+    waits = []
+    monkeypatch.setattr(stopping, "wait", lambda seconds: waits.append(seconds))
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) < 4:
+            locked()
+        return "ok"
+
+    with caplog.at_level(logging.WARNING, logger="tico.slack"):
+        assert G._when_free(stopping, "Slack recover", flaky) == "ok"
+    assert len(calls) == 4 and waits == [1.0, 2.0, 4.0]
+    assert f"Slack recover: {LOCKED}" in caplog.text
+
+
+def test_start_up_waiting_only_covers_busy_errors_and_stops_when_asked():
+    stopping = threading.Event()
+
+    def broken():
+        raise sqlite3.OperationalError("no such table: slack_posts")
+
+    with pytest.raises(sqlite3.OperationalError):
+        G._when_free(stopping, "x", broken)
+    stopping.set()
+    with pytest.raises(sqlite3.OperationalError):
+        G._when_free(stopping, "x", locked)
