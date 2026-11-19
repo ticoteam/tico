@@ -220,7 +220,7 @@ function renderInboxNav() {
       .catch(() => { INBOX_NAV = {bots: []}; renderTree(); });
   }
   const rows = inboxNavRows().filter(row => !INBOX_PLACED.has(row.bot));
-  section.hidden = !rows.length;
+  if (section.hidden !== !rows.length) section.hidden = !rows.length;   // a write that changes nothing still wakes whoever watches the rail
   patchHTML(list, rows.map(inboxNavLink).join(''));
   navCurSync(list);
 }
@@ -242,9 +242,12 @@ function navCurSync(root: Element): void {
       : a.dataset.seat ? seat === a.dataset.seat : false;
     a.classList.toggle('cur', on);
     // The mail link beside a person marks its bot's mailbox; the person's own row is the page.
-    if (on && !a.matches('.person-mail-link')) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    if (on && !a.matches('.person-mail-link')) navCurrent(a); else a.removeAttribute('aria-current');
   }
 }
+// The row is the page you are on. Written only when it is not said yet: writing the same value again is still a change
+// to whoever watches the rail (ui/app/motion.ts).
+function navCurrent(a: Element): void { if (a.getAttribute('aria-current') !== 'page') a.setAttribute('aria-current', 'page'); }
 function mailPersonVisible(person: OrgPerson): boolean {
   if (!S.me?.mail_access || !person?.email || !person.inbox_bot ||
       !botRow(person.inbox_bot)) return false;
@@ -261,8 +264,8 @@ function mailPersonVisible(person: OrgPerson): boolean {
   }
   return false;
 }
-function defaultCollapsed() {
-  const by = sidebarTree(), keys = new Set<string>([`g:${BUILT_IN_GROUP}`]);   // General starts folded
+function defaultCollapsed(by: OrgByParent = sidebarTree()) {
+  const keys = new Set<string>([`g:${BUILT_IN_GROUP}`]);   // General starts folded
   const founder = (by[''] || []).find(n => n.kind === 'person' && !n.person?.reports_to);
   for (const k of Object.keys(by)) {
     if (!k || !by[k]?.length) continue;
@@ -276,7 +279,7 @@ let collapsed = new Set<string | undefined>(), collapsedFor: string | null = nul
 function collapsedStorageKey() {
   return 'hub.collapsed.v3.' + (mePerson()?.id || S.me?.id || '');
 }
-function ensureCollapsed() {
+function ensureCollapsed(by?: OrgByParent) {
   const id = mePerson()?.id || S.me?.id || '';
   if (id !== collapsedFor) {
     collapsedFor = id;
@@ -290,10 +293,10 @@ function ensureCollapsed() {
         return;
       }
     } catch {}
-    collapsed = defaultCollapsed();
+    collapsed = defaultCollapsed(by);
     return;
   }
-  if (!collapsedSaved) collapsed = defaultCollapsed();
+  if (!collapsedSaved) collapsed = defaultCollapsed(by);
 }
 function saveCollapsed() {
   collapsedSaved = true;
@@ -311,7 +314,10 @@ function setPeople(data: {people?: AppState['people']; seats?: AppState['seats']
 // move anyone; anyone else may move what reports up to them, and only under themselves or their
 // own reports — the server holds that rule (backend/people.py `manages`), the client just offers
 // the handles for what it knows is yours.
+// One draw of the Team list asks this for every row: it is worked out once per draw (treePass), not once per row.
+let ORG_MINE_DRAW: {mine: Set<string> | null} | null = null;
 function orgMine(): Set<string> | null {
+  if (ORG_MINE_DRAW) return ORG_MINE_DRAW.mine;
   const mine = new Set<string>();
   if (S.me?.role === 'owner') return null;                       // everything
   const me = mePerson()?.id || S.me?.id; if (!me) return mine;
@@ -736,17 +742,19 @@ function orgHistoryOn() { try { return localStorage.getItem(ORG_HISTORY_ON_KEY) 
 // ⋯ on the Team header says which of its switches is on: a dot, and their names in its label; its menu's rows are
 // checked to match (the menu is ui/app/team-add.ts TEAM_MORE_MENU).
 const ORG_MINE_WORDS = 'Only bots I can open', ORG_HISTORY_WORDS = 'Recently viewed first';
+// An attribute is written only when it changes: the same value again is still a mutation to whoever watches.
+function attrSet(el: Element | null, name: string, value: string): void { if (el && el.getAttribute(name) !== value) el.setAttribute(name, value); }
 function orgMoreSync(mineOn = orgMineOn(), historyOn = orgHistoryOn()) {
   const more = document.getElementById('org-more');
   if (more) {
     const on = [mineOn && ORG_MINE_WORDS, historyOn && ORG_HISTORY_WORDS].filter(Boolean);
     const words = ['Team options', ...on].join(' · ');
     more.classList.toggle('on', on.length > 0);
-    more.setAttribute('aria-label', words);
-    more.title = words;
+    attrSet(more, 'aria-label', words);
+    attrSet(more, 'title', words);
   }
-  document.querySelector('#team-more-menu [data-org-more="mine"]')?.setAttribute('aria-checked', String(mineOn));
-  document.querySelector('#team-more-menu [data-org-more="history"]')?.setAttribute('aria-checked', String(historyOn));
+  attrSet(document.querySelector('#team-more-menu [data-org-more="mine"]'), 'aria-checked', String(mineOn));
+  attrSet(document.querySelector('#team-more-menu [data-org-more="history"]'), 'aria-checked', String(historyOn));
 }
 // The Team header's ⋯ menu (ui/app/team-add.ts TEAM_MORE_MENU) and the list's "Show all" call these.
 function orgMineToggle() {
@@ -829,11 +837,186 @@ function orgTopPerson(byParent: OrgByParent): OrgPersonNode | null | undefined {
   return tops.find(n => S.me?.owner_id && n.id === S.me.owner_id) || tops.find(n => me && n.id === me)
     || (roles.length === 1 ? roles[0] : tops.length === 1 ? tops[0] : null);
 }
-function renderTree() {
+// ----------------------------------------------------------------- drawing the Team list
+// The list is changed in place. A page change moves the mark of the page you are on and writes nothing else (a row's
+// markup never depends on the route). A draw builds the list's markup, and when it differs from the last draw's, each
+// row that changed takes its new attributes and text on the nodes it has: a count that changes is that count's text, a
+// bot that starts working is a class on its row and one ring added. Only a row that came or went is added or removed.
+// So a row keeps its node through every draw, and with it hover, focus, where the rail is scrolled to, a ring that is
+// turning, a group name being typed and the button an open menu hangs from. Before, one changed row replaced its whole
+// top-level row (patchHTML): a group and every row in it, a name being typed in it too.
+/** Each row's markup as last drawn: a row whose markup is the same is not looked into. */
+const TREE_SRC = new WeakMap<Element, string>();
+/** The markup the list was last drawn from, and the children that draw left (nobody else has redrawn it since). */
+let TREE_DRAWN: {html: string; first: ChildNode | null; count: number} | null = null;
+// Classes put on a row after a draw, which a draw leaves as they are: the page you are on (navCurSync), a move waiting
+// for its answer (orgPendingMark) and a drag's marks (orgDragWire).
+const TREE_OWN_CLASSES = ['cur', 'org-moved', 'dragging', 'drop-target', 'drop-before', 'drop-after', 'drop-refused'];
+// What a node is among its siblings, so a new draw's node meets the one it replaces: a row by who it is for (its
+// data-org, data-seat or data-toggle, a list item by its row's), a link by where it goes, anything else by its tag and
+// first class.
+function treeKey(n: Node): string {
+  if (!(n instanceof Element)) return '#' + n.nodeType;
+  const who = (el: Element | null | undefined): string | null => el ? el.getAttribute('data-org') ?? el.getAttribute('data-seat') ?? el.getAttribute('data-toggle') : null;
+  const row = n.localName === 'li' ? who(n.querySelector(':scope > .noderow[data-org], :scope > .noderow > [data-org], :scope > .noderow > [data-seat]'))
+    ?? n.querySelector(':scope > a[href]')?.getAttribute('href') : null;
+  return n.localName + '|' + (who(n) ?? row ?? n.getAttribute('href') ?? n.classList[0] ?? '');
+}
+// A row that changed places moves as it is where the browser can (moveBefore keeps focus and what is animating).
+function treeMove(parent: Node, node: ChildNode, before: ChildNode | null): void {
+  const move = (parent as Node & {moveBefore?: (node: Node, before: Node | null) => void}).moveBefore;
+  if (move) { try { move.call(parent, node, before); return; } catch { /* not one it can move in place */ } }
+  parent.insertBefore(node, before);
+}
+// `old`'s children become `fresh`'s: each new child meets the old one with its key, in order, and that node is kept
+// and brought up to date; an old child nothing meets goes, a new one nothing met comes in.
+function treeKids(old: Element, fresh: ParentNode): void {
+  const pool = new Map<string, ChildNode[]>();
+  for (const n of old.childNodes) { const key = treeKey(n), same = pool.get(key); if (same) same.push(n); else pool.set(key, [n]); }
+  const plan = [...fresh.childNodes].map(node => ({node, met: pool.get(treeKey(node))?.shift()}));
+  for (const left of pool.values()) for (const n of left) n.remove();
+  let at: ChildNode | null = old.firstChild;
+  for (const {node, met} of plan) {
+    if (!met) { old.insertBefore(node, at); continue; }
+    if (met === at) at = at.nextSibling; else treeMove(old, met, at);
+    if (met instanceof Element && node instanceof Element) treeSync(met, node);
+    else if (met.nodeValue !== node.nodeValue) met.nodeValue = node.nodeValue;
+  }
+}
+// One kept node brought up to date: its attributes, its classes (TREE_OWN_CLASSES stay), then its children.
+function treeSync(old: Element, fresh: Element): void {
+  const row = fresh.localName === 'li', src = row ? fresh.outerHTML : '';
+  if (row && TREE_SRC.get(old) === src) return;
+  for (const a of [...old.attributes]) if (a.name !== 'class' && a.name !== 'aria-current' && !fresh.hasAttribute(a.name)) old.removeAttribute(a.name);
+  for (const a of fresh.attributes) if (a.name !== 'class' && old.getAttribute(a.name) !== a.value) old.setAttribute(a.name, a.value);
+  const want = new Set(fresh.classList);
+  for (const c of TREE_OWN_CLASSES) if (old.classList.contains(c)) want.add(c);
+  if (want.size !== old.classList.length || [...want].some(c => !old.classList.contains(c))) old.setAttribute('class', [...want].join(' '));
+  treeKids(old, fresh);
+  if (row) TREE_SRC.set(old, src);
+}
+// The list drawn from `html`. Nothing is read or written when it is the markup already drawn.
+function treePatch(tree: Element, html: string): void {
+  const was = TREE_DRAWN;
+  if (was && was.html === html && was.first === tree.firstChild && was.count === tree.childNodes.length) return;
+  const t = document.createElement('template');
+  t.innerHTML = html;
+  treeKids(tree, t.content);
+  TREE_DRAWN = {html, first: tree.firstChild, count: tree.childNodes.length};
+}
+/** What each drawn bot's row shows of its live status line (hub-v2.ts S.v2.status): its state and its limit mark. */
+let TREE_BOTS = new Map<string, string>();
+const treeBotShows = (slug: string, state = stateOf(slug), limit = treeLimitMark(slug)): string => state + '\n' + limit;
+/** Live status lines came for these bots (ui/app/refresh.ts). The list reads two things from a status line, the bot's
+    state and its limit: when no row would show either differently, nothing is built and nothing is drawn. */
+function renderTreeForBots(slugs: Iterable<string>): void {
+  let stale = !TREE_DRAWN;
+  for (const slug of slugs) { const shown = TREE_BOTS.get(slug); if (shown !== undefined && shown !== treeBotShows(slug)) stale = true; }
+  if (stale) renderTreeSoon();
+}
+// At most one draw a frame: every renderTreeSoon() in a frame is one draw at its start, and a draw made at once
+// (renderTree) leaves none waiting. A hidden tab has no frames: its one draw waits for it to be shown.
+let TREE_FRAME = 0, TREE_BUSY = false, TREE_AGAIN = false;
+/** The page the marks were last put for. */
+let TREE_ROUTE: string | null = null;
+function renderTreeSoon(): void {
+  if (TREE_FRAME) return;
+  if (typeof requestAnimationFrame !== 'function') { treeDraw(); return; }
+  TREE_FRAME = requestAnimationFrame(() => { TREE_FRAME = 0; treeDraw(); });
+}
+// Draws the Team list now: its callers read the list right after. A page change (ui/app/router.ts) is the one caller
+// with nothing new to draw: the mark moves at once (treeMarks), and the list is checked against its data once, in
+// that frame, with whatever else asks in it.
+function renderTree(): void {
+  if (TREE_DRAWN && TREE_ROUTE !== null && S.route !== TREE_ROUTE) { treeMarks(); renderTreeSoon(); return; }
+  treeDraw();
+}
+// One draw at a time: a draw asked for from inside one (a move's strip going under another row, a name field that
+// lost focus as it left) runs when that one is done, not in the middle of it.
+function treeDraw(): void {
+  if (TREE_BUSY) { TREE_AGAIN = true; return; }
+  if (TREE_FRAME) { cancelAnimationFrame(TREE_FRAME); TREE_FRAME = 0; }
+  TREE_BUSY = true;
+  try {
+    let turns = 0;
+    do { TREE_AGAIN = false; treePass(); } while (TREE_AGAIN && ++turns < 4);
+  } finally { TREE_BUSY = false; ORG_MINE_DRAW = null; }
+  if (TREE_AGAIN) { TREE_AGAIN = false; renderTreeSoon(); }   // still asked for after four in a row: in the next frame
+}
+// The page you are on, marked on its row in the list, in the message bots' list and on the pages above them. This is
+// all a page change writes in the sidebar.
+function treeMarks(): void {
+  TREE_ROUTE = S.route;
+  navCurSync($('#tree'));
+  const inboxes = $('#inbox-list');
+  if (inboxes) navCurSync(inboxes);
+  navMarks();
+}
+function navMarks(): void {
+  // More is current only for pages the bottom bar does not have its own button for (Updates is in More, and so is
+  // Threads but for a bot, whose bar keeps its tab: tasks.ts flowTabPaint).
+  const inOverview = S.route === HOME || rdUnder(S.route, OVERVIEW) || rdUnder(S.route, CP_ROUTE);   // Company, a factory's floor and Share
+  const mobilePrimary = inOverview || isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap'
+    || ((S.route.startsWith(THREADS_ROUTE) || S.route.startsWith(THREAD_ROUTE)) && document.querySelector<HTMLElement>('#mobile-threads')?.hidden === false);
+  document.querySelectorAll<HTMLElement>('[data-nav]').forEach(a => {
+    const isCurrent = (a.dataset.nav === 'overview' && inOverview) ||
+      (a.dataset.nav === 'meetings' && (S.route === MEETINGS || S.route.startsWith(MEETINGS + '?'))) ||
+      (a.dataset.nav === 'mail' && (S.route === MAIL || S.route.startsWith(MAIL + '?') || S.route.startsWith(MESSAGING))) ||
+      // Setup is a modal over Tasks: Tasks is the page, and Finish setup is never marked current.
+      (a.dataset.nav === 'tasks' && (isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap' || S.route === WELCOME)) ||
+      (a.dataset.nav === 'settings' && S.route === SETTINGS) ||
+      (a.dataset.nav === 'credentials' && S.route === CREDENTIALS) ||
+      (a.dataset.nav === 'docs' && (S.route === DOCS || S.route.startsWith(DOCS + '/') || S.route.startsWith(DOCS + '?'))) ||
+      (a.dataset.nav === 'strategy' && (isStrategyRoute(S.route) || isLensesRoute(S.route) || isMarketRoute(S.route))) ||
+      (a.dataset.nav === 'integrations' && (S.route === INTEGRATIONS || S.route.startsWith(INTEGRATIONS + '/'))) ||
+      (a.dataset.nav === 'changelog' && S.route === '#/changelog') ||
+      (a.dataset.nav === 'learnings' && (S.route === LEARNINGS || S.route.startsWith(LEARNINGS + '?'))) ||
+      (a.dataset.nav === 'usage' && S.route === '#/usage') ||
+      (a.dataset.nav === 'replay' && S.route.startsWith('#/replay')) ||
+      (a.dataset.nav === 'updates' && (S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) ||
+      (a.dataset.nav === 'threads' && (S.route.startsWith(THREADS_ROUTE) || S.route.startsWith(THREAD_ROUTE))) ||
+      (a.dataset.nav === 'more' && !mobilePrimary) ||
+      redesignNavCurrent(a.dataset.nav);
+    a.classList.toggle('cur', isCurrent);
+    if (isCurrent) navCurrent(a); else a.removeAttribute('aria-current');
+  });
+  $('#account')?.classList.toggle('cur', !!document.querySelector('#account-menu .cur'));   // the page you are on is behind it
+}
+// A click in the list: set once on the list, which outlives every draw.
+function treeClick(ev: MouseEvent): void {
+  if (eventElement(ev)?.closest('[data-org-show-all]')) { ev.preventDefault(); orgMineToggle(); return; }
+  const seat = eventElement(ev)?.closest('[data-seat-open]');
+  if (seat) { setDrawer(false); return; }        // its Applicants page (ui/app/recruit.ts)
+  const confirm = eventElement(ev)?.closest<HTMLElement>('[data-org-confirm]');
+  if (confirm) { ev.preventDefault(); if (confirm.dataset.orgConfirm === 'go') void orgPendingSave(); else orgPendingCancel(); return; }
+  if (eventElement(ev)?.closest('.org-confirm')) return;
+  const remove = eventElement(ev)?.closest<HTMLElement>('[data-group-delete]');
+  if (remove) { ev.preventDefault(); void orgGroupDelete(remove.dataset.groupDelete!); return; }
+  const plus = eventElement(ev)?.closest<HTMLElement>('[data-group-plus]');
+  if (plus) { ev.preventDefault(); teamAddToggle(plus.dataset.groupPlus); return; }
+  const rename = eventElement(ev)?.closest<HTMLElement>('[data-group-rename]');
+  if (rename) { ev.preventDefault(); orgGroupEdit({rename: rename.dataset.groupRename}); return; }
+  // A group's name opens its page and unfolds it; only the arrow folds it again.
+  const label = eventElement(ev)?.closest('a.dept-label');
+  if (label) {
+    const k = label.closest<HTMLElement>('[data-org]')?.dataset.org;
+    if (k && collapsed.delete(k)) { saveCollapsed(); renderTree(); }
+    return;
+  }
+  const b = eventElement(ev)?.closest<HTMLElement>('[data-toggle]'); if (!b) return;
+  ev.preventDefault(); const k = b.dataset.toggle; collapsed.has(k) ? collapsed.delete(k) : collapsed.add(k);
+  saveCollapsed();
+  renderTree();
+}
+/** What the plus menu was last brought up to date for (ui/app/team-add.ts teamAddRefresh). */
+let TREE_ADD_FOR = '';
+function treePass(): void {
   if (ORG_PENDING && !ORG_PENDING.sent) orgPendingApply(ORG_PENDING);   // a drop waiting for Move shows its new place
   renderAccountFace();                                                    // the roster names the person: their picture
-  ensureCollapsed();
   const byParent = sidebarTree();
+  ensureCollapsed(byParent);
+  ORG_MINE_DRAW = null; ORG_MINE_DRAW = {mine: orgMine()};
+  const shows = new Map<string, string>();                               // TREE_BOTS for this draw
   let needCounts: ReturnType<typeof needsMeCounts> | undefined;                                   // counted once per render, on first use
   const needN = (slug: string): number => (needCounts ||= needsMeCounts()).get('bot:' + slug) || 0;
   // only "needs you" surfaces through a collapsed parent; running is not something to chase
@@ -924,13 +1107,15 @@ function renderTree() {
     const helper = isHelperBot(e);                 // not on the chart: nothing is dragged onto or out of it
     const own = !flat && sources[e.id];
     if (own) INBOX_PLACED.add(e.id);
+    const limit = treeLimitMark(e.id);
+    shows.set(e.id, treeBotShows(e.id, st, limit));
     return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
       ${kids ? treeChev(key, e.display_name || '', !!isCol, !!isCol && subtreeNeeds(key)) : ''}
       <a class="node ${e.status} ${st}" href="${botRowHref(e.id)}" title="${esc(e.display_name || e.slug)}" data-org="b:${esc(e.id)}"${helper ? ' data-helper' : placeAttrs(key, at)}${!flat && !helper && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
         ${avatar(e.id, depth ? 16 : 20, st)}${treeName(isTempBot(e) ? (e.display_name || '').replace(TEMP_RE, '') : e.display_name || '',
           orgBranchMark(e) + frTreeMark(e) + (e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''),
           isTempBot(e) ? TEMP_FLAG : '')}
-        ${botPausedBadge(e.id)}${treeLimitMark(e.id)}${treeDmBadge('bot:' + e.id, empName(e.id), !!n || st === 'needs' || !!overLimit(e.id) || stateOf(e.id) === 'paused')}${treeBadge(n, st, e.id)}</a></div>${orgConfirmHTML(key)}
+        ${botPausedBadge(e.id)}${limit}${treeDmBadge('bot:' + e.id, empName(e.id), !!n || st === 'needs' || !!overLimit(e.id) || stateOf(e.id) === 'paused')}${treeBadge(n, st, e.id)}</a></div>${orgConfirmHTML(key)}
       ${own ? `<ul class="inbox-list node-sources" aria-label="${esc(e.display_name || e.slug)}: mailboxes and channels">${own.map(inboxNavLink).join('')}</ul>` : ''}
       ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
   };
@@ -945,74 +1130,31 @@ function renderTree() {
   const historyOn = orgHistoryOn();
   const mineOn = orgMineOn();
   orgMoreSync(mineOn, historyOn);
-  $('#tree').classList.toggle('history', historyOn);
+  const tree: HTMLElement = $('#tree');
+  tree.classList.toggle('history', historyOn);
   const manage = orgCanGroups() && !historyOn;
-  teamAddRefresh();
-  // Bot status events redraw the tree several times a minute: only the rows that changed are replaced (patchHTML). A
-  // redrawn strip keeps the button that had focus.
+  // The plus menu's items follow who may add what, and where it is open: brought up to date when one of those changed
+  // (opening it does so itself, ui/app/team-add.ts teamAddOpen).
+  const addFor = JSON.stringify([TEAM_ADD_GROUP, teamAddAllowed(TEAM_ADD_GROUP), teamAddAny()]);
+  if (addFor !== TREE_ADD_FOR) { TREE_ADD_FOR = addFor; teamAddRefresh(); }
+  // A strip that is drawn again keeps the button that had focus.
   const confirmFocus = document.activeElement?.closest<HTMLElement>('#tree [data-org-confirm]')?.dataset.orgConfirm;
   // A filter hidden in ⋯ could look like missing bots: the list says it is on and offers the way back.
   const mineNote = mineOn ? '<li class="org-filter-note">Only bots you can open · <button type="button" data-org-show-all>Show all</button></li>' : '';
-  patchHTML($('#tree'), mineNote + (historyOn ? history()
+  const html = mineNote + (historyOn ? history()
     : (manage && ORG_EDIT?.add === '' ? `<li class="org-new">${orgGroupFieldHTML()}</li>` : '') + recTop()
-      + (manage ? '<li class="org-no-group" data-org="g:">No group</li>' : '')));
+      + (manage ? '<li class="org-no-group" data-org="g:">No group</li>' : ''));
+  ORG_MINE_DRAW = null;
+  // Bot status events ask for the list several times a minute: only what changed is written (treePatch).
+  treePatch(tree, html);
+  TREE_BOTS = shows;
   if (confirmFocus && !document.activeElement?.closest?.('#tree [data-org-confirm]')) $(`#tree [data-org-confirm="${confirmFocus}"]`)?.focus({preventScroll: true});
-  navCurSync($('#tree'));
-  orgPendingMark($('#tree'));
+  TREE_ROUTE = S.route;
+  navCurSync(tree);
+  orgPendingMark(tree);
   renderInboxNav();                                   // after the tree, which places what it can
-  orgDragWire($('#tree'));
+  orgDragWire(tree);
   orgGroupFieldWire();
-  $('#tree').onclick = (ev: MouseEvent) => {
-    if (eventElement(ev)?.closest('[data-org-show-all]')) { ev.preventDefault(); orgMineToggle(); return; }
-    const seat = eventElement(ev)?.closest('[data-seat-open]');
-    if (seat) { setDrawer(false); return; }        // its Applicants page (ui/app/recruit.ts)
-    const confirm = eventElement(ev)?.closest<HTMLElement>('[data-org-confirm]');
-    if (confirm) { ev.preventDefault(); if (confirm.dataset.orgConfirm === 'go') void orgPendingSave(); else orgPendingCancel(); return; }
-    if (eventElement(ev)?.closest('.org-confirm')) return;
-    const remove = eventElement(ev)?.closest<HTMLElement>('[data-group-delete]');
-    if (remove) { ev.preventDefault(); void orgGroupDelete(remove.dataset.groupDelete!); return; }
-    const plus = eventElement(ev)?.closest<HTMLElement>('[data-group-plus]');
-    if (plus) { ev.preventDefault(); teamAddToggle(plus.dataset.groupPlus); return; }
-    const rename = eventElement(ev)?.closest<HTMLElement>('[data-group-rename]');
-    if (rename) { ev.preventDefault(); orgGroupEdit({rename: rename.dataset.groupRename}); return; }
-    // A group's name opens its page and unfolds it; only the arrow folds it again.
-    const label = eventElement(ev)?.closest('a.dept-label');
-    if (label) {
-      const k = label.closest<HTMLElement>('[data-org]')?.dataset.org;
-      if (k && collapsed.delete(k)) { saveCollapsed(); renderTree(); }
-      return;
-    }
-    const b = eventElement(ev)?.closest<HTMLElement>('[data-toggle]'); if (!b) return;
-    ev.preventDefault(); const k = b.dataset.toggle; collapsed.has(k) ? collapsed.delete(k) : collapsed.add(k);
-    saveCollapsed();
-    renderTree();
-  };
-  document.querySelectorAll<HTMLElement>('[data-nav]').forEach(a => {
-    // More is current only for pages the bottom bar does not have its own button for (Updates is in More, and so is
-    // Threads but for a bot, whose bar keeps its tab: tasks.ts flowTabPaint).
-    const inOverview = S.route === HOME || rdUnder(S.route, OVERVIEW) || rdUnder(S.route, CP_ROUTE);   // Company, a factory's floor and Share
-    const mobilePrimary = inOverview || isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap'
-      || ((S.route.startsWith(THREADS_ROUTE) || S.route.startsWith(THREAD_ROUTE)) && document.querySelector<HTMLElement>('#mobile-threads')?.hidden === false);
-    const isCurrent = (a.dataset.nav === 'overview' && inOverview) ||
-      (a.dataset.nav === 'meetings' && (S.route === MEETINGS || S.route.startsWith(MEETINGS + '?'))) ||
-      (a.dataset.nav === 'mail' && (S.route === MAIL || S.route.startsWith(MAIL + '?') || S.route.startsWith(MESSAGING))) ||
-      // Setup is a modal over Tasks: Tasks is the page, and Finish setup is never marked current.
-      (a.dataset.nav === 'tasks' && (isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap' || S.route === WELCOME)) ||
-      (a.dataset.nav === 'settings' && S.route === SETTINGS) ||
-      (a.dataset.nav === 'credentials' && S.route === CREDENTIALS) ||
-      (a.dataset.nav === 'docs' && (S.route === DOCS || S.route.startsWith(DOCS + '/') || S.route.startsWith(DOCS + '?'))) ||
-      (a.dataset.nav === 'strategy' && (isStrategyRoute(S.route) || isLensesRoute(S.route) || isMarketRoute(S.route))) ||
-      (a.dataset.nav === 'integrations' && (S.route === INTEGRATIONS || S.route.startsWith(INTEGRATIONS + '/'))) ||
-      (a.dataset.nav === 'changelog' && S.route === '#/changelog') ||
-      (a.dataset.nav === 'learnings' && (S.route === LEARNINGS || S.route.startsWith(LEARNINGS + '?'))) ||
-      (a.dataset.nav === 'usage' && S.route === '#/usage') ||
-      (a.dataset.nav === 'replay' && S.route.startsWith('#/replay')) ||
-      (a.dataset.nav === 'updates' && (S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) ||
-      (a.dataset.nav === 'threads' && (S.route.startsWith(THREADS_ROUTE) || S.route.startsWith(THREAD_ROUTE))) ||
-      (a.dataset.nav === 'more' && !mobilePrimary) ||
-      redesignNavCurrent(a.dataset.nav);
-    a.classList.toggle('cur', isCurrent);
-    if (isCurrent) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
-  });
-  $('#account')?.classList.toggle('cur', !!document.querySelector('#account-menu .cur'));   // the page you are on is behind it
+  if (tree.onclick !== treeClick) tree.onclick = treeClick;
+  navMarks();
 }

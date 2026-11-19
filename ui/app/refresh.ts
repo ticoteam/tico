@@ -61,8 +61,8 @@ async function refresh(force = false): Promise<void> {
 // ----------------------------------------------------------------- live events (ui/app/live.ts)
 // What the 30 s refresh used to find by reading everything again now arrives as it changes: a task moved (the open
 // board, the bot's columns and ticker, a person's tasks, the open task), a bot's status line (the tree, the
-// heartbeat, the paused notice, the Overview's desks), and Needs you (the tree's counts). Each surface redraws once
-// per burst.
+// paused notice, the Overview's desks), and Needs you (the tree's counts). Each surface redraws once per burst, and
+// only when the burst changed what it shows.
 // The same JSON value, whatever order its keys come in (a live event's copy of a task is built apart from the list's).
 // A JSON object read by key: sameData checks it is one before it reads a key.
 const fieldsOf = (v: object): Record<string, unknown> => v as Record<string, unknown>;
@@ -111,13 +111,29 @@ function liveWire(): void {
   if (!S.me) return;
   let tasks: LiveTaskEvent[] = [];
   liveOn('tasks', (d: LiveTaskEvent) => { tasks.push(d); liveSoon('tasks', () => { const batch = tasks; tasks = []; liveTasksApply(batch); }, 200); });
+  // A burst of status lines draws what those bots' lines are shown in, once, and nothing else. A status line changes
+  // S.v2.status for its bot only: the roster, the computers and /status stay as the last refresh read them.
+  let bots = new Set<string>();
   liveOn('bots', (d: LiveBotEvent) => {
     if (d.status) S.v2.status[d.bot] = d.status; else delete S.v2.status[d.bot];
+    bots.add(d.bot);
     tipRefresh(d.bot);
     liveSoon('bots', () => {
-      renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster(); pageChatFollowRoster(); document.dispatchEvent(new CustomEvent('tico:roster'));
+      const changed = bots; bots = new Set();
+      // The Team list: drawn in the next frame, and only when a row would read differently (ui/app/sidebar.ts).
+      renderTreeForBots(changed);
+      // The account's status dot says whether Tico is reached and bots run at all (heartbeat.ts reads /status and the
+      // computers): no bot's line moves it, so it is not drawn here.
+      // The notice over a chat is about the bot whose chat or page is open.
+      const open = V2C?.slug || BOT?.slug;
+      if (open && changed.has(open)) pausedRender();
+      botAvatarsSync(); goalsFollowRoster();
+      // The page's chat shows its owner's face, which carries that bot's state.
+      const owner = PGC ? pgcOwner(PGC) : null;
+      if (owner?.startsWith('bot:') && changed.has(owner.slice(4))) pageChatFollowRoster();
+      document.dispatchEvent(new CustomEvent('tico:roster'));
       tipRefresh();
-      botAlertDraw();
+      botAlertDraw();   // a bot page's notices: this is also when it asks, at most every 15 s, whether its bot can run
     }, 200);
   });
   // Needs you comes as the ids that changed; the list is mended from them (v2NeedsChanged), then `needs-list` says so.
@@ -127,7 +143,7 @@ function liveWire(): void {
     if (!moved) return;
     liveEmit('needs-list', S.v2.needs || []);
     liveSoon('needs', () => {
-      renderTree();
+      renderTreeSoon();   // with a burst of status lines in the same frame, one draw
       tasksNeedsLive();
       if (BOT) botNeedsChanged(BOT.slug);
       if (typeof DEC !== 'undefined' && DEC) decideRefresh(DEC, S.v2.needs || []);   // open Flow: a pinged bot's ❓ comes on screen
