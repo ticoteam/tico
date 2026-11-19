@@ -314,6 +314,38 @@
  {
   "argv": [
    "risk",
+   "matters",
+   "--risk",
+   "risk:customer-theft-claims"
+  ],
+  "tools": [
+   [
+    "tico_risk_matters",
+    {
+     "operation_id": null,
+     "risk": "risk:customer-theft-claims"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "matters?risk=risk%3Acustomer-theft-claims",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
    "link",
    "risk:customer-theft-claims",
    "--document",

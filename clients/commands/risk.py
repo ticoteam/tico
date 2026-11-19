@@ -65,15 +65,15 @@ def risk_show(api, args):
     "Matters you can read (tasks carrying a risk) with their facts, newest first. kind=dispute open=true: Disputes.",
     {
         "kind": _s("Only this kind", enum=MATTER_KINDS),
-        "open": {"type": "boolean", "description": "true: open matters only"},
+        "open": {"type": "boolean", "description": "true: open matters only; false: closed ones only"},
         "risk": RISK,
         **PAGE,
     },
 )
 def risk_matters(api, args):
     query = _present({k: args.get(k) for k in ("kind", "risk", "limit", "offset")})
-    if args.get("open"):
-        query["open"] = "true"
+    if args.get("open") is not None:
+        query["open"] = "true" if args["open"] else "false"
     return _as_person(api).get("matters", **query)
 
 
@@ -192,7 +192,12 @@ CLI = (
         "set a tagged task's matter facts",
         example="tico risk matter D18450 --kind dispute --amount 250000 --currency USD --forum AAA",
     ),
-    Command("risk matters", "matters you can read, newest first", example="tico risk matters --kind dispute --open"),
+    Command(
+        "risk matters",
+        "matters you can read, newest first",
+        args=(Arg("open", default=None),),  # left out: open and closed alike
+        example="tico risk matters --kind dispute --open",
+    ),
     Command(
         "risk link",
         "link a rule or a document to a risk",

@@ -87,9 +87,11 @@ def install(app, store, auth):
         who = request.state.identity
         auth.domain(who)
         from .org_rules import redact_audit
+        from . import risk
 
         with store.read() as c:
             mine = None if who.role == "owner" else who.actor
             page = rows(c, obj=object, actor=mine, limit=limit, before=before)
             redact_audit(c, auth, who, page["rows"])
+            risk.redact_audit(c, auth, who, page["rows"])  # a matter's facts follow its task's privacy
             return page

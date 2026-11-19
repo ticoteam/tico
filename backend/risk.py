@@ -10,7 +10,8 @@
 - `risk_links` ties a risk to org rules (role `rule`) and Directory documents (role `source`, or `covers` for a policy).
 - Who sees what: every teammate lists every risk (backend/task_privacy.py `_listed_alone`); the counts, sums, dates and
   matters come only from the tasks the viewer reads (auth.task_sql), so they differ by viewer. Every rule is read by every
-  teammate (backend/org_rules.py); a document shows only to a reader the Directory lets see it.
+  teammate (backend/org_rules.py); a Directory record (party, place, product, document) shows only to a reader the
+  Directory lets see it, read as Contacts reads it: as the caller (who.actor), and as the record it was merged into.
 - Every write: one permission check and an audit_log row (`risk:<tag id>`, `matter:<task id>`, `risk_link:<id>`).
 """
 
@@ -24,6 +25,7 @@ from pydantic import Field
 from . import audit_log
 from . import page_owners
 from . import task_privacy as privacy
+from . import teammate_access
 from .api_contract import api_v2
 from .entities import store as ES
 from .models import ID, Contract
@@ -127,7 +129,10 @@ def risk_rows(c, who, ids=None):
 
 
 def require_risk(c, who, ident):
-    row = H.tag(c, ident) or H.tag(c, PREFIX + slug(ident))
+    row = H.tag(c, ident)
+    if not row or row.get("kind") != KIND:
+        # A plain tag `claims` does not hide the risk `risk:claims`.
+        row = H.tag(c, PREFIX + slug(ident))
     if not row or row.get("kind") != KIND or not privacy.tag_readable(c, who, row):
         raise Problem("not_found", "Risk not found", 404)
     return row
@@ -212,13 +217,15 @@ def list_risks(auth, c, who, task=None):
 # ----------------------------------------------------------------------------- matters
 
 
+def _current(c, ids):
+    """{stored id: the id it answers as now}: a merged record answers as the one it was merged into (ES._follow), whose
+    sources say who may see it; the merged row itself has none left, and a record with none shows to everyone."""
+    return {ident: ES._follow(c, [ident])[0] for ident in dict.fromkeys(ids)}
+
+
 def _entity(c, actor, ident, field):
     """The live Directory record a matter fact names, followed through a merge, when `actor` may see it."""
-    row = c.execute("SELECT id, type, status, merged_into_id, deleted_at FROM entities WHERE id=?", (ident,)).fetchone()
-    if row and row["merged_into_id"]:
-        row = c.execute(
-            "SELECT id, type, status, merged_into_id, deleted_at FROM entities WHERE id=?", (row["merged_into_id"],)
-        ).fetchone()
+    row = c.execute("SELECT id, type, deleted_at FROM entities WHERE id=?", (_current(c, [ident])[ident],)).fetchone()
     if not row or row["deleted_at"] or not ES.visible_ids(c, actor, [row["id"]]):
         raise Problem("not_found", f"No such {field} in the Directory: {ident}", 404)
     if row["type"] not in ENTITY_TYPES[field]:
@@ -234,8 +241,8 @@ def matter_view(c, actor, row):
     if not row:
         return None
     row = dict(row)
-    named = [row[COLUMNS[f]] for f in COLUMNS if row.get(COLUMNS[f])]
-    seen = ES.visible_ids(c, actor, named) if named else set()
+    now = _current(c, [row[COLUMNS[f]] for f in COLUMNS if row.get(COLUMNS[f])])
+    seen = ES.visible_ids(c, actor, set(now.values())) if now else set()
     names = ES.entity_names(c, seen) if seen else {}
     value = {
         "task_id": row["task_id"],
@@ -252,7 +259,7 @@ def matter_view(c, actor, row):
         "updated_at": row["updated_at"],
     }
     for field, column in COLUMNS.items():
-        ident = row.get(column)
+        ident = now.get(row.get(column))
         value[column] = ident if ident in seen else None
         value[field] = {"id": ident, "name": names.get(ident, "")} if ident in seen else None
     return value
@@ -261,7 +268,7 @@ def matter_view(c, actor, row):
 def matter_of(c, who, task_id):
     """The matter of a task its reader is shown (the full task view), or None."""
     row = c.execute("SELECT * FROM matters WHERE task_id=?", (task_id,)).fetchone()
-    return matter_view(c, (who.task_actor or who.actor) if who is not None else None, row) if row else None
+    return matter_view(c, who.actor if who is not None else None, row) if row else None
 
 
 def _task_risks(c, task_id):
@@ -292,7 +299,9 @@ def set_matter(auth, c, who, tid, body):
     task_id = auth.resolve_task(c, who, tid)
     row = auth.task(c, who, task_id)
     risks = _task_risks(c, task_id)
-    if not risks:
+    found = c.execute("SELECT * FROM matters WHERE task_id=?", (task_id,)).fetchone()
+    # Facts left after the last risk came off can still be cleared, by whoever may change the task.
+    if not risks and not (body.clear and found):
         raise Problem("validation", f"Tag the task with a risk first: tico task label {task_id} --add risk:<slug>", 422)
     if not may_set_matter(c, who, row, risks):
         raise Problem(
@@ -300,9 +309,9 @@ def set_matter(auth, c, who, tid, body):
             "A matter's facts are set by whoever may change the task, or by a bot the risk lets tag tasks",
             403,
         )
-    found = c.execute("SELECT * FROM matters WHERE task_id=?", (task_id,)).fetchone()
     before = dict(found) if found else None
-    if found and body.version is not None and body.version != found["version"]:
+    # A version names facts that were read: gone since (cleared), they are not made again from a stale read.
+    if body.version is not None and (not found or body.version != found["version"]):
         raise Problem("version_conflict", "The matter changed; read the task and retry", 409)
     if found and body.version is None and H.is_bot(who.actor):
         raise Problem("version_conflict", "Send the matter's version from the task you read", 409)
@@ -369,7 +378,7 @@ def set_matter(auth, c, who, tid, body):
 # The tasks a viewer reads that carry a risk, newest first, with their facts and stage.
 MATTERS_SQL = (
     "SELECT t.id, t.number, t.prefix, t.title, t.status, t.due_at, t.created_at, t.owner_id, t.pipeline_id, "
-    "t.stage_id, s.name AS stage, {matter} FROM {visible} t "
+    "t.stage_id, t.requester_id, t.conversation_id, s.name AS stage, {matter} FROM {visible} t "
     "{join} matters m ON m.task_id=t.id LEFT JOIN stages s ON s.id=t.stage_id "
     "WHERE t.id IN (SELECT tt.task_id FROM task_tags tt JOIN tags g ON g.id=tt.tag_id WHERE g.kind='risk'{risk})"
     "{where} ORDER BY t.status<>'open', coalesce(m.created_at, t.created_at) DESC, t.id LIMIT ? OFFSET ?"
@@ -386,6 +395,8 @@ TASK_FIELDS = (
     "pipeline_id",
     "stage_id",
 )
+# Read to mask a task's owner (teammate_access.Known.task), not shown.
+MASK_FIELDS = ("requester_id", "conversation_id")
 MATTER_FIELDS = (
     "task_id",
     "kind",
@@ -426,7 +437,7 @@ def matters(auth, c, who, *, risk_id=None, kind=None, open_only=None, limit=LIMI
         where.append("t.status='open'" if open_only else "t.status<>'open'")
     sql = MATTERS_SQL.format(
         matter=", ".join(f"m.{k} AS m_{k}" for k in MATTER_FIELDS),
-        visible=_visible_tasks(auth, c, who, ", ".join(TASK_FIELDS)),
+        visible=_visible_tasks(auth, c, who, ", ".join((*TASK_FIELDS, *MASK_FIELDS))),
         join="JOIN" if kind else "LEFT JOIN",
         risk=" AND g.id=?" if risk_id else "",
         where="".join(" AND " + w for w in where),
@@ -437,25 +448,53 @@ def matters(auth, c, who, *, risk_id=None, kind=None, open_only=None, limit=LIMI
     tags = {}
     if ids:
         for r in c.execute(
-            f"SELECT tt.task_id, g.id, g.key, g.label FROM task_tags tt JOIN tags g ON g.id=tt.tag_id "
+            f"SELECT tt.task_id AS on_task, g.* FROM task_tags tt JOIN tags g ON g.id=tt.tag_id "
             f"WHERE g.kind='risk' AND tt.task_id IN ({','.join('?' * len(ids))}) ORDER BY tt.rowid",
             ids,
         ):
-            tags.setdefault(r["task_id"], []).append({"id": r["id"], "key": r["key"], "label": r["label"]})
-    actor = who.task_actor or who.actor
+            tags.setdefault(r["on_task"], []).append(H._tag_view(r))
+    shown = {g["id"] for g in privacy.tags_readable(c, who, [g for found in tags.values() for g in found])}
+    known = teammate_access.Known(c, who, auth)  # an owner the reader may not see reads "", as on the task itself
     out = []
     for r in page:
         task = {k: r[k] for k in TASK_FIELDS}
+        task["owner_id"] = known.task({k: r[k] for k in (*TASK_FIELDS, *MASK_FIELDS)})["owner_id"]
         task["stage"] = r["stage"]
         task["label"] = f"{r['prefix']}{r['number']}" if r["prefix"] and r["number"] is not None else None
         out.append(
             {
                 "task": task,
-                "matter": matter_view(c, actor, {k: r["m_" + k] for k in MATTER_FIELDS}) if r["m_task_id"] else None,
-                "risks": tags.get(r["id"], []),
+                "matter": matter_view(c, who.actor, {k: r["m_" + k] for k in MATTER_FIELDS})
+                if r["m_task_id"]
+                else None,
+                "risks": [{k: g[k] for k in ("id", "key", "label")} for g in tags.get(r["id"], []) if g["id"] in shown],
             }
         )
     return {"matters": out, "next_offset": offset + limit if len(rows) > limit else None}
+
+
+def redact_audit(c, auth, who, found):
+    """The audit rows of matters (backend/audit_log.py `rows`), with the facts shown only to a reader of the task now:
+    anyone else, the owner included, reads only which task it was. Changed in place."""
+    tasks = {
+        str(item.get("object"))[len("matter:") :] for item in found if str(item.get("object")).startswith("matter:")
+    }
+    if not tasks:
+        return
+    marks = ",".join("?" * len(tasks))
+    readable = {
+        r[0]
+        for r in c.execute(
+            f"SELECT id FROM {_visible_tasks(auth, c, who)} WHERE id IN ({marks})",
+            list(tasks),
+        )
+    }
+    for item in found:
+        task_id = str(item.get("object"))[len("matter:") :]
+        if str(item.get("object")).startswith("matter:") and task_id not in readable:
+            for key in ("before", "after"):
+                if item.get(key):
+                    item[key] = {"task_id": task_id}
 
 
 # ----------------------------------------------------------------------------- links
@@ -473,21 +512,21 @@ def links(c, who, risk_id):
             rule_ids,
         ):
             rules[r["id"]] = dict(r)
-    entity_ids = [r["linkable_id"] for r in rows if r["linkable_type"] == "entity"]
-    actor = who.task_actor or who.actor
-    seen = ES.visible_ids(c, actor, entity_ids) if entity_ids else set()
+    now = _current(c, [r["linkable_id"] for r in rows if r["linkable_type"] == "entity"])
+    seen = ES.visible_ids(c, who.actor, set(now.values())) if now else set()
     facts = ES.entity_facts(c, seen) if seen else {}
     names = ES.entity_names(c, seen) if seen else {}
     out = {"rules": [], "sources": [], "coverage": []}
     for r in rows:
         if r["linkable_type"] == "org_rule" and r["linkable_id"] in rules:
             out["rules"].append({"link_id": r["id"], **rules[r["linkable_id"]]})
-        elif r["linkable_type"] == "entity" and r["linkable_id"] in seen:
+        elif r["linkable_type"] == "entity" and now[r["linkable_id"]] in seen:
+            ident = now[r["linkable_id"]]
             entry = {
                 "link_id": r["id"],
-                "id": r["linkable_id"],
-                "name": names.get(r["linkable_id"], ""),
-                "type": (facts.get(r["linkable_id"]) or {}).get("type"),
+                "id": ident,
+                "name": names.get(ident, ""),
+                "type": (facts.get(ident) or {}).get("type"),
             }
             out["coverage" if r["role"] == "covers" else "sources"].append(entry)
     return out
@@ -502,7 +541,8 @@ def _link_target(c, who, body):
         if not c.execute("SELECT 1 FROM org_rules WHERE id=?", (body.linkable_id,)).fetchone():
             raise Problem("not_found", f"There is no rule {body.linkable_id}", 404)
         return body.linkable_id, role
-    row = c.execute("SELECT id, type, deleted_at FROM entities WHERE id=?", (body.linkable_id,)).fetchone()
+    current = _current(c, [body.linkable_id])[body.linkable_id]
+    row = c.execute("SELECT id, type, deleted_at FROM entities WHERE id=?", (current,)).fetchone()
     if not row or row["deleted_at"] or not ES.visible_ids(c, who.actor, [row["id"]]):
         raise Problem("not_found", f"No such document in the Directory: {body.linkable_id}", 404)
     if row["type"] != "document":
@@ -542,10 +582,18 @@ def unlink(c, who, row, body):
     _editable(c, who, row)
     roles = LINK_ROLES[body.linkable_type]
     role = body.role or roles[0]
-    found = c.execute(
-        "SELECT * FROM risk_links WHERE risk_id=? AND linkable_type=? AND linkable_id=? AND role=?",
-        (row["id"], body.linkable_type, body.linkable_id, role),
-    ).fetchone()
+    # A document linked before a merge still unlinks by the id it answers as now.
+    found = next(
+        (
+            r
+            for r in c.execute(
+                "SELECT * FROM risk_links WHERE risk_id=? AND linkable_type=? AND role=? ORDER BY created_at, id",
+                (row["id"], body.linkable_type, role),
+            )
+            if body.linkable_id in (r["linkable_id"], _current(c, [r["linkable_id"]])[r["linkable_id"]])
+        ),
+        None,
+    )
     if not found:
         raise Problem("not_found", "There is no such link", 404)
     c.execute("DELETE FROM risk_links WHERE id=?", (found["id"],))
@@ -592,7 +640,7 @@ def update(auth, c, who, row, body):
         fields["owner"] = auth.target(c, who, fields["owner"])
     after = H.tag_update(c, who.actor, row["id"], body.version, **fields, mover=_mover(c, who))
     audit_log.write(c, who.actor, "risk:" + row["id"], row, after, _via(who))
-    return {"risk": risk_view(after)}
+    return {"risk": risk_view(after, standing(auth, c, who, [row["id"]]).get(row["id"]))}
 
 
 def detail(auth, c, who, row, limit=LIMIT_DEFAULT, offset=0):

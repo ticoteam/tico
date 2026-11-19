@@ -106,6 +106,12 @@ SCHEMAS.update(
         ),
         "MatterList": obj({"matters": items(ref("MatterRow")), "next_offset": INT_N}),
         "MatterResult": obj({"task_id": "s", "matter": {"oneOf": [ref("Matter"), {"type": "null"}]}}),
-        "RiskLinkResult": obj({"link": {"type": ["object", "null"]}}),
+        "RiskLinkResult": obj(
+            {
+                "link": {"type": ["object", "null"]},
+                "removed": {"type": "string", "description": "The unlinked link's id"},
+            },
+            required=("link",),
+        ),
     }
 )

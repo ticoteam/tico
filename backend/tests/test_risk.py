@@ -121,6 +121,22 @@ def test_six_tagged_matters_count_and_sum_for_their_readers_and_zero_for_anyone_
     assert get(api, "tasks/" + ids[1])["task"]["matter"]["party"] is None
 
 
+def test_a_risk_whose_text_names_a_private_task_lists_only_to_its_readers_in_the_api_and_sql(api):
+    secret = task(api, "Acme private claim", private=True)
+    post(api, "risks", {"label": "Open claims"})
+    post(api, "risks", {"label": "Named claims", "markdown": f"See [the claim](#/task/{secret['id']})."})
+
+    def keys(token):
+        listed = [r["key"] for r in get(api, "risks", token=token)["risks"]]
+        rows = post(api, "sql", {"sql": "SELECT key FROM tags WHERE kind='risk' ORDER BY key"}, token=token)["rows"]
+        return listed, [r[0] for r in rows]
+
+    named, open_ = "risk:named-claims", "risk:open-claims"
+    assert keys("ana-test") == ([named, open_], [named, open_])
+    assert keys("priya-test") == ([open_], [open_])
+    get(api, "risks/" + named, token="priya-test", expected=404)
+
+
 def test_matter_facts_are_checked_and_a_stale_version_is_refused(api):
     post(api, "risks", {"label": "Customer theft claims"})
     found = task(api, "Theft claim")
@@ -155,6 +171,67 @@ def test_matter_facts_are_checked_and_a_stale_version_is_refused(api):
     with api.app.state.store.read() as c:
         logged = [r[0] for r in c.execute("SELECT object FROM audit_log WHERE object=?", ("matter:" + found["id"],))]
     assert len(logged) == 4  # set, edit, clear the claim, clear: each write leaves its row (a refusal none)
+
+
+def test_a_matter_through_its_tasks_life_and_the_risk_it_carries(api):
+    # A plain tag `claims` does not hide the risk `risk:claims` from a lookup by slug.
+    post(api, "tags", {"key": "claims"})
+    risk = post(api, "risks", {"label": "Claims"})["risk"]
+    assert get(api, "risks/claims")["risk"]["key"] == "risk:claims"
+    found = task(api, "Acme deposit claim")
+    label(api, found["id"], ["risk:claims"])
+    matter(api, found["id"], {"kind": "dispute", "amount": 700, "currency": "USD", "claim": "Deposit"})
+    # An edit answers with the risk's standing, as a read would.
+    edited = post(api, "risks/risk:claims", {"version": risk["version"], "label": "Deposit claims"})["risk"]
+    assert (edited["open"], edited["level"], edited["claimed"]) == (1, "live", [{"currency": "USD", "amount": 700}])
+    # A version read before a clear does not make the facts again.
+    assert matter(api, found["id"], {"version": 1, "clear": True})["matter"] is None
+    assert (
+        matter(api, found["id"], {"version": 1, "kind": "notice"}, expected=409)["error"]["code"] == "version_conflict"
+    )
+    # Facts left after the last risk comes off can still be cleared, and nothing new is set without one.
+    matter(api, found["id"], {"kind": "notice"})
+    label(api, found["id"], [])
+    matter(api, found["id"], {"version": 1, "forum": "AAA"}, expected=422)
+    assert matter(api, found["id"], {"version": 1, "clear": True})["matter"] is None
+    # A merged party answers as the record it was merged into.
+    old = entity(api, "organization", "Acme Homes", {"domain": "homes.acme.example"})
+    kept = entity(api, "organization", "Acme Homes LLC", {"domain": "acmehomes.example"})
+    label(api, found["id"], ["risk:claims"])
+    matter(api, found["id"], {"kind": "dispute", "party_entity_id": old, "claim": "Deposit"})
+    with api.app.state.store.transaction() as c:
+        ES.merge(c, ANA, kept, old)
+    assert get(api, "tasks/" + found["id"])["task"]["matter"]["party"] == {"id": kept, "name": "Acme Homes LLC"}
+    # A task restored after its party was erased keeps its facts, without the party.
+    post(api, f"tasks/{found['id']}/delete", {})
+    with api.app.state.store.transaction() as c:
+        ES.erase_rows(c, ANA, kept, "request")
+    restored = api.post(f"/api/v2/tasks/{found['id']}/restore", headers=headers(), json={})
+    assert restored.status_code == 200, restored.text
+    back = get(api, "tasks/" + found["id"])["task"]["matter"]
+    assert (back["claim"], back["party"], back["party_entity_id"]) == ("Deposit", None, None)
+
+
+def test_the_audit_feed_shows_a_matters_facts_only_to_a_reader_of_its_task(api):
+    from backend import audit_log
+
+    post(api, "risks", {"label": "Customer theft claims"})
+    mine = task(api, "Acme claim")
+    label(api, mine["id"], [RISK])
+    matter(api, mine["id"], {"kind": "dispute", "claim": "A missing ring"})
+    assert get(api, "audit?object=matter:" + mine["id"])["rows"][0]["after"]["claim"] == "A missing ring"
+    # Priya's private task the owner does not read: its matter's row says which task, not the facts.
+    hidden = post(
+        api,
+        "tasks",
+        {"owner": "human:priya", "title": "Acme warrant", "body": "x", "private": True},
+        token="priya-test",
+    )
+    get(api, "tasks/" + hidden["id"], expected=404)
+    with api.app.state.store.transaction() as c:
+        audit_log.write(c, "bot:cmo", "matter:" + hidden["id"], None, {"task_id": hidden["id"], "claim": "Secret"})
+    row = get(api, "audit?object=matter:" + hidden["id"])["rows"][0]
+    assert (row["before"], row["after"]) == (None, {"task_id": hidden["id"]})
 
 
 def test_the_risk_page_owner_bot_tags_a_task_it_reads_and_sets_its_facts(api):

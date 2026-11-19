@@ -452,9 +452,15 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
             msg_gate += f" AND coalesce({deleted},0)=0"
     attempt_gate = function("attempt") + "(id)"
     event_gate = function("event") + "(target,actor,created_at,detail)"
-    # A template or a risk lists on its own content, as the API lists it (task_privacy._listed_alone).
-    tag_gate = function("tag") + "(id,is_template OR kind='risk')"
     content_gate = lambda cols: function("content") + "(" + ",".join(cols) + ")"
+    # A template or a risk lists whatever tasks carry it (task_privacy._listed_alone); a risk, as the API lists it, only
+    # when its own text names nothing the reader may not read.
+    tag_gate = (
+        function("tag")
+        + "(id,is_template OR kind='risk') AND (kind<>'risk' OR "
+        + content_gate(("label", "markdown", "metadata"))
+        + ")"
+    )
     blob_gate = function("blob") + "(id)"
     file_gate = (
         "(task_id IS NULL OR task_id IN (SELECT id FROM tasks)) AND NOT EXISTS ("
