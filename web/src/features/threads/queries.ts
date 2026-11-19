@@ -46,8 +46,9 @@ const PAGE = 50;
 /** The list: threads and DMs, newest activity first, a page at a time. */
 export const threadListQuery = infiniteQueryOptions({
   queryKey: threadKeys.list,
-  queryFn: async ({ pageParam, signal }): Promise<ListPage> =>
-    toPage(await api.get<Parameters<typeof toPage>[0]>(`/api/v2/threads${qs({ sort: 'recent', limit: PAGE, cursor: pageParam })}`, { signal })),
+  // Route loaders share this request with the menu's Threads tab, even while its observers unmount: no signal.
+  queryFn: async ({ pageParam }): Promise<ListPage> =>
+    toPage(await api.get<Parameters<typeof toPage>[0]>(`/api/v2/threads${qs({ sort: 'recent', limit: PAGE, cursor: pageParam })}`)),
   initialPageParam: null as string | null,
   getNextPageParam: (last) => last.next ?? undefined,
 });

@@ -103,8 +103,9 @@ export interface Asks {
 
 /**
  * A conversation asks you when Catch up flags it `mention` (an @mention, an ask, an assignment, or a person's reply to
- * you, past your read mark), or when it is a DM with something you have not read. `catchUp` is Catch up's first page
- * (mentions come first in it); `rows` the loaded list. A task's thread is the task's, not a conversation's.
+ * you, past your read mark), or when it is a DM from a person with something you have not read. An agent's DM counts
+ * only through the flag: its unread status lines ask nothing. `catchUp` is Catch up's first page (mentions come first
+ * in it); `rows` the loaded list. A task's thread is the task's, not a conversation's.
  */
 export function asksOf(catchUp: { items: { thread: Thread; mention?: boolean }[] } | undefined, rows: readonly Thread[], me: string | undefined): Asks {
   const threads = new Set<string>();
@@ -118,7 +119,7 @@ export function asksOf(catchUp: { items: { thread: Thread; mention?: boolean }[]
     if (t.audience === 'home' && typeof t.home?.actor === 'string') homes.add(t.home.actor);
   };
   for (const it of catchUp?.items ?? []) if (it.mention) add(it.thread);
-  for (const t of rows) if (t.audience === 'personal' && unreadOf(t) > 0) add(t);
+  for (const t of rows) if (t.audience === 'personal' && unreadOf(t) > 0 && othersOf(t, me)[0]?.startsWith('human:')) add(t);
   return { threads, mates, homes };
 }
 

@@ -1,4 +1,4 @@
-import { isCancelledError, type QueryClient } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 import { learnedQuery, viewersQuery, threadListQuery, threadQuery, updateListQuery, updateQuery, type UpdateTab } from './queries';
 
 /* What the routes read before they draw, and their search params. The page's main read throws to the router's fault
@@ -22,14 +22,9 @@ const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined)
 
 export { asksOf, type Asks } from './model';
 
-/** A thread's page: the list (the menu's Threads tab) and the open thread. The menu reads the list too: its observer
-    can detach during mount while the route still waits on the read, which cancels it; the route reads again. */
+/** A thread's page: the list (the menu's Threads tab) and the open thread. */
 export function loadThreads(qc: QueryClient, o: { thread?: string } = {}) {
-  const list = () => qc.ensureInfiniteQueryData(threadListQuery);
-  return Promise.all([
-    list().catch((error: unknown) => (isCancelledError(error) ? list() : Promise.reject(error))),
-    o.thread && qc.prefetchQuery(threadQuery(o.thread)),
-  ]);
+  return Promise.all([qc.ensureInfiniteQueryData(threadListQuery), o.thread && qc.prefetchQuery(threadQuery(o.thread))]);
 }
 
 export interface UpdatesSearch {
