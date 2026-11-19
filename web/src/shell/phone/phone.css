@@ -1,0 +1,228 @@
+/* shell/phone/phone.css: the phone's layered cards, ported from B/phone/phone.css (the shell and the cards' own
+   parts; a page's insides stay with that page). Back to front: the page < the second chat or a call < the menu < Tico.
+   Numbers are the mock's and motion.md section 6. Cards move by transform only; the mock's eased heights (Tico's
+   peek, the lips drawing down, the bottom fade, the page foot) are laid out at once and revealed by moving cards.
+   Lips are full width and opaque (README, audit fix), so the mock's rest scales (.97, .93, .89) are not used.
+
+   State on .ph (React):  data-card="none|tico-half|tico|menu|chat"   .has-chat  .is-peek  .is-handle  .is-back  .is-call
+   State on .ph (set by hand, never by React):  data-drag="tico|menu|chat"  data-scrolling  data-typing="tico|menu|chat|page"
+     style --c (0..1, lips drawn down)  --p (page set back)  --f (full content shown)  --kb  --vv-top  --dock-h */
+
+/* the document never scrolls (platforms.md 2.1) */
+html:has(.ph),html:has(.ph) body{height:100%;overflow:hidden;overscroll-behavior:none}
+
+.ph{position:fixed;left:0;right:0;top:0;height:100dvh;overflow:hidden;background:var(--ground);isolation:isolate;color:var(--ink);overscroll-behavior:none;
+  --sat:env(safe-area-inset-top,0px);
+  --sab:max(env(safe-area-inset-bottom,0px),8px);
+  --lipT:58px;                /* Tico's lip */
+  --lipM:38px;                /* the menu's lip, above Tico's */
+  --lipC:0px;                 /* the second chat's lip, above the menu's: 38px when a chat is open */
+  --c:0;                      /* 0..1: how far a downward scroll has drawn the back lips down */
+  --drawM:calc(28px * var(--c));--drawC:0px;
+  --top:calc(var(--sat) + 57px);   /* where a raised card stops: the page's head stays in view above it */
+  --half:410px;               /* Tico at half: this much of its card shows */
+  --kb:0px;--vv-top:0px;
+  --dock-h:96px;              /* the answer or message box that holds the bottom; measured */
+  --stack:calc(var(--sab) + var(--lipT) + var(--lipM) + var(--lipC));
+  --p:0;--f:0;
+  --card-dur:560ms;--card-ease:cubic-bezier(.3,1.2,.4,1);
+  --r-layer:24px;
+  --c-tico:var(--raised);
+  --c-menu:color-mix(in srgb,var(--raised) 58%,var(--sheet));
+  --c-chat:color-mix(in srgb,var(--raised) 26%,var(--sheet));
+  --dim:.64}                  /* of --scrim: .42 black */
+/* the card spring: zeta .74, 45 samples, settled to 0.2% (motion.md section 6) */
+@supports (transition-timing-function:linear(0,1)){
+  .ph{--card-ease:linear(0,0.0175,0.0634,0.1291,0.2072,0.2922,0.3793,0.4652,0.5473,0.6238,0.6935,0.7559,0.8107,0.858,0.8981,0.9315,0.9587,0.9805,0.9974,1.0101,1.0193,1.0255,1.0293,1.0312,1.0315,1.0307,1.0291,1.0269,1.0244,1.0217,1.0189,1.0162,1.0137,1.0113,1.0092,1.0073,1.0056,1.0042,1.0029,1.0019,1.0011,1.0005,1,0.9996,1)}
+}
+/* the mock's light card tones and the shadow cast up from a card, per theme. They belong in tokens.css; until its
+   owner adds them they are kept here, and only here. */
+/* stylelint-disable color-no-hex, function-disallowed-list, selector-disallowed-list -- phone tones, pending tokens */
+.ph{--up:rgba(0,0,0,.6)}
+:root:not([data-theme="dark"]) .ph{--c-tico:#FFFFFF;--c-menu:#F6F6F6;--c-chat:#EFEFEF;--up:rgba(0,0,0,.16);--dim:.21}
+/* stylelint-enable color-no-hex, function-disallowed-list, selector-disallowed-list */
+.ph.has-chat{--lipC:38px;--drawC:var(--drawM)}
+.ph.is-peek{--lipT:84px}
+.ph.is-handle{--stack:0px}
+.ph.is-back{--p:1}
+/* a window wider than a phone (the narrow desktop): a small bottom margin, a taller half */
+@media (min-width:501px){.ph{--sab:max(env(safe-area-inset-bottom,0px),10px);--half:440px}}
+
+/* motion levels: Off (or the system asking for less, unless the person chose a level) moves cards at once.
+   Drag-follow still tracks the finger: it is the person's own movement. */
+:root[data-motion="off"] .ph,:root[data-motion="reduce"] .ph{--card-dur:1ms}
+@media (prefers-reduced-motion:reduce){:root:not([data-motion="more"]):not([data-motion="less"]) .ph{--card-dur:1ms}}
+
+/* ---------- the page: the back card ---------- */
+.ph>.pg{position:absolute;left:env(safe-area-inset-left,0px);right:env(safe-area-inset-right,0px);top:0;bottom:0;z-index:1;background:var(--sheet);--surface:var(--sheet);
+  display:flex;flex-direction:column;overflow:hidden;transform-origin:50% 0;
+  transition:transform var(--card-dur) var(--card-ease),border-radius var(--dur-slow) var(--ease)}
+.ph>.pg::after{content:"";position:absolute;inset:0;background:var(--scrim);opacity:calc(var(--dim) * var(--p));pointer-events:none;transition:opacity var(--dur-slow) var(--ease);z-index:5}
+.ph>.pg::before{content:"";position:absolute;left:0;right:0;bottom:0;height:calc(var(--stack) + 22px);z-index:4;pointer-events:none;
+  background:linear-gradient(to top,var(--sheet) calc(100% - 44px),transparent);
+  transform:translateY(calc(var(--drawM) + var(--drawC)));transition:transform var(--card-dur) var(--card-ease),opacity var(--dur) var(--ease)}
+.ph.is-handle>.pg::before{opacity:0}
+/* set back only while something is in front or a finger pulls a card: a transform here would hold fixed children */
+.ph.is-back>.pg,.ph[data-drag]>.pg{transform:translateY(calc(6px * var(--p))) scale(calc(1 - .07 * var(--p)));border-radius:calc(26px * var(--p))}
+.ph>.pg-tuck{position:absolute;inset:0;z-index:1;display:none;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.ph.is-back>.pg-tuck{display:block}
+
+/* the page's frame, shared by every page on a phone */
+.ph .pg-head{flex:none;height:calc(var(--sat) + 60px);padding:var(--sat) 4px 0 16px;display:flex;align-items:center;gap:2px;min-width:0}
+.ph .pg-head h1{font-size:24px;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.ph .pg-head .back{margin-left:-12px}
+.ph .pg-sub{color:var(--muted);font-size:var(--t-sm);margin:6px 0 0 8px;white-space:nowrap}
+.ph .pg-body{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:none;padding-bottom:calc(var(--stack) + 20px)}
+.ph.is-handle .pg-body{padding-bottom:20px}
+.ph .pg-row2{flex:none;display:flex;align-items:center;gap:8px;height:44px;padding:0 12px 0 8px}
+.ph .p-tabs{flex:none;display:flex;gap:2px;overflow:auto;scrollbar-width:none;padding:0 6px;box-shadow:inset 0 -1px 0 var(--line)}
+/* stylelint-disable-next-line color-no-hex -- mask */
+.ph .p-tabs.is-long{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 36px),transparent)}
+/* a message box that belongs to the page (an agent's own page) sits over the lips and follows them down */
+.ph .pg-foot{flex:none;padding:6px 10px calc(var(--stack) + 10px);transform:translateY(calc(var(--drawM) + var(--drawC)));transition:transform var(--card-dur) var(--card-ease)}
+
+/* the bottom of a page or a chat that has its own: an answer, a message box, a call's controls */
+.ph .p-dock{flex:none;position:relative;z-index:6;display:flex;flex-direction:column;align-items:stretch;gap:8px;padding:12px 10px calc(var(--sab) + 6px);
+  --surface:var(--raised);background:var(--raised);box-shadow:var(--lift-2),0 -12px 28px -14px var(--up)}
+.ph .p-dock .answer{padding:2px 0 2px 6px;border-radius:0;background:none;box-shadow:none}
+.ph .p-dock .answer.is-ask{padding:4px 2px 0}
+.ph .p-dock .an-why{margin-right:0}
+.ph .p-dock .composer{background:var(--dock-field)}
+.ph .p-dock.is-flat{background:none;box-shadow:inset 0 1px 0 var(--line);padding-top:10px}
+.ph .p-dock.is-flat .composer{background:var(--well)}
+.ph .p-dock .look{align-self:flex-start}
+.ph .pg>.p-dock{padding-top:18px}
+
+/* ---------- the cards in front of the page ---------- */
+.ph>.ly{position:absolute;left:env(safe-area-inset-left,0px);right:env(safe-area-inset-right,0px);top:var(--top);height:calc(100% - var(--top));
+  border-radius:var(--r-layer) var(--r-layer) 0 0;overflow:hidden;transform-origin:50% 0;
+  transform:translateY(var(--ty));transition:transform var(--card-dur) var(--card-ease);will-change:transform;
+  box-shadow:var(--lift-2),0 -10px 26px -10px var(--up)}
+.ph>.ly:focus{outline:none}
+.ph>.ly-chat{z-index:2;background:var(--c-chat);--surface:var(--c-chat);--ty:calc(100% - var(--stack) + var(--drawM) + var(--drawC))}
+.ph>.ly-menu{z-index:3;background:var(--c-menu);--surface:var(--c-menu);--ty:calc(100% - var(--sab) - var(--lipT) - var(--lipM) + var(--drawM))}
+.ph>.ly-tico{z-index:4;background:var(--c-tico);--surface:var(--c-tico);--ty:calc(100% - var(--sab) - var(--lipT))}
+.ph:not(.has-chat)>.ly-chat{--ty:calc(100% + 48px)}
+.ph.is-handle>.ly{--ty:calc(100% + 48px)}
+.ph[data-card="menu"]>.ly-menu,.ph[data-card="chat"]>.ly-chat,.ph[data-card="tico"]>.ly-tico{--ty:0px}
+.ph[data-card="tico-half"]>.ly-tico{--ty:calc(100% - var(--half))}
+/* raised, a card stands a step higher */
+.ph[data-card="menu"]>.ly-menu,.ph[data-card="chat"]>.ly-chat,.ph[data-card^="tico"]>.ly-tico{box-shadow:var(--lift-3),0 -14px 34px -10px var(--up)}
+
+.ph .lip{position:absolute;left:0;right:0;top:0;border:0;background:none;display:flex;align-items:center;gap:8px;padding:0 14px;color:var(--ink);font-size:15px;line-height:20px;text-align:left;
+  touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;transition:opacity var(--dur) var(--ease)}
+.ph .lip::before{content:"";position:absolute;left:0;right:0;top:-6px;height:6px}      /* a 38px lip is a 44px target */
+.ph .lip b{font-weight:var(--w-strong);white-space:nowrap}
+.ph .lip .lip-t{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.ph .lip>.ico{width:12px;height:12px;stroke-width:2;color:var(--faint);margin:0 -3px}
+.ph .lip .lip-end{margin-left:auto;display:inline-flex;align-items:center;gap:6px;flex:none;color:var(--muted);font-size:var(--t-sm);font-variant-numeric:tabular-nums}
+.ph .lip .lip-end b{color:var(--ink)}
+.ph .ly-menu>.lip{height:40px}
+.ph .ly-menu .lip .co-mark{width:20px;height:20px;border-radius:6px;font-size:11px;flex:none;color:var(--c-menu)}
+.ph .ly-chat>.lip{height:42px}
+.ph .ly-chat .lip .lip-t{color:var(--ink-2)}
+.ph .lip>*{transition:opacity var(--dur) var(--ease)}
+/* drawn down, the back lips' contents fade by the time they are half way */
+.ph>.ly-menu>.lip>*,.ph>.ly-chat>.lip>*{opacity:calc(1 - min(1, var(--c) * 2))}
+/* a control that stands on a lip without being part of its tap target ("Join", mute) */
+.ph .lip-act{position:absolute;top:0;right:14px;z-index:1;display:flex;align-items:center;gap:6px;transition:opacity var(--dur) var(--ease)}
+.ph .ly-tico>.lip-act{height:var(--lipT)}
+.ph .ly-chat>.lip-act{height:38px}
+.ph .full{position:absolute;left:0;right:0;top:0;height:100%;display:flex;flex-direction:column;opacity:0;pointer-events:none;transition:opacity var(--dur) var(--ease)}
+.ph .ly.is-up>.lip,.ph .ly.is-up>.lip-act{opacity:0;pointer-events:none}
+.ph .ly.is-up>.full{opacity:1;pointer-events:auto}
+.ph .grab{position:absolute;left:50%;top:7px;z-index:2;width:36px;height:4px;margin-left:-18px;border-radius:2px;background:var(--line-strong);opacity:0;touch-action:none;transition:opacity var(--dur) var(--ease)}
+.ph .grab::before{content:"";position:absolute;inset:-7px -40px -14px}
+.ph .ly.is-up>.grab{opacity:1}
+/* a raised card's head is where it is taken hold of */
+.ph .tico-head,.ph .m-head,.ph .c-head,.ph .call-head,.ph [data-grab]{touch-action:none}
+
+/* a finger holds a card: no transitions on what follows it; lip and content crossfade by position */
+.ph[data-drag]>.pg,.ph[data-drag]>.pg::after{transition:none}
+.ph[data-drag="tico"]>.ly-tico,.ph[data-drag="menu"]>.ly-menu,.ph[data-drag="chat"]>.ly-chat{transition:none}
+.ph[data-drag="tico"]>.ly-tico>.full,.ph[data-drag="menu"]>.ly-menu>.full,.ph[data-drag="chat"]>.ly-chat>.full{opacity:var(--f);transition:none}
+.ph[data-drag="tico"]>.ly-tico>.lip,.ph[data-drag="menu"]>.ly-menu>.lip,.ph[data-drag="chat"]>.ly-chat>.lip{opacity:calc(1 - var(--f));transition:none}
+.ph[data-drag="tico"]>.ly-tico>.grab,.ph[data-drag="menu"]>.ly-menu>.grab,.ph[data-drag="chat"]>.ly-chat>.grab{opacity:var(--f);transition:none}
+/* a scroll draws the lips down under the finger; the snap afterwards runs on the spring */
+.ph[data-scrolling]>.ly,.ph[data-scrolling]>.pg::before,.ph[data-scrolling] .pg-foot,.ph[data-scrolling]>.ly>.lip>*{transition:none}
+
+/* Tico: the front card. Its Dot stays where it is while the lip turns into the card's head. */
+.ph .tico-dot{position:absolute;left:14px;top:14px;z-index:3;pointer-events:none;display:block}
+.ph .ly-tico>.lip{height:var(--lipT);padding-left:56px;font-size:var(--t-md)}
+.ph .ly-tico .lip .lip-t{color:var(--muted)}
+.ph .ly-tico .lip .lip-say{color:var(--ink);white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:15px;line-height:21px}
+.ph .ly-tico .lip .lip-did{display:flex;align-items:center;gap:8px;color:var(--ink-2);font-size:15px;min-width:0}
+.ph .ly-tico .lip .lip-did .ico{width:15px;height:15px;stroke-width:2;color:var(--muted);flex:none}
+.ph .ly-tico .lip .lip-did span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.ph .ly-tico>.full{height:var(--vis,100%)}
+.ph[data-card="tico-half"] .ly-tico>.full{--vis:var(--half)}
+.ph .tico-head{flex:none;height:58px;display:flex;align-items:center;gap:4px;padding:0 6px 0 56px}
+.ph .tico-head b{font-weight:var(--w-title);font-size:var(--t-md);line-height:var(--lh-tight);margin-right:auto}
+.ph .ly-tico .chat-body{padding:4px 16px 8px}
+.ph .tico-foot{flex:none;padding:4px 10px calc(var(--sab) + 6px);display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+.ph .composer{min-height:48px;font-size:var(--t-md)}
+.ph .did{min-height:28px}
+.ph .look{font-size:var(--t-sm);height:28px}
+.ph .msg p,.ph .msg ul{font-size:15px}
+/* fields are 16px on touch so iOS does not zoom on focus (platforms.md 2.4) */
+@media (pointer:coarse){.ph input,.ph textarea,.ph select,.ph [contenteditable]{font-size:max(16px,1em)}}
+
+/* the menu */
+.ph .m-head{flex:none;height:60px;display:flex;align-items:center;gap:2px;padding:6px 6px 0 14px}
+/* stylelint-disable-next-line color-no-hex -- mask */
+.ph .m-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:none;padding-bottom:18px;-webkit-mask-image:linear-gradient(#000 calc(100% - 22px),transparent);mask-image:linear-gradient(#000 calc(100% - 22px),transparent)}
+.ph .m-scroll .nav-item{font-size:15px}
+.ph .m-scroll .nav-kid{height:40px;font-size:var(--t-base)}
+.ph .tree-row,.ph .tree-team{height:44px;font-size:15px}
+.ph .tree-team{font-size:var(--t-base)}
+.ph .tree-head{height:36px}
+.ph .m-foot{flex:none;height:56px;display:flex;align-items:center;gap:2px;padding:0 6px 0 12px;border-top:1px solid var(--line);margin-bottom:calc(var(--sab) + var(--lipT))}
+.ph .m-foot .me-name{display:inline-flex;align-items:center;gap:10px;font-size:15px}
+.ph .ly-menu .co-pick{height:44px;font-size:var(--t-md)}
+.ph .ly-menu .co-pick .co-mark{color:var(--c-menu)}
+
+/* the second chat */
+.ph .c-head{flex:none;height:60px;display:flex;align-items:center;gap:10px;padding:6px 6px 0 16px}
+.ph .c-head b{font-weight:var(--w-title);font-size:var(--t-md);line-height:var(--lh-tight);margin-right:auto;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.ph .ly-chat .chat-body{padding:4px 16px 20px}
+.ph .chat-body{overscroll-behavior:contain;touch-action:pan-y}
+
+/* the handle: the whole stack drawn down to one small pull with the Dot, on the top edge of whatever holds the bottom.
+   It comes in once its card has landed. */
+.ph>.nub{position:absolute;left:50%;bottom:calc(var(--dock-h) - 15px);z-index:7;width:66px;height:30px;margin-left:-33px;padding:0;border:0;border-radius:15px;background:var(--c-tico);
+  box-shadow:var(--lift-2),0 6px 16px -6px var(--up);display:grid;place-items:center;opacity:0;pointer-events:none;transform:translateY(40px) scale(.7);
+  touch-action:none;-webkit-tap-highlight-color:transparent;transition:transform var(--card-dur) var(--card-ease),opacity var(--dur) var(--ease)}
+.ph>.nub::before{content:"";position:absolute;inset:-7px 0}
+.ph.is-handle>.nub{opacity:1;pointer-events:auto;transform:none;transition:transform 260ms var(--card-ease) var(--card-dur),opacity var(--dur) var(--ease) var(--card-dur)}
+.ph.is-handle[data-card^="tico"]>.nub,.ph[data-typing]>.nub{opacity:0;pointer-events:none;transform:translateY(40px) scale(.7);transition:transform var(--card-dur) var(--card-ease),opacity var(--dur) var(--ease)}
+
+/* measures the bottom safe area for the drag math */
+.ph>.ph-sab{position:absolute;left:0;bottom:0;width:0;height:var(--sab);visibility:hidden;pointer-events:none}
+
+/* ---------- a call: the second chat's card, as a takeover ---------- */
+.ph.is-call>.ly-chat{top:0;height:100%}
+.ph.is-call[data-card="chat"]>.ly-chat{border-radius:0;background:var(--sheet);--surface:var(--sheet)}
+.ph.is-call[data-card="chat"]>.ly-chat>.grab{display:none}
+.ph .call-head{flex:none;display:flex;align-items:center;gap:4px;height:calc(var(--sat) + 62px);padding:var(--sat) 6px 0 6px}
+
+/* ---------- the keyboard: the card being typed in rides it (platforms.md 2.3) ----------
+   The system keyboard sets the pace, so what follows it has no transition of its own. The layer is shifted down by
+   any pan iOS made, so it fills exactly what can be seen. Handles and the other lips are away while typing. */
+.ph[data-typing]{transform:translateY(var(--vv-top))}
+.ph[data-typing="tico"]>.ly:not(.ly-tico),.ph[data-typing="chat"]>.ly:not(.ly-chat),.ph[data-typing="menu"]>.ly:not(.ly-menu),.ph[data-typing="page"]>.ly{--ty:calc(100% + 48px)}
+.ph[data-typing="tico"]>.ly-tico,.ph[data-typing="chat"]>.ly-chat,.ph[data-typing="menu"]>.ly-menu{transition:none}
+.ph[data-typing="tico"][data-card="tico-half"]>.ly-tico{--ty:calc(100% - var(--kb) - 204px)}
+.ph[data-typing="tico"][data-card="tico-half"]>.ly-tico>.full{--vis:204px}
+.ph[data-typing="tico"][data-card="tico"]>.ly-tico>.full{--vis:calc(100% - var(--kb))}
+.ph[data-typing="tico"][data-card="tico-half"] .tico-head{display:none}
+.ph[data-typing="tico"][data-card="tico-half"] .ly-tico .tico-dot{opacity:0}
+/* stylelint-disable-next-line color-no-hex -- mask */
+.ph[data-typing="tico"][data-card="tico-half"] .ly-tico .chat-body{padding-top:18px;-webkit-mask-image:linear-gradient(transparent 4px,#000 16px);mask-image:linear-gradient(transparent 4px,#000 16px)}
+.ph[data-typing] .tico-foot,.ph[data-typing] .p-dock{padding-bottom:8px}
+.ph[data-typing="chat"]>.ly-chat>.full,.ph[data-typing="menu"]>.ly-menu>.full{height:calc(100% - var(--kb))}
+.ph[data-typing="chat"] .ly-chat .chat-body{padding-bottom:8px}
+/* typing in a page's own message box (an agent's page): the page ends at the keyboard and the stack waits under it */
+.ph[data-typing="page"]>.pg{bottom:var(--kb)}
+.ph[data-typing="page"]>.pg::before{display:none}
+.ph[data-typing="page"] .pg-body{padding-bottom:12px}
+.ph[data-typing="page"] .pg-foot{padding-bottom:8px;transform:none;transition:none}
