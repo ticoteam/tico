@@ -270,6 +270,29 @@ def test_inbox_page_says_not_configured_on_a_real_install_with_inbound_off(api):
     assert api.get('/api/v2/inbound/inboxes', headers=headers()).json()['configured'] is True
 
 
+def test_a_missing_sync_row_reads_as_never_synced_and_the_next_write_makes_it(api):
+    svc = seed(api)
+    with svc.store.transaction() as c:
+        c.execute('DELETE FROM inbound_sync')  # a dev copy made before the copy kept the row
+    listed = api.get('/api/v2/inbound/inboxes', headers=headers())
+    assert listed.status_code == 200
+    assert (listed.json()['last_synced_at'], listed.json()['error'], listed.json()['gaps']) == (None, '', [])
+    assert api.get('/api/v2/inbound/messages', headers=headers()).json()['messages'] == []
+    svc.off = False
+
+    def unreachable(method, path, body=None):
+        raise Problem('inbound_unavailable', 'HQ is down', 503)
+
+    svc.remote = unreachable
+    with pytest.raises(Problem):
+        svc.sync()
+    assert api.get('/api/v2/inbound/inboxes', headers=headers()).json()['error'] == 'inbound_unavailable'
+    svc.ingest(page())
+    with svc.store.read() as c:
+        assert [tuple(r) for r in c.execute('SELECT singleton,cursor,error FROM inbound_sync')] == [(1, 1, '')]
+    assert len(api.get('/api/v2/inbound/messages', headers=headers()).json()['messages']) == 1
+
+
 def test_authorization_rejects_bare_runners_support_and_non_admin_phone_writes(api):
     svc = seed(api)
     for who in (
