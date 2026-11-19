@@ -34,6 +34,13 @@ ROOT = Path(__file__).resolve().parents[1]
 ANCHOR_AGE = timedelta(hours=24)
 PRODUCT, DESKTOP = "product", "desktop"
 DESKTOP_INPUTS = ("app/",)  # the Tauri desktop app: its part of the gate tests it
+# What the product part runs besides the images: the Docker isolation suite and its fakes, and the journey. A change to
+# one selects the product part, so a fix to a red isolation or journey check wakes the train (v0.6.83 waited on #4413).
+PRODUCT_INPUTS = (
+    "runner_support/tests/isolation/",
+    "runner_support/tests/test_isolation_docker.py",
+    "scripts/journey-test.sh",
+)
 IGNORED_JOBS = {"release-check", "test-timings"}  # a consequence of a failed part, or optional
 FAILED = {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
 RUNNER = "4cpu-linux-x64"
@@ -199,7 +206,7 @@ def selection_tokens(selected, changed):
         tokens |= set(pr_checks.CONTRACT_TESTS)
     if selected.get("conformance"):
         tokens.add(pr_checks.CONFORMANCE)
-    if selected.get("caddy"):
+    if selected.get("caddy") or any(name.startswith(PRODUCT_INPUTS) for name in changed):
         tokens.add(PRODUCT)
     if any(name.startswith(DESKTOP_INPUTS) for name in changed):
         tokens.add(DESKTOP)
@@ -328,7 +335,12 @@ def plan_for(
     )
     python = [name for name in python if name not in slow_only]
     browser = sorted(name for name in browser if exists(f"ui/tests/{name}.cjs"))
-    product = bool(selected.get("caddy")) or PRODUCT in carried or bool(previous_changed)
+    product = (
+        bool(selected.get("caddy"))
+        or any(name.startswith(PRODUCT_INPUTS) for name in changed)
+        or PRODUCT in carried
+        or bool(previous_changed)
+    )
     desktop = any(name.startswith(DESKTOP_INPUTS) for name in changed) or DESKTOP in carried
     jobs = build_jobs(
         python,
