@@ -34,7 +34,8 @@ const RK_KINDS: readonly [string, string][] = [['dispute', 'Dispute'], ['request
 const RK_BASIS: Readonly<Record<string, string>> = {law: 'Law', order: 'Order', agency: 'Agency', contract: 'Contract', ours: 'Ours', asked: 'Asked', theirs: 'Theirs'};
 const RK_BINDING: ReadonlySet<string> = new Set(['law', 'order', 'agency', 'contract']);   // as backend/rule_due.py BINDING
 const RK_DUE_GROUPS: readonly [RkDue['group'], string][] = [['unconfirmed', 'Unconfirmed'], ['next', 'Next 14 days'], ['later', 'Later'], ['past', 'Past 30 days']];
-const RK_CAT_DATES = 6;          // a live risk shows this many of its dates; the rest are on its page
+const RK_CAT_DATES = 6;
+const RK_DETAIL_DATES = 200;      // as backend/risk.py LIMIT_MAX: the most dates a risk's page read holds          // a live risk shows this many of its dates; the rest are on its page
 const RK_POLL_MS = 3 * 60000;    // dates with no task send no event: the ones on screen are read again this often
 let RKP: RkPage | null = null;   // the page on screen: a late answer for a page left behind draws nothing
 let RK_RUN = 0;
@@ -206,6 +207,8 @@ async function pageRiskOne(slug: string): Promise<void> {
   try {
     page.detail = await get<RkDetail>(`/v2/risks/${rkApiKey(slug)}`, {fresh: true});
     page.dates = page.detail.obligations || [];
+    // The page's read holds the first RK_DETAIL_DATES dates; a risk with more reads them all.
+    if (page.dates.length >= RK_DETAIL_DATES) page.dates = page.detail.obligations = await rkDatesAll(page.detail.risk.key);
     page.loaded = true;
   } catch (e) {
     const body = main.querySelector('[data-rk-body]');
@@ -344,9 +347,9 @@ function rkProofHTML(p: RkProof | null | undefined): string {
   const icon = p.kind === 'email' ? 'mail' : p.kind === 'file' ? 'description' : 'link';
   const words = p.kind === 'email' ? 'Sent mail' : p.kind === 'file' ? p.name || 'File' : p.ref ? rkHost(p.ref) : 'Link';
   const face = `<span class="nav-icon" aria-hidden="true">${icon}</span><span>${esc(words)}</span>`;
-  if (p.kind === 'link' && p.ref) return `<a class="rk-src" href="${esc(p.ref)}" target="_blank" rel="noopener noreferrer" title="${esc(p.ref)}">${face}</a>`;
-  if (p.kind === 'file' && p.ref) return `<a class="rk-src" href="${API}/v2/files/${encodeURIComponent(p.ref)}" target="_blank" rel="noopener" title="${esc(words)}">${face}</a>`;
-  return `<span class="rk-src"${p.name ? ` title="${esc(p.name)}"` : ''}>${face}</span>`;
+  if (p.kind === 'link' && p.ref) return `<a class="rk-pf" href="${esc(p.ref)}" target="_blank" rel="noopener noreferrer" title="${esc(p.ref)}">${face}</a>`;
+  if (p.kind === 'file' && p.ref) return `<a class="rk-pf" href="${API}/v2/files/${encodeURIComponent(p.ref)}" target="_blank" rel="noopener" title="${esc(words)}">${face}</a>`;
+  return `<span class="rk-pf"${p.name ? ` title="${esc(p.name)}"` : ''}>${face}</span>`;
 }
 // What an occurrence's last column says: Unconfirmed (loud), a tick with the day and who met it, Waived with who,
 // Missed, Passed, the owner's face while it is due, and nothing for a date that is theirs to meet.
@@ -357,7 +360,7 @@ function rkDueState(d: RkDue): string {
   if (d.state === 'waived') return `<span>Waived</span>${m ? actorAvatar(m.satisfied_by, 16) : ''}`;
   if (d.state === 'missed') return '<span>Missed</span>';
   if (d.state === 'passed') return '<span>Passed</span>';
-  if (d.state === 'due' && d.owner) return actorAvatar(d.owner, 16);
+  if (d.state === 'due' && d.owner && d.basis !== 'theirs') return actorAvatar(d.owner, 16);
   return '';
 }
 // One date: its day, what is due, (its risks on the tab), its basis, its proof, its state, and ⋯ for the panel. A date
@@ -451,6 +454,7 @@ function rkLiveTask(page: RkPage, id: string, dates = false): void {
 const rkShown = (page: RkPage): RkRow[] => page.detail ? page.detail.matters : [...page.rows, ...page.closed];
 async function rkPatch(page: RkPage, ids: readonly string[], dated: ReadonlySet<string> = new Set()): Promise<void> {
   const redate = new Map<string, string>();   // risk id -> key: the risks whose dates are read again after the loop
+  let unknown = false;   // a date changed on a task with no risk: it may sit under a risk by its rule alone
   for (const id of ids) {
     if (!rkLive(page.run)) return;
     let now: RkRisk[];
@@ -463,6 +467,7 @@ async function rkPatch(page: RkPage, ids: readonly string[], dated: ReadonlySet<
       for (const r of [...now, ...held]) redate.set(r.id, r.key);
       for (const rid of before) if (!redate.has(rid)) { const key = rkKeyOf(page, rid); if (key) redate.set(rid, key); }
     }
+    if (dated.has(id) && !now.length && !held.length && !before.length) unknown = true;
     if (!now.length && !before.length) continue;   // not a matter, then or now
     let row: RkRow | null = null;
     if (now.length) {
@@ -477,7 +482,11 @@ async function rkPatch(page: RkPage, ids: readonly string[], dated: ReadonlySet<
     if (!rkLive(page.run)) return;
     rkApply(page, id, row, [...now, ...left]);
   }
-  if (redate.size) await rkDatesFor(page, redate);
+  if (unknown) {
+    for (const r of page.risks) if (r.level === 'live') redate.set(r.id, r.key);
+    if (page.detail) redate.set(page.detail.risk.id, page.detail.risk.key);
+  }
+  if (redate.size || (unknown && page.tab === 'obligations')) await rkDatesFor(page, redate);
   if (rkLive(page.run)) rkDraw(page);
 }
 // A risk's key from its id, from what the page holds.
@@ -489,16 +498,33 @@ function rkKeyOf(page: RkPage, id: string): string {
 // risks whose dates are on screen: on Risks the live ones (one that just turned live gets its dates here), on one
 // risk's page that risk, on Obligations every one.
 async function rkDatesFor(page: RkPage, risks: ReadonlyMap<string, string>): Promise<void> {
-  const shown = [...risks].filter(([id]) => page.tab === 'obligations'
-    || (page.tab === 'risks' && page.risks.some(r => r.id === id && r.level === 'live'))
+  // Obligations lists every date: one read of them all keeps each date's full list of risks.
+  if (page.tab === 'obligations') {
+    try { const all = await rkDatesAll(null); if (rkLive(page.run)) page.dates = all; } catch { /* unread: as they were */ }
+    return;
+  }
+  const shown = [...risks].filter(([id]) => (page.tab === 'risks' && page.risks.some(r => r.id === id && r.level === 'live'))
     || (page.tab === 'one' && page.detail?.risk.id === id));
   for (const [id, key] of shown) {
     let fresh: RkDue[];
     try { fresh = await rkDatesAll(key); } catch { continue; }   // unread: the dates stay as they were
     if (!rkLive(page.run)) return;
-    const keep = page.dates.filter(d => !d.risks.some(r => r.id === id));
-    const seen = new Set(keep.map(rkDueKey));
-    page.dates = [...keep, ...fresh.filter(d => !seen.has(rkDueKey(d)))];
+    // A read by risk lists only that risk on each date, so a date under other risks too keeps them: this read says
+    // only whether the date is under this one.
+    const was = new Map(page.dates.map(d => [rkDueKey(d), d]));
+    const now = new Set(fresh.map(rkDueKey));
+    const next: RkDue[] = [];
+    for (const d of page.dates) {
+      if (now.has(rkDueKey(d))) continue;
+      const others = d.risks.filter(r => r.id !== id);
+      if (others.length === d.risks.length) next.push(d);
+      else if (others.length) next.push({...d, risks: others});
+    }
+    for (const d of fresh) {
+      const others = (was.get(rkDueKey(d))?.risks || []).filter(r => r.id !== id && !d.risks.some(x => x.id === r.id));
+      next.push(others.length ? {...d, risks: [...d.risks, ...others]} : d);
+    }
+    page.dates = next;
   }
   if (page.detail) page.detail.obligations = page.dates;
 }
@@ -604,17 +630,17 @@ function rkDueSide(page: RkPage, side: HTMLElement): void {
   const d = rkDueNamed(page), close = rkClosed();
   side.dataset['rkWait'] = d || page.loaded ? '' : '1';
   if (!d) { side.innerHTML = rkSideHead('Date', close) + `<div class="rk-pad">${page.loaded ? '<p class="rk-err">Not found.</p>' : skelRows(4)}</div>`; return; }
-  side.dataset['rkShown'] = JSON.stringify([d.state, d.mark?.satisfied_at || '', d.mark?.proof?.ref || '']);
+  side.dataset['rkShown'] = JSON.stringify(d);
   side.innerHTML = rkSideHead(d.title || 'Date', close) + rkDueFactsHTML(d) + rkDueActsHTML(d);
   rkDueBind(page, side, d);
 }
-// After a redraw: the panel's date drawn again when it was waiting for the dates or its state moved, unless the viewer
-// is typing in it.
+// After a redraw: the panel's date drawn again when it was waiting for the dates or anything on it changed, unless the
+// viewer is typing in it.
 function rkDueSideRedraw(page: RkPage): void {
   const side = document.getElementById('rk-side');
   if (!side || side.hidden || !side.dataset['rkFor']?.startsWith('due:') || side.querySelector('[data-rk-act-form]')) return;
   const d = rkDueNamed(page);
-  const shown = d ? JSON.stringify([d.state, d.mark?.satisfied_at || '', d.mark?.proof?.ref || '']) : '';
+  const shown = d ? JSON.stringify(d) : '';
   if (side.dataset['rkWait'] || shown !== side.dataset['rkShown']) rkDueSide(page, side);
 }
 function rkDueFactsHTML(d: RkDue): string {
@@ -692,13 +718,17 @@ function rkActBind(page: RkPage, side: HTMLElement, d: RkDue, form: HTMLFormElem
       if (text('note')) body['note'] = text('note');
     }
     const go = form.querySelector<HTMLButtonElement>('[type=submit]');
+    const mine = side.dataset['rkFor'];
     if (err) err.hidden = true;
     if (go) go.disabled = true;
     try {
       await post(`/v2/rule-due/${encodeURIComponent(d.id)}/satisfied`, body);
     } catch (e) {
-      if (go) go.disabled = false;
-      return fail(errorMessage(e, 'Something went wrong.'));
+      // Proved by someone else meanwhile (409): their proof is read and shown in place of the form.
+      if ((e as {status?: number}).status !== 409) {
+        if (go) go.disabled = false;
+        return fail(errorMessage(e, 'Something went wrong.'));
+      }
     }
     if (!rkLive(page.run)) return;
     // Its risks' dates and counts read again: the date may move group, and a risk may turn quiet.
@@ -707,7 +737,8 @@ function rkActBind(page: RkPage, side: HTMLElement, d: RkDue, form: HTMLFormElem
     if (!rkLive(page.run)) return;
     rkApplyRisks(page, counts.filter((r): r is RkRisk => r !== null));
     rkDraw(page);
-    rkDueSide(page, side);
+    // The panel is drawn again only while it still shows this date: the viewer may have opened another meanwhile.
+    if (side.dataset['rkFor'] === mine && form.isConnected) rkDueSide(page, side);
   });
 }
 // The file search under Add proof: the files the viewer may read, by title (GET /v2/files/search).
@@ -720,7 +751,7 @@ function rkFilePick(form: HTMLFormElement, run: number): void {
     id.value = '';
     if (timer) clearTimeout(timer);
     const text = q.value.trim();
-    if (!text) { found.hidden = true; found.innerHTML = ''; return; }
+    if (!text) { ask++; found.hidden = true; found.innerHTML = ''; return; }
     timer = setTimeout(async () => {
       const mine = ++ask;
       const rows = await get<{results: {id: string; title: string}[]}>(`/v2/files/search?q=${encodeURIComponent(text)}&limit=6`).then(r => r.results).catch(() => []);
@@ -770,7 +801,7 @@ function rkFormBind(side: HTMLElement, tid: string, m: RkMatter | null, run: num
     if (pid) pid.value = '';
     if (timer) clearTimeout(timer);
     const text = q.value.trim();
-    if (!text) { found.hidden = true; found.innerHTML = ''; return; }
+    if (!text) { ask++; found.hidden = true; found.innerHTML = ''; return; }
     timer = setTimeout(async () => {
       const mine = ++ask;
       const one = (kind: string) => get<{rows: {id: string; name: string}[]}>(`/v2/entities/find/${kind}?name=${encodeURIComponent(text)}&limit=5`).then(r => r.rows).catch(() => []);

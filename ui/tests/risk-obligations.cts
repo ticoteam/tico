@@ -1,7 +1,7 @@
 // Company › Risk's dates on a real hub (evals/redesign/seeds.py "risk" and "risk-dates"): the Obligations tab in its
 // four groups, binding dates in ink and the other side's in grey, an unproved premium loud under Unconfirmed that a link
-// moves to Past 30 days, a waiver that needs a note, the dates beside a live risk's matters and on its page. A member
-// reads the same dates without the private matter's, and may not mark them.
+// moves to Past 30 days, a waiver that needs a note, a mark made elsewhere arriving live, the dates beside a live risk's
+// matters and on its page. A member reads the same dates without the private matter's, and may not mark them.
 import type {Page} from 'playwright';
 import type * as RealHubSupport from './support/real-hub.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -29,7 +29,8 @@ async function openDate(page: Page, title: string) {
   await page.locator('#rk-side [data-rk-due-facts]').waitFor({timeout: t(20000)});
 }
 
-async function desktop(page: Page) {
+type Hub = {url: string; tokens: Record<string, string>};
+async function desktop(page: Page, hub: Hub) {
   // Risks: a live risk shows its dates beside its matters, and an unconfirmed date makes its risk live and says so.
   await go(page, '#/risk');
   const people = page.locator('[data-rk-level="live"][data-rk-risk="risk:people-benefits"]');
@@ -76,7 +77,7 @@ async function desktop(page: Page) {
   await form.locator('[data-error]:not([hidden])').waitFor({timeout: t(5000)});
   await form.locator('input[name="link"]').fill('https://files.acme.example/principal-receipt');
   await form.locator('button[type="submit"]').click();
-  await side.locator('[data-rk-due-facts] .rk-src').waitFor({timeout: t(20000)});
+  await side.locator('[data-rk-due-facts] .rk-pf').waitFor({timeout: t(20000)});
   assert.match(await side.locator('[data-rk-due-facts]').innerText(), /Met/);
   assert.equal(await side.locator('[data-rk-acts]').count(), 0, 'a proved date takes no more marks');
   await page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>('[data-rk-dates] .rk-due')]
@@ -85,6 +86,19 @@ async function desktop(page: Page) {
   assert.match(await all(due(page, 'Principal premium')), /files\.acme\.example/);
   await page.keyboard.press('Escape');
   await side.waitFor({state: 'hidden', timeout: t(10000)});
+
+  // A mark made elsewhere (here, the API) arrives on the open tab by its task event, well before the 3-minute poll.
+  const headers = {Authorization: 'Bearer ' + hub.tokens['dana'], 'Content-Type': 'application/json'};
+  const listed = await fetch(hub.url + '/api/v2/risk/obligations?limit=200', {headers})
+    .then(r => r.json() as Promise<{obligations: {id: string; due_on: string; title: string}[]}>);
+  const zoom = listed.obligations.find(d => d.title === 'Murphy discovery, Zoom notice');
+  if (!zoom) throw new Error('the seed made no Zoom notice');
+  const marked = await fetch(`${hub.url}/api/v2/rule-due/${zoom.id}/satisfied`,
+    {method: 'POST', headers, body: JSON.stringify({due_on: zoom.due_on, outcome: 'waived', note: 'The court dropped it.'})});
+  assert.ok(marked.ok, await marked.text());
+  await page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>('[data-rk-dates] .rk-due')]
+    .some(r => r.textContent!.includes('Murphy discovery, Zoom notice') && r.dataset['rkState'] === 'waived'), null, {timeout: t(15000)});
+  assert.equal(await groupOf(page, 'Murphy discovery, Zoom notice'), 'past');
 }
 
 async function phone(page: Page) {
@@ -127,7 +141,7 @@ async function phone(page: Page) {
       page.on('pageerror', e => errors.push(String(e)));
       try {
         await page.waitForFunction(() => document.querySelector('#main')?.children.length! > 0, null, {timeout: t(20000)});
-        await (onPhone ? phone(page) : desktop(page));
+        await (onPhone ? phone(page) : desktop(page, hub));
         if (onPhone) assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll on a phone');
         assert.deepEqual(errors, []);
       } finally {

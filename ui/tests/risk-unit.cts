@@ -123,6 +123,7 @@ assert.match(rowOf('Premium'), /<span class="rk-un">Unconfirmed<\/span>/);
 assert.match(rowOf('Premium'), /<span class="rk-k">Customer theft claims<\/span>/, 'the tab names the risk');
 assert.match(rowOf('Records'), /class="rk-row rk-due rk-bind"/);
 assert.match(rowOf('Discovery'), /class="rk-row rk-due rk-soft"/);
+assert.match(rowOf('Discovery'), /<span class="rk-os"><\/span>/, 'a date theirs to meet shows no owner of ours');
 assert.match(rowOf('Reply'), /<span>Passed<\/span>/);
 // A due date shows its owner; a met one a tick, the day it was met, who met it, and its link by host.
 assert.match(rowOf('Records'), /<span class="rk-os"><i data-face="bot:legal-owner"><\/i><\/span>/);
@@ -130,7 +131,7 @@ assert.match(rowOf('Production'), /aria-label="Met">check<\/span><span>Thu, Feb 
 assert.match(rowOf('Production'), /href="https:\/\/www\.files\.acme\.example\/p"[^>]*>.*<span>files\.acme\.example<\/span><\/a>/);
 assert.match(rkDatesHTML([]), /No dates\./);
 // Proof the viewer cannot open keeps its kind and no link; a file opens by its id; a sent email reads Sent mail.
-assert.equal(rkProofHTML({kind: 'file', ref: null, name: null}), '<span class="rk-src"><span class="nav-icon" aria-hidden="true">description</span><span>File</span></span>');
+assert.equal(rkProofHTML({kind: 'file', ref: null, name: null}), '<span class="rk-pf"><span class="nav-icon" aria-hidden="true">description</span><span>File</span></span>');
 assert.match(rkProofHTML({kind: 'file', ref: 'f1', name: 'receipt.pdf'}), /href="\/api\/v2\/files\/f1".*receipt\.pdf/);
 assert.match(rkProofHTML({kind: 'email', ref: 'e1', name: 'Premium paid'}), /title="Premium paid".*Sent mail/);
 assert.equal(rkProofHTML(null), '');

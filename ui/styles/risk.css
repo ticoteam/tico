@@ -77,11 +77,11 @@ a.rk-t:hover{text-decoration:underline}
 .rk-bind .rk-rd,.rk-bind .rk-t{color:var(--ink)}
 .rk-soft .rk-rd,.rk-soft .rk-t{color:var(--muted)}
 .rk-loud .rk-rd,.rk-loud .rk-t{font-weight:600}
-.rk-src{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:100%;color:var(--muted);font-size:var(--t-sm);white-space:nowrap;text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:3px}
-.rk-src>span:last-child{overflow:hidden;text-overflow:ellipsis}
-.rk-src .nav-icon{flex:none;font-size:14px}
-span.rk-src{text-decoration:none}
-a.rk-src:hover{color:var(--ink)}
+.rk-pf{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:100%;color:var(--muted);font-size:var(--t-sm);white-space:nowrap;text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:3px}
+.rk-pf>span:last-child{overflow:hidden;text-overflow:ellipsis}
+.rk-pf .nav-icon{flex:none;font-size:14px}
+span.rk-pf{text-decoration:none}
+a.rk-pf:hover{color:var(--ink)}
 /* a live risk: its matters, and its dates beside them */
 .rk-cat-b{display:grid;grid-template-columns:minmax(0,620px) minmax(0,1fr);gap:0 var(--s4);align-items:start}
 .rk-dts .rk-rd{width:84px}
@@ -137,10 +137,14 @@ a.rk-src:hover{color:var(--ink)}
 .rk-dlg textarea{resize:vertical}
 
 /* The columns follow the list's own width, which the docked chat and the facts panel narrow, not the window's */
-@container (max-width:860px){
-  .rk-table .rk-f,.rk-table .rk-d,.rk-sec .rk-f,.rk-dues .rk-bs{display:none}
+/* a live risk's dates go under its matters once the two cannot sit side by side with each date's title whole: 620px of
+   matters, the gap, and about 440px for a date (day, title, basis, state, ⋯) */
+@container (max-width:1080px){
   .rk-cat-b{grid-template-columns:minmax(0,1fr)}
   .rk-dts{margin-top:var(--s2)}
+}
+@container (max-width:860px){
+  .rk-table .rk-f,.rk-table .rk-d,.rk-sec .rk-f,.rk-dues .rk-bs{display:none}
 }
 @container (max-width:640px){
   .rk-table .rk-k,.rk-table .rk-o,.rk-sec .rk-o,.rk-ev{display:none}
