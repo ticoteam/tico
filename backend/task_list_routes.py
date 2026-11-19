@@ -60,6 +60,7 @@ LIST_FILTERS = frozenset(
         "due",
         "late",
         "after",
+        "counts",
     }
 )
 # `on_behalf_of`, read by the BotOps middleware (above).
@@ -85,8 +86,12 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         **api_v2(
             "Tasks",
             "listTasks",
-            "Tasks the caller can see, brief: each row's version, pipeline_id, stage_id, owner, turn (whose turn it is, and why), late and snoozed. q matches title words or #N; status (open, done, closed), number and updated_since filter, member=<actor> keeps the tasks that person or bot is on in some role (role=<name> narrows it to one), brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all, status=all, or asked for by ids or number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters answers only the tasks changed since (`tasks`) and the ids that left (`gone`), or `reset: true` to read in full. A full read has an ETag: If-None-Match answers 304 when nothing changed. A query parameter that is not one of these filters answers 422 `filter` naming it (owner=, not assignee=)",
+            "Tasks the caller can see, brief: each row's version, pipeline_id, stage_id, owner, turn (whose turn it is, and why), late and snoozed. q matches title words or #N; status (open, done, closed), number and updated_since filter, member=<actor> keeps the tasks that person or bot is on in some role (role=<name> narrows it to one), brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all, status=all, or asked for by ids or number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters answers only the tasks changed since (`tasks`) and the ids that left (`gone`), or `reset: true` to read in full. A full read has an ETag: If-None-Match answers 304 when nothing changed. A query parameter that is not one of these filters answers 422 `filter` naming it (owner=, not assignee=). counts=stage also answers `counts`: how many tasks the same filters select in each stage, across every page",
             "TaskList",
+            parameters={
+                "counts": "stage: also answer `counts`, the number of tasks these filters select in each stage across "
+                "every page (the rows a reader may not read are never counted). Not with changed_after",
+            },
         ),
     )
     def tasks(
@@ -122,6 +127,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         due: str | None = None,
         late: bool | None = None,
         after: str | None = None,
+        counts: str | None = None,
     ):
         """Tasks this reader may read. `pipeline` and `stage` (ids) keep a pipeline's or a stage's tasks;
         `waiting_on` (a person or a bot) keeps the open tasks with a wait on them (waiting_on.py: a person's or a
@@ -129,7 +135,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         a requirement (false, the rest). `search`, `owners`, `stages`, `requesters`, `labels`, `turn`, `due` and
         `late` are the Tasks page's search and filters, with its meaning (backend/task_match.py). Every page answers
         `next_after` when there is more: pass it back as `after` for the next page (a keyset page, which a task added
-        or removed meanwhile does not shift); `next_offset` stays for offset paging."""
+        or removed meanwhile does not shift); `next_offset` stays for offset paging. `counts=stage` adds how many tasks
+        the filters select in each stage, all pages together, so a board shows a stage's count with one page loaded."""
         from . import task_match
         from . import task_reads as reads
         from . import teammate_access
@@ -144,6 +151,10 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 raise Problem("offset", "offset is zero or greater", 422)
             if sort not in ("queue", "finished"):
                 raise Problem("sort", "sort is queue or finished", 422)
+            if counts not in (None, "stage"):
+                raise Problem("counts", "counts is stage", 422)
+            if counts and changed_after is not None:
+                raise Problem("counts", "counts is a full read's: not with changed_after", 422)
             owner, requester, filters = task_filters(
                 c,
                 owner=owner,
@@ -270,9 +281,22 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 next_offset = offset + limit if last is not None else None
                 next_after = keyset_token(last) if last is not None else None
                 brief_rows(rows)
+                # The same call as the rows' with the same filters, grouped: the counts and the list cannot select
+                # differently. A task in no stage counts in the total only.
+                per_stage = visible_tasks(c, who, owner, requester, per_stage=True, **filters) if counts else None
+                tallies = (
+                    {
+                        "total": sum(per_stage.values()),
+                        "stage": dict(sorted((stage_id, n) for stage_id, n in per_stage.items() if stage_id)),
+                    }
+                    if per_stage is not None
+                    else None
+                )
                 # The validator is the answer itself and the reader's access. A change this reader cannot read (a
                 # hidden ticket, another team's) leaves it as it was, so it sends no new ETag for identical data.
-                tag = reads.etag("tasks", rows, next_offset, next_after, *reader)
+                tag = reads.etag(
+                    "tasks", rows, next_offset, next_after, *reader, *([tallies] if tallies is not None else [])
+                )
                 if reads.fresh(request, tag):
                     return reads.not_modified(tag)
                 response.headers["ETag"] = tag
@@ -282,6 +306,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                     "next_after": next_after,
                     "cursor": reads.cursor(c, visible_sql),
                 }
+                if tallies is not None:
+                    result["counts"] = tallies
                 if typed is not None:
                     # What was asked for and is not here: unknown, ambiguous, outside the filters or not readable.
                     returned = {row["id"] for row in rows}
@@ -746,27 +772,30 @@ def readers(auth):
         visible_sql=None,
         narrow=None,
         keyset=False,
+        per_stage=False,
         **more,
     ):
         """A page of the tasks `who` may read. `narrow` is a further WHERE fragment over the task's own columns (a
         list's pipeline, stage or pushed-past filter, task_list_routes.narrowing): it picks the rows only, while the
         rows are still read with the reader's own visibility. With `keyset`, the second value is the last row's sort
-        key when there is more (the next page's `after`), not an offset."""
+        key when there is more (the next page's `after`), not an offset. With `per_stage`, the answer is instead
+        {stage_id: count} of every task the same filters select, across all pages, from one grouped read
+        (H.tasks per_stage): a list's counts go through here so they never select differently from its rows."""
         auth.domain(who)
         visible_sql = visible_sql or auth.task_sql(c, who)
-        rows = H.tasks(
-            c,
+        selection: dict[str, Any] = dict(
             owner=owner,
             requester=requester,
             status=status,
             lane=lane,
             label=label,
-            limit=limit + 1,
-            offset=offset,
             order=order,
             visible=f"({visible_sql}) AND ({narrow})" if narrow else visible_sql,
             **more,
         )
+        if per_stage:
+            return H.tasks(c, per_stage=True, **selection)
+        rows = H.tasks(c, limit=limit + 1, offset=offset, **selection)
         page, has_more = rows[:limit], len(rows) > limit
         if keyset:
             return task_views(page, c, who, visible_sql), H.task_sort_key(page[-1], order) if has_more else None
