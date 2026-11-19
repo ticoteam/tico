@@ -811,23 +811,23 @@ mod tests {
     async fn hub_answering(
         answer: impl Fn(&str, &Value) -> (&'static str, Value) + Send + Sync + 'static,
     ) -> (String, Arc<Mutex<Vec<String>>>) {
-        hub_answering_after(Duration::ZERO, answer).await
+        hub_answering_after(|_| Duration::ZERO, answer).await
     }
 
-    /// `hub_answering`, each answer sent `delay` after its request is read (a hub busy with its write lock).
+    /// `hub_answering`, each answer sent `delay(path)` after its request is read (a hub busy with its write lock).
     async fn hub_answering_after(
-        delay: Duration,
+        delay: impl Fn(&str) -> Duration + Send + Sync + 'static,
         answer: impl Fn(&str, &Value) -> (&'static str, Value) + Send + Sync + 'static,
     ) -> (String, Arc<Mutex<Vec<String>>>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let answer = Arc::new(answer);
+        let (answer, delay) = (Arc::new(answer), Arc::new(delay));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let seen = Arc::new(Mutex::new(vec![]));
         let kept = seen.clone();
         tokio::spawn(async move {
             while let Ok((mut socket, _)) = listener.accept().await {
-                let (kept, answer) = (kept.clone(), answer.clone());
+                let (kept, answer, delay) = (kept.clone(), answer.clone(), delay.clone());
                 tokio::spawn(async move {
                     let (mut request, mut buffer) = (Vec::new(), [0u8; 8192]);
                     let head = loop {
@@ -868,7 +868,7 @@ mod tests {
                         serde_json::from_slice(&request[head + 4..]).unwrap_or(Value::Null);
                     kept.lock().unwrap().push(format!("{path} {body}"));
                     let (status, answer) = answer(&path, &body);
-                    tokio::time::sleep(delay).await;
+                    tokio::time::sleep(delay(&path)).await;
                     let answer = answer.to_string();
                     let response = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}", answer.len());
                     let _ = socket.write_all(response.as_bytes()).await;
@@ -2018,17 +2018,25 @@ mod tests {
             micros[25] / 1e3, micros[0] / 1e3, micros[49] / 1e3, commits[25], commits[0], commits[49]);
     }
 
-    /// A chat turn on a hub whose every answer takes `delay`, with the outbox uploader running as in a real attempt:
-    /// a status line goes up as the harness starts, the model's first text comes `first` later, and the turn ends
-    /// `end` after that. Returns how long after the first text the hub was sent it, and how long after the turn's end
-    /// the drive returned.
+    /// A chat turn on a hub whose events uploads take `uploads` to answer and whose inputs reads take `asks` (a write on
+    /// the hub, behind its write lock), with the outbox uploader running as in a real attempt: a status line goes up
+    /// as the harness starts, the model's first text comes `first` later, and the turn ends `end` after that. Returns
+    /// how long after the first text the hub was sent it, and how long after the turn's end the drive returned.
     async fn slow_hub_turn(
-        delay: Duration,
+        uploads: Duration,
+        asks: Duration,
         first: Duration,
         end: Duration,
     ) -> (Duration, Duration) {
         let sent_at: Arc<Mutex<Vec<(Instant, String)>>> = Arc::new(Mutex::new(vec![]));
         let log = sent_at.clone();
+        let delay = move |path: &str| {
+            if path.ends_with("/inputs") {
+                asks
+            } else {
+                uploads
+            }
+        };
         let (url, _seen) = hub_answering_after(delay, move |path, body| {
             log.lock()
                 .unwrap()
@@ -2050,6 +2058,7 @@ mod tests {
         let claude = ClaudeHost::new("acme", vec![], tx.clone());
         claude.pretend_up(true);
         let host = Host::Claude(claude);
+        assert!(host.supports_steer());
         let f = Arc::new(flags(false));
         let wake = Arc::new(Notify::new());
         let streamer = tokio::spawn(runner.clone().stream_loop(
@@ -2058,9 +2067,9 @@ mod tests {
             f.clone(),
         ));
         let started = Instant::now();
+        tx.send(json!({"kind": "status", "thread_id": "th-slow", "turn_id": "turn-1", "text": "Starting"}))
+            .unwrap();
         let feed = tokio::spawn(async move {
-            tx.send(json!({"kind": "status", "thread_id": "th-slow", "turn_id": "turn-1", "text": "Starting"}))
-                .unwrap();
             tokio::time::sleep(first).await;
             let token = Instant::now();
             tx.send(json!({"kind": "delta", "thread_id": "th-slow", "turn_id": "turn-1", "text": "Acme's"}))
@@ -2136,40 +2145,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_slow_hub_does_not_hold_the_first_text_behind_the_drive_step() {
-        // Every hub answer takes 2 s. The status upload and the first step's inputs read both start as the turn does;
-        // the first text, 300 ms in, goes up as soon as the status upload is answered, not after the step as well.
-        let delay = Duration::from_secs(2);
+    async fn a_slow_inputs_read_does_not_hold_back_the_first_text() {
+        // The turn's first step reads its inputs at once, and that read waits 2 s for the hub's write lock. The model's
+        // first text, 300 ms in, goes up as soon as it is said, not once the read is answered.
         let (first, _) = slow_hub_turn(
-            delay,
+            Duration::from_millis(50),
+            Duration::from_secs(2),
             Duration::from_millis(300),
             Duration::from_millis(500),
         )
         .await;
         assert!(
-            first < Duration::from_millis(2800),
+            first < Duration::from_secs(1),
             "first text sent {first:?} after the model said it"
         );
     }
 
-    /// Bench, not run by CI: model-first-text to the hub, and turn end to the drive's return, on a hub answering in
-    /// 0, 0.5, 1 and 2 s. `cargo test --release bench_slow_hub -- --ignored --nocapture`.
+    /// Bench, not run by CI: model-first-text to the hub, and turn end to the drive's return, on hubs slow to answer
+    /// uploads, inputs reads or both. `cargo test --release bench_slow_hub -- --ignored --nocapture`.
     #[tokio::test]
     #[ignore]
     async fn bench_slow_hub_first_text_and_turn_end() {
-        for ms in [0u64, 500, 1000, 2000] {
-            let delay = Duration::from_millis(ms);
+        for (uploads, asks) in [(0u64, 0u64), (50, 2000), (1000, 50), (2000, 2000)] {
             let (first, end) = slow_hub_turn(
-                delay,
+                Duration::from_millis(uploads),
+                Duration::from_millis(asks),
                 Duration::from_millis(300),
-                Duration::from_millis(1700),
+                Duration::from_millis(2900),
             )
             .await;
-            // first_delta_posted is marked when the hub answers that upload: `delay` after it was sent.
+            // first_delta_posted is marked when the hub answers that upload: `uploads` after it was sent.
             println!(
-                "hub answers in {ms} ms: first text sent +{} ms, first_delta_posted +{} ms, turn end seen +{} ms",
+                "uploads {uploads} ms, inputs reads {asks} ms: first text sent +{} ms, first_delta_posted +{} ms, turn end seen +{} ms",
                 first.as_millis(),
-                (first + delay).as_millis(),
+                first.as_millis() + u128::from(uploads),
                 end.as_millis()
             );
         }
