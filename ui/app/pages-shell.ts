@@ -1323,3 +1323,164 @@ const LF_KINDS = [['', 'All kinds'], ['page', 'Pages'], ['document', 'Documents'
 const LF_ICON: Record<string, string> = {page: 'article', document: 'description', image: 'palette', data: 'analytics', media: 'play_arrow', other: 'inventory_2'};
 // The open Files page's state; null until it opens, and again once another page is shown.
 let LF: LfState | null = null;
+
+// health.ts
+// ----------------------------------------------------------------- Health's checks, read for every page
+// What the shell reads of Settings > Health (ui/health.ts, in the settings part): the one answer of GET /api/v2/health,
+// polled from boot for the account dot, the stuck bots and a new version. The page and General's Health line are drawn
+// by the part (hlSummaryDraw and hlPageDraw do nothing until it is loaded).
+let HL: HlHealth | null = null;
+let HL_LOAD = 0;
+let HL_NEWEST: Promise<HlHealth | null> = Promise.resolve(null);   // the read started last: the one that draws the page
+let HL_METRICS: HlMetrics | null = null;   // owners and admins: the last hour from the flight recorder (GET /api/v2/system/metrics)
+let HL_FINDINGS: HlFindings | null = null;  // Check health's open findings and the team rule (GET /api/v2/health/findings)
+
+// A read overtaken by a newer one (a poll, a boot read, a caller's own) draws nothing, so it resolves with the newest
+// read's result: an awaited refresh never reports the state from before it. The dots (ui/app/heartbeat.ts) are drawn
+// from HL when the newest read lands, so a caller that reads them after its await sees that state.
+async function hlRefresh(): Promise<HlHealth | null> {
+  if (!S.me) return null;
+  const run = hlRead(++HL_LOAD);
+  HL_NEWEST = run;
+  return run;
+}
+
+async function hlRead(seq: number): Promise<HlHealth | null> {
+  // The last hour and the monitor are drawn only on the Health page: the minute poll elsewhere (the dot, the stuck
+  // bots, a new version) reads the checks alone. On the page, once the checks have said who this is (their audience),
+  // all three are read together; the first time, the other two follow the checks.
+  const page = !!$('#hl-page');
+  const extras = (hl: HlHealth | null): Promise<[HlMetrics | null, HlFindings | null]> => Promise.all([page && hl && hl.audience !== 'human' ? v2Get('/v2/system/metrics?minutes=60') : null,
+    page && hl ? v2Get('/v2/health/findings') : null]);
+  const checks = (data: HlHealth | null): HlHealth | null => data && Array.isArray(data.checks) ? data : null;
+  const [data, [metrics, findings]] = HL ? await Promise.all([v2Get('/v2/health'), extras(HL)])
+    : await v2Get('/v2/health').then(async data => [data, await extras(checks(data))]);
+  if (seq !== HL_LOAD) return HL_NEWEST;   // overtaken: the newest read draws the page and this call waits for it
+  HL = checks(data);
+  if (page) {
+    HL_METRICS = HL && HL.audience !== 'human' && metrics?.requests ? metrics : null;
+    HL_FINDINGS = HL && Array.isArray(findings?.findings) ? findings : null;
+  }
+  // The sidebar's "New version" reads the same answer, so it never lags the page beside it.
+  if (HL?.update && S.config) { S.config = {...S.config, update: HL.update}; window.renderNewVersion?.(); }
+  hlNav();
+  hlSummaryDraw();
+  hlPageDraw();
+  return HL;
+}
+
+// The computers Health lists: everyone's for owners and admins; null for others, who are shown none. The account
+// menu reads it for its one no-computer line (ui/app/heartbeat.ts).
+window.hlComputers = () => HL && HL.audience !== 'human' ? HL.computers : null;
+window.hlNav = function hlNav() {
+  const attention = HL?.attention || 0;
+  document.querySelectorAll<HTMLElement>('[data-hl-alert]').forEach(dot => { dot.hidden = !attention; });
+  const details = document.querySelector('[data-hl-details]');
+  if (details) { if (attention) details.setAttribute('aria-label', `Health details, ${attention} to look at`); else details.removeAttribute('aria-label'); }
+  window.renderAccountStatus?.();
+};
+
+window.hlBoot = function () {
+  void hlRefresh();
+  // Every 2 minutes. Health classifies each computer's queue; the old 60 s cadence while live was
+  // down multiplied that work across tabs. Returning to the tab still refreshes at once.
+  let at = 0;
+  setInterval(() => {
+    if (document.hidden || !S.me || Date.now() - at < 119000) return;
+    at = Date.now(); void hlRefresh();
+  }, 60000);
+  // A shown tab reads once: the refresh also restarts the 2-minute timer, so the next tick does not read again.
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.me) { at = Date.now(); void hlRefresh(); } });
+};
+
+// app/finance.ts
+// ----------------------------------------------------------------- Finance's place in the sidebar, and its dates
+// What the shell runs of Finance (ui/app/finance.ts, in the finance part): the one read per visit that shows or hides
+// its sidebar row, the return from connecting books, and the dates Strategy's Budget shares.
+let FIN_ACCESS: FinAccData | null = null;    // the last GET /v2/finance/access, or null (not set up, or nothing to see)
+let FIN_PROBE: Promise<FinAccData | null> | null = null;     // the sidebar's one read per visit
+
+const finMe = () => S.me?.id ? 'human:' + S.me.id : '';
+// What a teammate's Finance holds, from their access row: the tabs, and the rights behind each button.
+function finCapsOf(acc: FinAccData | null | undefined, who: string) {
+  const row = (acc?.teammates || []).find(t => t.teammate === who);
+  if (!row) return null;
+  const live = (row.grants || []).filter(g => g.live && g.status === 'active');
+  const what = new Set(live.map(g => g.what));
+  const owner = row.default === 'everything';
+  const all = owner || what.has('everything');
+  const rights = new Set(row.rights || []);
+  const may = (right: string) => owner || rights.has(right) || rights.has('finance.admin');
+  // Finance beyond one's own budgets: a default view, a grant, or finance.admin. Without it a teammate with budgets of
+  // their own sees only My budget (backend/finance/handlers.py reads_budget), and one with none sees no Finance at all.
+  const sees = all || row.default !== 'none' || live.length > 0 || rights.has('finance.admin');
+  const mine = !owner && (row.budgets || 0) > 0;
+  // Attribution: the backend's flag when present (finance.attribution; admin and owner imply it), else the same rule here.
+  const attribute = typeof row.attribute === 'boolean' ? row.attribute
+    : owner || rights.has('finance.attribution') || rights.has('finance.admin');
+  return {row, owner, all, rights, may, sees, mine, attribute,
+    any: sees || mine || attribute,
+    company: all || what.has('pnl') || what.has('pnl_lines'),
+    // Company-wide expenses (backend/finance/core/view.py company_expenses), which the Unattributed filter needs.
+    companyExpenses: all || live.some(g => g.whose === 'company' && (g.what === 'pnl' || g.what === 'expenses')),
+    balance: all || what.has('balance_sheet') || what.has('bs_lines'),
+    sources: all || what.has('sources'),
+    // Budgets: the owner and whoever holds finance.budgets (or finance.admin, which implies it).
+    budgets: owner || rights.has('finance.budgets') || rights.has('finance.admin'),
+    // Bills and invoices show to a payables or receivables view, or to the right whose work they are
+    // (backend/finance/tab_ap.py sees_side).
+    payables: all || what.has('payables') || may('finance.ap'),
+    receivables: all || what.has('receivables') || may('finance.ar')};
+}
+
+// ----------------------------------------------------------------- the sidebar
+// Finance shows in the rail (index.html, under Strategy and Growth) while Finance is set up and the viewer sees
+// something in it. Until this visit's answer it shows as the last one this browser had for the same person said, and
+// stays hidden with none (ui/app/redesign.js rdNavShow): most people never see Finance, and the few who do see it from
+// their second visit on. Only a definite answer moves it: an access list, or Finance refusing (403) or missing (404).
+// No answer at all (offline, a server error) leaves the row as it is.
+function finNavSync(error: unknown) {
+  if (error && ![403, 404].includes(errorStatus(error) ?? 0)) return;
+  rdNavShow('finance', !!finCapsOf(FIN_ACCESS, finMe())?.any);
+}
+async function finProbe() {
+  let error: unknown = null;
+  try { const acc = await get<FinAccData | null>('/v2/finance/access', {fresh: true}); FIN_ACCESS = Array.isArray(acc?.teammates) ? acc : null; }
+  catch (e) { FIN_ACCESS = null; error = e; }
+  finNavSync(error);
+  return FIN_ACCESS;
+}
+// Once a visit, after the first page is drawn (who is signed in is known by then).
+function finProbeOnce() { finBooksReturn(); if (!FIN_PROBE && S.me?.id) FIN_PROBE = finProbe(); }
+
+// Back from connecting QuickBooks or Xero: the server sends the browser to #/finance?books=connected or
+// ?books=error&reason=<code> (backend/finance/books_link.py codes). Says how it went once, lands on Sources and cleans
+// the address.
+function finBooksReturn() {
+  const [hashPath, hashQ = ''] = location.hash.split('?'), h = new URLSearchParams(hashQ);
+  if (!h.has('books') || !S.me?.id) return;
+  const state = h.get('books'), reason = h.get('reason') || '';
+  h.delete('books'); h.delete('reason');
+  const hs = h.toString(), path = hashPath && hashPath !== FIN_ROUTE && rdUnder(hashPath, FIN_ROUTE) ? hashPath : FIN_ROUTE + '/sources';
+  history.replaceState(history.state, '', location.pathname + location.search + path + (hs ? '?' + hs : ''));
+  if (state === 'connected') toast('Books connected');
+  else if (reason === 'reconnect_required') toast('Reconnect books', true);
+  else toast('Books not connected' + (FIN_BOOKS_WHY[reason] ? ': ' + FIN_BOOKS_WHY[reason] : ''), true);
+  setTimeout(() => route(), 0);   // draw the cleaned address (this runs inside a route draw)
+}
+const FIN_BOOKS_WHY: Record<string, string | undefined> = {access_denied: 'access denied', not_connected: 'connect again', vault_write_failed: 'sign-in not saved',
+  no_refresh_token: 'connect again', gateway_refused: 'try again', bad_answer: 'try again', unknown: 'try again',
+  connected_elsewhere: 'already connected elsewhere', already_connected: 'already has a connection'};
+
+const FIN_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+const finPad = (n: number) => String(n).padStart(2, '0');
+const finIso = (d: Date) => `${d.getFullYear()}-${finPad(d.getMonth() + 1)}-${finPad(d.getDate())}`;
+const finDate = (s: string | null | undefined) => { const [y, m, d] = String(s || '').slice(0, 10).split('-').map(Number) as [number, number?, number?]; return new Date(y, (m || 1) - 1, d || 1); };
+
+// "Oct 30", "Oct 30, 2025" when not this year.
+const finDayLabel = (s: string | null | undefined) => {
+  if (!s) return '';
+  const d = finDate(s);
+  return `${FIN_MON[d.getMonth()]} ${d.getDate()}${d.getFullYear() !== new Date().getFullYear() ? ', ' + d.getFullYear() : ''}`;
+};

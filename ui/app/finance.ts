@@ -36,43 +36,9 @@ interface FinActDone { bill_id?: string; invoice_id?: string; contact_id?: strin
 const FIN_TABS: [string, string][] = [['mine', 'My budget'], ['pnl', 'P&L'], ['budgets', 'Budgets'], ['transactions', 'Transactions'], ['payables', 'Payables'], ['receivables', 'Receivables'],
   ['balance', 'Balance sheet'], ['tax', 'Tax'], ['attribution', 'Attribution'], ['cards', 'Cards'], ['sources', 'Sources'], ['access', 'Access']];
 let FIN: FinPage | null = null;           // the open page: {load, tab, arg, q, acc, caps}
-let FIN_ACCESS: FinAccData | null = null;    // the last GET /v2/finance/access, or null (not set up, or nothing to see)
-let FIN_PROBE: Promise<FinAccData | null> | null = null;     // the sidebar's one read per visit
 let FIN_VIEW_AS = '';     // the owner viewing Finance as a teammate (read only): ?view_as=… in the address
 
 // ----------------------------------------------------------------- who sees what
-const finMe = () => S.me?.id ? 'human:' + S.me.id : '';
-// What a teammate's Finance holds, from their access row: the tabs, and the rights behind each button.
-function finCapsOf(acc: FinAccData | null | undefined, who: string) {
-  const row = (acc?.teammates || []).find(t => t.teammate === who);
-  if (!row) return null;
-  const live = (row.grants || []).filter(g => g.live && g.status === 'active');
-  const what = new Set(live.map(g => g.what));
-  const owner = row.default === 'everything';
-  const all = owner || what.has('everything');
-  const rights = new Set(row.rights || []);
-  const may = (right: string) => owner || rights.has(right) || rights.has('finance.admin');
-  // Finance beyond one's own budgets: a default view, a grant, or finance.admin. Without it a teammate with budgets of
-  // their own sees only My budget (backend/finance/handlers.py reads_budget), and one with none sees no Finance at all.
-  const sees = all || row.default !== 'none' || live.length > 0 || rights.has('finance.admin');
-  const mine = !owner && (row.budgets || 0) > 0;
-  // Attribution: the backend's flag when present (finance.attribution; admin and owner imply it), else the same rule here.
-  const attribute = typeof row.attribute === 'boolean' ? row.attribute
-    : owner || rights.has('finance.attribution') || rights.has('finance.admin');
-  return {row, owner, all, rights, may, sees, mine, attribute,
-    any: sees || mine || attribute,
-    company: all || what.has('pnl') || what.has('pnl_lines'),
-    // Company-wide expenses (backend/finance/core/view.py company_expenses), which the Unattributed filter needs.
-    companyExpenses: all || live.some(g => g.whose === 'company' && (g.what === 'pnl' || g.what === 'expenses')),
-    balance: all || what.has('balance_sheet') || what.has('bs_lines'),
-    sources: all || what.has('sources'),
-    // Budgets: the owner and whoever holds finance.budgets (or finance.admin, which implies it).
-    budgets: owner || rights.has('finance.budgets') || rights.has('finance.admin'),
-    // Bills and invoices show to a payables or receivables view, or to the right whose work they are
-    // (backend/finance/tab_ap.py sees_side).
-    payables: all || what.has('payables') || may('finance.ap'),
-    receivables: all || what.has('receivables') || may('finance.ar')};
-}
 // The viewer's own: what the reads run as (the teammate viewed as, for the owner), and whether writes are open.
 function finCaps() {
   const acc = FIN?.acc || FIN_ACCESS, me = finMe();
@@ -95,45 +61,7 @@ function finHref(path: string, params: Record<string, string> = {}) {
   return FIN_ROUTE + path + (qs ? '?' + qs : '');
 }
 
-// ----------------------------------------------------------------- the sidebar
-// Finance shows in the rail (index.html, under Strategy and Growth) while Finance is set up and the viewer sees
-// something in it. Until this visit's answer it shows as the last one this browser had for the same person said, and
-// stays hidden with none (ui/app/redesign.js rdNavShow): most people never see Finance, and the few who do see it from
-// their second visit on. Only a definite answer moves it: an access list, or Finance refusing (403) or missing (404).
-// No answer at all (offline, a server error) leaves the row as it is.
-function finNavSync(error: unknown) {
-  if (error && ![403, 404].includes(errorStatus(error) ?? 0)) return;
-  rdNavShow('finance', !!finCapsOf(FIN_ACCESS, finMe())?.any);
-}
-async function finProbe() {
-  let error: unknown = null;
-  try { const acc = await get<FinAccData | null>('/v2/finance/access', {fresh: true}); FIN_ACCESS = Array.isArray(acc?.teammates) ? acc : null; }
-  catch (e) { FIN_ACCESS = null; error = e; }
-  finNavSync(error);
-  return FIN_ACCESS;
-}
-// Once a visit, after the first page is drawn (who is signed in is known by then).
-function finProbeOnce() { finBooksReturn(); if (!FIN_PROBE && S.me?.id) FIN_PROBE = finProbe(); }
-
 const FIN_BOOKS = {quickbooks: 'QuickBooks', xero: 'Xero'};
-// Back from connecting QuickBooks or Xero: the server sends the browser to #/finance?books=connected or
-// ?books=error&reason=<code> (backend/finance/books_link.py codes). Says how it went once, lands on Sources and cleans
-// the address.
-function finBooksReturn() {
-  const [hashPath, hashQ = ''] = location.hash.split('?'), h = new URLSearchParams(hashQ);
-  if (!h.has('books') || !S.me?.id) return;
-  const state = h.get('books'), reason = h.get('reason') || '';
-  h.delete('books'); h.delete('reason');
-  const hs = h.toString(), path = hashPath && hashPath !== FIN_ROUTE && rdUnder(hashPath, FIN_ROUTE) ? hashPath : FIN_ROUTE + '/sources';
-  history.replaceState(history.state, '', location.pathname + location.search + path + (hs ? '?' + hs : ''));
-  if (state === 'connected') toast('Books connected');
-  else if (reason === 'reconnect_required') toast('Reconnect books', true);
-  else toast('Books not connected' + (FIN_BOOKS_WHY[reason] ? ': ' + FIN_BOOKS_WHY[reason] : ''), true);
-  setTimeout(() => route(), 0);   // draw the cleaned address (this runs inside a route draw)
-}
-const FIN_BOOKS_WHY: Record<string, string | undefined> = {access_denied: 'access denied', not_connected: 'connect again', vault_write_failed: 'sign-in not saved',
-  no_refresh_token: 'connect again', gateway_refused: 'try again', bad_answer: 'try again', unknown: 'try again',
-  connected_elsewhere: 'already connected elsewhere', already_connected: 'already has a connection'};
 
 // A narrow viewer's figures leave payroll out (§7.5): a read (or row) with `excluded` says so, as the P&L's totals do.
 const finExcl = (x: {excluded?: unknown; [key: string]: unknown} | null | undefined) => x?.excluded ? ' excl. payroll' : '';
@@ -141,19 +69,9 @@ const finExcl = (x: {excluded?: unknown; [key: string]: unknown} | null | undefi
 const finOwnSlice = (caps: FinCapsNow) => caps.viewing ? ` · ${finWho(caps.who)}'s view` : ' · Your view';
 
 // ----------------------------------------------------------------- formats
-const FIN_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const FIN_MONTH = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October',
   'November', 'December'];
-const finPad = (n: number) => String(n).padStart(2, '0');
-const finIso = (d: Date) => `${d.getFullYear()}-${finPad(d.getMonth() + 1)}-${finPad(d.getDate())}`;
-const finDate = (s: string | null | undefined) => { const [y, m, d] = String(s || '').slice(0, 10).split('-').map(Number) as [number, number?, number?]; return new Date(y, (m || 1) - 1, d || 1); };
 const finToday = () => finIso(new Date());
-// "Oct 30", "Oct 30, 2025" when not this year.
-const finDayLabel = (s: string | null | undefined) => {
-  if (!s) return '';
-  const d = finDate(s);
-  return `${FIN_MON[d.getMonth()]} ${d.getDate()}${d.getFullYear() !== new Date().getFullYear() ? ', ' + d.getFullYear() : ''}`;
-};
 // Whole dollars from cents for statements: 18,200; a negative in parentheses, (21,740).
 const finNum = (c: number | null | undefined) => {
   if (c == null) return '';

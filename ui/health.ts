@@ -203,57 +203,6 @@ interface HlSetupReply {
   doctor_only?: string;
 }
 
-let HL: HlHealth | null = null;
-let HL_LOAD = 0;
-let HL_NEWEST: Promise<HlHealth | null> = Promise.resolve(null);   // the read started last: the one that draws the page
-let HL_METRICS: HlMetrics | null = null;   // owners and admins: the last hour from the flight recorder (GET /api/v2/system/metrics)
-let HL_FINDINGS: HlFindings | null = null;  // Check health's open findings and the team rule (GET /api/v2/health/findings)
-
-// A read overtaken by a newer one (a poll, a boot read, a caller's own) draws nothing, so it resolves with the newest
-// read's result: an awaited refresh never reports the state from before it. The dots (ui/app/heartbeat.ts) are drawn
-// from HL when the newest read lands, so a caller that reads them after its await sees that state.
-async function hlRefresh(): Promise<HlHealth | null> {
-  if (!S.me) return null;
-  const run = hlRead(++HL_LOAD);
-  HL_NEWEST = run;
-  return run;
-}
-
-async function hlRead(seq: number): Promise<HlHealth | null> {
-  // The last hour and the monitor are drawn only on the Health page: the minute poll elsewhere (the dot, the stuck
-  // bots, a new version) reads the checks alone. On the page, once the checks have said who this is (their audience),
-  // all three are read together; the first time, the other two follow the checks.
-  const page = !!$('#hl-page');
-  const extras = (hl: HlHealth | null): Promise<[HlMetrics | null, HlFindings | null]> => Promise.all([page && hl && hl.audience !== 'human' ? v2Get('/v2/system/metrics?minutes=60') : null,
-    page && hl ? v2Get('/v2/health/findings') : null]);
-  const checks = (data: HlHealth | null): HlHealth | null => data && Array.isArray(data.checks) ? data : null;
-  const [data, [metrics, findings]] = HL ? await Promise.all([v2Get('/v2/health'), extras(HL)])
-    : await v2Get('/v2/health').then(async data => [data, await extras(checks(data))]);
-  if (seq !== HL_LOAD) return HL_NEWEST;   // overtaken: the newest read draws the page and this call waits for it
-  HL = checks(data);
-  if (page) {
-    HL_METRICS = HL && HL.audience !== 'human' && metrics?.requests ? metrics : null;
-    HL_FINDINGS = HL && Array.isArray(findings?.findings) ? findings : null;
-  }
-  // The sidebar's "New version" reads the same answer, so it never lags the page beside it.
-  if (HL?.update && S.config) { S.config = {...S.config, update: HL.update}; window.renderNewVersion?.(); }
-  hlNav();
-  hlSummaryDraw();
-  hlPageDraw();
-  return HL;
-}
-
-// The computers Health lists: everyone's for owners and admins; null for others, who are shown none. The account
-// menu reads it for its one no-computer line (ui/app/heartbeat.ts).
-window.hlComputers = () => HL && HL.audience !== 'human' ? HL.computers : null;
-window.hlNav = function hlNav() {
-  const attention = HL?.attention || 0;
-  document.querySelectorAll<HTMLElement>('[data-hl-alert]').forEach(dot => { dot.hidden = !attention; });
-  const details = document.querySelector('[data-hl-details]');
-  if (details) { if (attention) details.setAttribute('aria-label', `Health details, ${attention} to look at`); else details.removeAttribute('aria-label'); }
-  window.renderAccountStatus?.();
-};
-
 // General's Health line (ui/app/settings.ts #settings-health-line): the checks counted by severity, with Settings' own
 // issues (one a person must act on is urgent, the rest FYI), the release line with Update while one is out, and
 // Details for the full page. Before the checks load it is the label and Details alone.
@@ -606,19 +555,6 @@ window.hlMount = function hlMount() {
   if (HL) hlPageDraw(); else host.innerHTML = '<div class="empty">Loading…</div>';
   hlNav();
   void hlRefresh().then(() => { if (!HL) hlPageDraw(); });
-};
-
-window.hlBoot = function () {
-  void hlRefresh();
-  // Every 2 minutes. Health classifies each computer's queue; the old 60 s cadence while live was
-  // down multiplied that work across tabs. Returning to the tab still refreshes at once.
-  let at = 0;
-  setInterval(() => {
-    if (document.hidden || !S.me || Date.now() - at < 119000) return;
-    at = Date.now(); void hlRefresh();
-  }, 60000);
-  // A shown tab reads once: the refresh also restarts the 2-minute timer, so the next tick does not read again.
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.me) { at = Date.now(); void hlRefresh(); } });
 };
 
 document.addEventListener('change', event => {

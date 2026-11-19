@@ -164,6 +164,7 @@
  },
  "docs-editor": {
   "files": [
+   "docs-search.ts",
    "docs-editor.ts"
   ],
   "deps": []
@@ -190,6 +191,8 @@
  },
  "settings": {
   "files": [
+   "runner-updates.ts",
+   "health.ts",
    "app/bot-branches.ts",
    "app/settings.ts",
    "app/settings-search.ts",
@@ -254,7 +257,10 @@
    "teamBuildOpen",
    "cloudAgentsOpen"
   ],
-  "idle": [],
+  "idle": [
+   "hlSummaryDraw",
+   "hlPageDraw"
+  ],
   "events": [
    "[data-model-login]"
   ]
@@ -621,6 +627,7 @@
  },
  "finance": {
   "files": [
+   "app/finance.ts",
    "app/finance-pnl.ts",
    "app/finance-budgets.ts",
    "app/finance-books.ts",
@@ -647,13 +654,16 @@
    "finPnlPage",
    "finSourcesPage",
    "finTaxPage",
-   "finTxPage"
+   "finTxPage",
+   "pageFinance"
   ],
   "calls": [
    "finBriefLoad",
    "finCampaignOwnerChange"
   ],
-  "idle": []
+  "idle": [
+   "financeStop"
+  ]
  },
  "who-picker": {
   "files": [
@@ -794,6 +804,7 @@
   "files": [
    "app/person-page.ts",
    "app/assistant-page.ts",
+   "app/assistant-viewers.ts",
    "app/learned.ts",
    "app/learnings.ts",
    "app/mail.ts",
