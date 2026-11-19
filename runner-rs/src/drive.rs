@@ -1010,8 +1010,6 @@ mod tests {
         )
         .await
         .expect("the drive ends");
-        // The attempt's final flush, before its result: a turn that has ended leaves its last rows to it.
-        let _ = runner.flush("acme-late").await;
         (drove, carried, goal)
     }
 
@@ -1054,6 +1052,8 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(drove.outcome, status);
+            // The attempt's final flush, before its result: a turn that has ended leaves its last rows to it.
+            runner.flush("acme-late").await.unwrap();
             let events: Vec<Value> = sent
                 .lock()
                 .unwrap()
