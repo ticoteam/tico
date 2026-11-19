@@ -8,8 +8,9 @@ import { IconButton } from '@/kit/IconButton';
 import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
+import { poll } from '@/lib';
 import { Section } from '@/pagekinds';
-import { computersQuery, LIVE_LOGIN, loginQuery, modelsQuery, signOutStopsQuery, type Computer, type Login, type Runtime } from './queries';
+import { computersQuery, LIVE_LOGIN, modelsQuery, readLogin, signOutStopsQuery, type Computer, type Login, type Runtime } from './queries';
 
 type Tool = { runtime: string; name: string; value: Runtime; signIn: boolean; signOut: boolean };
 
@@ -127,6 +128,19 @@ function AddSignIn({ open, onOpenChange, c, tools, onStarted }: { open: boolean;
   );
 }
 
+/** A sign-in or sign-out on the computer, read every 3 s until it ends. The answer (a sign-in's one-time code and the
+    provider's page) stays in this component's state, never the query cache. `again` reads it now. */
+function useLogin(rid: string, lid: string | null) {
+  const [data, setData] = useState<Login | undefined>(undefined);
+  const [nudge, setNudge] = useState(0);
+  const over = !!data && !LIVE_LOGIN.includes(data.state);
+  useEffect(() => {
+    if (!lid || over) return;
+    return poll((signal) => readLogin(rid, lid, signal), setData, (l) => LIVE_LOGIN.includes(l.state), 3000);
+  }, [rid, lid, over, nudge]);
+  return { data, again: () => setNudge((n) => n + 1) };
+}
+
 const SAID: Record<string, string> = {
   requested: 'Starting the sign-in…',
   starting: 'Starting the sign-in…',
@@ -142,7 +156,7 @@ const SAID: Record<string, string> = {
 /** Follows a sign-in on the computer until it ends: the provider's page, a code to paste, Stop. */
 function SignInDialog({ c, login, name, onClose }: { c: Computer; login: string; name: string; onClose: () => void }) {
   const qc = useQueryClient();
-  const q = useQuery(loginQuery(c.id, login));
+  const q = useLogin(c.id, login);
   const send = useAction('computers.signInCode');
   const stop = useAction('computers.cancelSignIn');
   const [code, setCode] = useState('');
@@ -190,7 +204,7 @@ function SignInDialog({ c, login, name, onClose }: { c: Computer; login: string;
                 void send.run({ computer: c.id, login, code: code.trim() }).then((r) => {
                   if (r.ok) {
                     setCode('');
-                    void q.refetch();
+                    q.again();
                   }
                 });
               }}
@@ -215,7 +229,7 @@ function SignOutDialog({ c, tool, onClose }: { c: Computer; tool: Tool; onClose:
   const stops = useQuery(signOutStopsQuery(c.id, tool.runtime));
   const out = useAction('computers.signOut');
   const [login, setLogin] = useState<string | null>(null);
-  const follow = useQuery({ ...loginQuery(c.id, login ?? ''), enabled: !!login });
+  const follow = useLogin(c.id, login);
   const ended = !!follow.data && !LIVE_LOGIN.includes(follow.data.state);
   useEffect(() => {
     if (!ended) return;

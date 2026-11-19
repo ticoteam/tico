@@ -184,13 +184,23 @@ describe('newAddressFor', () => {
     expect(newAddressFor('#/tools/website/s_77')).toBe('/library/tools?tool=website:s_77');
   });
 
-  it('carries the QuickBooks and Xero return query unchanged', () => {
+  it('carries only the QuickBooks and Xero return words, dropping anything else', () => {
     expect(newAddressFor('#/finance?books=connected')).toBe('/company/finance?tab=sources&books=connected');
     expect(newAddressFor('#/finance?books=error&reason=access_denied')).toBe('/company/finance?tab=sources&books=error&reason=access_denied');
+    expect(newAddressFor('#/finance?books=connected&code=c0de-xyz&state=forged&reason=access_denied')).toBe('/company/finance?tab=sources&books=connected');
+    expect(newAddressFor('#/finance?books=error&reason=%3Cb%3Ex%3C%2Fb%3E')).toBe('/company/finance?tab=sources&books=error');
+    expect(newAddressFor('#/finance?books=https://evil.example')).toBe('/company/finance?tab=sources');
   });
 
-  it("carries GitHub's return query unchanged", () => {
+  it("carries only GitHub's return word, dropping anything else", () => {
     expect(newAddressFor('#/tools/github?github=declined')).toBe('/library/tools?tool=github&github=declined');
+    expect(newAddressFor('#/tools/github?github=installed&code=c0de-xyz&state=forged&installation_id=99')).toBe('/library/tools?tool=github&github=installed');
+    expect(newAddressFor('#/tools/github?github=javascript:alert(1)')).toBe('/library/tools?tool=github');
+  });
+
+  it("carries a skills helper's code only in its shape", () => {
+    expect(newAddressFor('#/skills/connect?code=WXYZ-2345&next=https://evil.example')).toBe('/library/skills?connect=WXYZ-2345');
+    expect(newAddressFor('#/skills/connect?code=%3Cscript%3E')).toBe('/library/skills?connect=setup');
   });
 
   it('takes the address with or without its #', () => {

@@ -6,7 +6,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
-import { accessQuery, limitsQuery, usageQuery, type AccessView } from './queries';
+import { Agents } from './Agents';
+import { accessQuery, computersQuery, limitsQuery, subscriptionsQuery, usageQuery, type AccessView } from './queries';
 import { SettingsPage } from './SettingsPage';
 import { UsagePage } from './Usage';
 
@@ -185,5 +186,29 @@ describe('Usage', () => {
     const row = await screen.findByTitle('builder');
     expect(within(row).getByText('Paused')).toBeTruthy();
     expect(row.getAttribute('href')).toBe('/company/usage?view=limits&open=builder');
+  });
+});
+
+describe('A model sign-in', () => {
+  const CODE = 'WDJB-MJHT';
+  const PAGE = `https://auth.example/device?user_code=${CODE}`;
+
+  it('keeps the provider’s code and page in the dialog only, never in the query cache', async () => {
+    serve((url, method) =>
+      method === 'POST' && url.endsWith('/api/v2/model-subscriptions/connect')
+        ? { status: 200, body: { id: 'l1', runner_id: 'r1', kind: 'codex_login', state: 'starting' } }
+        : url.endsWith('/api/v2/computers/r1/logins/l1')
+          ? { status: 200, body: { id: 'l1', runner_id: 'r1', state: 'waiting', url: PAGE, code: CODE, lines: [`Enter ${CODE}`] } }
+          : { status: 404, body: { detail: 'not_found' } },
+    );
+    const kind = { connect: false, help: '', kind: 'codex_login' as const, label: 'Codex', owned: false, runtime: 'codex' as const, secret_label: '' };
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [kind], subscriptions: [] });
+    queryClient.setQueryData(computersQuery.queryKey, []);
+    show(<Agents />, '/settings/agents');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Codex/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Connect Codex' });
+    expect((await within(dialog).findByRole('link', { name: 'Open page' })).getAttribute('href')).toBe(PAGE);
+    expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => [q.queryKey, q.state.data]))).not.toContain(CODE);
   });
 });

@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
-import { cleanup, render, screen } from '@testing-library/react';
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider, useSearch } from '@tanstack/react-router';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
@@ -11,6 +11,8 @@ import { diffLines, mainText, SkillsPage } from './SkillsPage';
 import { entries } from './ToolsPage';
 import { nameFromUrl, ReplaceLoginDialog } from './AddTool';
 import { replaceLogin } from './queries';
+import { skillsSearch } from './search';
+import { newAddressFor } from '@/oldAddress/map';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
@@ -238,5 +240,33 @@ describe('Add tool', () => {
     // A stored password is never read back: the field starts empty.
     expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('');
     expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
+  });
+});
+
+describe("Connect Claude Code from the helper's old link", () => {
+  const CODE = 'WXYZ-2345';
+
+  it('takes the code out of the address at once, and keeps it out of the cache', async () => {
+    const sent: string[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') !== 'GET') sent.push(String(url));
+      const body = String(url).endsWith(`/skills/devices/codes/${CODE}`) ? { user_code: CODE, label: 'Studio laptop', expires_at: '2026-11-19T08:00:00Z' } : {};
+      return new Response(JSON.stringify(body), { status: String(url).includes('/skills/devices/') ? 200 : 404, headers: { 'Content-Type': 'application/json' } });
+    });
+    const at = newAddressFor(`/#/skills/connect?code=${CODE}`) ?? '';
+    const Skills = () => <SkillsPage search={skillsSearch(useSearch({ strict: false }))} />;
+    const root = createRootRoute({ component: Outlet });
+    const page = createRoute({ getParentRoute: () => root, path: '/library/skills', component: Skills });
+    const router = createRouter({ routeTree: root.addChildren([page]), history: createMemoryHistory({ initialEntries: [at] }) });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    const dialog = await screen.findByRole('dialog', { name: 'Connect Claude Code' });
+    expect(await within(dialog).findByText(CODE)).toBeTruthy();
+    await waitFor(() => expect(router.state.location.href).toBe('/library/skills'));
+    expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => [q.queryKey, q.state.data]))).not.toContain(CODE);
+    expect(skillsSearch({ connect: 'https://evil.example' })).toEqual({});
   });
 });

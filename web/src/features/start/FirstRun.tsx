@@ -2,7 +2,7 @@ import { Radio } from '@base-ui/react/radio';
 import { RadioGroup } from '@base-ui/react/radio-group';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { run, useAction } from '@/actions';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -10,9 +10,10 @@ import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { Select } from '@/kit/Select';
 import { Checkbox } from '@/kit/Checkbox';
+import { poll } from '@/lib';
 import { Dot } from '@/tico/dot';
 import { keyLost, pendingSetup, reasonOf } from './handoff';
-import { githubQuery, loginLive, loginQuery, setupQuery, subscriptionsQuery, type KeyKind, type PlanKind } from './queries';
+import { githubQuery, loginLive, loginQuery, readLogin, setupQuery, subscriptionsQuery, type KeyKind, type PlanKind, type PlanLogin } from './queries';
 import { setupStep, stepNumber, type SetupStep } from './steps';
 import './start.css';
 
@@ -184,6 +185,14 @@ function ModelStep() {
   const list = subs.data?.subscriptions ?? [];
   const any = list.length > 0;
   const going = loginLive(login) ? login : null;
+  // The sign-in's one-time code and the provider's page: this state only, never the cache (which holds the state).
+  const [seen, setSeen] = useState<PlanLogin | null>(null);
+  const live = !!going;
+  useEffect(() => {
+    if (!live) return;
+    return poll(readLogin, setSeen, loginLive, 2000);
+  }, [live]);
+  const shown = going?.id && seen?.id === going.id ? seen : null;
 
   const end = (plan: (typeof PLANS)[number], first: boolean) => {
     const sub = list.find((s) => s.runtime === plan.runtime);
@@ -194,9 +203,9 @@ function ModelStep() {
           <Icon name="check" />
         </span>
       );
-    if (going?.kind === plan.kind && going.state === 'waiting' && going.url)
+    if (going?.kind === plan.kind && going.state === 'waiting' && shown?.url)
       return (
-        <a className="btn btn-fill" href={going.url} target="_blank" rel="noopener noreferrer">
+        <a className="btn btn-fill" href={shown.url} target="_blank" rel="noopener noreferrer">
           Open {plan.name}
         </a>
       );
@@ -226,9 +235,9 @@ function ModelStep() {
           </div>
         ))}
       </div>
-      {going?.code && (
+      {shown?.code && (
         <p className="wl-done">
-          Code <b>{going.code}</b>
+          Code <b>{shown.code}</b>
         </p>
       )}
       {going?.accepts_code && !going.code_sent && <CodeForm />}

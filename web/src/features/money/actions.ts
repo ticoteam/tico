@@ -194,6 +194,8 @@ export const startMirror = defineAction({
   id: 'finance.startMirror',
   title: 'Use QuickBooks or Xero as the books',
   kind: 'change',
+  // The books are the person's own press: what posts to them, and whether they are connected.
+  tico: false,
   input: s.object({ connection: id }),
   run: (_ctx, { connection }) => decide('mirror_start', { connection_id: connection }),
   did: (_i, out) => waits(out, 'Mirroring'),
@@ -204,6 +206,7 @@ export const stopMirror = defineAction({
   id: 'finance.stopMirror',
   title: 'Stop using QuickBooks or Xero as the books',
   kind: 'change',
+  tico: false,
   input: s.object({}),
   run: () => decide('mirror_stop', {}),
   did: (_i, out) => waits(out, 'Stopped'),
@@ -214,6 +217,7 @@ export const disconnect = defineAction({
   id: 'finance.disconnect',
   title: 'Disconnect a Finance source',
   kind: 'change',
+  tico: false,
   input: s.object({ connection: id, books: s.optional(s.boolean()) }),
   run: async (_ctx, { connection, books }): Promise<Decided | undefined> => {
     if (!books) return decide('connection_disconnect', { connection_id: connection });
@@ -238,6 +242,8 @@ export const setDefaults = defineAction({
   id: 'finance.setDefaults',
   title: 'Set what managers and everyone else see in Finance',
   kind: 'change',
+  // Who sees financial data is the person's own press.
+  tico: false,
   input: s.object({
     manager: s.optional(s.oneOf(['none', 'team_expenses', 'own_expenses'] as const)),
     manager_payroll: s.optional(s.oneOf(['totals', 'hidden'] as const)),
@@ -286,6 +292,7 @@ export const postStatement = defineAction({
   id: 'finance.postStatement',
   title: 'Post the new rows of a bank or card statement',
   kind: 'change',
+  tico: false,
   input: s.object({
     account: id,
     file: s.string({ min: 1, max: 1_400_000 }),
@@ -360,6 +367,7 @@ export const importHistory = defineAction({
   id: 'finance.importHistory',
   title: "Import a spreadsheet's monthly totals as history",
   kind: 'change',
+  tico: false,
   input: s.object({
     csv: s.string({ min: 1, max: 1_000_000 }),
     basis: s.oneOf(['accrual', 'cash'] as const),
@@ -397,6 +405,8 @@ export const addRow = defineAction({
   id: 'budget.addRow',
   title: 'Add a monthly budget for a P&L line',
   kind: 'change',
+  // A budget is money: the person's own press. Opening one (above) stays Tico's.
+  tico: false,
   input: s.object({ name: s.string({ min: 1, max: 120 }), line: id, amount: dollars }),
   run: async ({ router }, { name, line, amount }) => {
     const done = addBudget(budgetDay(), { name, line, cents: Math.round(amount * 100) });
@@ -411,6 +421,7 @@ export const updateRow = defineAction({
   id: 'budget.updateRow',
   title: 'Change a budget from this month on',
   kind: 'change',
+  tico: false,
   input: s.object({ budget: id, amount: dollars }),
   run: (_ctx, { budget, amount }) => setBudgetAmount(budgetDay(), budget, Math.round(amount * 100)),
   did: () => 'Changed the budget',
@@ -421,6 +432,7 @@ export const removeRow = defineAction({
   id: 'budget.removeRow',
   title: 'Stop a budget from this month on',
   kind: 'change',
+  tico: false,
   input: s.object({ budget: id }),
   run: async ({ router }, { budget }) => {
     const done = removeBudget(budgetDay(), budget);

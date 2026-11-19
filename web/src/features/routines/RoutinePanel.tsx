@@ -13,8 +13,11 @@ import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { fmtDate, fmtMoney } from '@/lib';
 import { SidePanel } from '@/pagekinds';
+import { BoardItemEditor, BoardView, type ItemRef } from './BoardEditor';
+import { routineBoard, takesTemplate } from './board';
 import { Face, HeadSwitch, press, pressOut, RemoveItem, useConfirmRemove, useName, Verb, Word } from './parts';
 import { routineQuery, routinesQuery, runsQuery, versionsQuery } from './queries';
+import { ApplyTemplate } from './Templates';
 import type { Routine, Run, Trigger, Version } from './types';
 import { browserZone, EVERY, eventWords, parseSchedule, scheduleCron, timeChoices, triggerWords, WEEKDAYS, runWords, type Every } from './words';
 
@@ -37,6 +40,8 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
   const [limiting, setLimiting] = useState(false);
   const [testing, setTesting] = useState(false);
   const [versions, setVersions] = useState(false);
+  const [item, setItem] = useState<ItemRef | null>(null);
+  const [applying, setApplying] = useState(false);
   const remove = useConfirmRemove();
   if (!r) {
     return (
@@ -47,6 +52,8 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
   }
   if (editing) return <RoutineEditor routine={r} onDone={() => setEditing(false)} onClose={onClose} />;
   if (versions) return <Versions routine={r} onDone={() => setVersions(false)} onClose={onClose} />;
+  const board = routineBoard(r);
+  if (board && item) return <BoardItemEditor key={`${item.part}:${item.at ?? ''}`} routine={r} board={board} it={item} onDone={() => setItem(null)} onClose={onClose} />;
   const on = r.enabled !== false && !r.paused;
   const step = stepOf(r);
   const tmp = r.id.startsWith('tmp:');
@@ -68,6 +75,7 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
             <MenuItem label="Edit" icon="edit" disabled={!r.can_edit} onSelect={() => setEditing(true)} />
             <MenuItem label="Test run" icon="play" disabled={r.readonly} onSelect={() => setTesting(true)} />
             <MenuItem label="Versions" icon="clock" onSelect={() => setVersions(true)} />
+            {takesTemplate(r) && <MenuItem label="Apply template" icon="mail" onSelect={() => setApplying(true)} />}
             <RemoveItem disabled={!r.can_edit} onSelect={() => remove.confirm(r.name || 'this routine', () => void press('routines.remove', { routine: r.id }))} />
           </Menu>
         </>
@@ -94,9 +102,11 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
           <p className="inst t-read">{step.prompt}</p>
         </section>
       )}
+      {board && <BoardView routine={r} board={board} onOpen={setItem} />}
       {!tmp && <Runs id={r.id} />}
       {remove.node}
       {testing && <TestRun routine={r} onClose={() => setTesting(false)} />}
+      {applying && <ApplyTemplate routine={r} onClose={() => setApplying(false)} />}
     </SidePanel>
   );
 }

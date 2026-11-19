@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider, useSearch } from '@tanstack/react-router';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,6 +8,7 @@ import { run } from '@/actions';
 import { bind } from '@/actions/bind';
 import { queryClient } from '@/data';
 import { ContactsPage } from './ContactsPage';
+import { DocPage } from './DocPage';
 import { DocsPage } from './DocsPage';
 import {
   archivedDocsQuery,
@@ -15,15 +16,20 @@ import {
   cardQuery,
   contactsQuery,
   countsQuery,
+  docQuery,
   docsListQuery,
+  docVersionsQuery,
   installTargetsQuery,
+  proposalsQuery,
   skillQuery,
+  skillsQuery,
   skillUsageQuery,
   sourcesQuery,
   typesQuery,
   type Card,
 } from './queries';
 import { SkillsPage } from './SkillsPage';
+import { skillsSearch } from './search';
 
 /* Archived docs, importing a file, a field's history and installing a skill: what is sent, and what shows. */
 
@@ -108,6 +114,36 @@ describe('archived docs', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Archived' }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ archived: 1 }));
+  });
+});
+
+describe('editing a doc', () => {
+  it('keeps what the person typed when the save is refused, and sends the version they started from again', async () => {
+    const full = { ...doc('d1', 'Notes'), body: 'Old text', archived: false, created_at: '', created_by_id: '', created_by_name: '' };
+    const patches: unknown[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        patches.push(JSON.parse(String(init.body)));
+        return Response.json({ error: { code: 'doc_version_conflict', detail: 'Changed meanwhile' } }, { status: 409 });
+      }
+      // the conflict reads the doc again: someone else's newer text
+      if (String(url) === '/api/v2/docs/d1') return Response.json({ doc: { ...full, version: 4, body: 'Their text' } });
+      return Response.json({ docs: [], next_cursor: null, versions: [] });
+    });
+    queryClient.setQueryData(docQuery('d1').queryKey, full);
+    queryClient.setQueryData(docVersionsQuery('d1').queryKey, []);
+    at('/library/d1?edit=1', <DocPage doc="d1" search={{ edit: 1 }} />);
+    const text = await screen.findByRole('textbox', { name: 'Text' });
+    fireEvent.change(text, { target: { value: 'My text' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(queryClient.getQueryData<{ version: number }>(docQuery('d1').queryKey)?.version).toBe(4));
+    expect(screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Text' }).value).toBe('My text');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patches).toHaveLength(2));
+    expect(patches).toEqual([
+      { version: 3, body: 'My text' },
+      { version: 3, body: 'My text' },
+    ]);
   });
 });
 
@@ -214,5 +250,73 @@ describe('install a skill', () => {
     expect(install.className).toContain('btn-fill');
     fireEvent.click(install);
     expect(await screen.findByRole('dialog', { name: 'Install triage' })).toBeTruthy();
+  });
+});
+
+describe('propose a new skill', () => {
+  const TEXT = '---\ndescription: Use when a call comes in\n---\n\n# Steps\nAsk who is calling.';
+  const proposal = { id: 'skp_1', name: 'triage-calls', status: 'pending', description: 'Use when a call comes in', note: null, base_version: null, version: null, proposed_by: { type: 'Bot', id: 'b1' }, task_id: null, created_at: '2026-11-19T00:00:00Z', updated_at: '2026-11-19T00:00:00Z' };
+  const reply = (url: string, method: string) => {
+    if (method === 'POST' && url === '/api/v2/skills/proposals') return { proposal };
+    if (url === '/api/v2/skills/proposals/skp_1') return { proposal, files: [{ path: 'SKILL.md', content: TEXT }], diff: '', stale: false, screening: null };
+    if (url.startsWith('/api/v2/skills/proposals')) return { proposals: [proposal] };
+    if (url.startsWith('/api/v2/skills/usage')) return { skills: [] };
+    return { skills: [] };
+  };
+  const skill = (name: string) => ({ id: 's1', name, description: '', latest: null, installs_count: 0, on: [] });
+
+  it('Tico may propose one: it is sent with no base version, waits at the top, and lands on the proposal', async () => {
+    const sent = serve(reply);
+    queryClient.setQueryData(skillsQuery.queryKey, []);
+    queryClient.setQueryData(proposalsQuery.queryKey, []);
+    const router = at('/library/skills');
+    const r = await run('skills.propose', { name: 'triage-calls', text: TEXT }, { via: 'tico' });
+    expect(r).toMatchObject({ ok: true, did: 'Proposed triage-calls' });
+    expect(writes(sent)).toEqual([{ url: '/api/v2/skills/proposals', method: 'POST', body: { name: 'triage-calls', files: [{ path: 'SKILL.md', content: TEXT }] } }]);
+    expect(queryClient.getQueryData(proposalsQuery.queryKey)).toEqual([proposal]);
+    expect(router.state.location.search).toEqual({ proposal: 'skp_1' });
+  });
+
+  it('refuses a name that is already a skill, or not a skill name, and sends nothing', async () => {
+    const sent = serve(reply);
+    queryClient.setQueryData(skillsQuery.queryKey, [skill('triage-calls')]);
+    at('/library/skills');
+    expect(await run('skills.propose', { name: 'triage-calls', text: TEXT }, { via: 'click' })).toMatchObject({ ok: false, error: 'exists' });
+    expect((await run('skills.propose', { name: 'Triage Calls', text: TEXT }, { via: 'click' })).error).toMatch(/^bad_input/);
+    expect(writes(sent)).toEqual([]);
+  });
+
+  it('New skill on the Skills page takes a name and its text, and opens the proposal', async () => {
+    const sent = serve(reply);
+    queryClient.setQueryData(skillsQuery.queryKey, [skill('review-a-pr')]);
+    queryClient.setQueryData(proposalsQuery.queryKey, []);
+    queryClient.setQueryData(skillUsageQuery.queryKey, []);
+    const Skills = () => <SkillsPage search={skillsSearch(useSearch({ strict: false }))} />;
+    const router = at('/library/skills', <Skills />);
+    const make = await screen.findByRole('button', { name: 'New skill' });
+    expect(make.className).toContain('btn-fill');
+    fireEvent.click(make);
+    const dialog = await screen.findByRole('dialog', { name: 'New skill' });
+    const propose = screen.getByRole('button', { name: 'Propose' });
+    expect(propose).toHaveProperty('disabled', true);
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Triage calls' } });
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('triage-calls');
+    fireEvent.change(screen.getByLabelText('Text'), { target: { value: TEXT } });
+    fireEvent.click(propose);
+    await waitFor(() => expect(router.state.location.search).toEqual({ proposal: 'skp_1' }));
+    expect(dialog.isConnected).toBe(false);
+    expect(await screen.findByRole('heading', { name: 'triage-calls' })).toBeTruthy();
+    expect(writes(sent)).toEqual([{ url: '/api/v2/skills/proposals', method: 'POST', body: { name: 'triage-calls', files: [{ path: 'SKILL.md', content: TEXT }] } }]);
+  });
+});
+
+describe('connect Claude Code', () => {
+  it('opens the setup steps only: a code is never taken into the address', async () => {
+    serve();
+    const router = at('/library/skills');
+    expect((await run('skills.connect', { code: 'WXYZ-2345' }, { via: 'click' })).error).toMatch(/^bad_input/);
+    expect(router.state.location.search).toEqual({});
+    expect((await run('skills.connect', {}, { via: 'click' })).ok).toBe(true);
+    expect(router.state.location.search).toEqual({ connect: 'setup' });
   });
 });

@@ -29,6 +29,7 @@ import {
   archiveDoc,
   addSource,
   addWebsite,
+  apiToolQuery,
   approveProposal,
   cancelLetter,
   checkTool,
@@ -45,10 +46,13 @@ import {
   saveDoc,
   saveFact,
   setAccess,
+  proposeSkill,
+  SKILL_NAME,
   skillsQuery,
   startSignIn,
   toolsQuery,
   uploadFile,
+  websiteToolQuery,
   type DocRow,
   type SkillRow,
 } from './queries';
@@ -60,6 +64,12 @@ import { viewing } from './viewing';
 
 const id = s.string({ min: 1, max: 200 });
 const text = (max: number) => s.string({ max });
+
+/* Where a stored key or login is sent, and who may use one, are the person's own press. From Tico a change that sends a
+   stored credential somewhere new or widens who uses it is refused; narrowing stays Tico's. A tool not read yet is
+   refused too: the screen cannot tell, and the person can do it themselves. */
+const LEVEL = { none: 0, read: 1, read_write: 2 } as const;
+const adds = (next: readonly string[] | undefined, had: readonly string[]) => !!next?.some((x) => !had.includes(x));
 
 /** Go to a Library page, keeping only the search words given (an empty one is dropped). */
 const go = (router: AnyRouter, to: string, search: Record<string, string | number | undefined> = {}, replace = false) =>
@@ -325,13 +335,37 @@ export const skillsOpenProposal = defineAction({
   target: (i) => ({ kind: 'proposal', id: i.proposal }),
 });
 
-/** The setup steps, or (with the code the helper shows) approving that computer. */
+/** A new skill as its SKILL.md. Open to Tico: it only waits for an admin's OK after screening (backend/skills.py
+   propose), and changes nothing until then. A name already in the list is refused: proposing it would replace that
+   skill's whole folder with this one file. Lands on the proposal. */
+export const skillsPropose = defineAction({
+  id: 'skills.propose',
+  title: 'Propose a new skill',
+  kind: 'change',
+  input: s.object({
+    name: s.string({ min: 1, max: 80, pattern: SKILL_NAME, what: 'a skill name in lowercase letters, digits, dots and hyphens' }),
+    text: s.string({ min: 1, max: 90_000 }),
+    note: s.optional(text(200)),
+    task: s.optional(id),
+  }),
+  run: async ({ router, queryClient }, i) => {
+    const skills = await queryClient.ensureQueryData(skillsQuery);
+    if (skills.some((k) => k.name === i.name)) throw Object.assign(new Error(`${i.name} is already a skill`), { code: 'exists' });
+    const p = await proposeSkill({ name: i.name, text: i.text, note: i.note?.trim() || undefined, task: i.task });
+    await go(router, '/library/skills', { proposal: p.id }, true);
+    return p.id;
+  },
+  did: (i) => `Proposed ${i.name}`,
+  target: (_i, out) => (out ? { kind: 'page', id: `/library/skills?proposal=${out}` } : null),
+});
+
+/** The setup steps. A helper's approval code is never put in the address: the page holds one from an old link itself. */
 export const skillsConnect = defineAction({
   id: 'skills.connect',
   title: 'Connect Claude Code to skills',
   kind: 'view',
-  input: s.object({ code: s.optional(s.string({ min: 1, max: 40 })) }),
-  run: ({ router }, i) => set(router, { connect: i.code ?? 'setup' }),
+  input: s.object({}),
+  run: ({ router }) => set(router, { connect: 'setup' }),
   target: () => ({ kind: 'skills', id: 'connect' }),
 });
 
@@ -457,6 +491,8 @@ export const toolsRemoveKey = defineAction({
   title: 'Remove a key',
   kind: 'change',
   input: s.object({ tool: id, key: id }),
+  // For good, and the agents using it stop: the person's own press.
+  tico: false,
   run: (_ctx, i) => removeKey(i.tool, i.key),
   did: () => 'Removed the key',
   target: (i) => ({ kind: 'tool-keys', id: i.tool }),
@@ -477,6 +513,9 @@ export const toolsSetAccess = defineAction({
   title: 'Change who may use a tool',
   kind: 'change',
   input: s.object({ tool: id, subject: id, level: s.oneOf(['read', 'read_write', 'none'] as const) }),
+  can: (ctx, i) =>
+    ctx.via !== 'tico' ||
+    LEVEL[i.level] <= LEVEL[ctx.queryClient.getQueryData(apiToolQuery(i.tool).queryKey)?.access.find((a) => a.subject === i.subject)?.level ?? 'none'],
   run: (_ctx, i) => setAccess(i.tool, i.subject, i.level),
   did: (i) => (i.level === 'none' ? 'Removed' : 'Changed'),
   target: (i) => ({ kind: 'tool-who', id: i.tool }),
@@ -622,8 +661,8 @@ export const toolsCancelLetter = defineAction({
   target: (i) => ({ kind: 'letter', id: i.letter }),
 });
 
-/* Changing a tool. Tico may rename it, move its address, set a key's end date or a run setting: nothing secret is
-   typed. Reading a stored secret, a sign-in code, a paste of keys, or anything paid or for good is the person's own. */
+/* Changing a tool. Tico may rename it, move the address of a tool with no stored key, set a key's end date or a run
+   setting: nothing secret is typed. Reading a stored secret, a sign-in code, a paste of keys, or anything paid or for good is the person's own. */
 
 const api = (tool: string) => ({ kind: 'tool', id: `api:${tool}` });
 const site = (tool: string) => ({ kind: 'tool', id: `website:${tool}` });
@@ -641,6 +680,13 @@ export const toolsEditApi = defineAction({
     auth_scheme: s.optional(s.string({ min: 1, max: 80, pattern: /^(bearer|basic_user|basic_password|(header|query):[\w-]+)$/ })),
     check_path: s.optional(text(500)),
   }),
+  can: (ctx, i) => {
+    if (ctx.via !== 'tico' || (i.base_url === undefined && i.auth_scheme === undefined)) return true;
+    const t = ctx.queryClient.getQueryData(apiToolQuery(i.tool).queryKey);
+    if (!t) return false;
+    const moved = (i.base_url !== undefined && i.base_url !== t.tool?.base_url) || (i.auth_scheme !== undefined && i.auth_scheme !== t.tool?.auth_scheme);
+    return !moved || t.keys.length === 0;
+  },
   run: (_ctx, { tool, ...change }) => editApiTool(tool, change),
   did: () => 'Saved',
   target: (i) => api(i.tool),
@@ -720,6 +766,13 @@ export const toolsEditWebsite = defineAction({
     sites: s.optional(s.array(s.string({ min: 1, max: 300 }), { max: 50 })),
     central_only: s.optional(s.boolean()),
   }),
+  can: (ctx, i) => {
+    if (ctx.via !== 'tico' || (i.sites === undefined && i.central_only !== false)) return true;
+    const t = ctx.queryClient.getQueryData(websiteToolQuery(i.tool).queryKey);
+    if (!t) return false;
+    const widened = adds(i.sites, t.tool.sites) || (i.central_only === false && t.tool.central_only);
+    return !widened || t.accounts.length === 0;
+  },
   run: (_ctx, { tool, ...change }) => editWebsite(tool, change),
   did: () => 'Saved',
   target: (i) => site(i.tool),

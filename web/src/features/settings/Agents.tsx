@@ -15,6 +15,7 @@ import { Pill } from '@/kit/Pill';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
+import { poll } from '@/lib';
 import { Section } from '@/pagekinds';
 import { AgentList } from './AgentList';
 import { ComputerPanel } from './ComputerPanel';
@@ -28,8 +29,8 @@ import {
   hostedQuery,
   modelsQuery,
   providersQuery,
+  readSignIn,
   sleepQuery,
-  signInQuery,
   subscriptionsQuery,
   type SignIn,
   type Subscription,
@@ -78,9 +79,17 @@ function SignInDialog({ kind, onClose }: { kind: 'claude_login' | 'codex_login';
       clearTimeout(timer);
     };
   }, [kind, tries, late, visible, login, error]);
-  // A hidden tab pauses the follow too: Query does not poll in the background.
-  const follow = useQuery({ ...signInQuery(login?.runner_id ?? '', login?.id ?? ''), enabled: !!login?.id && !late });
-  const now = { ...login, ...follow.data } as SignIn;
+  // The follow: every 2 s while it runs, paused while the tab is hidden. Its answers (the provider's one-time code and
+  // page) stay in this state, never the query cache.
+  const [follow, setFollow] = useState<SignIn | null>(null);
+  const runner = login?.runner_id;
+  const lid = login?.id;
+  const over = !!follow?.state && !LIVE_SIGN_IN.includes(follow.state);
+  useEffect(() => {
+    if (!runner || !lid || late || !visible || over) return;
+    return poll((signal) => readSignIn(runner, lid, signal), setFollow, (a) => LIVE_SIGN_IN.includes(a.state ?? 'requested'), 2000);
+  }, [runner, lid, late, visible, over]);
+  const now = { ...login, ...follow } as SignIn;
   const state = now.state ?? (login ? 'starting' : 'requested');
   const finished = useRef(false);
   useEffect(() => {

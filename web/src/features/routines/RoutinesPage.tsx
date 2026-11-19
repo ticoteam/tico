@@ -8,26 +8,33 @@ import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
+import { MenuItem } from '@/kit/Menu';
 import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
-import { List, Section, type PageTab } from '@/pagekinds';
+import { List, PageMore, Section, type PageTab } from '@/pagekinds';
 import { BUILTINS, ROUTINES, type Builtin } from './actions';
 import { BuiltinPanel } from './BuiltinPanel';
-import { Face, press, Word } from './parts';
-import { heartbeatQuery, hooksQuery, maintenanceQuery, routinesQuery, systemJobsQuery } from './queries';
+import { EndpointDialog, EndpointRow } from './Endpoints';
+import { NewInbox } from './Templates';
+import { Face, press, pressOut, Word } from './parts';
+import { endpointsQuery, heartbeatQuery, hooksQuery, maintenanceQuery, routinesQuery, systemJobsQuery, type Endpoint, type RunRange, type RunStatus } from './queries';
 import { RoutinePanel } from './RoutinePanel';
+import { RunsTab } from './RunsTab';
 import type { Hook, Routine } from './types';
 import { WebhookPanel } from './WebhookPanel';
 import { maintenanceWords, startsWords, triggerWords } from './words';
 import './routines.css';
 
 /* Routines (pages/3-company/rules.js routinesScreen, webhooksScreen): a List. Routines in sections by what starts
-   them, then the built-in three; the Webhooks tab lists incoming webhooks. One routine, a built-in one or a webhook
-   opens in `?panel=`. */
+   them, then the built-in three; Runs lists every run across them; Webhooks lists incoming webhooks and outgoing
+   endpoints. One routine, a built-in one or a webhook opens in `?panel=`. */
 
 export interface RoutinesSearch {
-  tab?: 'webhooks';
+  tab?: 'webhooks' | 'runs';
   panel?: string;
+  /** Runs: which runs, and over what time. */
+  status?: RunStatus;
+  range?: RunRange;
 }
 
 /** `/company/routines?…`: the address a row opens. */
@@ -38,12 +45,17 @@ export const routinesHref = (search: RoutinesSearch) => {
 
 export const routinesTabs: readonly PageTab[] = [
   { label: 'Routines', to: ROUTINES, search: { tab: '' }, target: 'tab:routines' },
+  { label: 'Runs', to: ROUTINES, search: { tab: 'runs' }, target: 'tab:runs' },
   { label: 'Webhooks', to: ROUTINES, search: { tab: 'webhooks' }, target: 'tab:webhooks' },
 ];
 
 const head = { title: 'Routines', path: ROUTINES, tabs: routinesTabs, className: 'rr' };
 
 export function RoutinesPage({ search }: { search: RoutinesSearch }) {
+  if (search.tab === 'runs') {
+    const { status, range } = search;
+    return <RunsTab head={head} status={status} range={range} panel={search.panel} href={(panel) => routinesHref({ tab: 'runs', status, range, panel })} />;
+  }
   return search.tab === 'webhooks' ? <WebhooksTab panel={search.panel} /> : <RoutinesTab panel={search.panel} />;
 }
 
@@ -83,12 +95,23 @@ function RoutinesTab({ panel }: { panel?: string }) {
   // The built-in section keeps the page ready while there are no routines, so the page kind cannot see it is empty:
   // the empty state's Add is the one filled button then, and the head's draws plain.
   const none = list.isSuccess && !routines.length;
+  const [inbox, setInbox] = useState(false);
   return (
     <List
       {...head}
       state={list.isPending ? 'loading' : list.isError ? 'fault' : 'ready'}
       onRetry={() => void list.refetch()}
-      actions={add(none ? 'plain' : 'primary')}
+      actions={
+        <>
+          {add(none ? 'plain' : 'primary')}
+          {inbox && <NewInbox onClose={() => setInbox(false)} />}
+        </>
+      }
+      more={
+        <PageMore>
+          <MenuItem label="New inbox" icon="mail" onSelect={() => setInbox(true)} />
+        </PageMore>
+      }
       sections={
         <>
           {routines.length ? (
@@ -183,7 +206,13 @@ function BuiltInSection({ selected }: { selected: Builtin | null }) {
 
 function WebhooksTab({ panel }: { panel?: string }) {
   const hooks = useQuery(hooksQuery);
+  const endpoints = useQuery(endpointsQuery);
   const [adding, setAdding] = useState(false);
+  // the endpoint dialog: a new one, or the one being changed
+  const [endpoint, setEndpoint] = useState<Endpoint | 'new' | null>(null);
+  const out = endpoints.data ?? [];
+  // a new webhook's full address, secret included, shown once: this state only, never the cache or the address
+  const [made, setMade] = useState<{ hook: string; url: string } | null>(null);
   const list = hooks.data ?? [];
   const open = panel?.startsWith('hook:') ? panel.slice(5) : null;
   const add = (
@@ -194,23 +223,52 @@ function WebhooksTab({ panel }: { panel?: string }) {
   return (
     <List
       {...head}
-      state={hooks.isPending ? 'loading' : hooks.isError ? 'fault' : list.length ? 'ready' : 'empty'}
+      state={hooks.isPending ? 'loading' : hooks.isError ? 'fault' : list.length || out.length ? 'ready' : 'empty'}
       onRetry={() => void hooks.refetch()}
       empty={{ title: 'No webhooks yet', action: add }}
       actions={
         <>
           {add}
-          <AddWebhook open={adding} onOpenChange={setAdding} />
+          <AddWebhook open={adding} onOpenChange={setAdding} onMade={setMade} />
+          {endpoint && <EndpointDialog endpoint={endpoint === 'new' ? null : endpoint} onClose={() => setEndpoint(null)} />}
         </>
       }
-      sections={
-        <Section name="Incoming" count={list.length} target="section:incoming">
-          {list.map((h) => (
-            <HookRow key={h.id} h={h} selected={h.id === open} />
-          ))}
-        </Section>
+      more={
+        <PageMore>
+          <MenuItem label="New outgoing webhook" icon="plus" onSelect={() => setEndpoint('new')} />
+        </PageMore>
       }
-      panel={open && <WebhookPanel key={open} id={open} onClose={close} />}
+      sections={
+        <>
+          <Section name="Incoming" count={list.length} target="section:incoming">
+            {list.map((h) => (
+              <HookRow key={h.id} h={h} selected={h.id === open} />
+            ))}
+          </Section>
+          {(out.length > 0 || endpoints.isError) && (
+            <Section name="Outgoing" count={out.length} target="section:outgoing">
+              {endpoints.isError && <Word>Outgoing webhooks did not load</Word>}
+              {out.map((h) => (
+                <EndpointRow key={h.id} h={h} onEdit={() => setEndpoint(h)} />
+              ))}
+            </Section>
+          )}
+        </>
+      }
+      panel={
+        open && (
+          <WebhookPanel
+            key={open}
+            id={open}
+            shown={made?.hook === open ? made.url : null}
+            onShown={(url) => setMade({ hook: open, url })}
+            onClose={() => {
+              setMade(null);
+              close();
+            }}
+          />
+        )
+      }
     />
   );
 }
@@ -235,15 +293,16 @@ function HookRow({ h, selected }: { h: Hook; selected: boolean }) {
   );
 }
 
-function AddWebhook({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+function AddWebhook({ open, onOpenChange, onMade }: { open: boolean; onOpenChange: (o: boolean) => void; onMade: (m: { hook: string; url: string }) => void }) {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const save = async () => {
     if (!name.trim()) return;
     setBusy(true);
-    const ok = await press('webhooks.add', { name: name.trim() });
+    const r = await pressOut<{ hook: string; url: string }>('webhooks.add', { name: name.trim() });
     setBusy(false);
-    if (ok) {
+    if (r) {
+      if (r.out?.url) onMade(r.out);
       setName('');
       onOpenChange(false);
     }

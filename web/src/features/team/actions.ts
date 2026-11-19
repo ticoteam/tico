@@ -349,6 +349,8 @@ export const invite = defineAction({
     team: s.optional(team),
     role: s.optional(s.oneOf(['member', 'admin'] as const)),
   }),
+  // An admin's rights are the person's own to give; inviting a member stays Tico's.
+  can: (ctx, { role }) => !(role === 'admin' && ctx.via === 'tico'),
   run: ({ router }, input) =>
     said("Couldn't send the invite", async () => {
       const out = await invitePerson(input);
@@ -364,6 +366,8 @@ export const setPermissions = defineAction({
   title: "Change a person's permissions",
   kind: 'change',
   input: s.object({ person, role: s.oneOf(['member', 'admin'] as const) }),
+  // Making someone an admin is the person's own press; back to member stays Tico's.
+  can: (ctx, { role }) => !(role === 'admin' && ctx.via === 'tico'),
   run: (_ctx, { person, role }) => said("Couldn't change it", () => setPersonRole(person, role)),
   did: ({ role }) => (role === 'admin' ? 'Made them an admin' : 'Made them a member'),
   target: ({ person }) => onPage(person),
@@ -510,6 +514,8 @@ export const signOut = defineAction({
   id: 'computers.signOut',
   title: 'Sign out of an AI tool on a computer',
   kind: 'change',
+  // Only a person can sign in again, so signing out is the person's own press too.
+  tico: false,
   input: s.object({ computer, runtime }),
   run: (_ctx, { computer, runtime }) => said("Couldn't sign out", () => startLogout(computer, runtime)),
   did: () => 'Signing out. The agents that use it stop until someone signs in again.',

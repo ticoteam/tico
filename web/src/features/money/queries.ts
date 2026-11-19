@@ -23,7 +23,7 @@ import type {
   FinanceSalesTax,
   FinanceTransactions,
 } from '@/api/schema';
-import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
+import { isNetworkError, QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
 import { newId } from '@/lib';
 
 /* Finance, budgets and Growth. None has a live topic: each root is read again after the person's own writes, on
@@ -358,10 +358,29 @@ export type Decided = FinanceAction & { approver?: string | null; impact?: Impac
 /** A decision, tried first: the rules say whether it goes through or whom it waits for. Nothing is written. */
 export const tryDecision = (kind: string, payload: object) => api.post<Decided>('/api/v2/finance/actions', { kind, payload, dry_run: true });
 
+/* The Idempotency-Key of each decision whose answer has not come back: sent and waiting, or lost to the network. The
+   same decision sent again within KEY_WINDOW_MS reuses it, so the server acts once (store.py keeps keys 48 hours). Any
+   answer from the server, done or refused, ends the key: the next press is a new request. */
+const KEY_WINDOW_MS = 10 * 60_000;
+const unanswered = new Map<string, { key: string; at: number }>();
+
 /** A decision sent: done, or waiting for its approver (said by the caller). Anything else is refused and throws. */
 export async function decide(kind: string, payload: object): Promise<Decided> {
-  // One key for this press, so a request sent twice (a retry on a dropped answer) moves money once.
-  const out = await api.post<Decided>('/api/v2/finance/actions', { kind, payload }, { idempotencyKey: newId() });
+  const sig = JSON.stringify([kind, payload]);
+  const now = Date.now();
+  for (const [s, e] of unanswered) if (now - e.at > KEY_WINDOW_MS) unanswered.delete(s);
+  const key = unanswered.get(sig)?.key ?? newId();
+  unanswered.set(sig, { key, at: now });
+  let out: Decided;
+  try {
+    out = await api.post<Decided>('/api/v2/finance/actions', { kind, payload }, { idempotencyKey: key });
+  } catch (err) {
+    // A gateway's 502, 503 or 504 is no answer either: the server may have acted and its reply been lost.
+    const lost = isNetworkError(err) || (err instanceof ApiError && err.status >= 502 && err.status <= 504);
+    if (!lost && unanswered.get(sig)?.key === key) unanswered.delete(sig);
+    throw err;
+  }
+  if (unanswered.get(sig)?.key === key) unanswered.delete(sig);
   void queryClient.invalidateQueries({ queryKey: ['finance'] });
   if (out.status === 'committed' || out.status === 'needs_approval') return out;
   throw Object.assign(new Error(out.reason || out.status), { code: out.code || out.status });

@@ -26,7 +26,7 @@ import type {
 import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
 
 /* Settings and Usage have no live topic: both are read again after the person's own writes, on reconnect, and when a
-   section opens with data older than a minute. The one timer is a model sign-in under way (signInQuery). */
+   section opens with data older than a minute. The one timer is a model sign-in under way (readSignIn). */
 quietRoot('settings');
 quietRoot('usage');
 
@@ -486,14 +486,10 @@ export const LIVE_SIGN_IN = ['requested', 'starting', 'waiting', 'finishing'];
 export const startSignIn = (kind: 'claude_login' | 'codex_login') =>
   api.post<SignIn | null>('/api/v2/model-subscriptions/connect', { kind });
 
-/** The one timer in Settings: a sign-in under way is read every 2 s until it ends. */
-export const signInQuery = (runner: string, id: string) =>
-  queryOptions({
-    queryKey: ['settings', 'sign-in', runner, id],
-    queryFn: ({ signal }) => api.get<SignIn>(`/api/v2/computers/${enc(runner)}/logins/${enc(id)}`, { signal }),
-    refetchInterval: (q) => (LIVE_SIGN_IN.includes(q.state.data?.state ?? 'requested') ? 2000 : false),
-    staleTime: 0,
-  });
+/** One read of a sign-in under way. Not a query: its answer holds the provider's one-time code and page, which stay
+    in the dialog's state (polled with `poll` from @/lib), never the query cache. */
+export const readSignIn = (runner: string, id: string, signal?: AbortSignal) =>
+  api.get<SignIn>(`/api/v2/computers/${enc(runner)}/logins/${enc(id)}`, { signal });
 
 export const sendSignInCode = (runner: string, id: string, code: string) =>
   api.post<SignIn>(`/api/v2/computers/${enc(runner)}/logins/${enc(id)}/code`, { code });

@@ -31,6 +31,14 @@ describe('write', () => {
     expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false); // put back, not read again
   });
 
+  it('leaves nothing made up when the key had not been read before the refused change', async () => {
+    const runs = ['maintenance', 'runs'];
+    const sent = write({ key: runs, optimistic: (cur: unknown[] | undefined) => [{ id: 'tmp:1' }, ...(cur ?? [])], send: () => Promise.reject(new ApiError(403, 'forbidden', 'No')) });
+    expect(queryClient.getQueryData(runs)).toEqual([{ id: 'tmp:1' }]);
+    await expect(sent).rejects.toBeInstanceOf(ApiError);
+    expect(queryClient.getQueryData(runs)).toBeUndefined();
+  });
+
   it('reads the key again when the stream changed it meanwhile, rather than putting back a stale copy', async () => {
     queryClient.setQueryData<List>(key, { tasks: [{ id: 't1', title: 'Plan' }] });
     let fail!: (e: unknown) => void;

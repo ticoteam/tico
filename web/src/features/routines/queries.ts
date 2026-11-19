@@ -1,6 +1,8 @@
-import { queryOptions } from '@tanstack/react-query';
+import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
+import type { AutomationOverviewRuns, AutomationTemplate, AutomationTemplates, EventTypeList, Webhook, WebhookCreate, WebhookCreated, WebhookList, WebhookUpdate } from '@/api/schema';
+import type { Dest } from './board';
+import { QUIET_STALE_MS, quietRoot, write } from '@/data';
 import type {
   Delivery,
   DocFile,
@@ -205,6 +207,74 @@ export function removeRoutine(id: string, key: readonly unknown[] = routinesQuer
   });
 }
 
+/** Its steps and destinations as one new version (the board, a template applied). */
+export function setFlow(id: string, flow: { steps: Step[]; destinations: Dest[] }, summary?: string) {
+  const change = (r: Routine): Routine => ({ ...r, steps: flow.steps, destinations: flow.destinations });
+  return write<Routine>({
+    key: [routinesQuery.queryKey, routineQuery(id).queryKey],
+    optimistic: (cur: Routine[] | Routine | undefined) => (Array.isArray(cur) ? mapList(cur, id, change) : cur && change(cur)),
+    send: (idempotencyKey) => api.patch<Routine>(`/api/v2/automations/${enc(id)}`, { ...flow, ...(summary ? { summary } : {}) }, { idempotencyKey }),
+    settle: (cur: Routine[] | Routine | undefined, made) => (Array.isArray(cur) ? mapList(cur, id, () => made) : cur && made),
+  });
+}
+
+// ---------------------------------------------------------------- every run, across routines
+
+export const RUN_RANGES = ['5m', '1h', '24h', '7d'] as const;
+export type RunRange = (typeof RUN_RANGES)[number];
+export const RUN_STATUSES = ['failed', 'waiting', 'running', 'done'] as const;
+export type RunStatus = (typeof RUN_STATUSES)[number];
+export type AnyRun = AutomationOverviewRuns['runs'][number];
+
+/** Runs across every routine the person may see, newest first, fifty a page; `next` is the next page's `before`. */
+export const allRunsQuery = (range: RunRange, status?: RunStatus) =>
+  infiniteQueryOptions({
+    queryKey: ['routines', 'all-runs', range, status ?? ''],
+    queryFn: ({ signal, pageParam }) => {
+      const q = new URLSearchParams({ range, limit: '50', ...(status ? { status } : {}), ...(pageParam ? { before: pageParam } : {}) });
+      return api.get<AutomationOverviewRuns>(`/api/v2/automations/runs?${q.toString()}`, { signal });
+    },
+    initialPageParam: '',
+    getNextPageParam: (last) => last.next || undefined,
+    ...quiet,
+  });
+
+// ---------------------------------------------------------------- inbox templates
+
+export const templatesQuery = queryOptions({
+  queryKey: ['routines', 'templates'],
+  queryFn: async ({ signal }) => (await api.get<AutomationTemplates>('/api/v2/automations/templates', { signal })).templates,
+  ...quiet,
+});
+
+/** A template filled in for an owner (`person:`, `bot:` or `group:<id>`) and an inbox: the flow the server would save.
+   Nothing is saved; the server refuses an owner the person may not make a routine for, or one that can't hear it. */
+export const fillTemplate = (tid: string, owner: string, inbox: string, signal?: AbortSignal) =>
+  api.get<AutomationTemplate>(`/api/v2/automations/templates/${enc(tid)}?${new URLSearchParams({ owner, inbox }).toString()}`, { signal });
+
+export const filledQuery = (tid: string, owner: string, inbox: string) =>
+  queryOptions({
+    queryKey: ['routines', 'template', tid, owner, inbox],
+    queryFn: ({ signal }) => fillTemplate(tid, owner, inbox, signal),
+    staleTime: 0,
+    gcTime: 0,
+  });
+
+/** A new inbox routine from a filled template, on or off. */
+export function createInbox(f: AutomationTemplate, on: boolean) {
+  return write<Routine>({
+    key: routinesQuery.queryKey,
+    optimistic: (list: Routine[] | undefined) => list,
+    send: (idempotencyKey) =>
+      api.post<Routine>(
+        '/api/v2/automations',
+        { name: f.name, owner: f.owner, enabled: on, builtin: false, trigger: f.trigger, steps: f.steps, destinations: f.destinations },
+        { idempotencyKey },
+      ),
+    settle: (list: Routine[] | undefined, made) => list && [...list.filter((r) => r.id !== made.id), made],
+  });
+}
+
 // ---------------------------------------------------------------- built in: Maintenance, Heartbeat, System jobs
 
 export const maintenanceQuery = queryOptions({
@@ -297,13 +367,9 @@ export const payloadQuery = (hook: string, delivery: string) =>
     gcTime: 0,
   });
 
-/* The full address of a webhook, secret included, is given once: at creation and on a new secret. It is held in the
-   cache only while its panel shows it (gcTime 0), under a root no write reads again, and is never sent anywhere. */
-const shownKey = (id: string) => ['shown-once', id] as const;
-export const shownOnceQuery = (id: string) =>
-  queryOptions<string | null>({ queryKey: shownKey(id), queryFn: () => null, staleTime: Infinity, gcTime: 0 });
-
-export async function createHook(name: string) {
+/* The full address of a webhook, secret included, is given once: at creation and on a new secret. It goes back to
+   the caller only (the panel's state): never the cache, a toast, a log or the address bar. */
+export async function createHook(name: string): Promise<{ id: string; url: string }> {
   const id = tmpId();
   const shown: Hook = { id, name, url: '', received_24h: 0, automations: [] };
   const r = await write<{ trigger: ShownOnce }>({
@@ -313,13 +379,11 @@ export async function createHook(name: string) {
     settle: (list: Hook[] | undefined, made) => list?.map((h) => (h.id === id ? { ...h, id: made.trigger.id, url: stripSecret(made.trigger.url) } : h)),
     revert: (list: Hook[] | undefined) => list?.filter((h) => h.id !== id),
   });
-  if (r.trigger.url) setShown(r.trigger.id, r.trigger.url);
-  return r.trigger.id;
+  return { id: r.trigger.id, url: r.trigger.url };
 }
 
-export async function rotateHook(id: string) {
-  const r = await api.post<{ trigger: ShownOnce }>(`/api/v2/triggers/${enc(id)}/rotate`, {});
-  setShown(id, r.trigger.url);
+export async function rotateHook(id: string): Promise<string> {
+  return (await api.post<{ trigger: ShownOnce }>(`/api/v2/triggers/${enc(id)}/rotate`, {})).trigger.url;
 }
 
 export function removeHook(id: string) {
@@ -349,13 +413,52 @@ export function signHookOff(id: string) {
   });
 }
 
-function setShown(id: string, url: string) {
-  queryClient.setQueryData(shownKey(id), url);
-}
-
 /** The address without its secret: what a row may copy. The secret is the last path part (backend/triggers.py). */
 export function stripSecret(url: string): string {
   return url.replace(/\/[^/]+$/, '');
+}
+
+// ---------------------------------------------------------------- outgoing endpoints (/v2/webhooks)
+
+export type Endpoint = Webhook;
+
+export const endpointsQuery = queryOptions({
+  queryKey: ['routines', 'endpoints'],
+  queryFn: async ({ signal }) => (await api.get<WebhookList>('/api/v2/webhooks?limit=200', { signal })).items,
+  ...quiet,
+});
+
+/** The events an endpoint may send: the catalog less the ones only rules see. */
+export const eventTypesQuery = queryOptions({
+  queryKey: ['routines', 'event-types'],
+  queryFn: async ({ signal }) => (await api.get<EventTypeList>('/api/v2/event-types', { signal })).items.filter((t) => t.outbound !== false),
+  staleTime: 60 * 60_000,
+});
+
+type Shown = Webhook & { secret?: string; replayed?: boolean };
+const unsecret = ({ secret: _s, replayed: _r, ...h }: Shown): Webhook => h;
+
+/* A new endpoint's signing secret is in the answer once. It goes back to the caller only (the dialog's state): the
+   list keeps the endpoint without it. An agent's call files an approval instead. */
+export async function createEndpoint(body: WebhookCreate): Promise<{ id?: string; secret?: string; replayed?: boolean; approval?: boolean }> {
+  const r = await write<WebhookCreated & { webhook?: Shown }>({
+    key: endpointsQuery.queryKey,
+    optimistic: (list: Webhook[] | undefined) => list,
+    send: (idempotencyKey) => api.post<WebhookCreated & { webhook?: Shown }>('/api/v2/webhooks', body, { idempotencyKey }),
+    settle: (list: Webhook[] | undefined, made) => (made.webhook && list ? [...list.filter((h) => h.id !== made.webhook?.id), unsecret(made.webhook)] : list),
+  });
+  if (!r.webhook) return { approval: !!r.approval };
+  return { id: r.webhook.id, secret: r.webhook.secret, replayed: !!r.webhook.replayed };
+}
+
+export function updateEndpoint(id: string, body: WebhookUpdate) {
+  return write<{ webhook: Webhook }>({
+    key: endpointsQuery.queryKey,
+    optimistic: (list: Webhook[] | undefined) =>
+      list?.map((h) => (h.id === id ? { ...h, ...(body.name ? { name: body.name } : {}), ...(body.events ? { events: body.events } : {}) } : h)),
+    send: (idempotencyKey) => api.post<{ webhook: Webhook }>(`/api/v2/webhooks/${enc(id)}/update`, body, { idempotencyKey }),
+    settle: (list: Webhook[] | undefined, made) => list?.map((h) => (h.id === id ? made.webhook : h)),
+  });
 }
 
 // ---------------------------------------------------------------- rules

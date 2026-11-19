@@ -16,8 +16,26 @@ const AGAIN_S = 8;
 // Tico support is a chat inside the app (ui/support.ts); with no app open there is nowhere to link, so the foot only names it.
 const Support = () => <>Contact Tico support</>;
 
+/* Where a sign-in comes back to: the path, and only the search words that pick a page's tab, view or open item, as
+   plain ids. Never the fragment, and never anything else in the search (a one-time code, a token): those would ride
+   to the sign-in server in its address. */
+const BACK_KEYS = ['tab', 'view', 'panel', 'open', 'chat', 'setup', 'tool', 'skill', 'kind', 'date', 'box', 'who'];
+const PLAIN = /^"?[\w:.-]{1,100}"?$/;
+
+/** The address to come back to after signing in (see BACK_KEYS). */
+export function backAddress(path = location.pathname, search = location.search): string {
+  const from = new URLSearchParams(search);
+  const keep = new URLSearchParams();
+  for (const k of BACK_KEYS) {
+    const v = from.get(k);
+    if (v && PLAIN.test(v)) keep.set(k, v);
+  }
+  const s = keep.toString();
+  return s ? `${path}?${s}` : path;
+}
+
 /** The server's sign-in path, coming back here after. */
-export function signInHref(path: string, back = location.pathname + location.search + location.hash): string {
+export function signInHref(path: string, back = backAddress()): string {
   return `${path}${path.includes('?') ? '&' : '?'}next=${encodeURIComponent(back)}`;
 }
 

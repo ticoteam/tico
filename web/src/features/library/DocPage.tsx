@@ -40,7 +40,8 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
   const past = search.v && doc && search.v !== doc.version ? old.data : undefined;
   const body = past?.body ?? doc?.body ?? '';
   const outline = headings(body);
-  if (editing && doc) return <EditDoc key={doc.version} doc={doc} />;
+  // Keyed by the doc, not its version: a save's shown version and its rollback must not reset what the person typed.
+  if (editing && doc) return <EditDoc key={doc.id} doc={doc} />;
 
   const versionPick = doc && (versions.data?.length ?? 0) > 1 && (
     <Menu
@@ -133,7 +134,10 @@ function Outline({ items }: { items: { id: string; text: string }[] }) {
 }
 
 /** The doc's title and text in place. Save sends the version it started from, so a doc changed meanwhile is refused. */
-function EditDoc({ doc }: { doc: Doc }) {
+function EditDoc({ doc: shown }: { doc: Doc }) {
+  // The doc as editing began: the cache changes under it (the save shows at once, a refusal puts it back, a conflict
+  // reads the newer one), and a Save again must still be refused if someone else changed it.
+  const [doc] = useState(shown);
   const [title, setTitle] = useState(doc.title);
   const [body, setBody] = useState(doc.body);
   const [busy, setBusy] = useState(false);

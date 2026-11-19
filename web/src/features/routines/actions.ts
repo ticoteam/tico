@@ -1,9 +1,19 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import { defineAction, s, type Ctx } from '@/actions';
 import { meQuery } from '@/data';
+import { ApiError } from '@/api/client';
+import { ACTS, applyFlow, dropItem, flowOf, putItem, routineBoard, type Part } from './board';
 import {
   addDue,
   addOrgRule,
+  createEndpoint,
+  createInbox,
+  endpointsQuery,
+  fillTemplate,
+  RUN_RANGES,
+  RUN_STATUSES,
+  setFlow,
+  updateEndpoint,
   addStageRule,
   createHook,
   createRoutine,
@@ -68,6 +78,8 @@ const name = s.string({ min: 1, max: 200 });
 const owner = s.string({ min: 1, max: 200, pattern: /^(bot|human):\S+$/, what: 'bot:<id> or human:<id>' });
 const day = s.string({ min: 10, max: 10, pattern: /^\d{4}-\d{2}-\d{2}$/, what: 'a day, YYYY-MM-DD' });
 const REPEATS = ['once', 'weekly', 'monthly', 'quarterly', 'yearly'] as const;
+/** The range the Runs tab shows when the address names none. */
+export const RUNS_RANGE = '24h';
 
 const go = (router: AnyRouter, to: string, search: Record<string, string | undefined> = {}) => router.navigate({ to, search });
 const panelOff = (router: AnyRouter) =>
@@ -123,6 +135,16 @@ export const closePanel = defineAction({
   input: s.object({}),
   run: ({ router }) => panelOff(router),
   did: () => 'Closed the panel',
+});
+
+export const showRuns = defineAction({
+  id: 'routines.showRuns',
+  title: 'Show every run across routines',
+  kind: 'view',
+  input: s.object({ status: s.optional(s.oneOf(RUN_STATUSES)), range: s.optional(s.oneOf(RUN_RANGES)) }),
+  run: ({ router }, i) => go(router, ROUTINES, { tab: 'runs', status: i.status, range: i.range === RUNS_RANGE ? undefined : i.range }),
+  did: () => 'Opened the runs',
+  target: () => ({ kind: 'tab', id: 'runs' }),
 });
 
 // ---------------------------------------------------------------- routines: changes
@@ -262,6 +284,8 @@ export const setLimit = defineAction({
   title: "Set a routine's spend limit",
   kind: 'change',
   input: s.object({ routine: id, per30m: s.nullable(s.number({ min: 0, max: 100_000 })) }),
+  // A spending limit is budget: the person's own press.
+  tico: false,
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
   run: (_ctx, i) => said(setRoutineLimit(i.routine, i.per30m)),
   did: (i) => (i.per30m === null ? "Uses the agent's limit" : 'Limit set'),
@@ -338,6 +362,108 @@ export const setJobAction = defineAction({
   target: (i) => ({ kind: 'job', id: i.job }),
 });
 
+// ---------------------------------------------------------------- the board, inboxes and templates
+
+const notLoaded = () => Object.assign(new Error('That routine is not loaded'), { code: 'not_found: That routine is not loaded' });
+const notBoard = () => Object.assign(new Error("This routine isn't a board"), { code: "not_a_board: This routine isn't a board" });
+
+const act = s.object({ do: s.oneOf(Object.keys(ACTS)), args: s.optional(s.record(s.string({ max: 20_000 }))) });
+const cond = s.object({ field: s.string({ min: 1, max: 200 }), op: s.optional(s.oneOf(['is', 'is_not', 'contains', 'matches', '>=', '<='] as const)), value: s.string({ max: 2000 }) });
+
+export const saveBoardItem = defineAction({
+  id: 'routines.saveBoardItem',
+  title: "Add or change a rule, question, destination or the LLM on a routine's board",
+  kind: 'change',
+  input: s.object({
+    routine: id,
+    part: s.oneOf(['rule', 'question', 'destination', 'llm'] as const),
+    // which one, from 0; left out adds a new one (the LLM has just one)
+    at: s.optional(s.number({ int: true, min: 0, max: 500 })),
+    when: s.optional(s.array(cond, { max: 20 })),
+    match: s.optional(s.oneOf(['all', 'any'] as const)),
+    then: s.optional(s.array(act, { max: 20 })),
+    // a rule's or question's last step: a destination id, or '' to end (or, a rule with moveOn, to move on)
+    goTo: s.optional(s.string({ max: 100 })),
+    moveOn: s.optional(s.boolean()),
+    text: s.optional(s.string({ max: 8000 })),
+    min: s.optional(s.nullable(s.number({ min: 0, max: 1 }))),
+    name: s.optional(name),
+    mode: s.optional(s.oneOf(['sort', 'draft', 'reply'] as const)),
+    prompt: s.optional(s.string({ max: 20_000 })),
+    dests: s.optional(s.array(s.string({ min: 1, max: 100 }), { max: 50 })),
+    unsure: s.optional(s.string({ max: 100 })),
+  }),
+  can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
+  run: (ctx, { routine, ...item }) => {
+    const r = cached(ctx, routine);
+    if (!r) throw notLoaded();
+    const b = routineBoard(r);
+    if (!b) throw notBoard();
+    return said(setFlow(routine, flowOf(putItem(b, item, r)))).then(() => undefined);
+  },
+  did: (i) => (i.at === undefined && i.part !== 'llm' ? 'Added' : 'Saved'),
+  target: (i) => ({ kind: 'routine', id: i.routine }),
+});
+
+export const removeBoardItem = defineAction({
+  id: 'routines.removeBoardItem',
+  title: "Remove a rule, question or destination from a routine's board",
+  kind: 'change',
+  input: s.object({ routine: id, part: s.oneOf(['rule', 'question', 'destination'] as const), at: s.number({ int: true, min: 0, max: 500 }) }),
+  can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
+  run: (ctx, i) => {
+    const r = cached(ctx, i.routine);
+    if (!r) throw notLoaded();
+    const b = routineBoard(r);
+    if (!b) throw notBoard();
+    return said(setFlow(i.routine, flowOf(dropItem(b, i.part as Exclude<Part, 'llm'>, i.at)))).then(() => undefined);
+  },
+  did: () => 'Removed',
+  target: (i) => ({ kind: 'routine', id: i.routine }),
+});
+
+/** `human:<id>` as the server's owner (`person:<id>`); an agent or a team as it is. */
+const ownerRef = (o: string) => o.replace(/^human:/, 'person:');
+
+export const newInbox = defineAction({
+  id: 'routines.newInbox',
+  title: 'Add an inbox routine from a template',
+  kind: 'change',
+  input: s.object({
+    // an email address, or a channel a team hears
+    inbox: s.string({ min: 1, max: 300 }),
+    owner: s.string({ min: 1, max: 200, pattern: /^(human|person|bot|group):\S+$/, what: 'human:<id>, bot:<id> or group:<id>' }),
+    template: s.string({ min: 1, max: 100 }),
+    on: s.optional(s.boolean()),
+  }),
+  run: async ({ router }, i) => {
+    const filled = await said(fillTemplate(i.template, ownerRef(i.owner), i.inbox.trim()));
+    const made = await said(createInbox(filled, !!i.on));
+    await go(router, ROUTINES, { panel: `routine:${made.id}` });
+    return made.id;
+  },
+  did: (i) => `Added the ${i.inbox.trim()} inbox`,
+  target: (_i, out) => (out ? { kind: 'routine', id: out } : null),
+});
+
+export const applyTemplate = defineAction({
+  id: 'routines.applyTemplate',
+  title: 'Move an inbox routine onto a template',
+  kind: 'change',
+  input: s.object({ routine: id, template: s.string({ min: 1, max: 100 }) }),
+  can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
+  run: async (ctx, i) => {
+    const r = cached(ctx, i.routine);
+    if (!r) throw notLoaded();
+    const filled = await said(fillTemplate(i.template, ownerRef(r.owner_id ?? ''), String(r.trigger.inbox ?? '')));
+    const flow = applyFlow(r, filled);
+    if (!flow) throw Object.assign(new Error("This template doesn't fit this inbox"), { code: "bad_input: This template doesn't fit this inbox" });
+    await said(setFlow(i.routine, flow, 'Applied a template'));
+  },
+  did: () => 'Applied the template',
+  target: (i) => ({ kind: 'routine', id: i.routine }),
+});
+
 // ---------------------------------------------------------------- webhooks
 
 export const openWebhook = defineAction({
@@ -356,13 +482,14 @@ export const addWebhook = defineAction({
   kind: 'change',
   tico: false,
   input: s.object({ name }),
+  // The full address (secret included) goes back to the page that added it, held in its state: never cached
   run: async ({ router }, i) => {
-    const hook = await said(createHook(i.name.trim()));
-    await go(router, ROUTINES, { tab: 'webhooks', panel: `hook:${hook}` });
-    return hook;
+    const made = await said(createHook(i.name.trim()));
+    await go(router, ROUTINES, { tab: 'webhooks', panel: `hook:${made.id}` });
+    return { hook: made.id, url: made.url };
   },
   did: (i) => `Added ${i.name}`,
-  target: (_i, hook) => (hook ? { kind: 'hook', id: hook } : null),
+  target: (_i, made) => (made ? { kind: 'hook', id: made.hook } : null),
 });
 
 export const rotateWebhook = defineAction({
@@ -372,8 +499,9 @@ export const rotateWebhook = defineAction({
   tico: false,
   input: s.object({ hook: id }),
   run: async ({ router }, i) => {
-    await said(rotateHook(i.hook));
+    const url = await said(rotateHook(i.hook));
     await go(router, ROUTINES, { tab: 'webhooks', panel: `hook:${i.hook}` });
+    return { url };
   },
   did: () => 'New secret made',
   target: (i) => ({ kind: 'hook', id: i.hook }),
@@ -412,12 +540,90 @@ export const removeWebhook = defineAction({
   title: 'Remove a webhook',
   kind: 'change',
   input: s.object({ hook: id }),
+  // Its address and secret are gone for good, and whoever calls it is refused: the person's own press.
+  tico: false,
   can: (ctx, i) => !ctx.queryClient.getQueryData<{ id: string; builtin?: boolean }[]>(hooksQuery.queryKey)?.find((h) => h.id === i.hook)?.builtin,
   run: async ({ router }, i) => {
     await said(removeHook(i.hook));
     await panelOff(router);
   },
   did: () => 'Removed the webhook',
+});
+
+// ---------------------------------------------------------------- outgoing endpoints
+
+const header = s.object({ name: s.string({ min: 1, max: 64 }), value: s.optional(s.string({ max: 1000 })), secret: s.optional(s.boolean()) });
+const endpointFields = {
+  name: s.string({ min: 1, max: 100 }),
+  url: s.string({ min: 8, max: 2000, pattern: /^https?:\/\/\S+$/i, what: 'an http(s) address' }),
+  // ['*'] for every event
+  events: s.array(s.string({ min: 1, max: 100 }), { max: 200 }),
+  allowHttp: s.optional(s.boolean()),
+  headers: s.optional(s.array(header, { max: 10 })),
+};
+const endpointBody = (i: { name: string; url: string; events: string[]; allowHttp?: boolean; headers?: { name: string; value?: string; secret?: boolean }[] }) => ({
+  name: i.name.trim(),
+  url: i.url.trim(),
+  events: i.events.length ? i.events : ['*'],
+  allow_http: /^http:/i.test(i.url.trim()) && !!i.allowHttp,
+  // a secret header sent with no value keeps the value it has
+  ...(i.headers ? { headers: i.headers.map((h) => (h.secret && !h.value ? { name: h.name, secret: true } : { name: h.name, value: h.value ?? '', secret: !!h.secret })) } : {}),
+});
+
+export const addEndpoint = defineAction({
+  id: 'webhooks.addEndpoint',
+  title: 'Add an outgoing webhook',
+  kind: 'change',
+  // Its signing secret is made now and shown once: the person's own press.
+  tico: false,
+  input: s.object(endpointFields),
+  run: (_ctx, i) => {
+    if (!i.events.length) throw Object.assign(new Error('Pick at least one event'), { code: 'bad_input: Pick at least one event' });
+    return said(createEndpoint(endpointBody(i)));
+  },
+  did: (_i, out) => (out?.approval ? 'Sent for approval' : 'Added the endpoint'),
+});
+
+/** A destination change while secret headers are saved: where it sent, where it would send, which ones. */
+export interface Held {
+  from: string;
+  to: string;
+  credentials: string[];
+}
+
+export const updateEndpointAction = defineAction({
+  id: 'webhooks.updateEndpoint',
+  title: 'Change an outgoing webhook',
+  kind: 'change',
+  input: s.object({
+    endpoint: id,
+    ...endpointFields,
+    // after a destination change was held: send the saved secret headers to the new address, or clear them
+    credentials: s.optional(s.oneOf(['keep', 'clear'] as const)),
+  }),
+  // Tico may rename it or change its events. Where the company's events are sent (the address), a secret header's
+  // value, and where saved ones go are the person's own; an endpoint not read yet is refused too.
+  can: (ctx, i) => {
+    if (ctx.via !== 'tico') return true;
+    if (i.credentials || (i.headers ?? []).some((h) => h.secret && h.value)) return false;
+    const was = ctx.queryClient.getQueryData(endpointsQuery.queryKey)?.find((h) => h.id === i.endpoint);
+    return !!was && was.url === i.url.trim() && !(i.allowHttp && !was.allow_http);
+  },
+  run: async (ctx, i) => {
+    const was = ctx.queryClient.getQueryData<{ id: string; revision: number }[]>(endpointsQuery.queryKey)?.find((h) => h.id === i.endpoint);
+    try {
+      await updateEndpoint(i.endpoint, { ...endpointBody(i), ...(was ? { expected_revision: was.revision } : {}), ...(i.credentials ? { credentials: i.credentials } : {}) });
+    } catch (e) {
+      // The person's own press gets the choice back; Tico's run is refused with the reason.
+      if (ctx.via !== 'tico' && e instanceof ApiError && e.code === 'destination_change') {
+        const at = (k: string) => String((e.extra[k] as { address?: string } | undefined)?.address ?? '');
+        return { held: { from: at('old'), to: at('new'), credentials: (e.extra.credentials as string[] | undefined) ?? [] } satisfies Held };
+      }
+      return said(Promise.reject(e));
+    }
+    return { held: null };
+  },
+  did: (_i, out) => (out?.held ? 'Needs a choice' : 'Saved'),
 });
 
 // ---------------------------------------------------------------- rules: views

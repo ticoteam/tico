@@ -45,7 +45,7 @@ export const filesSearch = (raw: Record<string, unknown>): FilesSearch =>
 
 /**
  * `skill` (a name) or `proposal` (an id) open in the page. `connect`: Connect Claude Code, `setup` for the steps or the
- * code the helper on a computer shows.
+ * code the helper on a computer shows (an old link's; the page moves it into its state and out of the address at once).
  */
 export interface SkillsSearch {
   q?: string;
@@ -53,8 +53,10 @@ export interface SkillsSearch {
   proposal?: string;
   connect?: string;
 }
+/** `setup`, or a code in the helper's shape (eight letters and digits, maybe split by a dash); nothing else. */
+const connectWord = (v: unknown) => (v === 'setup' || (typeof v === 'string' && /^[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}$/.test(v)) ? v : undefined);
 export const skillsSearch = (raw: Record<string, unknown>): SkillsSearch =>
-  clean({ q: str(raw.q), skill: str(raw.skill), proposal: str(raw.proposal), connect: str(raw.connect) });
+  clean({ q: str(raw.q), skill: str(raw.skill), proposal: str(raw.proposal), connect: connectWord(raw.connect) });
 
 /** The words GitHub's install and sign-in returns carry (backend/github_app.py). */
 export const GITHUB_RETURNS = ['connected', 'installed', 'authorized', 'pending', 'declined', 'finish', 'again', 'expired'] as const;

@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/api/client';
 import type { GetNeedsYouResponse, ModelSubscriptionList, NeedsYouItem } from '@/api/schema';
-import { adaptNeeds, needHref, needsSetup, screenFor, type SetupRecord } from './queries';
+import { queryClient } from '@/data';
+import { adaptNeeds, loginQuery, needHref, needsSetup, readLogin, screenFor, startConnect, type SetupRecord } from './queries';
 import { resumeStep, setupStep, stepBefore } from './steps';
 
 const err = (status: number, signIn: string | null = null) => new ApiError(status, 'x', 'Not on the list', false, signIn);
@@ -64,5 +65,27 @@ describe('first run steps @s1171', () => {
     expect(stepBefore('name')).toBe('path');
     expect(setupStep('model')).toBe('model');
     expect(setupStep('welcome')).toBeNull();
+  });
+});
+
+describe('a model sign-in in the first run', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const CODE = 'WDJB-MJHT';
+  const PAGE = `https://auth.example/device?user_code=${CODE}`;
+
+  it('caches the state only; the code and page go back to the caller', async () => {
+    queryClient.clear();
+    vi.stubGlobal('fetch', async (url: string) => {
+      const body = String(url).endsWith('/connect')
+        ? { id: 'l1', runner_id: 'r1', state: 'waiting', url: PAGE, code: CODE }
+        : { id: 'l1', runner_id: 'r1', state: 'waiting', url: PAGE, code: CODE, lines: [`Enter ${CODE}`], accepts_code: false };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    await startConnect('codex_login');
+    const read = await readLogin();
+    expect(read?.code).toBe(CODE);
+    expect(read?.url).toBe(PAGE);
+    expect(queryClient.getQueryData(loginQuery.queryKey)).toEqual({ id: 'l1', runner_id: 'r1', state: 'waiting', kind: 'codex_login', accepts_code: false });
+    expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => [q.queryKey, q.state.data]))).not.toContain(CODE);
   });
 });

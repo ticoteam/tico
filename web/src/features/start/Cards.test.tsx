@@ -2,7 +2,7 @@ import { within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '@/api/client';
 import { showPage } from '@/pagekinds/_parts/test-page';
-import { signInHref, StartScreen } from './Cards';
+import { backAddress, signInHref, StartScreen } from './Cards';
 
 const retry = () => {};
 
@@ -13,6 +13,19 @@ describe('Before the app opens @s1155 @s1156 @s1157 @s1194 @s1195', () => {
     expect(within(main).getByRole('link', { name: 'Sign in' }).getAttribute('href')).toBe(`/auth/sign-in?next=${encodeURIComponent(location.pathname)}`);
     expect(within(main).queryByLabelText(/password/i)).toBeNull();
     expect(signInHref('/auth/login?x=1', '/tasks')).toBe('/auth/login?x=1&next=%2Ftasks');
+  });
+
+  it('comes back to the path and its page words only: never the fragment or a one-time value', () => {
+    expect(backAddress('/library/skills', '?connect=WXYZ-2345&tab=installed')).toBe('/library/skills?tab=installed');
+    expect(backAddress('/library/tools', '?tool=github&github=installed&code=c0de-xyz&state=forged')).toBe('/library/tools?tool=github');
+    expect(backAddress('/company/routines', '?panel=hook:h1&next=https://evil.example/x')).toBe('/company/routines?panel=hook%3Ah1');
+    expect(backAddress('/tasks', '?view=%3Cscript%3E')).toBe('/tasks');
+    history.replaceState(null, '', '/settings/people?open=p2&ticket=tk-1#access_token=secret-1');
+    const link = signInHref('/auth/sign-in');
+    expect(decodeURIComponent(link)).toBe('/auth/sign-in?next=/settings/people?open=p2');
+    expect(link).not.toContain('secret-1');
+    expect(link).not.toContain('tk-1');
+    history.replaceState(null, '', '/');
   });
 
   it('a refusal says why, with another account as the way on', async () => {

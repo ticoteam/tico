@@ -806,14 +806,9 @@ export const startLogout = (rid: string, runtime: string) => api.post<Login>(`${
 export const sendLoginCode = (rid: string, lid: string, code: string) => api.post<Login>(`${logins(rid)}/logins/${at(lid)}/code`, { code });
 export const cancelLogin = (rid: string, lid: string) => api.post<Login>(`${logins(rid)}/logins/${at(lid)}/cancel`, {});
 
-/** The one timer here: a sign-in or sign-out under way is read every 3 s until it ends, while its dialog is open. */
-export const loginQuery = (rid: string, lid: string) =>
-  queryOptions({
-    queryKey: ['team', 'login', rid, lid] as const,
-    queryFn: ({ signal }) => api.get<Login>(`${logins(rid)}/logins/${at(lid)}`, { signal }),
-    refetchInterval: (q) => (LIVE_LOGIN.includes(q.state.data?.state ?? 'requested') ? 3000 : false),
-    staleTime: 0,
-  });
+/** One read of a sign-in or sign-out under way. Not a query: a sign-in's answer holds the provider's one-time code
+    and page, which stay in its dialog's state (polled with `poll` from @/lib), never the query cache. */
+export const readLogin = (rid: string, lid: string, signal?: AbortSignal) => api.get<Login>(`${logins(rid)}/logins/${at(lid)}`, { signal });
 
 /** The agents a sign-out would stop, for the question before it. */
 export const signOutStopsQuery = (rid: string, runtime: string) =>

@@ -154,6 +154,8 @@ export const dropToken = defineAction({
   title: 'Revoke an API token',
   kind: 'change',
   input: s.object({ token: id('a token id') }),
+  // Its scripts stop for good: the person's own press.
+  tico: false,
   run: (_ctx, { token }) => revokeToken(token),
   did: () => 'Token revoked',
   target: ({ token }) => ({ kind: 'token', id: token }),
@@ -186,6 +188,8 @@ export const changeRole = defineAction({
   title: "Change a person's role",
   kind: 'change',
   input: s.object({ person: id('a person id'), role: s.oneOf(['admin', 'member'] as const) }),
+  // Making someone an admin widens their rights: the person's own press. Back to member stays Tico's.
+  can: (ctx, { role }) => !(role === 'admin' && ctx.via === 'tico'),
   run: (_ctx, { person, role }) => setRole(person, role),
   did: ({ role }) => `Role set to ${role}`,
   target: ({ person }) => ({ kind: 'person', id: person }),
@@ -335,6 +339,8 @@ export const reportsDirect = defineAction({
   title: 'Agents report to Tico support',
   kind: 'change',
   input: s.object({ on: s.boolean() }),
+  // Sending reports outside the company is the person's own press; turning it off stays Tico's.
+  can: (ctx, { on }) => !(on && ctx.via === 'tico'),
   run: (_ctx, { on }) => setRule('bot_reports_direct', on),
   did: ({ on }) => (on ? 'Turned on' : 'Turned off'),
   target: () => setting('reports'),
@@ -434,6 +440,8 @@ export const removeSub = defineAction({
   title: 'Remove a subscription',
   kind: 'change',
   input: s.object({ subscription: id('a subscription id') }),
+  // Its runs stop and the key is gone: the person's own press (the page asks first).
+  tico: false,
   run: (_ctx, { subscription }) => removeSubscription(subscription),
   did: () => 'Removed',
   target: () => setting('subscriptions'),
@@ -466,6 +474,8 @@ export const dropComputer = defineAction({
   title: 'Remove a computer',
   kind: 'change',
   input: s.object({ computer: id('a computer id') }),
+  // Its sign-in ends for good and its agents stop: the person's own press.
+  tico: false,
   run: (_ctx, { computer }) => removeComputer(computer),
   did: () => 'Removed',
   target: () => setting('computers'),
@@ -507,6 +517,8 @@ export const editSub = defineAction({
     name: s.string({ min: 1, max: 80 }),
     owner: s.optional(s.string({ max: 200, what: 'a person id, for a plan' })),
   }),
+  // Who holds a plan's sign-in is the person's own press; a new name stays Tico's.
+  can: (ctx, { owner }) => !(owner && ctx.via === 'tico'),
   run: (_ctx, { subscription, name, owner }) => editSubscription(subscription, name, owner || undefined),
   did: ({ name }) => `Saved ${name}`,
   target: ({ subscription }) => sub(subscription),
@@ -822,6 +834,8 @@ export const limit = defineAction({
   title: "Change an agent's monthly limit",
   kind: 'change',
   input: s.object({ agent: id('an agent slug'), monthly: money }),
+  // A spending limit is budget: the person's own press.
+  tico: false,
   run: (_ctx, { agent, monthly }) => setLimit(agent, monthly ?? null),
   did: ({ monthly }) => (monthly == null ? 'Limit removed' : `Limit set to $${monthly}`),
   target: ({ agent }) => ({ kind: 'limit', id: agent }),
@@ -832,6 +846,7 @@ export const defaultLimit = defineAction({
   title: 'Change the monthly limit for a new agent',
   kind: 'change',
   input: s.object({ monthly: money }),
+  tico: false,
   run: (_ctx, { monthly }) => setDefaultLimit(monthly ?? null),
   did: ({ monthly }) => (monthly == null ? 'Limit removed' : `Limit set to $${monthly}`),
   target: () => ({ kind: 'limit', id: 'default' }),

@@ -203,9 +203,27 @@ const person = (id: string, name: string, extra: Partial<Requester> = {}): Reque
   ...extra,
 });
 const seedRequesters = (rows: Requester[]) =>
-  queryClient.setQueryData(['requesters', 't1'], { requesters: rows, next_offset: null, my_requester_id: null });
+  queryClient.setQueryData(['requesters', 't1'], { pages: [{ requesters: rows, next_offset: null, my_requester_id: null }], pageParams: [0] });
 
 describe('Requesters @s36', () => {
+  it('reads every page: the next one comes on More requesters, after the first', async () => {
+    const asked: string[] = [];
+    serve((url) => {
+      asked.push(url);
+      return url.includes('offset=100')
+        ? { status: 200, body: { requesters: [person('r2', 'Sam Sample')], next_offset: null, my_requester_id: null } }
+        : { status: 200, body: { requesters: [person('r1', 'Ada Example')], next_offset: 100, my_requester_id: null } };
+    });
+    show(<RequestersDialog task="t1" title="Bulk orders" onClose={() => {}} />, '/roadmap?requesters=t1');
+    expect(await screen.findByTitle('Ada Example')).toBeTruthy();
+    expect(screen.queryByTitle('Sam Sample')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'More requesters' }));
+    expect(await screen.findByTitle('Sam Sample')).toBeTruthy();
+    expect(screen.getByTitle('Ada Example')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'More requesters' })).toBeNull();
+    expect(asked).toEqual(['/api/v2/tasks/t1/requesters?limit=100', '/api/v2/tasks/t1/requesters?limit=100&offset=100']);
+  });
+
   it('adds someone outside the team; the answer\'s removal token is never kept or shown', async () => {
     const rows = [person('r1', 'Ada Example', { important: 1, organization: 'Example Co' })];
     serve((url, method) => {

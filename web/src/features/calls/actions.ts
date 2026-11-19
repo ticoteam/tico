@@ -539,6 +539,8 @@ export const disconnectGranolaAction = defineAction({
   title: 'Remove Granola',
   kind: 'change',
   input: s.object({}),
+  // Only a person can connect it again (above), so removing it is the person's own press too.
+  tico: false,
   run: () => disconnectGranola(),
   did: () => 'Removed Granola',
 });

@@ -67,6 +67,26 @@ describe('run', () => {
     expect(flight).not.toHaveBeenCalled();
   });
 
+  it('once the change is made, a throw finding the target or wording the result does not turn it into a failure', async () => {
+    const odd = defineAction({
+      ...setOwner,
+      id: 'task.odd',
+      did: () => {
+        throw new Error('no words');
+      },
+      target: () => {
+        throw new Error('no target');
+      },
+    });
+    const only = new Map<string, AnyAction>([[odd.id, odd as AnyAction]]);
+    const input = { task: 412, owner: 'agent:qa' };
+    expect(await runIn(only, 'task.odd', input, 'tico', router)).toEqual({ ok: true, did: 'Give a task to someone' });
+    expect(await showIn(only, 'task.odd', input, router)).toEqual({ ok: true, did: 'Give a task to someone' });
+    vi.mocked(waitForTarget).mockRejectedValueOnce(new SyntaxError('bad selector'));
+    expect(await runIn(actions, 'task.setOwner', input, 'tico', router)).toEqual({ ok: true, did: 'Gave #412 away' });
+    expect(flight).not.toHaveBeenCalled();
+  });
+
   it('refuses when can is false, without running', async () => {
     const r = await runIn(actions, 'task.setOwner', { task: 13, owner: 'agent:qa' }, 'tico', router);
     expect(r).toEqual({ ok: false, error: 'not_allowed' });

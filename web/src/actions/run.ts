@@ -42,9 +42,11 @@ export async function runIn(
   } catch (e) {
     return { ok: false, error: problem(e) };
   }
-  // Reads never get here (they are not actions), and only Tico's hand flies the Dot.
-  if (via === 'tico') await land(a.target?.(input, out) ?? null, a.kind === 'view', a.did?.(input, out) ?? a.title);
-  const result: Result = { ok: true, did: a.did?.(input, out) ?? a.title };
+  // The change is made: from here nothing may turn it into a failure. Reads never get here (they are not actions),
+  // and only Tico's hand flies the Dot.
+  const did = didOf(a, input, out);
+  if (via === 'tico') await land(() => a.target?.(input, out), a.kind === 'view', did);
+  const result: Result = { ok: true, did };
   // The output stays on this screen: Tico's runs never carry it (a token or code must not reach the conversation).
   if (via !== 'tico' && out !== undefined) result.out = out;
   return result;
@@ -72,8 +74,18 @@ export async function showIn(
   } catch (e) {
     return { ok: false, error: problem(e) };
   }
-  await land(a.target?.(parsed.value, undefined) ?? null, true, a.did?.(parsed.value, undefined) ?? a.title);
-  return { ok: true, did: a.did?.(parsed.value, undefined) ?? a.title };
+  const did = didOf(a, parsed.value, undefined);
+  await land(() => a.target?.(parsed.value, undefined), true, did);
+  return { ok: true, did };
+}
+
+/** The result's words; a throw there falls back to the action's title. */
+function didOf(a: AnyAction, input: unknown, out: unknown): string {
+  try {
+    return a.did?.(input, out) ?? a.title;
+  } catch {
+    return a.title;
+  }
 }
 
 function allowed(a: AnyAction, ctx: Ctx, input: unknown): boolean {
@@ -95,15 +107,21 @@ function problem(e: unknown): string {
 
 /* ---------- the flight after a Tico run (motion.md 5) ---------- */
 
-/** Motion's findTarget resolves off-screen, folded and undrawn targets; `show` (a view action) jumps it into view. */
-async function land(t: Target | null, show: boolean, label: string): Promise<void> {
-  if (!t) return;
-  const el = await waitForTarget(t.kind, t.id, WAIT_MS, { show, label });
-  if (!el) return; // cases 5 and 6: nothing to land on; the chat line stands alone
-  const from = bound.dot();
-  // The flight resolves at landing; the result does not wait for it.
-  if (from) void flight(from, el, { kind: show ? 'open' : 'edit', label });
-  else wash(el);
+/* Motion's findTarget resolves off-screen, folded and undrawn targets; `show` (a view action) jumps it into view.
+   A target that throws or cannot be found only means no flight. */
+async function land(target: () => Target | null | undefined, show: boolean, label: string): Promise<void> {
+  try {
+    const t = target();
+    if (!t) return;
+    const el = await waitForTarget(t.kind, t.id, WAIT_MS, { show, label });
+    if (!el) return; // cases 5 and 6: nothing to land on; the chat line stands alone
+    const from = bound.dot();
+    // The flight resolves at landing; the result does not wait for it.
+    if (from) flight(from, el, { kind: show ? 'open' : 'edit', label }).catch(() => {});
+    else wash(el);
+  } catch {
+    // the flight just does not happen
+  }
 }
 
 /* ---------- buttons ---------- */

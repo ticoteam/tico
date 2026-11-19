@@ -32,7 +32,7 @@ describe('Tico is off @s216', () => {
   it('holds the Dot off while Tico is off, once, and lets go when it is back', async () => {
     const client = new QueryClient();
     const set = (p: TicoPower) => act(() => void client.setQueryData(ticoPowerQuery.queryKey, p));
-    client.setQueryData(ticoPowerQuery.queryKey, { available: false, can_turn_on: true, state: 'archived' });
+    client.setQueryData(ticoPowerQuery.queryKey, { available: false, bot: 'assistant', can_turn_on: true, state: 'archived' });
     const Probe = () => (useTicoPower(), null);
     render(
       <QueryClientProvider client={client}>
@@ -42,7 +42,7 @@ describe('Tico is off @s216', () => {
     );
     await waitFor(() => expect(vi.mocked(dot.set)).toHaveBeenCalledWith('off'));
     expect(vi.mocked(dot.set)).toHaveBeenCalledTimes(1);
-    set({ available: true, can_turn_on: false, state: 'active' });
+    set({ available: true, bot: 'assistant', can_turn_on: false, state: 'active' });
     await waitFor(() => expect(release).toHaveBeenCalledTimes(1));
   });
 });

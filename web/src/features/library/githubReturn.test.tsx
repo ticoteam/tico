@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useSearch } from '@tanstack/react-router';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
@@ -30,7 +30,7 @@ const githubRow = (tone: 'ok' | 'wait' | 'idle') => ({
   needs_you: false,
   href: '',
 });
-function serve(rows: unknown[]) {
+function serve(rows: unknown[], authorized = false) {
   const reads: string[] = [];
   vi.stubGlobal('fetch', async (url: string) => {
     reads.push(String(url));
@@ -38,7 +38,7 @@ function serve(rows: unknown[]) {
     const body = String(url).includes('/tool-index')
       ? { rows }
       : String(url).endsWith('/github/app') && github
-        ? { connected: true, org: 'sample-org', installed: github.status?.tone === 'ok', administration: true }
+        ? { connected: true, org: 'sample-org', installed: github.status?.tone === 'ok', administration: true, authorized }
         : {};
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
   });
@@ -101,10 +101,19 @@ describe("GitHub's return", () => {
     await waitFor(() => expect(query(router)).toEqual({ tool: 'github' }));
   });
 
-  it('says authorized when the App is kept, and nothing when it is not', async () => {
-    serve([githubRow('wait')]);
+  it("says authorized only when the server's read of the App says authorized", async () => {
+    serve([githubRow('wait')], true);
     show('/library/tools?tool=github&github=authorized');
     expect(await toastOf('Authorized: GitHub')).toBeTruthy();
+    cleanup();
+    queryClient.clear();
+    // The App kept (and even installed) is not the sign-in held.
+    const reads = serve([githubRow('ok')], false);
+    const kept = show('/library/tools?tool=github&github=authorized');
+    await waitFor(() => expect(query(kept)).toEqual({ tool: 'github' }));
+    await waitFor(() => expect(reads.some((u) => u.endsWith('/api/v2/github/app'))).toBe(true));
+    await act(async () => {});
+    expect(screen.queryByText(/^Authorized/)).toBeNull();
     cleanup();
     queryClient.clear();
     serve([]);
