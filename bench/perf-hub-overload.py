@@ -96,7 +96,9 @@ def seed(api):
                 c.execute(f"INSERT INTO tasks({','.join(cols)}) SELECT {sel} FROM tasks WHERE id=?", (new, tid))
                 c.execute("INSERT OR REPLACE INTO task_move_guards (id, open, task_id) VALUES (1, 1, ?)", (new,))
                 c.execute(
-                    "UPDATE tasks SET status='done', pipeline_id=(SELECT pipeline_id FROM tasks WHERE id=?) WHERE id=?",
+                    "UPDATE tasks SET status='done', pipeline_id=s.pipeline_id, stage_id=s.stage_id, "
+                    "stage_entered_at=s.stage_entered_at FROM (SELECT pipeline_id, stage_id, stage_entered_at FROM tasks "
+                    "WHERE id=?) s WHERE tasks.id=?",
                     (tid, new),
                 )
                 c.execute("UPDATE task_move_guards SET open=0, task_id=NULL WHERE id=1")
