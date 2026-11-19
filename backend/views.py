@@ -3647,10 +3647,11 @@ def runnable_choices(c, who, auth, settings):
     for row in c.execute("SELECT bot,runner_id FROM assignments").fetchall():
         read_cache.prime(c, PLACED_SQL, {(row["bot"],): read_cache.one(c, RUNNER_SQL, (row["runner_id"],))})
     rows = c.execute(
-        f"SELECT a.bot,{BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
+        f"SELECT a.bot,{BS.CONFIG} AS config,bc.bot AS configured FROM assignments a JOIN bots b ON b.id=a.bot "
         f"LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} WHERE b.state<>'archived' ORDER BY a.bot"
     ).fetchall()
-    read_cache.prime(c, CONFIG_SQL, {(row["bot"],): row for row in rows})
+    # A bot with no bot_config row has no config, as CONFIG_SQL answers for it alone (None, not the JOIN's "{}").
+    read_cache.prime(c, CONFIG_SQL, {(row["bot"],): row if row["configured"] else None for row in rows})
     for row in rows:
         bot = row["bot"]
         if not auth.bot_manager(c, who, bot):

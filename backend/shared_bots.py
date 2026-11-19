@@ -49,7 +49,7 @@ def declared(c, bot):
     if not H._has_table(c, "bot_config"):
         return {}
     row = read_cache.one(c, BS.ONE_SQL, (bot,))
-    return _json(row[0]) if row else {}
+    return _json(row["config"]) if row else {}  # by name: pages prime this row with other columns first
 
 
 def source_of(config):

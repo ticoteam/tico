@@ -489,7 +489,23 @@ def _usage_limit(a: _Ask) -> bool:
 
     EX: Any = execution
     RC: Any = read_cache
-    return bool(RC.value(a.c, ("holds.cooling_off", a.bot), lambda: bool(EX.cooling_off(a.c, None, a.bot)), True))
+
+    def judged() -> bool:
+        # A page asks this of many bots: from the third one in a snapshot, what cooling_off reads is read once for
+        # every bot (execution.cooling_off_loads). A question about one or two bots reads only their own rows.
+        values = RC.cache(a.c)
+        loads = None
+        if values is not None:
+            asked = values.setdefault("holds.cooling_off.asked", set())
+            asked.add(a.bot)
+            if len(asked) >= 3:
+                loads = RC.value(a.c, "holds.cooling_off.loads", lambda: EX.cooling_off_loads(a.c), True)
+                place = RC.one(a.c, EX.PLACE_SQL, (a.bot,))
+                if loads is not None and (not place or place["runner_id"] not in loads.runners):
+                    loads = None  # on no computer, or a revoked one: judged as one bot alone is
+        return bool(EX.cooling_off(a.c, None, a.bot, loads))
+
+    return bool(RC.value(a.c, ("holds.cooling_off", a.bot), judged, True))
 
 
 # Every open hold on a queued job (claim_error, cant_start): few at any time, read once per snapshot.
