@@ -1525,6 +1525,7 @@ def test_chat_send_runs_message_send_with_a_notice(monkeypatch):
         (["task", "types"], "tico task show"),
         (["task", "type", "create", "--name", "Ops"], "tico task show"),
         (["task", "stuck"], "tico task list"),
+        (["task", "thumbs", "t1", "r1", "up"], "tico task answer"),
         (["growth", "idea", "create", "--title", "Referral"], "tico task create"),
     ],
 )

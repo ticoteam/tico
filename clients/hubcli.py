@@ -1126,7 +1126,7 @@ def parser():
     s.set_defaults(fn="decision outcome")
     s = decision.add_parser(
         "readout",
-        help="per question set: the last days' calls, cost, Jev or fallback and answer "
+        help="per question set: the last days' calls, cost, decision model or fallback and answer "
         "spread, and the month's spend against the cap",
     )
     s.add_argument("--days", type=int, help="how many days back from now (1-31, 7 by default)")
@@ -1535,6 +1535,7 @@ REMOVED = [
     (("task", "stuck"), "Tico's own check finds a task that is stuck; tico task list lists tasks"),
     (("task", "bulk"), "a person changes many tasks at once on the Tasks page; a bot changes one task at a time"),
     (("task", "waive-qa"), MOVE_INSTEAD),
+    (("task", "thumbs"), "asks no longer take a thumbs up or down; answer the ask: tico task answer"),
     (("task", "type"), PIPELINE_INSTEAD),
     (("task", "types"), PIPELINE_INSTEAD),
     (

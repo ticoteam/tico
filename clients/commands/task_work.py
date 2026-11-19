@@ -603,7 +603,7 @@ def task_follow(api, args):
     "Attach a deliverable (a report, a draft) to a task so the people on it "
     "can open it in Tico. Returns the link to put in your note; never link a path on your "
     "Mac or an s3:// URI. Send the text as-is, or content_base64 for a binary file. "
-    "With req and page instead, attach a page to the stage's page requirement: Jev checks it, then the person it "
+    "With req and page instead, attach a page to the stage's page requirement: the decision model checks it, then the person it "
     "names OKs that version. Attaching again replaces it; on a document approval (QA report, Spec) a different page "
     "also replaces the pages attached to it in this stage, unless add is true (then every page is judged together). "
     "With a new version after a send back, say what changed "

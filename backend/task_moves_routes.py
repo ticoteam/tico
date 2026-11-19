@@ -53,6 +53,12 @@ MOVE_CAP = 500
 # A snooze's bare date is the start of that day here, as the bot tools say ("the start of that day, Pacific").
 ZONE = ZoneInfo("America/Los_Angeles")
 
+# What a CLI or MCP install from before asks lost their thumbs is told when it still sends one.
+THUMBS_REMOVED = (
+    "Thumbs up and down on asks were removed. Answer the ask instead (tico task answer), "
+    "and update tico to drop the old command"
+)
+
 
 def parse_until(value: object) -> str | None:
     """`value` (an ISO-8601 date or date-time) as a stored UTC timestamp. A bare date, or a time with no offset, reads
@@ -988,6 +994,13 @@ def register(
             H.task_give(c, who.actor, task_id, requirement_on(c, task_id, requirement_id), body.to, body.version)
 
         return work(request, tid, body, call)
+
+    @app.post("/api/v2/tasks/{tid}/asks/{requirement_id}/thumbs", include_in_schema=False)
+    def retired_ask_thumbs(tid: str, requirement_id: str):
+        """Asks no longer take a thumbs up or down. A CLI or MCP install from before the removal still sends
+        `tico task thumbs` / `tico_task_thumbs` here: it gets a plain 410 saying so, not a bare 404. Remove this
+        route once those versions leave the supported window."""
+        raise Problem("removed", THUMBS_REMOVED, 410)
 
     # ------------------------------------------------------------------ OKs bound to what was shown (task_asks)
     def ok_task(c: Any, who: Any, requirement_id: str) -> str:

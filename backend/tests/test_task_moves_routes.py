@@ -419,3 +419,14 @@ def test_the_buttons_a_reader_is_offered_are_the_ones_the_calls_allow(api):
     post(api, f"tasks/{tid}/asks/{rid}/answer", {"value": "ok"}, token="ben-test")
     assert "undo" in leave(show(api, tid, token="ben-test"), rid)["may"]
     assert "undo" not in leave(show(api, tid), rid)["may"]
+
+
+def test_an_old_install_sending_an_ask_thumb_is_told_plainly_it_was_removed(api):
+    """A CLI or MCP install from before asks lost their thumbs still posts here: a 410 that says what to do instead,
+    not a bare 404, and nothing is written."""
+    made = task(api)
+    for up in (True, False):
+        body = refused(api, f"tasks/{made['id']}/asks/req-1/thumbs", {"up": up, "note": "x"}, status=410)
+        said = body["error"]
+        assert said["code"] == "removed" and "removed" in said["detail"] and "tico task answer" in said["detail"]
+    assert show(api, made["id"])["version"] == made["version"]
