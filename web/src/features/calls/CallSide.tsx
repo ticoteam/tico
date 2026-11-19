@@ -58,7 +58,7 @@ export function CallSide({ room }: CallSideProps) {
 function Person({ actor, inCall }: { actor: string; inCall: boolean }) {
   const nameOf = useNameOf();
   return (
-    <span className="rail-row">
+    <span className="rail-row call-rail">
       <Face actor={actor} size={22} />
       <span>{nameOf(actor)}</span>
       <em>{inCall ? 'In the call' : 'Left'}</em>

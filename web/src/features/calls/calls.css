@@ -6,8 +6,8 @@
 .btn-sm{height:var(--ctl-sm);padding:0 var(--s-2h);font-size:var(--t-sm)}
 .btn-sm .ico{width:15px;height:15px}
 .btn-wide{width:100%;justify-content:center}
-.f2{display:grid;grid-template-columns:minmax(0,1fr) 124px;gap:var(--s-3)}
-.f2 .f{justify-items:stretch}
+.call-f2{display:grid;grid-template-columns:minmax(0,1fr) 124px;gap:var(--s-3)}
+.call-f2 .f{justify-items:stretch}
 .ev-form{display:grid;gap:var(--s-4)}
 .ev-form .f{justify-items:stretch}
 
@@ -23,13 +23,13 @@
 /* ---------- the picker: who to call or ask ---------- */
 .pop{--surface:var(--raised);padding:var(--s-3);border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-3)}
 .call-pick{width:304px;display:grid;gap:var(--s-2h)}
-.to{align-self:stretch;justify-self:stretch;min-height:44px;display:flex;align-items:center;flex-wrap:wrap;gap:var(--s-1h);padding:var(--s-1h) var(--s-2);border-radius:var(--r-ctl);background:var(--surface);box-shadow:inset 0 0 0 1px var(--faint)}
-.to:focus-within{box-shadow:inset 0 0 0 1.5px var(--focus)}
-.to-chip{display:inline-flex;align-items:center;gap:var(--s-1h);height:28px;padding:0 var(--s-0) 0 var(--s-1h);border-radius:var(--r-chip);background:var(--well-2);white-space:nowrap;font-size:var(--t-sm)}
-.to-chip button{width:22px;height:22px;border:0;border-radius:var(--r-key);background:none;color:var(--muted);display:grid;place-items:center}
-.to-chip button .ico{width:12px;height:12px;stroke-width:2}
-.to-in{flex:1 1 auto;min-width:0;height:28px;border:0;padding:0;background:none;color:var(--ink);font-family:inherit;font-size:inherit;outline:0}
-.to-in::placeholder{color:var(--faint)}
+.call-to{align-self:stretch;justify-self:stretch;min-height:44px;display:flex;align-items:center;flex-wrap:wrap;gap:var(--s-1h);padding:var(--s-1h) var(--s-2);border-radius:var(--r-ctl);background:var(--surface);box-shadow:inset 0 0 0 1px var(--faint)}
+.call-to:focus-within{box-shadow:inset 0 0 0 1.5px var(--focus)}
+.call-to-chip{display:inline-flex;align-items:center;gap:var(--s-1h);height:28px;padding:0 var(--s-0) 0 var(--s-1h);border-radius:var(--r-chip);background:var(--well-2);white-space:nowrap;font-size:var(--t-sm)}
+.call-to-chip button{width:22px;height:22px;border:0;border-radius:var(--r-key);background:none;color:var(--muted);display:grid;place-items:center}
+.call-to-chip button .ico{width:12px;height:12px;stroke-width:2}
+.call-to-in{flex:1 1 auto;min-width:0;height:28px;border:0;padding:0;background:none;color:var(--ink);font-family:inherit;font-size:inherit;outline:0}
+.call-to-in::placeholder{color:var(--faint)}
 .pick{display:grid;gap:calc(var(--s-0) / 2);margin:0 calc(var(--s-1h) * -1);max-height:320px;overflow:auto;scrollbar-width:none}
 .pick-row{width:100%;min-height:var(--ctl);display:flex;align-items:center;padding:0 var(--s-2);border:0;border-radius:var(--r-row);gap:var(--s-2h);background:none;color:inherit;font-family:inherit;font-size:inherit;text-align:left;cursor:pointer}
 .pick-box{width:16px;height:16px;flex:none;display:grid;place-items:center;border-radius:var(--r-key);color:var(--on-fill);box-shadow:inset 0 0 0 1.5px var(--faint)}
@@ -44,6 +44,31 @@
 .pick-ico .ico{width:14px;height:14px}
 .pop-go{width:100%}
 .ev-form .pick{max-height:200px}
+.pick-row.is-disabled{opacity:.42;pointer-events:none}
+
+/* ---------- a call from a thread: who to call (calls.css .call-pop), and the card the call posts ---------- */
+.call-pop{width:264px;display:grid;gap:var(--s-2h)}
+.call-pop .seg{display:flex}
+.call-pop .seg button{flex:1}
+.call-card{display:flex;align-items:center;flex-wrap:wrap;gap:var(--s-2h);padding:var(--s-1h) var(--s-2h);border-radius:var(--r-card);background:var(--well)}
+.call-card-ic{width:var(--ctl-sm);height:var(--ctl-sm);flex:none;display:grid;place-items:center;border-radius:50%;background:var(--well-2);color:var(--ink-2)}
+.call-card-ic .ico{width:14px;height:14px}
+.call-card-t{font-weight:var(--w-strong);color:inherit;text-decoration:none}
+a.call-card-t:hover{text-decoration:underline}
+.call-card-n{font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums}
+.call-card-go{margin-left:auto;display:flex;gap:var(--s-1h)}
+
+/* ---------- List's ⋯: Meeting sources, Connect Granola (MeetingMenu.tsx) ---------- */
+.call-src{list-style:none;margin:0;padding:0;display:grid;gap:var(--s-2h)}
+.call-src-row{display:flex;align-items:center;flex-wrap:wrap;gap:var(--s-1h) var(--s-2h)}
+.call-src-st,.call-src-facts{font-size:var(--t-sm);color:var(--muted)}
+.call-src-facts{display:flex;flex-wrap:wrap;gap:var(--s-2h);flex-basis:100%;order:3}
+.call-src-err{flex-basis:100%;order:4;margin:0;font-size:var(--t-sm);color:var(--ink)}
+.call-src-go{margin-left:auto;display:flex;gap:var(--s-1h)}
+.call-gr-steps{margin:0;padding-left:var(--s-4);display:grid;gap:var(--s-2h)}
+.call-gr-steps li>span:first-child{margin-right:var(--s-2h)}
+.call-gr-code{font-family:var(--font-code);font-weight:var(--w-strong);margin-right:var(--s-1h)}
+.call-gr-wait{margin:0;font-size:var(--t-sm);color:var(--muted)}
 
 /* ---------- the head: range and steps, Day | Week | Month | List, +, Start call ---------- */
 .cv-range{margin-left:var(--s-2h);position:relative;top:3px;font-family:var(--font-text);font-size:var(--t-md);font-weight:var(--w-strong);line-height:1;font-feature-settings:"ss09";color:var(--ink-2);white-space:nowrap}
@@ -194,9 +219,9 @@
 .ev-now{display:grid;gap:var(--s-3)}
 .ev-live{display:flex;align-items:center;gap:var(--s-2h);height:20px}
 .ev-live b{font-weight:var(--w-strong)}
-.rail-row>span{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.rail-row em{flex:none;font-style:normal;font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums}
-.rail-row>.av,.rail-row>.face{flex:none}
+.call-rail>span{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.call-rail em{flex:none;font-style:normal;font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums}
+.call-rail>.av,.call-rail>.face{flex:none}
 
 /* a meeting's summary, agenda and tasks */
 .mv-body{padding:calc(var(--s-4) + var(--s-0)) var(--pad-task) var(--s-10)}
@@ -219,12 +244,12 @@ button.act-text{padding:0;border:0;background:none;color:inherit;font-family:inh
 .act-in{min-width:0;height:var(--ctl-sm);padding:0 var(--s-2);border:0;outline:0;border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);font-family:inherit;font-size:inherit;line-height:inherit;box-shadow:inset 0 0 0 1.5px var(--focus)}
 
 /* a meeting's recording */
-.rec{display:flex;align-items:center;gap:var(--s-3);height:48px;padding:0 var(--s-2);border-radius:var(--r-card);background:var(--well)}
-.rec-play{width:var(--ctl);height:var(--ctl);border:0;border-radius:50%;background:var(--raised);color:var(--ink);display:grid;place-items:center;flex:none;box-shadow:var(--lift-ctl)}
-.rec-play .ico{width:14px;height:14px}
-.rec-track{flex:1;height:4px;border-radius:var(--r-pill);background:var(--well-2);position:relative}
-.rec-track i{position:absolute;left:0;top:0;bottom:0;border-radius:var(--r-pill);background:var(--ink-2)}
-.rec time{font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums}
+.call-rec{display:flex;align-items:center;gap:var(--s-3);height:48px;padding:0 var(--s-2);border-radius:var(--r-card);background:var(--well)}
+.call-rec-play{width:var(--ctl);height:var(--ctl);border:0;border-radius:50%;background:var(--raised);color:var(--ink);display:grid;place-items:center;flex:none;box-shadow:var(--lift-ctl)}
+.call-rec-play .ico{width:14px;height:14px}
+.call-rec-track{flex:1;height:4px;border-radius:var(--r-pill);background:var(--well-2);position:relative}
+.call-rec-track i{position:absolute;left:0;top:0;bottom:0;border-radius:var(--r-pill);background:var(--ink-2)}
+.call-rec time{font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums}
 
 /* ---------- the call window: what it is, the stage, what is said, the controls ---------- */
 .pane.cw{--surface:var(--sheet);min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}

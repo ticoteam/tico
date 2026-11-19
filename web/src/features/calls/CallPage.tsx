@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useRouter } from '@tanstack/react-router';
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { ApiError } from '@/api/client';
 import type { Call } from '@/api/schema';
 import { ticoRoomQuery } from '@/conversation';
 import { Button } from '@/kit/Button';
@@ -64,14 +65,23 @@ export function CallPage({ room }: CallPageProps) {
   const ended = phase === 'ended' || (phase === 'idle' && c?.state === 'ended');
   const isTico = !!c && !!ticoRoom && ticoRoom === c.thread_id;
 
-  if (call.isError && !c)
+  if (call.isError && !c) {
+    // No call behind the address (or not this person's): said plainly, with nothing to try again.
+    const status = call.error instanceof ApiError ? call.error.status : 0;
     return (
       <main className={cards ? 'pane pc cw' : 'pane cw is-full'}>
-        <Empty title="Call did not load" icon="alert">
-          <Button onClick={() => void call.refetch()}>Try again</Button>
-        </Empty>
+        {status === 404 ? (
+          <Empty title="No such call" icon="call" />
+        ) : status === 403 ? (
+          <Empty title="You don't have access to this call" icon="lock" />
+        ) : (
+          <Empty title="Call did not load" icon="alert">
+            <Button onClick={() => void call.refetch()}>Try again</Button>
+          </Empty>
+        )}
       </main>
     );
+  }
 
   const lead = cards ? <IconButton icon="chevdown" label="Back to the app" onClick={back} /> : null;
   return (
@@ -387,7 +397,7 @@ function Ended({ room }: { room: string }) {
                 <h2 className="sec-name">Tasks made</h2>
               </div>
               {n.follow_ups.map((f) => (
-                <Link key={f.task_id} to="/task/$task" params={{ task: f.task_id }} className="rail-row">
+                <Link key={f.task_id} to="/task/$task" params={{ task: f.task_id }} className="rail-row call-rail">
                   <Icon name="tasks" />
                   <span>{f.title}</span>
                 </Link>

@@ -8,12 +8,21 @@ import type {
   CalendarSearch as CalendarFound,
   Call,
   CallJoin,
+  CallList,
   CallLive,
   CallNotes,
   CallRing,
   CallRinging,
   EventChange,
   EventCreate,
+  GranolaDevice,
+  GranolaDisconnect,
+  GranolaSignIn,
+  GranolaStatus,
+  GranolaSync,
+  ImportMeetingBody,
+  MeetingReviewPreferences,
+  ReviewSettings,
   ThreadView,
 } from '@/api/schema';
 import { queryClient, quietRoot, write } from '@/data';
@@ -39,6 +48,8 @@ export const callKeys = {
   one: (id: string) => ['calls', id] as const,
   notes: (id: string) => ['calls', id, 'notes'] as const,
   ringing: ['calls', 'ringing'] as const,
+  /** A thread's calls. Under `live` on purpose: every `call.*` change reads ['calls', 'live'] again, and this with it. */
+  inThread: (thread: string) => ['calls', 'live', 'thread', thread] as const,
 };
 
 // The calendar topic refetches ['calendar'] and a followed meeting refetches ['meetings', id]; the list of past meetings has
@@ -386,10 +397,101 @@ export async function startCall(withWho: readonly string[]): Promise<Call> {
   return call;
 }
 
+/** A thread's latest call, its soonest booked one, and which kinds of call the person may start there. */
+export const threadCallsQuery = (thread: string) =>
+  queryOptions({
+    queryKey: callKeys.inThread(thread),
+    queryFn: ({ signal }) => api.get<CallList>(`/api/v2/threads/${enc(thread)}/calls?limit=1`, { signal }),
+  });
+
+/** A call in this thread: a voice call (Tico Meet) with these agents, or a Google Meet (people only). */
+export async function startInThread(thread: string, provider: 'tico' | 'google_meet', bots: readonly string[]): Promise<Call> {
+  const call = await api.post<Call>(`/api/v2/threads/${enc(thread)}/calls`, provider === 'tico' && bots.length ? { provider, bots } : { provider });
+  queryClient.setQueryData(callKeys.one(call.id), call);
+  void queryClient.invalidateQueries({ queryKey: callKeys.live });
+  return call;
+}
+
+/** End a Google Meet for everyone: whoever started it may. */
+export async function endCall(id: string): Promise<Call> {
+  const call = await api.post<Call>(`/api/v2/calls/${enc(id)}/end`, {});
+  queryClient.setQueryData(callKeys.one(id), call);
+  void queryClient.invalidateQueries({ queryKey: callKeys.live });
+  return call;
+}
+
 export const joinCall = (id: string) => api.post<CallJoin>(`/api/v2/calls/${enc(id)}/join`, {});
 
 export async function leaveCall(id: string): Promise<void> {
   const call = await api.post<Call>(`/api/v2/calls/${enc(id)}/leave`, {});
   queryClient.setQueryData(callKeys.one(id), call);
   void queryClient.invalidateQueries({ queryKey: callKeys.live });
+}
+
+/* ---------------------------------------------------------------- meeting sources and settings */
+
+const sourceKeys = {
+  granola: ['meetings', 'sources', 'granola'] as const,
+  settings: ['meetings', 'settings'] as const,
+};
+
+/** The person's own Granola account: connected or not, last sync, how many notes it brought. */
+export const granolaQuery = queryOptions({
+  queryKey: sourceKeys.granola,
+  queryFn: ({ signal }) => api.get<GranolaStatus>('/api/v2/meetings/granola', { signal }),
+});
+
+/**
+ * Start a Granola sign-in: a short code the person enters in Granola. The code lives on the dialog that shows it, never
+ * in the query cache.
+ */
+export const connectGranola = () => api.post<GranolaDevice>('/api/v2/meetings/granola/connect', {});
+
+/** Where a sign-in stands: `pending` until it connects, is denied or expires. */
+export async function pollGranola(): Promise<GranolaSignIn> {
+  const r = await api.get<GranolaSignIn>('/api/v2/meetings/granola/connect/status');
+  if (r.state !== 'pending') void queryClient.invalidateQueries({ queryKey: sourceKeys.granola });
+  return r;
+}
+
+export async function disconnectGranola(): Promise<void> {
+  await api.delete<GranolaDisconnect>('/api/v2/meetings/granola/connect');
+  await queryClient.invalidateQueries({ queryKey: sourceKeys.granola });
+}
+
+/** Bring new Granola notes in now. */
+export async function syncGranola(): Promise<GranolaSync> {
+  const r = await api.post<GranolaSync>('/api/v2/meetings/granola/sync?now=true', {});
+  void queryClient.invalidateQueries({ queryKey: sourceKeys.granola });
+  void queryClient.invalidateQueries({ queryKey: meetKeys.list });
+  return r;
+}
+
+/** Whether the person's imported meetings wait for review or are shared at once, and the company's default. */
+export const meetingSettingsQuery = queryOptions({
+  queryKey: sourceKeys.settings,
+  queryFn: ({ signal }) => api.get<MeetingReviewPreferences>('/api/v2/meetings/settings', { signal }),
+});
+
+export async function setMeetingSettings(body: ReviewSettings): Promise<MeetingReviewPreferences> {
+  const r = await api.post<MeetingReviewPreferences>('/api/v2/meetings/settings', body);
+  queryClient.setQueryData(sourceKeys.settings, r);
+  return r;
+}
+
+/** A meeting logged by hand: notes, a transcript, or both. Shared at once, unless private. */
+export interface LoggedMeeting {
+  title?: string;
+  started_at?: string;
+  participants?: string[];
+  notes?: string;
+  transcript?: string;
+  private?: boolean;
+}
+export async function logMeeting(m: LoggedMeeting): Promise<{ id: string }> {
+  const body: ImportMeetingBody = { ...m, source: m.transcript ? 'upload' : 'manual', review: 'live' };
+  const r = await api.post<{ id: string }>('/api/v2/meetings/import', body);
+  void queryClient.invalidateQueries({ queryKey: meetKeys.list });
+  void queryClient.invalidateQueries({ queryKey: calKeys.all });
+  return r;
 }

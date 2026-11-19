@@ -1,19 +1,29 @@
 // What a person (or Tico) can do on the Calendar, in a meeting's panel and on a call.
+import type { Call } from '@/api/schema';
 import { defineAction, s, type Ctx } from '@/actions';
 import { VIEWS } from './model';
 import {
   addItem,
   addToCall,
+  callKeys,
   changeEvent,
+  connectGranola,
   createEvent,
+  disconnectGranola,
   dismissItem,
   editItem,
   editNote,
+  endCall,
+  joinCall,
+  logMeeting,
   makeTask,
   meetKeys,
   removeEvent,
   reviewMeeting,
+  setMeetingSettings,
   startCall,
+  startInThread,
+  syncGranola,
   type MeetingItem,
   type MeetingItems,
 } from './queries';
@@ -234,6 +244,72 @@ export const startCallAction = defineAction({
   did: () => 'Started the call',
 });
 
+/** A tab opened inside the press (a pop-up blocker lets that one through); it goes to the Meet once the server answers. */
+function blankTab(): Window | null {
+  try {
+    const tab = window.open('', '_blank');
+    if (tab) tab.opener = null;
+    return tab;
+  } catch {
+    return null;
+  }
+}
+function sendTab(tab: Window | null, url: string | null | undefined): void {
+  if (!url) return void tab?.close();
+  if (tab && !tab.closed) tab.location.href = url;
+  else window.open(url, '_blank', 'noopener');
+}
+/** A Google Meet: the server notes the join and answers its link, which opens in the tab the press made. */
+async function intoMeet(tab: Window | null, run: () => Promise<{ url?: string | null; call?: Call }>, fallback?: string | null): Promise<void> {
+  try {
+    const r = await run();
+    sendTab(tab, r.url || r.call?.join_url || fallback);
+  } catch (e) {
+    tab?.close();
+    throw e;
+  }
+}
+
+/** Start a call in a thread: a voice call rings its people and brings in the agents picked; a Google Meet takes people only. */
+export const startInThreadAction = defineAction({
+  id: 'calls.startIn',
+  title: 'Start a call in a thread',
+  kind: 'change',
+  tico: false,
+  input: s.object({ thread: id('a thread id'), meet: s.optional(s.boolean()), agents: s.optional(s.array(person, { max: 50 })) }),
+  run: async (ctx, { thread, meet, agents = [] }) => {
+    if (meet) {
+      const tab = blankTab();
+      let call: Call | undefined;
+      await intoMeet(tab, async () => {
+        call = await startInThread(thread, 'google_meet', []);
+        return { call };
+      });
+      return call;
+    }
+    prime(null);
+    const bots = agents.filter((a) => a.startsWith('bot:')).map((a) => a.slice(4));
+    const call = await startInThread(thread, 'tico', bots).catch((e: unknown) => {
+      void leave();
+      throw e;
+    });
+    claim(call.id);
+    await openCall(ctx, call.id);
+    await join(call.id);
+    return call;
+  },
+  did: () => 'Started the call',
+});
+
+export const endCallAction = defineAction({
+  id: 'calls.end',
+  title: 'End a call for everyone',
+  kind: 'change',
+  input: s.object({ id: id('a call id') }),
+  run: (_ctx, { id }) => endCall(id),
+  did: () => 'Ended the call',
+});
+
 export const joinCallAction = defineAction({
   id: 'calls.join',
   title: 'Join a call',
@@ -241,6 +317,8 @@ export const joinCallAction = defineAction({
   tico: false,
   input: s.object({ id: id('a call id') }),
   run: async (ctx, { id }) => {
+    const known = ctx.queryClient.getQueryData<Call>(callKeys.one(id));
+    if (known?.provider === 'google_meet') return intoMeet(blankTab(), () => joinCall(id), known.join_url);
     prime(id);
     await openCall(ctx, id);
     await join(id);
@@ -323,4 +401,74 @@ export const leaveAction = defineAction({
   input: s.object({}),
   run: () => leave(),
   did: () => 'Left the call',
+});
+
+/* ---------------------------------------------------------------- meetings brought in: logged, Granola, settings */
+
+export const logMeetingAction = defineAction({
+  id: 'calls.logMeeting',
+  title: 'Log a meeting',
+  kind: 'change',
+  input: s.object({
+    title: s.optional(s.string({ max: 300, what: 'a title' })),
+    start: s.optional(when),
+    with: s.optional(s.array(s.string({ min: 1, max: 200, what: 'a name or an email' }), { max: 100 })),
+    notes: s.optional(s.string({ max: 200_000, what: 'notes, in markdown' })),
+    transcript: s.optional(s.string({ max: 2_000_000, what: 'a transcript: Name: text, WebVTT, SRT or JSON' })),
+    private: s.optional(s.boolean()),
+  }),
+  run: async (ctx, i) => {
+    if (!i.notes?.trim() && !i.transcript?.trim()) throw new Error('empty: add notes or a transcript');
+    const m = await logMeeting({
+      title: i.title?.trim() || undefined,
+      started_at: i.start,
+      participants: i.with?.length ? i.with : undefined,
+      notes: i.notes?.trim() || undefined,
+      transcript: i.transcript?.trim() ? i.transcript : undefined,
+      private: i.private || undefined,
+    });
+    if (m.id) await toCalendar(ctx, (prev) => ({ ...prev, view: 'list', panel: `meeting:${m.id}` }));
+    return m;
+  },
+  did: ({ title }) => (title ? `Logged ${title}` : 'Logged a meeting'),
+  target: (_i, m) => (m?.id ? { kind: 'meeting', id: m.id } : PAGE),
+});
+
+const share = s.oneOf(['default', 'review', 'auto'] as const);
+export const meetingSettingsAction = defineAction({
+  id: 'calls.meetingSettings',
+  title: 'Change meeting settings',
+  kind: 'change',
+  input: s.object({ mine: share, team: s.optional(s.oneOf(['review', 'auto'] as const)) }),
+  run: (_ctx, { mine, team }) => setMeetingSettings({ auto_share: mine === 'default' ? null : mine === 'auto', ...(team ? { review_default: team } : {}) }),
+  did: ({ mine }) => (mine === 'auto' ? 'Set meetings to share at once' : mine === 'review' ? 'Set meetings to wait for review' : 'Set meetings to the company default'),
+});
+
+// Signing in to Granola is the person's own: the code it gives must reach only their screen.
+export const connectGranolaAction = defineAction({
+  id: 'calls.connectGranola',
+  title: 'Connect Granola',
+  kind: 'change',
+  tico: false,
+  input: s.object({}),
+  run: () => connectGranola(),
+  did: () => 'Started connecting Granola',
+});
+
+export const syncGranolaAction = defineAction({
+  id: 'calls.syncGranola',
+  title: 'Sync Granola now',
+  kind: 'change',
+  input: s.object({}),
+  run: () => syncGranola(),
+  did: () => 'Asked Granola for new notes',
+});
+
+export const disconnectGranolaAction = defineAction({
+  id: 'calls.disconnectGranola',
+  title: 'Remove Granola',
+  kind: 'change',
+  input: s.object({}),
+  run: () => disconnectGranola(),
+  did: () => 'Removed Granola',
 });

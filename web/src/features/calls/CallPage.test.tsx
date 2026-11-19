@@ -169,6 +169,14 @@ describe('Call window', () => {
     expect(posted).toEqual([]);
   });
 
+  it('says there is no such call when the server has none, with nothing to try again', async () => {
+    queryClient.removeQueries({ queryKey: callQuery(ROOM).queryKey });
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ error: { code: 'not_found', message: 'No such call' } }), { status: 404, headers: { 'Content-Type': 'application/json' } }));
+    show();
+    expect(await screen.findByText('No such call', {}, { timeout: 3000 })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
   it('joins on the press: microphone, token, room; then Mute and Leave', async () => {
     show();
     await joinNow();

@@ -13,6 +13,7 @@ import { Segmented } from '@/kit/Segmented';
 import { Calendar } from '@/pagekinds';
 import { EventDialog } from './EventDialog';
 import { MeetingPanel, EventPanel } from './EventPanel';
+import { MeetingMenu } from './MeetingMenu';
 import {
   alsoOf,
   calendarSearch,
@@ -147,6 +148,7 @@ export function CalendarPage() {
             />
             <IconButton icon="plus" label="New event" onClick={() => setAdding(true)} />
             <StartCall />
+            {view === 'list' && <MeetingMenu />}
           </>
         }
         state={view !== 'list' && events.isError ? 'fault' : undefined}

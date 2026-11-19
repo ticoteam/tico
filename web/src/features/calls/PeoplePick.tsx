@@ -39,9 +39,9 @@ export function PeoplePick({ value, onChange, tico, quiet, autoFocus }: PeoplePi
   const list = !quiet || q.trim();
   return (
     <>
-      <div className="to">
+      <div className="call-to">
         {value.map((id) => (
-          <span key={id} className="to-chip">
+          <span key={id} className="call-to-chip">
             {byId.get(id)?.name ?? id}
             <button type="button" aria-label={`Remove ${byId.get(id)?.name ?? id}`} onClick={() => toggle([id])}>
               <Icon name="close" />
@@ -49,7 +49,7 @@ export function PeoplePick({ value, onChange, tico, quiet, autoFocus }: PeoplePi
           </span>
         ))}
         <input
-          className="to-in"
+          className="call-to-in"
           aria-label="Who"
           placeholder={value.length ? '' : 'Name, agent or team'}
           value={q}
@@ -108,9 +108,17 @@ export function PeoplePick({ value, onChange, tico, quiet, autoFocus }: PeoplePi
   );
 }
 
-function PickRow({ on, label, sub, lead, onPress }: { on: boolean; label: string; sub?: string; lead: ReactNode; onPress: () => void }) {
+/** One row to pick. Without `onPress` it is set by something else (a call rings its thread's people); `off` is greyed out. */
+export function PickRow({ on, label, sub, lead, onPress, off }: { on: boolean; label: string; sub?: string; lead: ReactNode; onPress?: () => void; off?: boolean }) {
   return (
-    <button type="button" role="checkbox" aria-checked={on} className={on ? 'pick-row is-on' : 'pick-row'} onClick={onPress}>
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={on}
+      aria-disabled={off || !onPress || undefined}
+      className={['pick-row', on && 'is-on', off && 'is-disabled'].filter(Boolean).join(' ')}
+      onClick={off ? undefined : onPress}
+    >
       {lead}
       <span className="pick-name">{label}</span>
       {sub && <small>{sub}</small>}

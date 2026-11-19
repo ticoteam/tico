@@ -97,25 +97,25 @@ export function EventPanel({
         <section className="rail-sec">
           <h3>About</h3>
           {o.links.thread && (
-            <Link to="/threads/$thread" params={{ thread: o.links.thread }} className="rail-row">
+            <Link to="/threads/$thread" params={{ thread: o.links.thread }} className="rail-row call-rail">
               <Icon name="threads" />
               <span>Thread</span>
             </Link>
           )}
           {o.links.meeting && (
-            <Link to="/calendar" search={{ view: 'list', panel: `meeting:${o.links.meeting}` }} className="rail-row">
+            <Link to="/calendar" search={{ view: 'list', panel: `meeting:${o.links.meeting}` }} className="rail-row call-rail">
               <Icon name="file" />
               <span>Notes</span>
             </Link>
           )}
           {o.links.task && (
-            <Link to="/task/$task" params={{ task: o.links.task }} className="rail-row">
+            <Link to="/task/$task" params={{ task: o.links.task }} className="rail-row call-rail">
               <Icon name="tasks" />
               <span>Task</span>
             </Link>
           )}
           {o.open_url && (
-            <a href={o.open_url} target="_blank" rel="noopener noreferrer" className="rail-row">
+            <a href={o.open_url} target="_blank" rel="noopener noreferrer" className="rail-row call-rail">
               <Icon name="popout" />
               <span>{o.home === 'google' ? 'Open in Google Calendar' : 'Open'}</span>
             </a>
@@ -161,7 +161,7 @@ function Guest({ actor }: { actor: string }) {
   const a = useActor(actor);
   const name = a?.name ?? actor.slice(actor.indexOf(':') + 1);
   return (
-    <span className="rail-row">
+    <span className="rail-row call-rail">
       <Avatar kind={a?.kind ?? (actor.startsWith('bot:') ? 'agent' : 'person')} name={name} hue={a?.hue} decorative />
       <span>{name}</span>
     </span>
@@ -270,7 +270,7 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
         <section className="rail-sec">
           <h3>Tasks made</h3>
           {made.map((t) => (
-            <Link key={t.id} to="/task/$task" params={{ task: t.id }} className="rail-row">
+            <Link key={t.id} to="/task/$task" params={{ task: t.id }} className="rail-row call-rail">
               <Icon name="tasks" />
               <span>{t.title}</span>
             </Link>
@@ -336,7 +336,7 @@ function saveNote(meeting: string, latest: { current: string }, saved: { current
   void press('calls.editNote', { meeting, note: v });
 }
 
-/** The meeting's recording (calls.css .rec): play, how far, the time, download. */
+/** The meeting's recording (calls.css .call-rec): play, how far, the time, download. */
 function Recording({ src }: { src: string }) {
   const audio = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
@@ -344,10 +344,10 @@ function Recording({ src }: { src: string }) {
   const [length, setLength] = useState(0);
   const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
   return (
-    <div className="rec">
+    <div className="call-rec">
       <button
         type="button"
-        className="rec-play"
+        className="call-rec-play"
         aria-label={playing ? 'Pause' : 'Play'}
         title={playing ? 'Pause' : 'Play'}
         onClick={() => {
@@ -359,7 +359,7 @@ function Recording({ src }: { src: string }) {
       >
         <Icon name={playing ? 'pause' : 'play'} />
       </button>
-      <span className="rec-track">
+      <span className="call-rec-track">
         <i style={{ width: `${length ? (at / length) * 100 : 0}%` }} />
       </span>
       <time>{mmss(length ? length - at : 0)}</time>

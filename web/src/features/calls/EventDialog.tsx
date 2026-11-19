@@ -64,7 +64,7 @@ function EventForm({ event, start, done }: { event?: CalendarOccurrence; start?:
       }}
     >
       <Field label="Title" value={title} onValueChange={setTitle} autoFocus />
-      <div className="f2">
+      <div className="call-f2">
         <DatePick label="When" value={when} onValueChange={setWhen} />
         <Select label="Length" options={lengths} value={mins} onValueChange={setMins} />
       </div>

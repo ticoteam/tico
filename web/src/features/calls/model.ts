@@ -249,6 +249,44 @@ export function joinOf(o: CalendarOccurrence): JoinWay | null {
   return null;
 }
 
+/** The parts of a call a thread's header and card read (a Call, or a thread's call list row). */
+export interface CallSeen {
+  state: 'scheduled' | 'live' | 'ending' | 'ended';
+  provider: 'tico' | 'google_meet';
+  status_source: 'google' | 'recorder' | null;
+  live_count: number;
+  participants?: readonly { actor: string; in_call: boolean; joined_at: string; left_at: string | null; removed_at: string | null }[];
+  bots?: readonly string[];
+}
+
+/** A Google Meet nothing reports on: Tico cannot know who is in it. */
+const blind = (c: CallSeen) => c.provider === 'google_meet' && !c.status_source;
+const stayed = (p: NonNullable<CallSeen['participants']>[number]) => !!p.joined_at && !p.left_at && !p.removed_at;
+
+/** Who is in it now: the status source's count while there is one, else who joined and its agents (thread-call.ts callCount). */
+export function callCount(c: CallSeen): number {
+  if (blind(c)) return 0;
+  if (c.status_source) return c.live_count || 0;
+  return (c.participants ?? []).filter(stayed).length + (c.state === 'live' ? (c.bots ?? []).length : 0);
+}
+
+/** The faces on a live call's card: who the status source sees, else who joined. */
+export function callFaces(c: CallSeen): string[] {
+  if (blind(c)) return [];
+  return (c.participants ?? []).filter((p) => (c.status_source ? p.in_call : stayed(p))).map((p) => p.actor);
+}
+
+/** When a booked call is: "2:30 PM" today, "Thu, Nov 19, 2:30 PM" another day. */
+export function callWhen(at: string | null | undefined, now: Date): string {
+  if (!at) return '';
+  const d = new Date(at);
+  const t = clock(minutes(d));
+  return dayKey(d) === dayKey(now) ? t : `${dl(d)}, ${t}`;
+}
+
+/** How long a call was: "45s", "23m", "1h 5m". */
+export const callLength = (s: number | null | undefined): string => (s == null ? '' : s < 60 ? `${Math.max(0, Math.round(s))}s` : lengthWords(s / 60));
+
 /** The `panel` search value: `event:<occurrence id>` or `meeting:<meeting id>`. */
 export type PanelRef = { kind: 'event' | 'meeting'; id: string };
 export function panelOf(value: string | undefined): PanelRef | null {
