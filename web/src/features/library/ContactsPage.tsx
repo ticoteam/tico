@@ -7,10 +7,24 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Link } from '@/kit/Link';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { Table, Td, Th, Tr } from '@/kit/Table';
 import { List, RecordPanel, Section, type PageState, type PageTab } from '@/pagekinds';
 import { Face, Find, More, OwnerButton, press, Who } from './parts';
-import { attributesQuery, cardQuery, contactThreadsQuery, contactsQuery, countsQuery, typesQuery, type Attribute, type Card, type ContactRow, type FactValue } from './queries';
+import {
+  attributesQuery,
+  cardQuery,
+  contactThreadsQuery,
+  contactsQuery,
+  countsQuery,
+  factHistoryQuery,
+  typesQuery,
+  type Attribute,
+  type Card,
+  type ContactRow,
+  type FactPast,
+  type FactValue,
+} from './queries';
 import type { ContactsSearch } from './search';
 import './library.css';
 
@@ -130,6 +144,7 @@ function ContactPanel({ id, search }: { id: string; search: ContactsSearch }) {
   const attrs = useQuery({ ...attributesQuery(c?.type ?? ''), enabled: !!c });
   const close = () => void press('contacts.open', { contact: null });
   const save = (key: string) => (value: string) => void press('contacts.update', { contact: id, type: c?.type ?? 'person', key, value }, 'Not saved');
+  const [past, setPast] = useState<Attribute | null>(null);
 
   return (
     <RecordPanel
@@ -150,7 +165,13 @@ function ContactPanel({ id, search }: { id: string; search: ContactsSearch }) {
                 </LabelValue>
               )}
               {(attrs.data ?? []).map((a) => (
-                <Fact key={a.key} label={a.name} value={shown(c.values[a.key])} onSave={editable(a) ? save(a.key) : undefined} />
+                <Fact
+                  key={a.key}
+                  label={a.name}
+                  value={shown(c.values[a.key])}
+                  onSave={editable(a) ? save(a.key) : undefined}
+                  onHistory={() => setPast(a)}
+                />
               ))}
               {c.owner?.name && (
                 <LabelValue label="Owner">
@@ -162,7 +183,14 @@ function ContactPanel({ id, search }: { id: string; search: ContactsSearch }) {
           )
         )
       }
-      sections={c && <CardSections c={c} search={search} />}
+      sections={
+        c && (
+          <>
+            {past && <FactHistory contact={id} field={past} onClose={() => setPast(null)} />}
+            <CardSections c={c} search={search} />
+          </>
+        )
+      }
       foot={c && <NoteBox id={id} />}
     />
   );
@@ -170,8 +198,21 @@ function ContactPanel({ id, search }: { id: string; search: ContactsSearch }) {
 
 const editable = (a: Attribute) => !a.multiple && !a.sensitive && EDITABLE.has(a.value_type);
 
-/** A fact that changes in place: press it, type, and it saves when the field is left or Enter is pressed. */
-function Fact({ label, value, onSave }: { label: string; value: string; onSave?: (value: string) => void }) {
+/** A fact that changes in place: press it, type, and it saves when the field is left or Enter is pressed. Its ⋯ holds
+   History. */
+function Fact({ label, value, onSave, onHistory }: { label: string; value: string; onSave?: (value: string) => void; onHistory?: () => void }) {
+  if (!onHistory) return <FactLine label={label} value={value} onSave={onSave} />;
+  return (
+    <div className="fact-more">
+      <FactLine label={label} value={value} onSave={onSave} />
+      <Menu trigger={<IconButton icon="more" label={`More on ${label}`} />}>
+        <MenuItem label="History" onSelect={onHistory} />
+      </Menu>
+    </div>
+  );
+}
+
+function FactLine({ label, value, onSave }: { label: string; value: string; onSave?: (value: string) => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   if (!onSave || !editing)
@@ -281,5 +322,27 @@ function NoteBox({ id }: { id: string }) {
       <Field label="Add a note" labelHidden value={text} onValueChange={setText} placeholder="Add a note" wide />
       <IconButton icon="send" label="Add the note" type="submit" disabled={!text.trim()} />
     </form>
+  );
+}
+
+/** Where a past value came from: a teammate when the source names one, else the kind of source. */
+const pastFrom = (h: FactPast) => (h.source_id && /^(bot|human):/.test(h.source_id) ? h.source_id : null);
+
+/** A field's past values, newest first, at the top of the panel. Read-only. */
+function FactHistory({ contact, field, onClose }: { contact: string; field: Attribute; onClose: () => void }) {
+  const rows = useQuery(factHistoryQuery(contact, field.key));
+  return (
+    <Section name={`${field.name} history`} count={rows.data?.length} actions={<IconButton icon="close" label="Close" onClick={onClose} />}>
+      {rows.isError && <Empty title="This did not load" icon="alert" />}
+      {rows.data && !rows.data.length && <Empty title="No past values" />}
+      {rows.data?.map((h) => (
+        <div key={h.id} className="row lrow hrow">
+          <span className="lead">{pastFrom(h) ? <Face actor={pastFrom(h)} /> : null}</span>
+          <span className="row-title">{shown({ value: h.value, source_type: h.source_type, source_id: h.source_id, updated_at: '' })}</span>
+          <span className="row-ctx">{pastFrom(h) ? '' : h.source_type}</span>
+          {h.active_until ? <Ago at={h.active_until} className="row-age" /> : <span className="row-age" />}
+        </div>
+      ))}
+    </Section>
   );
 }

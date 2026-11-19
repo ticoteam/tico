@@ -34,7 +34,12 @@
 .lib .frow .row-title{color:inherit}
 .lib .drow,.lib .doc-cols{grid-template-columns:20px minmax(0,1fr) 208px 168px 52px}
 .lib .drow{--rule-from:28px}
+.lib .drow.is-gone,.lib .doc-cols.is-gone{grid-template-columns:20px minmax(0,1fr) 208px 168px 52px 28px}
+.lib .doc-cols.is-gone span:nth-last-child(2){text-align:right}
 .lib .srow{grid-template-columns:32px minmax(0,1fr) auto 92px var(--av-sm) 52px}
+.lib .hrow{grid-template-columns:32px minmax(0,1fr) auto 52px}
+.lib .fact-more{display:flex;align-items:center;gap:var(--s-1)}
+.lib .fact-more>.fact,.lib .fact-more>form{flex:1;min-width:0}
 .lib .srow .row-fig{color:var(--muted);font-size:var(--t-sm);padding-right:var(--s-4)}
 
 /* a tag: a quiet pill on a row; greys only */
@@ -210,6 +215,7 @@
   .lib .frow .row-title{white-space:normal;line-height:1.35;padding-right:var(--s-3);overflow-wrap:anywhere}
   .lib .frow .row-tags{display:none}
   .lib .drow{--rule-from:8px;grid-template-columns:minmax(0,1fr) var(--av-sm) 56px;padding:0 var(--s-2)}
+  .lib .drow.is-gone{grid-template-columns:minmax(0,1fr) var(--av-sm) 56px 28px}
   .lib .drow .lead,.lib .drow .tie,.lib .doc-owner>span:last-child,.lib .doc-cols,.lib .skill-cols{display:none}
   .lib .read-by{height:auto;min-height:28px;flex-wrap:wrap}
   .lib .srow{grid-template-columns:30px minmax(0,1fr) auto 40px}

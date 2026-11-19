@@ -13,12 +13,15 @@ import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Link } from '@/kit/Link';
 import { Row } from '@/kit/Row';
+import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { Document, List, type PageState } from '@/pagekinds';
 import { Markdown } from '@/kit/Markdown';
+import { Foot, useGo } from './AddTool';
 import { Face, Find, OwnerButton, press, when, Who } from './parts';
 import {
   deviceCodeQuery,
+  installTargetsQuery,
   proposalQuery,
   proposalsQuery,
   skillQuery,
@@ -31,6 +34,7 @@ import {
   type SkillFile,
   type SkillRow,
   type SkillUse,
+  type SkillVersion,
 } from './queries';
 import type { SkillsSearch } from './search';
 import './library.css';
@@ -199,6 +203,7 @@ function SkillPage({ name }: { name: string }) {
   const use = usage.data?.find((u) => u.name === name);
   const files = text.data?.files ?? [];
   const extra = files.filter((f) => !/(^|\/)SKILL\.md$/i.test(f.path));
+  const [installing, setInstalling] = useState(false);
 
   return (
     <Document
@@ -206,7 +211,17 @@ function SkillPage({ name }: { name: string }) {
       path={`/library/skills?skill=${name}`}
       crumb={CRUMB}
       className="lib"
-      actions={<OwnerButton page="skills" />}
+      actions={
+        <>
+          <OwnerButton page="skills" />
+          {latest && (
+            <Button variant={d.data?.installs.length ? 'plain' : 'primary'} onClick={() => setInstalling(true)} data-target={`skill-install:${name}`}>
+              Install
+            </Button>
+          )}
+          {installing && <InstallDialog name={name} versions={d.data?.versions ?? []} onClose={() => setInstalling(false)} />}
+        </>
+      }
       state={stateOf(d)}
       onRetry={() => void d.refetch()}
       body={
@@ -560,6 +575,52 @@ function ApproveDevice({ code }: { code: string }) {
           <Checkbox label="Share which skills I use" checked={share} onCheckedChange={setShare} />
         </div>
       )}
+    </Dialog>
+  );
+}
+
+/** Install (skills.ts skillsInstallDialog): for me, one agent, one person, or a team's current members; the latest
+   version, or one pinned. */
+function InstallDialog({ name, versions, onClose }: { name: string; versions: SkillVersion[]; onClose: () => void }) {
+  const t = useQuery(installTargetsQuery);
+  const [who, setWho] = useState<string | null>(null);
+  const [version, setVersion] = useState('latest');
+  const [busy, go] = useGo(onClose);
+  const me = t.data?.me?.type === 'Human' ? t.data.me : null;
+  const options = [
+    ...(me ? [{ value: `Human:${me.id}`, label: 'Me' }] : []),
+    ...(t.data?.bots ?? []).map((b) => ({ value: `Bot:${b.id}`, label: b.name })),
+    ...(t.data?.people ?? []).filter((p) => p.id !== me?.id).map((p) => ({ value: `Human:${p.id}`, label: p.name })),
+    ...(t.data?.teams ?? []).map((g) => ({ value: `team:${g.id}`, label: `${g.name} (${g.targets.length})` })),
+  ];
+  const targets = () => {
+    if (who?.startsWith('team:')) return t.data?.teams.find((g) => `team:${g.id}` === who)?.targets ?? [];
+    const at = who?.indexOf(':') ?? -1;
+    return who && at > 0 ? [{ target_type: who.slice(0, at) as 'Bot' | 'Human', target_id: who.slice(at + 1) }] : [];
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={`Install ${name}`}
+      actions={
+        <Foot
+          onClose={onClose}
+          label="Install"
+          busy={busy}
+          ready={!!who}
+          onGo={() => void go('skills.install', { skill: name, targets: targets(), version: version === 'latest' ? undefined : Number(version) }, 'Not installed')}
+        />
+      }
+    >
+      {t.isError && <Empty title="This did not load" icon="alert" />}
+      <Select label="For" options={options} value={who} onValueChange={setWho} placeholder="Choose" />
+      <Select
+        label="Version"
+        options={[{ value: 'latest', label: 'Latest' }, ...versions.map((v) => ({ value: String(v.number), label: `v${v.number} only` }))]}
+        value={version}
+        onValueChange={setVersion}
+      />
     </Dialog>
   );
 }

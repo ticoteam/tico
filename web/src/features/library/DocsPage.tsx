@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -8,12 +8,14 @@ import { Empty } from '@/kit/Empty';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
+import { toast } from '@/kit/Toast';
 import { List, Section, SidePanel, type PageState, type PageTab } from '@/pagekinds';
 import { Foot, trimmed, useGo } from './AddTool';
 import { Face, Find, KindGlyph, OwnerButton, press, Who } from './parts';
-import { docsListQuery, sourceDocsQuery, sourcesQuery, type DocRow } from './queries';
+import { archivedDocsQuery, docsListQuery, IMPORT_MAX, IMPORT_TYPES, sourceDocsQuery, sourcesQuery, type DocRow } from './queries';
 import type { DocSource } from '@/api/schema';
 import type { DocsSearch } from './search';
 import './library.css';
@@ -43,15 +45,47 @@ export function DocsPage({ search }: { search: DocsSearch }) {
   return search.tab === 'sources' ? <SourcesPage panel={search.panel} /> : <OwnDocs search={search} />;
 }
 
+/** The head's ⋯: archived docs, and a file to import as a new doc (the types the server reads, up to 20 MB). */
+function DocsMore({ archived }: { archived: boolean }) {
+  const pick = useRef<HTMLInputElement>(null);
+  const chosen = (file: File | undefined) => {
+    if (!file) return;
+    if (file.size > IMPORT_MAX) toast({ text: 'Over 20 MB', kind: 'failed' });
+    else void press('docs.import', { file }, `${file.name} was not imported`);
+  };
+  return (
+    <>
+      <Menu trigger={<IconButton icon="more" label="More" />}>
+        <MenuItem label="Import a file" onSelect={() => pick.current?.click()} />
+        <MenuItem label="Archived" on={archived} onSelect={() => void press('docs.list', { archived: !archived })} />
+      </Menu>
+      <input
+        ref={pick}
+        type="file"
+        accept={IMPORT_TYPES}
+        hidden
+        aria-label="Import a file"
+        onChange={(e) => {
+          chosen(e.target.files?.[0]);
+          e.target.value = '';
+        }}
+      />
+    </>
+  );
+}
+
 function OwnDocs({ search }: { search: DocsSearch }) {
-  const docs = useQuery(docsListQuery);
+  const archived = !!search.archived;
+  const live = useQuery(docsListQuery);
+  const gone = useQuery({ ...archivedDocsQuery, enabled: archived });
+  const docs = archived ? gone : live;
   const sources = useQuery(sourcesQuery);
   const words = search.q?.toLowerCase() ?? '';
   const rows = (docs.data?.docs ?? []).filter((d) => !words || d.title.toLowerCase().includes(words) || d.path.toLowerCase().includes(words));
 
   const groups = new Map<string, DocRow[]>();
   for (const d of rows) {
-    const [name] = folder(d.path);
+    const [name] = archived ? ['Archived'] : folder(d.path);
     groups.set(name, [...(groups.get(name) ?? []), d]);
   }
 
@@ -65,33 +99,35 @@ function OwnDocs({ search }: { search: DocsSearch }) {
       title="Docs"
       path="/library/docs"
       className="lib"
-      tabs={tabs(docs.data?.docs.length, sources.data?.sources.length)}
+      tabs={tabs(live.data?.docs.length, sources.data?.sources.length)}
       actions={
         <>
-          <Find label="Search docs" value={search.q} onFind={(q) => void press('docs.list', { q })} />
+          <Find label="Search docs" value={search.q} onFind={(q) => void press('docs.list', { q, archived: archived || undefined })} />
           <OwnerButton page="docs" />
+          <DocsMore archived={archived} />
           <Button variant="primary" icon="plus" onClick={newDoc} data-target="docs:new">
             New doc
           </Button>
         </>
       }
       state={state}
-      empty={{ title: 'No docs yet' }}
+      empty={{ title: archived ? 'Nothing archived' : 'No docs yet' }}
       onRetry={() => void docs.refetch()}
       sections={
         rows.length ? (
           <>
-            <div className="doc-cols" aria-hidden="true">
+            <div className={archived ? 'doc-cols is-gone' : 'doc-cols'} aria-hidden="true">
               <span />
               <span>Doc</span>
               <span>Filed under</span>
               <span>Edited by</span>
               <span>Changed</span>
+              {archived && <span />}
             </div>
             {[...groups].map(([name, list]) => (
               <Section key={name} name={name} count={list.length}>
                 {list.map((d) => (
-                  <DocLine key={d.id} d={d} />
+                  <DocLine key={d.id} d={d} archived={archived} />
                 ))}
               </Section>
             ))}
@@ -104,11 +140,11 @@ function OwnDocs({ search }: { search: DocsSearch }) {
   );
 }
 
-function DocLine({ d }: { d: DocRow }) {
+function DocLine({ d, archived }: { d: DocRow; archived: boolean }) {
   const [, under] = folder(d.path);
   const pending = d.id.startsWith('tmp:');
   return (
-    <Row className="lrow drow" title={d.title} href={pending ? undefined : docHref(d.id)} target={`doc:${d.id}`}>
+    <Row className={archived ? 'lrow drow is-gone' : 'lrow drow'} title={d.title} href={pending || archived ? undefined : docHref(d.id)} target={`doc:${d.id}`}>
       <span className="lead" />
       <span className="doc-name">
         <span className="row-title">{d.title}</span>
@@ -117,6 +153,11 @@ function DocLine({ d }: { d: DocRow }) {
       <span className="tie">{under && <span>{under}</span>}</span>
       <Who actor={d.updated_by_id || null} name={d.updated_by_name} />
       <Ago at={d.updated_at} className="row-age" />
+      {archived && (
+        <Menu trigger={<IconButton icon="more" label="More" />}>
+          <MenuItem label="Restore" onSelect={() => void press('docs.archive', { doc: d.id, version: d.version, archived: false }, 'Not restored')} />
+        </Menu>
+      )}
     </Row>
   );
 }

@@ -24,6 +24,9 @@ import {
   addKey,
   addMcp,
   addNote,
+  installSkill,
+  importDoc,
+  archiveDoc,
   addSource,
   addWebsite,
   approveProposal,
@@ -111,8 +114,16 @@ export const docsList = defineAction({
   id: 'docs.list',
   title: 'Open Docs',
   kind: 'view',
-  input: s.object({ tab: s.optional(s.oneOf(['docs', 'sources'] as const)), q: s.optional(text(200)), source: s.optional(id) }),
-  run: ({ router }, i) => (i.tab === 'sources' || i.source ? go(router, '/library/docs', { tab: 'sources', panel: i.source }) : go(router, '/library/docs', { q: i.q }, true)),
+  input: s.object({
+    tab: s.optional(s.oneOf(['docs', 'sources'] as const)),
+    q: s.optional(text(200)),
+    source: s.optional(id),
+    archived: s.optional(s.boolean()),
+  }),
+  run: ({ router }, i) =>
+    i.tab === 'sources' || i.source
+      ? go(router, '/library/docs', { tab: 'sources', panel: i.source })
+      : go(router, '/library/docs', { q: i.q, archived: i.archived ? 1 : undefined }, true),
   target: (i) => ({ kind: 'page', id: i.tab === 'sources' || i.source ? '/library/docs?tab=sources' : '/library/docs' }),
 });
 
@@ -163,6 +174,36 @@ export const docsRestore = defineAction({
   },
   did: (i) => `Brought back version ${i.version}`,
   target: (i) => ({ kind: 'page', id: `/library/${i.doc}` }),
+});
+
+/** Archive a doc (it leaves the list and search), or bring an archived one back. */
+export const docsArchive = defineAction({
+  id: 'docs.archive',
+  title: 'Archive a doc, or bring one back',
+  kind: 'change',
+  input: s.object({ doc: id, version: s.number({ int: true, min: 1 }), archived: s.boolean() }),
+  run: async ({ router }, i) => {
+    await archiveDoc(i.doc, i.version, i.archived);
+    if (i.archived && on(router, `/library/${i.doc}`)) await go(router, '/library/docs', {}, true);
+  },
+  did: (i) => (i.archived ? 'Archived' : 'Restored'),
+  target: () => ({ kind: 'page', id: '/library/docs' }),
+});
+
+/** A file the person chose becomes a new doc, and opens. */
+export const docsImport = defineAction({
+  id: 'docs.import',
+  title: 'Import a file as a doc',
+  kind: 'change',
+  // the file is one a person picks on their computer: there is nothing for Tico to hand over
+  tico: false,
+  input: s.object({ file, title: s.optional(s.string({ max: 300 })), path: s.optional(s.string({ max: 300 })) }),
+  run: async ({ router }, i) => {
+    const doc = await importDoc(i.file, { title: i.title, path: i.path });
+    await go(router, `/library/${encodeURIComponent(doc.id)}`);
+  },
+  did: (i) => `Imported ${i.file.name}`,
+  target: () => ({ kind: 'page', id: '/library/docs' }),
 });
 
 export const docsRefreshSource = defineAction({
@@ -317,6 +358,21 @@ export const skillsApprove = defineAction({
   },
   did: () => 'Approved',
   target: () => ({ kind: 'page', id: '/library/skills' }),
+});
+
+/** An approved skill for one teammate or a team's members; the latest version unless one is pinned. */
+export const skillsInstall = defineAction({
+  id: 'skills.install',
+  title: 'Install a skill',
+  kind: 'change',
+  input: s.object({
+    skill: s.string({ min: 1, max: 120 }),
+    targets: s.array(s.object({ target_type: s.oneOf(['Bot', 'Human'] as const), target_id: id }), { max: 200 }),
+    version: s.optional(s.number({ int: true, min: 1 })),
+  }),
+  run: (_ctx, i) => (i.targets.length ? installSkill(i.skill, i.targets, i.version) : Promise.reject(new Error('no_targets'))),
+  did: (i) => `Installed ${i.skill}${i.targets.length > 1 ? ` for ${i.targets.length}` : ''}`,
+  target: (i) => ({ kind: 'page', id: `/library/skills?skill=${i.skill}` }),
 });
 
 export const skillsDecline = defineAction({

@@ -77,6 +77,11 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
             <IconButton icon="edit" label="Edit" onClick={() => void press('docs.open', { doc: id, edit: true })} data-target={`doc-edit:${id}`} />
           )}
           <OwnerButton page="docs" />
+          {doc && !past && !doc.archived && (
+            <Menu trigger={<IconButton icon="more" label="More" />}>
+              <MenuItem label="Archive" onSelect={() => void press('docs.archive', { doc: id, version: doc.version, archived: true }, 'Not archived')} />
+            </Menu>
+          )}
         </>
       }
       state={stateOf(d)}

@@ -166,6 +166,43 @@ export function refreshSource(id: string) {
   });
 }
 
+/** Archived docs only: the server lists them apart (`archived=true`). */
+export const archivedDocsQuery = queryOptions({
+  queryKey: ['docs', 'archived'],
+  queryFn: () => api.get<InternalDocList>('/api/v2/docs?archived=true&limit=200'),
+  ...quiet,
+});
+
+/** Archive a doc, or bring one back. `version` is the one shown: the server refuses a stale one. */
+export function archiveDoc(id: string, version: number, archived: boolean) {
+  const from = archived ? docsListQuery.queryKey : archivedDocsQuery.queryKey;
+  return write<InternalDocResult>({
+    key: from,
+    optimistic: (cur: InternalDocList | undefined) => cur && { ...cur, docs: cur.docs.filter((d) => d.id !== id) },
+    send: (idempotencyKey) => api.patch<InternalDocResult>(`/api/v2/docs/${enc(id)}`, { version, archived }, { idempotencyKey }),
+  }).then(async (r) => {
+    // the list it moved to shows it on its next read
+    await queryClient.invalidateQueries({ queryKey: archived ? archivedDocsQuery.queryKey : docsListQuery.queryKey });
+    return r;
+  });
+}
+
+/** The types the import reads (backend/docs_import.py), up to 20 MB. */
+export const IMPORT_TYPES = '.md,.markdown,.txt,.html,.htm,.docx,.pdf';
+export const IMPORT_MAX = 20_000_000;
+
+/** A file becomes a new doc: converted to Markdown by the server. */
+export function importDoc(file: File, fields: { title?: string; path?: string } = {}) {
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  if (fields.title) fd.append('title', fields.title);
+  if (fields.path) fd.append('path', fields.path);
+  return api.post<InternalDocResult>('/api/v2/docs/import', fd, { idempotencyKey: crypto.randomUUID() }).then(async (r) => {
+    await queryClient.invalidateQueries({ queryKey: docsListQuery.queryKey });
+    return r.doc;
+  });
+}
+
 /** Link an outside source: an address, and what to call it. The server reads it in the background. */
 export const addSource = (body: SourceCreate) =>
   api.post<DocSourceResult>('/api/v2/doc-sources', body, { idempotencyKey: crypto.randomUUID() }).then(async (r) => {
@@ -378,6 +415,33 @@ export function approveProposal(id: string, acknowledged = false) {
     optimistic: dropProposal(id),
     send: (idempotencyKey) => api.post(`/api/v2/skills/proposals/${enc(id)}/approve`, acknowledged ? { acknowledged: true } : {}, { idempotencyKey }),
   });
+}
+
+/** Who a skill may go to: the reader, agents, people, and teams (each team as its current members). */
+export interface InstallTargets {
+  me?: { type?: string; id: string } | null;
+  bots: Array<{ id: string; name: string }>;
+  people: Array<{ id: string; name: string }>;
+  teams: Array<{ id: string; name: string; targets: Array<{ target_type: 'Bot' | 'Human'; target_id: string }> }>;
+}
+
+export const installTargetsQuery = queryOptions({
+  queryKey: ['skills', 'install-targets'],
+  queryFn: () => api.get<InstallTargets>('/api/v2/skills/install-targets'),
+  ...quiet,
+});
+
+export type InstallFor = Array<{ target_type: 'Bot' | 'Human'; target_id: string }>;
+
+/** Install for one teammate, or for several at once (a team). `version` pins one; none follows the latest. */
+export function installSkill(name: string, targets: InstallFor, version?: number) {
+  const policy = version ? { version_policy: 'pinned', pinned_version: version } : { version_policy: 'latest' };
+  const one = targets.length === 1 && targets[0];
+  return api
+    .post<unknown>(`/api/v2/skills/${enc(name)}/installs${one ? '' : '/bulk'}`, one ? { ...one, ...policy } : { targets, ...policy }, {
+      idempotencyKey: crypto.randomUUID(),
+    })
+    .then(() => queryClient.invalidateQueries({ queryKey: ['skills'] }));
 }
 
 /** Connect Claude Code: the code the skills helper on a person's computer shows (backend/skill_devices.py). */
@@ -851,6 +915,24 @@ export const cardQuery = (ref: string) =>
   queryOptions({
     queryKey: ['contacts', 'card', ref],
     queryFn: () => api.get<Card>(`/api/v2/entities/card${q({ ref })}`),
+    ...quiet,
+  });
+
+/** A field's past value (backend/entities/store.py history): where it came from, and when it held. */
+export interface FactPast {
+  id: string;
+  value: unknown;
+  source_type: string;
+  source_id: string | null;
+  confidence: number | null;
+  active_from: string | null;
+  active_until: string | null;
+}
+
+export const factHistoryQuery = (ref: string, attribute: string) =>
+  queryOptions({
+    queryKey: ['contacts', 'history', ref, attribute],
+    queryFn: () => api.get<{ rows: FactPast[]; next: string | null }>(`/api/v2/entities/history${q({ ref, attribute })}`).then((r) => r.rows),
     ...quiet,
   });
 
