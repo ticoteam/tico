@@ -20,7 +20,7 @@ import time_machine
 BUDGETS = {
     "GET /api/v2/threads/rail": 128,  # 106
     "GET /api/v2/needs-you": 136,  # 113
-    "GET /api/v2/health": 472,  # 393
+    "GET /api/v2/health": 472,  # 387 to 393 by the hash seed: holds._usage_limit judges the first two bots alone
     "GET /api/v2/company/floor": 124,  # 103
     "GET /api/v2/bots": 95,  # 79
     "GET /api/v2/places/person:me": 356,  # 296
