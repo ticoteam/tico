@@ -328,32 +328,49 @@ Re-running the step is safe. A failed install stops `base` with the step's outpu
 
 ## Build the base snapshot
 
-Once per release, from a computer with the boat CLI signed in to the account HQ uses. `--no-env` keeps the account's
-stored secrets out of the sandbox, and so out of the snapshot. Never pass `-e` secrets to the build sandbox: a saved
-snapshot hands its variables to every machine made from it.
-`base` also removes boat's box-scoped `export ASCII_TOKEN=` line from the user's `~/.bashrc`, so the snapshot carries no token.
+After each minor release, from a computer with the boat CLI signed in to the account HQ uses, in a checkout of tico.
+The Release Owner, or anyone with that boat account, can run it. Give it the release the servers run and a new name:
 
 ```sh
-V=v0.5.7   # the release the servers run
-id=$(boat new --no-env --name "tico-runner-base-$V" --json | jq -r 'select(.event == "ready") | .id')
-boat exec "$id" --timeout 1200 -- bash -lc "
-  set -euo pipefail
-  git clone --quiet --branch $V https://github.com/ticoteam/tico.git ~/tico
-  cd ~/tico && sudo python3 -m runner_support.cloud_machine base --user user"
-# not enrolled, service enabled, linger on
-boat exec "$id" -- bash -lc 'test ! -e ~/.config/tico/runner.json && systemctl is-enabled tico-cloud-machine.service && loginctl show-user user -p Linger'
-boat snapshot "$id" "tico-runner-base-$(echo "${V#v}" | tr . -)"   # a fixed version to pin or roll back to (no dots in names)
-boat snapshot "$id" tico-runner-base            # the name HQ uses by default; reusing a name replaces it
-boat delete "$id"
+python3 -m runner_support.base_snapshot --release v0.6.81 --name tico-runner-base-0-6-81
 ```
+
+It never replaces a saved snapshot: a name that already exists is refused, and so is any answer from boat that does
+not say clearly whether the name is free. The snapshot HQ boots from stays as it was until a person switches it, and
+a bad image rolls back by switching back. Names take lowercase letters, digits and hyphens, no dots. The script:
+
+1. Makes a build sandbox with `boat new --no-env`. `--no-env` keeps the account's stored secrets out of the sandbox,
+   and so out of the snapshot: a saved snapshot hands its variables to every machine made from it. Never pass `-e`
+   secrets to it.
+2. Clones the release there and runs `sudo python3 -m runner_support.cloud_machine base --user user`: the runner is
+   installed, not enrolled. `base` also removes boat's box-scoped `export ASCII_TOKEN=` line from `~/.bashrc`.
+3. Checks the sandbox: the marker names the release, the checkout is on its tag, the runner's Python is there, no
+   `runner.json` (not enrolled), `tico-cloud-machine.service` enabled, lingering on, no `/.dockerenv`, and no
+   `ASCII_TOKEN` or `TICO_ENROLL_TOKEN` line on the disk. Any failure stops it before anything is saved.
+4. Looks at the name again, saves the snapshot under it (`boat snapshot <id> <name>`), and makes a second sandbox
+   from the saved snapshot, again with no secrets and no enroll code, so its boot service does nothing. It runs the
+   same check there: what HQ will boot is what was checked.
+5. Deletes both sandboxes (`--keep` leaves them to look at) and prints the person's step below.
 
 `base` refuses a computer that is already enrolled (every machine made from it would be that one runner) and a
 checkout that is not on a release tag. It builds the venv and the release's Rust runner as `user` (the same steps as
 `scripts/setup-runner.sh`), writes the sudoers file, turns on lingering so the user's systemd starts at boot, writes
 the marker and enables the boot service.
 
-To pin HQ to one build, set `HQ_BOAT_BASE_SNAPSHOT=tico-runner-base-0-5-7` on HQ; to roll back, point it at the
-previous version's name. Machines that exist keep running whatever they have.
+### Point HQ at the new snapshot (a person's step)
+
+HQ boots new machines from `HQ_BOAT_BASE_SNAPSHOT` (default `tico-runner-base`), set on HQ in tico-services. The
+script does not change it.
+
+1. Write down the current value of `HQ_BOAT_BASE_SNAPSHOT` on HQ (unset means `tico-runner-base`).
+2. Set it to the new name, for example `HQ_BOAT_BASE_SNAPSHOT=tico-runner-base-0-6-81`, and apply it the way HQ's
+   settings are applied.
+3. Watch the next new or replaced machine: it enrolls and shows its computer in Settings > Computers within a few
+   minutes (see the checks below).
+4. To roll back, set it to the value from step 1. Machines that exist keep running whatever they have; only new and
+   replaced machines start from the snapshot.
+
+Delete an old snapshot (`boat snapshot rm <name>`) only once HQ no longer points at it and a newer one has booted.
 
 ## Verify on the first live machine
 
