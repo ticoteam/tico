@@ -115,10 +115,10 @@ hard-coded; delete our own machinery before adding more; when unsure, run the mo
 
 Tracked as Tico tasks:
 
-- **Keep warm is being removed** (ticoteam/tico #3811, Chris, open Nov 16): its visible "ok" replies buried real
+- **Keep warm was removed** (ticoteam/tico #3811, merged Nov 16 15:50Z): its visible "ok" replies buried real
   questions, and about 2.5% of 1,579 pings were followed by real work within the hour. Before that, **b62349cb**
-  (Tasks Product Owner) asked to skip stages whose turn is a person's; Chris answered no on Nov 16 (task a7881084).
-  Once #3811 ships, check 9 is retired and the 1–8 h resume write becomes the number to watch.
+  (Tasks Product Owner) asked to skip stages whose turn is a person's; the Owner answered no on Nov 16 (task
+  a7881084). With keep warm gone, the 1–8 h resume cache write is the number to watch (weekly review, step 3).
 - Done since Nov 14: **37d4ed7b** (Models Owner, Gateway turns load Tico tools on demand), **729e445c** (Performance
   Owner, the usage-limit fallback resumes its side session). Closed: **c99a4b8c** (UI Owner, read-once rule and
   subagents line in custom bots' AGENTS.md).
@@ -176,12 +176,13 @@ window, Nov 14 02:13Z to Nov 16 00:00Z (45.8 h), against the baseline above.
 | Model mix | Opus 82%, Codex and Gateway 18% | Opus 100% |
 
 - **Not fair yet:** Builder and Builder 2 have had no turns since Nov 14 (paused 08:09Z) and it was a weekend.
-  Merged PRs per day fell from about 150 (Nov 11–13) to 40, 14 and 13 (Nov 14–16).
+  Merged PRs per day fell from about 150 (Nov 11–13) to 40 and 14 (Nov 14–15), and 13 on
+  Nov 16, which is after this week.
 - **Holding:** compaction, skip-no-model runs, fallback (Codex gone), new-session share.
 - **Watch:** warm resumes within the hour write a median 20.2k vs 18.8k (n=157); Reviewer runs average 473k
   vs 294k, context median 107k vs 97k, on a weekend's few reviews.
 - **Keep warm** stayed under 5% over the window but went to 5.9% in the 24 h to Nov 16 15:00Z, and its 1–8 h resumes
-  wrote a median 52k vs 100k before. It is being removed (#3811).
+  wrote a median 52k vs 100k before. It was removed in #3811 (merged Nov 16 15:50Z).
 - Costliest tasks after the change are long Product tasks run pitch to production in one session; on several, about
   half of the runs were keep-warm pings (for example 33 of 66 runs on one task).
 - Guard, open-to-merge time of merged PRs (ticoteam/tico): median 1.3 h, p90 26.7 h this week vs 0.7 h and 11.2 h the
@@ -199,5 +200,6 @@ Once a week:
    - no Claude context above its model's `compact_at` plus about 10%;
    - heavy bots' own turns on their bot model;
    - did-nothing runs under 5%.
+   - the median cache write of resumes 1–8 h after the last turn, against the week before.
 4. File each clear opportunity as a task with its numbers, and update this page: the baseline table if it moved, what
    changed, and the open follow-ups.
