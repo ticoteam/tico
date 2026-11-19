@@ -1,26 +1,23 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { directoryQuery, useActor } from '@/data';
-import { fmtAge, fmtMoney } from '@/lib';
+import { fmtMoney } from '@/lib';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Lines, Sparkline } from '@/kit/Chart';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { MenuItem } from '@/kit/Menu';
-import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import { EmptyRow, Table } from '@/kit/Table';
-import { Dashboard, FiguresStrip, List, PageMore, Section, type Figure, type PageTab } from '@/pagekinds';
+import { Dashboard, FiguresStrip, Section, type Figure, type PageTab } from '@/pagekinds';
 import { GROWTH } from './head';
-import { ChannelPanel, ManagerFace, SourcePanel } from './GrowthPanels';
+import { ChannelPanel, ManagerFace } from './GrowthPanels';
 import { axis, count, firstRead, growthMonths, isYm, lastFullMonth, loudHealth, monShort, monthName, pct, ratio, statusWord, valueKind, ymOf } from './model';
 import { ActLink, readState, usePhone, usePress } from './parts';
 import {
   growthManager,
   growthReadQuery,
-  growthSourcesQuery,
   pageOwnersQuery,
   segmentsQuery,
   type GrowthChannel,
@@ -30,7 +27,6 @@ import {
   type GrowthMetric,
   type GrowthPoint,
   type GrowthRead,
-  type GrowthSource,
   type GrowthVerdict,
 } from './queries';
 import { panelOf, type GrowthSearch } from './search';
@@ -44,7 +40,6 @@ const usd = (v: number | null | undefined, cents = false) => (v == null ? '' : f
 const head = { title: 'Growth', path: GROWTH, className: 'money' } as const;
 
 export function GrowthPage({ search }: { search: GrowthSearch }) {
-  if (search.tab === 'sources') return <GrowthSources search={search} />;
   return <GrowthBoard search={search} />;
 }
 
@@ -196,11 +191,12 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
       onRetry={() => void read.refetch()}
       empty={{
         title: 'No numbers yet',
-        action: (
-          <Button variant="primary" onClick={() => void press(manager ? 'growth.askManager' : 'growth.openSources', {})}>
+        // Sources are set up through the Growth Manager; with none, there is nothing to press here.
+        action: manager ? (
+          <Button variant="primary" onClick={() => void press('growth.askManager', {})}>
             Set up
           </Button>
-        ),
+        ) : undefined,
       }}
       actions={
         <>
@@ -216,11 +212,6 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
             {d?.partial && <span className="gr-partial">partial</span>}
           </div>
         </>
-      }
-      more={
-        <PageMore target="growth:more">
-          <MenuItem label="Sources" onSelect={() => void press('growth.openSources', {})} />
-        </PageMore>
       }
       tabs={tabs}
       figures={
@@ -603,102 +594,5 @@ function HealthFoot({ health: h, quietOnly }: { health: GrowthHealth; quietOnly:
       )}
       {unknown && <p>{unknown}</p>}
     </div>
-  );
-}
-
-const HEALTH: Record<GrowthSource['health'], string> = { fresh: '', stale: 'Stale', failing: 'Sign in again', waiting: 'Waiting', not_synced: 'Not synced' };
-const words = (v: string[] | string | null | undefined) =>
-  (Array.isArray(v) ? v : v ? [v] : []).map((x) => x.replace(/_/g, ' ')).map((x, i) => (i ? x : x.charAt(0).toUpperCase() + x.slice(1))).join(', ');
-
-/** Where Growth's numbers come from, and what each word means here. Reading only; the Growth Manager changes them. On a
-    phone: the source and its last sync (two word columns of 184 left the name none); a source's panel says what it
-    feeds and holds. */
-function GrowthSources({ search }: { search: GrowthSearch }) {
-  const phone = usePhone();
-  const q = useQuery(growthSourcesQuery);
-  const open = panelOf(search.panel);
-  const picked = open?.[0] === 'source' ? open[1] : undefined;
-  const segments = useQuery(segmentsQuery);
-  const list = (q.data?.sources ?? []).filter((s) => !s.retired_at);
-  const defs = (segments.data?.segments ?? []).filter((s) => s.customer_rule);
-  return (
-    <List
-      title="Sources"
-      path={`${GROWTH}?tab=sources`}
-      crumb={[{ label: 'Growth', to: GROWTH }]}
-      className="money"
-      state={q.isPending ? 'loading' : q.isError ? 'fault' : 'ready'}
-      onRetry={() => void q.refetch()}
-      actions={<ManagerFace />}
-      panel={picked && <SourcePanel id={picked} />}
-      sections={
-        <>
-          <Section name="Sources" count={list.length}>
-            <Table label="Sources">
-              <colgroup>
-                <col />
-                {!phone && (
-                  <>
-                    <col className="t-line" />
-                    <col className="t-line" />
-                  </>
-                )}
-                <col className="t-col" />
-              </colgroup>
-              <thead>
-                <tr>
-                  <th scope="col">Source</th>
-                  {!phone && (
-                    <>
-                      <th scope="col">Feeds</th>
-                      <th scope="col">Holds</th>
-                    </>
-                  )}
-                  <th scope="col" className="num">
-                    Last sync
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {list.length === 0 && <EmptyRow span={phone ? 2 : 4}>No source connected</EmptyRow>}
-                {list.map((s) => (
-                  <tr key={s.id} className={s.id === picked ? 'is-selected' : undefined} data-target={`source:${s.id}`}>
-                    <td className="t-name">
-                      <ActLink
-                        to={GROWTH}
-                        search={{ tab: 'sources', panel: `source:${s.id}` }}
-                        action="growth.openSource"
-                        input={{ source: s.id }}
-                        className="t-link"
-                      >
-                        {s.name ?? s.system ?? s.id}
-                      </ActLink>
-                      {HEALTH[s.health] && <Pill flag={s.health === 'failing'}>{HEALTH[s.health]}</Pill>}
-                    </td>
-                    {!phone && (
-                      <>
-                        <td className="t-words">{words(s.fills)}</td>
-                        <td className="t-words">{words(s.truth_for)}</td>
-                      </>
-                    )}
-                    <td className="num t-words">{s.last_run_at ? fmtAge(s.last_run_at) : ''}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </Section>
-          {defs.length > 0 && (
-            <Section name="Definitions" count={defs.length}>
-              {defs.map((s) => (
-                <div key={s.slug} className="row def">
-                  <span className="row-title">{s.name}</span>
-                  <span>{s.customer_rule}</span>
-                </div>
-              ))}
-            </Section>
-          )}
-        </>
-      }
-    />
   );
 }

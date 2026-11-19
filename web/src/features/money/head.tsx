@@ -30,17 +30,22 @@ export function useFinanceHead() {
   const tabs = FINANCE_PAGE_TABS.filter((_, i) => shown(FINANCE_TABS[i]![0]));
   if (!as) return { ...financeHead, tabs };
   const name = who?.name ?? as.slice(as.indexOf(':') + 1);
+  const stop = (
+    <ActLink to={FIN} search={{ as: undefined }} action="finance.viewAs" input={{}}>
+      Stop
+    </ActLink>
+  );
   return {
     ...financeHead,
     tabs: tabs.map((t) => ({ ...t, search: { ...t.search, as } })),
     sub: (
       <span className="view-as" role="status">
         {`Viewing as ${name}`}
-        <ActLink to={FIN} search={{ as: undefined }} action="finance.viewAs" input={{}}>
-          Stop
-        </ActLink>
+        {stop}
       </span>
     ),
+    // A page closed to the teammate draws no head: Stop stays reachable from the no-access state itself.
+    noAccess: { text: `Viewing as ${name}`, actions: stop },
   };
 }
 

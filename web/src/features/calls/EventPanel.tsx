@@ -12,6 +12,7 @@ import { Field, Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
+import { Select } from '@/kit/Select';
 import { Tabs } from '@/kit/Tabs';
 import { toast } from '@/kit/Toast';
 import { SidePanel } from '@/pagekinds';
@@ -294,18 +295,13 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
           {(state === 'pending' || state === 'dismissed') && (
             <section className="rail-sec">
               <p className="mv-notes">{state === 'pending' ? 'Only you see this' : 'Dismissed'}</p>
-              <div className="mv-review">
-                {state === 'pending' ? (
-                  <>
-                    <Button onClick={() => void press('calls.review', { meeting: id, action: 'dismiss' })}>Dismiss</Button>
-                    <Button variant="primary" onClick={() => void press('calls.review', { meeting: id, action: 'approve' })}>
-                      Share
-                    </Button>
-                  </>
-                ) : (
+              {state === 'pending' && mm ? (
+                <ShareBox m={mm} />
+              ) : (
+                <div className="mv-review">
                   <Button onClick={() => void press('calls.review', { meeting: id, action: 'restore' })}>Restore</Button>
-                )}
-              </div>
+                </div>
+              )}
             </section>
           )}
           {mm?.started && (
@@ -476,6 +472,42 @@ function MeetingMenu({ m, canSend, onDelete }: { m: MeetingMore; canSend: boolea
         </>
       )}
     </Menu>
+  );
+}
+
+/** Sharing a Pending meeting (meetings.ts meetReviewDetail): who sees it once shared, and the agent that files its
+    tasks, Tico by default as in the old app; then Share, or Dismiss. */
+function ShareBox({ m }: { m: MeetingMore }) {
+  const agents = useActors().filter((a) => a.kind === 'agent');
+  const [seen, setSeen] = useState<'team' | 'private'>(m.private ? 'private' : 'team');
+  const [send, setSend] = useState('auto');
+  const sends = [{ value: 'auto', label: 'Send to Tico' }, ...agents.map((a) => ({ value: a.id, label: `Send to ${a.name}` })), { value: '', label: "Don't send" }];
+  return (
+    <>
+      <div className="mv-review">
+        <Select
+          label="Who sees it once shared"
+          labelHidden
+          look="quiet"
+          options={[
+            { value: 'team' as const, label: 'Team' },
+            { value: 'private' as const, label: 'Private' },
+          ]}
+          value={seen}
+          onValueChange={setSeen}
+        />
+        <Select label="Agent that files its tasks" labelHidden look="quiet" options={sends} value={send} onValueChange={setSend} />
+      </div>
+      <div className="mv-review">
+        <Button onClick={() => void press('calls.review', { meeting: m.id, action: 'dismiss' })}>Dismiss</Button>
+        <Button
+          variant="primary"
+          onClick={() => void press('calls.review', { meeting: m.id, action: 'approve', private: seen === 'private', ...(send ? { send } : {}) })}
+        >
+          Share
+        </Button>
+      </div>
+    </>
   );
 }
 

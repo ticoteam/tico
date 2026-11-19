@@ -1,6 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { budgetDay, monthSpan, pnlRange } from './model';
-import { budgetsQuery, growthReadQuery, growthSourcesQuery, pnlQuery, segmentsQuery, sourcesQuery } from './queries';
+import { budgetsQuery, growthReadQuery, pnlQuery, segmentsQuery, sourcesQuery } from './queries';
 import type { FinanceSearch, GrowthSearch } from './search';
 
 /* What each page reads first, warmed before it draws. A failed read is the page's own fault state, not the router's. */
@@ -21,7 +21,5 @@ export function loadFinance(qc: QueryClient, search: FinanceSearch): Promise<unk
 }
 
 export function loadGrowth(qc: QueryClient, search: GrowthSearch): Promise<unknown> {
-  const reads: Promise<unknown>[] = [qc.ensureQueryData(growthSourcesQuery), qc.ensureQueryData(segmentsQuery)];
-  if (search.tab !== 'sources') reads.push(qc.ensureQueryData(growthReadQuery(search.segment, search.month)));
-  return Promise.all(reads).catch(() => undefined);
+  return Promise.all([qc.ensureQueryData(segmentsQuery), qc.ensureQueryData(growthReadQuery(search.segment, search.month))]).catch(() => undefined);
 }

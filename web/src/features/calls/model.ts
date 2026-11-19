@@ -348,3 +348,16 @@ export function calendarSearch(raw: Record<string, unknown>): CalendarSearch {
   if (also.length) out.also = also.join(',');
   return out;
 }
+
+/** Where a logged transcript came from (meetings.ts IMPORT_SOURCES); the server files it under that source. */
+export const TRANSCRIPT_SOURCES = [
+  ['upload', 'Upload'],
+  ['zoom', 'Zoom'],
+  ['google-meet', 'Google Meet'],
+  ['granola', 'Granola'],
+  ['otter', 'Otter'],
+  ['fireflies', 'Fireflies'],
+  ['other', 'Other'],
+] as const;
+export type TranscriptSource = (typeof TRANSCRIPT_SOURCES)[number][0];
+export const TRANSCRIPT_SOURCE_IDS = TRANSCRIPT_SOURCES.map(([v]) => v);

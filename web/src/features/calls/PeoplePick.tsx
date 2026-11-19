@@ -13,6 +13,8 @@ export interface PeoplePickProps {
   tico?: boolean;
   /** The list shows only once something is typed (a form's guests). */
   quiet?: boolean;
+  /** Someone from outside may be typed in: a name or an email no one here has, kept as typed. */
+  free?: boolean;
   autoFocus?: boolean;
 }
 
@@ -22,7 +24,7 @@ interface Team {
 }
 
 /** Who to call or ask: chips for who is picked, then people, agents and teams to pick (cal-merge.js call picker). */
-export function PeoplePick({ value, onChange, tico, quiet, autoFocus }: PeoplePickProps) {
+export function PeoplePick({ value, onChange, tico, quiet, free, autoFocus }: PeoplePickProps) {
   const [q, setQ] = useState('');
   const me = useMe();
   const actors = useActors().filter((a) => a.id !== me);
@@ -36,6 +38,8 @@ export function PeoplePick({ value, onChange, tico, quiet, autoFocus }: PeoplePi
   };
   const people = actors.filter((a) => has(a.name));
   const shownTeams = teams.filter((t) => has(t.name));
+  const typed = q.trim();
+  const outside = free && typed && !people.length && !value.includes(typed) ? typed : '';
   const list = !quiet || q.trim();
   return (
     <>
@@ -57,9 +61,9 @@ export function PeoplePick({ value, onChange, tico, quiet, autoFocus }: PeoplePi
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Backspace' && !q && value.length) onChange(value.slice(0, -1));
-            if (e.key === 'Enter' && q.trim() && people[0]) {
+            if (e.key === 'Enter' && q.trim() && (people[0] || outside)) {
               e.preventDefault();
-              toggle([people[0].id]);
+              toggle([people[0]?.id ?? outside]);
             }
           }}
         />
@@ -87,6 +91,18 @@ export function PeoplePick({ value, onChange, tico, quiet, autoFocus }: PeoplePi
               lead={<Avatar kind={a.kind} name={a.name} hue={a.hue} size={22} decorative />}
             />
           ))}
+          {outside && (
+            <PickRow
+              on={false}
+              label={`Add ${outside}`}
+              onPress={() => toggle([outside])}
+              lead={
+                <span className="pick-ico">
+                  <Icon name="plus" />
+                </span>
+              }
+            />
+          )}
           {shownTeams.length > 0 && people.length > 0 && <hr />}
           {shownTeams.map((t) => (
             <PickRow

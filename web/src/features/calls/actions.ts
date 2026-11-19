@@ -3,7 +3,7 @@ import type { Call, MeetingImporterList } from '@/api/schema';
 import { defineAction, s, type Ctx } from '@/actions';
 import { meQuery } from '@/data';
 import { callWindowControls, desktop, isCallWindow } from '@/desktop';
-import { VIEWS } from './model';
+import { TRANSCRIPT_SOURCE_IDS, VIEWS, type TranscriptSource } from './model';
 import {
   addItem,
   addToCall,
@@ -23,6 +23,7 @@ import {
   meetKeys,
   removeEvent,
   reviewMeeting,
+  reviewMeetings,
   setImporter,
   setMeetingSettings,
   startCall,
@@ -221,12 +222,33 @@ export const review = defineAction({
   id: 'calls.review',
   title: 'Share or put away a meeting',
   kind: 'change',
-  input: s.object({ meeting: id('a meeting id'), action: s.oneOf(['approve', 'dismiss', 'restore'] as const) }),
+  input: s.object({
+    meeting: id('a meeting id'),
+    action: s.oneOf(['approve', 'dismiss', 'restore'] as const),
+    // Sharing only: who sees it once shared, and the agent that files its tasks then ('auto': Tico routes it).
+    private: s.optional(s.boolean()),
+    send: s.optional(s.string({ min: 4, max: 200, pattern: /^(auto|bot:\S+)$/, what: 'auto or bot:<id>' })),
+  }),
   // Sharing shows a meeting only the person saw to the whole company: their own press.
   can: (ctx, { action }) => !(ctx.via === 'tico' && action === 'approve'),
-  run: (_ctx, { meeting, action }) => reviewMeeting(meeting, action),
-  did: ({ action }) => (action === 'approve' ? 'Shared the meeting' : action === 'dismiss' ? 'Put the meeting away' : 'Brought the meeting back'),
+  run: (_ctx, { meeting, action, private: hidden, send }) =>
+    reviewMeeting(meeting, action, action === 'approve' ? { private: hidden, send_to: send && send !== 'auto' ? send.slice(4) : send } : {}),
+  did: ({ action, send }) =>
+    action === 'approve' ? (send ? 'Shared and sent the meeting' : 'Shared the meeting') : action === 'dismiss' ? 'Put the meeting away' : 'Brought the meeting back',
   target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
+});
+
+/** Share or dismiss several Pending meetings at once (old Meetings' Share N / Dismiss N). */
+export const reviewMany = defineAction({
+  id: 'calls.reviewMany',
+  title: 'Share or put away several pending meetings',
+  kind: 'change',
+  input: s.object({ meetings: s.array(id('a meeting id'), { max: 200 }), action: s.oneOf(['approve', 'dismiss'] as const) }),
+  // Sharing shows meetings only the person saw to the whole company: their own press.
+  can: (ctx, { meetings, action }) => meetings.length > 0 && !(ctx.via === 'tico' && action === 'approve'),
+  run: (_ctx, { meetings, action }) => reviewMeetings(meetings, action),
+  did: ({ meetings, action }) => `${action === 'approve' ? 'Shared' : 'Put away'} ${meetings.length === 1 ? 'a meeting' : `${meetings.length} meetings`}`,
+  target: () => PAGE,
 });
 
 export const makeMeetingTask = defineAction({
@@ -480,17 +502,26 @@ export const logMeetingAction = defineAction({
     with: s.optional(s.array(s.string({ min: 1, max: 200, what: 'a name or an email' }), { max: 100 })),
     notes: s.optional(s.string({ max: 200_000, what: 'notes, in markdown' })),
     transcript: s.optional(s.string({ max: 2_000_000, what: 'a transcript: Name: text, WebVTT, SRT or JSON' })),
+    /** Where the transcript came from (upload when left out). */
+    source: s.optional(s.oneOf(TRANSCRIPT_SOURCE_IDS as readonly TranscriptSource[])),
+    recording: s.optional(s.string({ max: 2000, pattern: /^https:\/\/\S+$/, what: 'a recording link, https://…' })),
     private: s.optional(s.boolean()),
+    /** An agent to hand it to once filed ('auto': Tico routes it). */
+    send: s.optional(s.string({ min: 4, max: 200, pattern: /^(auto|bot:\S+)$/, what: 'auto or bot:<id>' })),
   }),
   run: async (ctx, i) => {
     if (!i.notes?.trim() && !i.transcript?.trim()) throw new Error('empty: add notes or a transcript');
+    const transcript = i.transcript?.trim() ? i.transcript : undefined;
     const m = await logMeeting({
       title: i.title?.trim() || undefined,
       started_at: i.start,
       participants: i.with?.length ? i.with : undefined,
       notes: i.notes?.trim() || undefined,
-      transcript: i.transcript?.trim() ? i.transcript : undefined,
+      transcript,
+      source: transcript ? i.source : undefined,
+      media_url: transcript ? i.recording : undefined,
       private: i.private || undefined,
+      send_to: i.send && i.send !== 'auto' ? i.send.slice(4) : i.send,
     });
     if (m.id) await toCalendar(ctx, (prev) => ({ ...prev, view: 'list', panel: `meeting:${m.id}` }));
     return m;

@@ -147,7 +147,8 @@ describe('List’s ⋯', () => {
     // the code never reached the cache, the address or a toast
     expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => q.state.data))).not.toContain(CODE);
     expect(window.location.href).not.toContain(CODE);
-    expect(sent.map((x) => x.url)).toEqual(['/api/v2/meetings/granola/connect']);
+    // once connected, the first notes are asked for at once (meetings-granola.ts granolaPoll)
+    await waitFor(() => expect(sent.map((x) => x.url)).toEqual(['/api/v2/meetings/granola/connect', '/api/v2/meetings/granola/sync?now=true']));
   });
 
   it('shows a sign-in link on another site as its host only', async () => {
@@ -180,6 +181,9 @@ describe('List’s ⋯', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sync now' }));
     await waitFor(() => expect(sent.map((x) => `${x.method} ${x.url}`)).toEqual(['POST /api/v2/meetings/granola/sync?now=true']));
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    // asked first
+    const ask = await screen.findByRole('alertdialog', { name: 'Remove Granola?' });
+    fireEvent.click(within(ask).getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ method: 'DELETE', url: '/api/v2/meetings/granola/connect' }));
     expect(await screen.findByRole('button', { name: 'Connect' })).toBeTruthy();
   });

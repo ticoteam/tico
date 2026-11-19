@@ -98,7 +98,6 @@ describe('View as @s456', () => {
     expect(within(dialog).getByRole('combobox', { name: 'Teammate' }).textContent).toContain('Sam');
     fireEvent.click(within(dialog).getByRole('button', { name: 'View' }));
     await waitFor(() => expect((router.state.location.search as { as?: string }).as).toBe('human:sam'));
-    // Gap: the address keeps tab=access, which is closed while viewing as someone (the old app went to P&L).
   });
 });
 
@@ -178,32 +177,7 @@ const READ: GrowthRead = {
 };
 const GM: Actor = { id: 'bot:gm1', kind: 'agent', name: 'Growth Manager', slug: 'growth-manager' };
 
-describe('Growth Sources @s401 @s478', () => {
-  it('lists each source with what it feeds and holds, and the segment definitions, with nothing to edit', async () => {
-    serve([
-      ['/growth/sources', { sources: [{ id: 'src1', name: 'Ledger', health: 'failing', fills: ['spend'], truth_for: ['new_customers'] }] }],
-      ['/growth/segments', { segments: [{ slug: 'shops', name: 'Shops', customer_rule: 'A shop with a paid order' }] }],
-      ['/page-owners', { pages: {} }],
-    ]);
-    show('growth', '/company/growth?tab=sources');
-    const table = await screen.findByRole('table', { name: 'Sources' });
-    const row = within(table).getByRole('link', { name: 'Ledger' }).closest('tr')!;
-    expect(row.textContent).toContain('Sign in again');
-    expect(row.textContent).toContain('Spend');
-    expect(row.textContent).toContain('New customers');
-    expect(await screen.findByText('A shop with a paid order')).toBeTruthy();
-    // Growth is read here; sources and definitions change through the Growth Manager's chat.
-    expect(screen.queryByRole('button', { name: /^(Add|New|Edit|Connect|Sync|Settings)/ })).toBeNull();
-  });
-
-  it('with no source says so', async () => {
-    serve([['/growth/sources', { sources: [] }], ['/growth/segments', { segments: [] }], ['/page-owners', { pages: {} }]]);
-    show('growth', '/company/growth?tab=sources');
-    expect(await screen.findByText('No source connected')).toBeTruthy();
-  });
-});
-
-describe('Growth changes go to the Growth Manager @s479 @s481 @s482 @s483 @s485', () => {
+describe('Growth changes go to the Growth Manager @s479 @s481 @s482 @s483', () => {
   it('no channel, month, customer or source editor; a change asked of it lands in its chat with the scope on screen', async () => {
     directory(GM);
     serve([

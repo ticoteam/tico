@@ -155,7 +155,7 @@ describe('Meetings in List', () => {
     expect(await run('calls.review', { meeting: 'mt1', action: 'approve' }, { via: 'tico' })).toMatchObject({ ok: false });
     expect(writes()).toHaveLength(0);
     fireEvent.click(within(panel).getByRole('button', { name: 'Share' }));
-    await waitFor(() => expect(writes()).toEqual([expect.objectContaining({ method: 'POST', body: { action: 'approve' } })]));
+    await waitFor(() => expect(writes()).toEqual([expect.objectContaining({ method: 'POST', body: { action: 'approve', private: false, send_to: 'auto' } })]));
   });
 
   it('Dismissed: lists what was put away, and Restore brings it back to Pending @s995', async () => {

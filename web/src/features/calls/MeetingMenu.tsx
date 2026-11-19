@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { GranolaDevice, GranolaStatus, MeetingImporter, MeetingImporterComputer, MeetingSource } from '@/api/schema';
 import { run } from '@/actions';
-import { directoryQuery, meQuery } from '@/data';
+import { directoryQuery, meQuery, useActors } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { DatePick } from '@/kit/DatePick';
@@ -13,6 +14,7 @@ import { Select } from '@/kit/Select';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { PageMore } from '@/pagekinds';
+import { TRANSCRIPT_SOURCES, type TranscriptSource } from './model';
 import { PeoplePick } from './PeoplePick';
 import { press } from './parts';
 import { granolaQuery, importersQuery, meetingSettingsQuery, pollGranola, sourcesQuery } from './queries';
@@ -26,23 +28,33 @@ export function MeetingMenu({ children }: { children?: ReactNode }) {
   const granola = useQuery(granolaQuery).data;
   const sources = useQuery(sourcesQuery).data?.sources ?? [];
   const connected = (granola?.connected ? 1 : 0) + sources.filter((x) => x.id !== 'import' && x.status !== 'needs_setup').length;
+  // What needs a look (meetings-sources.ts meetSourcesTrouble): a source that errors or lags, or Granola signed out or failing.
+  const trouble =
+    sources.some((x) => x.status === 'error' || x.status === 'delayed') || !!(granola && (granola.needs_signin || (granola.connected && granola.last_error)));
   // Stable: Connect Granola's sign-in runs once per open, and it closes with this.
   const close = useCallback(() => setOpen(null), []);
   return (
     <>
-      <PageMore>
-        {children}
-        <MenuItem label="Log a meeting" icon="edit" onSelect={() => setOpen('log')} />
-        <MenuItem label="Meeting sources" icon="list" meta={connected ? String(connected) : undefined} onSelect={() => setOpen('sources')} />
-        {granola && !granola.connected && <MenuItem label="Connect Granola" icon="link" onSelect={() => setOpen('granola')} />}
-        <MenuRule />
-        <MenuItem label="Calendar settings" icon="gear" onSelect={() => setOpen('settings')} />
-      </PageMore>
+      <span className={trouble ? 'call-more is-trouble' : 'call-more'} title={trouble ? 'Meeting sources need a look' : undefined}>
+        <PageMore>
+          {children}
+          <MenuItem label="Log a meeting" icon="edit" onSelect={() => setOpen('log')} />
+          <MenuItem
+            label="Meeting sources"
+            icon="list"
+            meta={trouble ? 'Needs a look' : connected ? String(connected) : undefined}
+            onSelect={() => setOpen('sources')}
+          />
+          {granola && !granola.connected && <MenuItem label="Connect Granola" icon="link" onSelect={() => setOpen('granola')} />}
+          <MenuRule />
+          <MenuItem label="Calendar settings" icon="gear" onSelect={() => setOpen('settings')} />
+        </PageMore>
+      </span>
       <Dialog open={open === 'log'} onOpenChange={(o) => !o && close()} title="Log a meeting">
         {open === 'log' && <LogForm done={close} />}
       </Dialog>
       <Dialog open={open === 'sources'} onOpenChange={(o) => !o && close()} title="Meeting sources" actions={<Button onClick={close}>Done</Button>}>
-        {open === 'sources' && <Sources onConnect={() => setOpen('granola')} />}
+        {open === 'sources' && <Sources onConnect={() => setOpen('granola')} onLeave={close} />}
       </Dialog>
       <Dialog
         open={open === 'granola'}
@@ -68,10 +80,18 @@ function LogForm({ done }: { done: () => void }) {
   const [who, setWho] = useState<string[]>([]);
   const [notes, setNotes] = useState('');
   const [transcript, setTranscript] = useState('');
+  const [source, setSource] = useState<TranscriptSource>('upload');
+  const [recording, setRecording] = useState('');
+  const [send, setSend] = useState('');
   const [hidden, setHidden] = useState(false);
+  const agents = useActors().filter((a) => a.kind === 'agent');
+  const sends = [{ value: '', label: "Don't send" }, { value: 'auto', label: 'Tico' }, ...agents.map((a) => ({ value: a.id, label: a.name }))];
   const [busy, setBusy] = useState(false);
   const file = useRef<HTMLInputElement>(null);
-  const ready = !!(notes.trim() || transcript.trim()) && !!(title.trim() || transcript.trim());
+  const said = !!transcript.trim();
+  const link = recording.trim();
+  const badLink = said && !!link && !/^https:\/\/\S+$/.test(link);
+  const ready = !!(notes.trim() || said) && !!(title.trim() || said) && !badLink;
 
   const read = (f: File | undefined) => {
     if (!f) return;
@@ -86,14 +106,18 @@ function LogForm({ done }: { done: () => void }) {
   const save = async () => {
     if (!ready) return;
     setBusy(true);
-    const names = who.map((id) => dir?.byId[id]?.name ?? id.slice(id.indexOf(':') + 1));
+    // Someone typed in from outside is kept as typed (a name or an email).
+    const names = who.map((id) => dir?.byId[id]?.name ?? (/^(human|bot):/.test(id) ? id.slice(id.indexOf(':') + 1) : id));
     const ok = await press('calls.logMeeting', {
       title: title.trim() || undefined,
       start: when.toISOString(),
       with: names.length ? names : undefined,
       notes: notes.trim() || undefined,
-      transcript: transcript.trim() ? transcript : undefined,
+      transcript: said ? transcript : undefined,
+      source: said ? source : undefined,
+      recording: said && link ? link : undefined,
       private: hidden || undefined,
+      send: send || undefined,
     });
     setBusy(false);
     if (ok) done();
@@ -113,10 +137,17 @@ function LogForm({ done }: { done: () => void }) {
       </div>
       <div className="f">
         <span className="f-label">Who</span>
-        <PeoplePick value={who} onChange={setWho} quiet />
+        <PeoplePick value={who} onChange={setWho} quiet free />
       </div>
       <Field label="Notes" area value={notes} onValueChange={setNotes} placeholder="What was discussed and decided" />
       <Field label="Transcript" area value={transcript} onValueChange={setTranscript} placeholder="Paste one, or upload a file" />
+      {said && (
+        <div className="call-f2">
+          <Select label="Source" options={TRANSCRIPT_SOURCES.map(([value, label]) => ({ value, label }))} value={source} onValueChange={setSource} />
+          <Field label="Recording link" type="url" value={recording} onValueChange={setRecording} placeholder="https://" error={badLink ? 'An https link' : undefined} />
+        </div>
+      )}
+      <Select label="Send to an agent" options={sends} value={send} onValueChange={setSend} />
       <input
         ref={file}
         type="file"
@@ -147,7 +178,7 @@ function LogForm({ done }: { done: () => void }) {
  * with its state. The owner sees every importer instead, turns it on or off and picks the computer that runs it; its
  * credentials are a file on that computer and never come to the page.
  */
-function Sources({ onConnect }: { onConnect: () => void }) {
+function Sources({ onConnect, onLeave }: { onConnect: () => void; onLeave: () => void }) {
   const owner = useQuery(meQuery).data?.role === 'owner';
   const granola = useQuery(granolaQuery);
   const sources = useQuery(sourcesQuery);
@@ -170,6 +201,14 @@ function Sources({ onConnect }: { onConnect: () => void }) {
           <span className="call-src-st">{sourceWord(x)}</span>
           <Synced last={x.last_import} ok={x.last_succeeded_at} />
           {x.error && <span className="call-src-err">{x.error}</span>}
+          {x.id === 'close' && (
+            // Close is set up on its tool page (meetings-sources.ts), as every tool is.
+            <span className="call-src-go">
+              <Link to="/library/tools" search={{ tool: 'close-crm' }} className="btn btn-sm" onClick={onLeave}>
+                {x.status === 'needs_setup' ? 'Connect' : 'Manage'}
+              </Link>
+            </span>
+          )}
         </li>
       ))}
       {sources.isError && <ShortRow name="Other sources" />}
@@ -247,6 +286,7 @@ function ImporterRow({ i, computers }: { i: MeetingImporter; computers: MeetingI
 /** The person's own Granola account. */
 function GranolaRow({ g, onConnect }: { g: GranolaStatus; onConnect: () => void }) {
   const [syncing, setSyncing] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const sync = async () => {
     setSyncing(true);
     await press('calls.syncGranola', {});
@@ -265,7 +305,7 @@ function GranolaRow({ g, onConnect }: { g: GranolaStatus; onConnect: () => void 
           </Button>
         )}
         {(g.connected || g.needs_signin) && (
-          <Button className="btn-sm" variant="quiet" onClick={() => void press('calls.disconnectGranola', {})}>
+          <Button className="btn-sm" variant="quiet" onClick={() => setRemoving(true)}>
             Remove
           </Button>
         )}
@@ -275,6 +315,26 @@ function GranolaRow({ g, onConnect }: { g: GranolaStatus; onConnect: () => void 
           </Button>
         )}
       </span>
+      <Dialog
+        open={removing}
+        onOpenChange={setRemoving}
+        alert
+        title="Remove Granola?"
+        actions={
+          <>
+            <Button onClick={() => setRemoving(false)}>Cancel</Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setRemoving(false);
+                void press('calls.disconnectGranola', {});
+              }}
+            >
+              Remove
+            </Button>
+          </>
+        }
+      />
     </li>
   );
 }
@@ -351,6 +411,8 @@ function GranolaSignIn({ done }: { done: () => void }) {
         if (!live) return;
         if (s.state === 'connected') {
           toast({ text: 'Granola connected' });
+          // The first notes come in at once, as in the old app (meetings-granola.ts granolaPoll).
+          void press('calls.syncGranola', {});
           return done();
         }
         if (s.state === 'denied') return fail('Granola access was denied');

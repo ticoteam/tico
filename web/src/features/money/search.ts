@@ -69,11 +69,10 @@ export const BOOKS_REASONS = [
 export type BooksReason = (typeof BOOKS_REASONS)[number];
 
 export interface GrowthSearch {
-  tab?: 'sources';
   segment?: string;
   /** YYYY-MM; the last full month when left out. */
   month?: string;
-  /** `channel:<slug>`, or on Sources `source:<id>`. */
+  /** `channel:<slug>`. */
   panel?: string;
 }
 
@@ -83,7 +82,7 @@ const PANEL = /^(line|budget|channel):\S+$/;
 const BOOK_PANEL = /^(bill|invoice|card|tx):\S+$/;
 /** A source on Sources, a teammate on Access (`mate:human:<id>`). */
 const ADMIN_PANEL = /^(source|mate):\S+$/;
-const GROWTH_PANEL = /^(channel|source):\S+$/;
+const GROWTH_PANEL = /^channel:\S+$/;
 
 /** `?tab=pnl&period=quarter&basis=cash&from=2026-07&panel=line:<account>&as=human:<id>`; anything else is dropped. */
 export function validateFinanceSearch(raw: Record<string, unknown>): FinanceSearch {
@@ -112,16 +111,14 @@ export function validateFinanceSearch(raw: Record<string, unknown>): FinanceSear
   return out;
 }
 
-/** `?segment=<slug>&month=2026-10&panel=channel:<slug>`, or `?tab=sources&panel=source:<id>`. */
+/** `?segment=<slug>&month=2026-10&panel=channel:<slug>`. The Sources tab is gone: its old addresses land on the board. */
 export function validateGrowthSearch(raw: Record<string, unknown>): GrowthSearch {
   const out: GrowthSearch = {};
-  if (raw.tab === 'sources') out.tab = 'sources';
   const segment = text(raw.segment, 80);
   if (segment && /^[\w-]+$/.test(segment)) out.segment = segment;
   if (isYm(raw.month)) out.month = raw.month;
   const panel = text(raw.panel);
-  // A source opens on Sources only; the rest on the board.
-  if (panel && GROWTH_PANEL.test(panel) && panel.startsWith('source:') === (out.tab === 'sources')) out.panel = panel;
+  if (panel && GROWTH_PANEL.test(panel)) out.panel = panel;
   return out;
 }
 

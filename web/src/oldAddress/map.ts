@@ -204,7 +204,7 @@ export const ROWS: readonly Row[] = [
   { page: 'Listening (old Settings tab and Market view)', path: /^#\/(?:settings\/listening|strategy\/market\/listening)$/, to: () => '/company/listening' },
   { page: 'Library', path: /^#\/library$/, to: () => '/library/docs' },
   { page: 'Growth (old Strategy tab)', path: new RegExp(`^#/strategy/growth${tail}$`), to: () => '/company/growth' },
-  { page: 'Go-to-market sources', path: new RegExp(`^#/strategy/gtm/sources${tail}$`), to: () => at('/company/growth', { tab: 'sources' }) },
+  { page: 'Go-to-market sources', path: new RegExp(`^#/strategy/gtm/sources${tail}$`), to: () => '/company/growth' },
   { page: 'Go-to-market', path: new RegExp(`^#/strategy/gtm${tail}$`), to: () => '/company/strategy' },
   { page: 'Routines (old Tasks view)', path: /^#\/(?:recurring|tasks\/routines)$/, to: () => '/company/routines' },
   // Automations is Routines. One automation opens in its panel; Webhooks is a tab; the built-in jobs are panels.
