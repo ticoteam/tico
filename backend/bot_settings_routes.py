@@ -19,7 +19,7 @@ from .harnesses import resolve_harness, runtime_of
 from .providers import MODEL_BY_ID
 from .readiness import absolute as absolute_link, can_run
 from .store import H, Problem
-from .api_contract import api_v2
+from .api_contract import api_v2, error
 
 
 def register(
@@ -238,7 +238,29 @@ def register(
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         return mutate(request, body, lambda c: settings_admin.set_turns_at_once(c, request.state.identity, bot, body))
 
-    @app.post("/api/v2/bots/{bot}/task-model")
+    @app.post(
+        "/api/v2/bots/{bot}/task-model",
+        **api_v2(
+            "Bots",
+            "setBotTaskModel",
+            "Set the harness, model, effort and context length the bot's tasks run on; null: the same as the bot",
+            "BotTaskModelSaved",
+            description="Whoever may manage the bot (the owner, an admin, one of its owners or a person it reports up "
+            "to), or its manager bot where allowed. Send `expected_revision` from the bot's configuration. A missing "
+            "model is the bot's own, so an effort or context length can be set alone. The bot's own model never "
+            "changes. A model its computer cannot run saves all the same (`readiness` says so), and `warning` names a "
+            "cheaper pick on a bot that sends, spends, publishes or writes. Audited as `bot.task_model_changed`.",
+            parameters={"bot": "The bot's id or slug"},
+            responses={
+                "403": error("forbidden: the caller may not manage this bot"),
+                "409": error(
+                    "version_conflict: the bot's configuration changed, refresh; unchanged: already selected; "
+                    "shared_copy: change the bot it follows"
+                ),
+                "422": error("model: not a supported model; harness: choose a task model to pick a harness for it"),
+            },
+        ),
+    )
     def bot_task_model(request: Request, bot: str, body: M.BotTaskModel):
         """The harness, model and effort the bot's tasks run on, or null for the same as the bot
         (backend/task_models.py). The bot's own model (POST .../model) never changes it, and this never changes that.

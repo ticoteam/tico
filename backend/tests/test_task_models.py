@@ -10,8 +10,9 @@ from backend import bot_settings as BS
 from backend import usage_limits
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.api import assign, claim, get, headers, post, runner  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.check_models import company, finish, heartbeat
+from backend.tests.helpers.openapi_v2 import conforms
 from backend.tests.helpers.task_models import ops_on_sonnet, revision, set_task_model, task_turn
 
 
@@ -929,3 +930,25 @@ def test_undoing_a_save_over_the_bots_own_model_restores_it_after_the_model_is_h
     save_terra_then_hold_it("medium")
     undo_last()
     assert get(api, "bots/ops")["task_model"] is None
+
+
+def test_the_task_model_answer_and_the_bots_row_match_their_declared_shapes_and_a_non_manager_is_refused(api):
+    ops_on_sonnet(api)
+    document = get(api, "openapi.json")
+    schemas = document["components"]["schemas"]
+    refused = api.post(
+        "/api/v2/bots/ops/task-model",
+        json={"task_model": HAIKU, "expected_revision": revision(api)},
+        headers=headers("cara-test"),
+    )
+    assert (refused.status_code, refused.json()["error"]["code"]) == (403, "forbidden")
+    saved = set_task_model(api, HAIKU)
+    assert conforms(saved, schemas["BotTaskModelSaved"], document) is None
+    assert saved["task_model"]["model"] == "claude-haiku-5-5" and saved["readiness"] is not None
+    listed = api.get("/api/v2/bots", headers=headers()).json()
+    ops = next(row for row in listed if row["id"] == "ops")
+    assert ops["task_model"] == saved["task_model"] and isinstance(ops["compact_at"], int)
+    assert conforms(ops, schemas["Bot"], document) is None
+    cleared = set_task_model(api, None)
+    assert cleared["task_model"] is None and cleared["readiness"] is None
+    assert conforms(cleared, schemas["BotTaskModelSaved"], document) is None

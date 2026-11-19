@@ -15,6 +15,8 @@ from backend.tests.helpers.gateway_enroll import fake_hq
 from backend.tests.helpers.gateway_enroll import setup as enroll_setup
 from backend.tests.helpers.gateway_enroll import tick
 from backend.tests.helpers.cloud_access import BILLING_URL, signals
+from backend.tests.helpers.company import bot
+from backend.tests.helpers.openapi_v2 import conforms
 
 
 @pytest.fixture
@@ -123,6 +125,21 @@ def test_locked_refuses_people_except_billing_and_the_download_and_opens_again_b
             for row in c.execute("SELECT detail FROM events WHERE action='cloud.access' ORDER BY rowid")
         ]
     assert [(m["from"], m["to"]) for m in moves] == [(None, "locked"), ("locked", "open")]
+
+
+def test_the_access_and_the_locked_refusal_answer_their_declared_shapes_and_a_bot_is_refused(api, hq):  # noqa: F811
+    document = get(api, "openapi.json")
+    op = document["paths"]["/api/v2/cloud-access"]["get"]
+    schema = op["responses"]["200"]["content"]["application/json"]["schema"]
+    assert conforms(get(api, "cloud-access"), schema, document) is None  # off cloud: null
+    refused = api.get("/api/v2/cloud-access", headers=headers(bot(api, "ops")))
+    assert (refused.status_code, refused.json()["error"]["code"]) == (403, "identity")
+    say(api, hq, "locked", "trial_over")
+    assert conforms(get(api, "cloud-access", "cara-test"), schema, document) is None
+    locked = api.get("/api/v2/tasks", headers=headers())
+    assert locked.status_code == 402
+    assert conforms(locked.json(), document["components"]["schemas"]["Problem"], document) is None
+    assert conforms(locked.json()["error"]["cloud"], document["components"]["schemas"]["CloudAccess"], document) is None
 
 
 def test_a_restart_keeps_the_lock_until_hq_answers(api, hq):  # noqa: F811

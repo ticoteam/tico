@@ -7,6 +7,37 @@ from ._base import SCHEMAS, items, obj, scalar
 SCHEMAS.update(
     {
         "TaskFlow": obj({"going": "i", "waiting": "i"}, required=["going", "waiting"]),
+        # What a bot's tasks run on (backend/task_models.py stored): an empty model is the bot's own model.
+        "TaskModelSetting": obj(
+            {
+                "harness": {"type": "string", "description": "Empty without a model, or for the model's own"},
+                "model": {"type": "string", "description": "Empty: the bot's own model runs its tasks"},
+                "reasoning_effort": "s",
+                "runtime": {"type": "string", "description": "Empty without a model"},
+                "compact_at": {
+                    "type": ["integer", "null"],
+                    "description": "Where a task's conversation compacts, in tokens; null is the model's default",
+                },
+            }
+        ),
+        "BotTaskModelSaved": obj(
+            {
+                "bot": {"type": "string", "description": "The bot's id"},
+                "task_model": {"oneOf": [ref("TaskModelSetting"), {"type": "null"}]}
+                | {"description": "What its tasks run on now; null: the same as the bot"},
+                "revision": {"type": "integer", "description": "The bot's configuration revision after the save"},
+                "readiness": {
+                    "type": ["object", "null"],
+                    "description": "With a task model: whether the bot's computer can run it now (its tasks run on the "
+                    "bot's own model until it can); else null",
+                },
+                "warning": {
+                    "type": "string",
+                    "description": "Plain words for a cheaper task model on a bot that sends, spends, publishes or "
+                    "writes; it saved all the same. Empty otherwise",
+                },
+            }
+        ),
         "Bot": obj(
             {
                 "id": {
@@ -29,6 +60,16 @@ SCHEMAS.update(
                 "owners": "a",
                 "status": {"type": ["object", "null"]},
                 "turns_at_once": {"type": ["integer", "null"]},
+                "task_model": {"oneOf": [ref("TaskModelSetting"), {"type": "null"}]}
+                | {
+                    "description": "On a bot whose configuration the caller may read: what its tasks run on; null is "
+                    "the same as the bot"
+                },
+                "compact_at": {
+                    "type": ["integer", "null"],
+                    "description": "On a bot whose configuration the caller may read: where its conversation "
+                    "compacts, in tokens (its saved size, else its model's default)",
+                },
                 "task_flow": ref("TaskFlow"),
                 "access": ref("Access"),
                 "onboarding_state": "s",
