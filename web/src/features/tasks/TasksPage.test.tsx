@@ -3,6 +3,7 @@ import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } fr
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ActionsRoot } from '@/actions';
 import { keys, queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { FlowPage } from './FlowPage';
@@ -23,7 +24,15 @@ function serve(reply: (url: string, method: string) => Reply | Promise<Reply>) {
 }
 
 function show(node: ReactNode, at: string) {
-  const root = createRootRoute({ component: () => node });
+  // The shell's ActionsRoot lends the router to the action layer: a view action (Filter, View) runs through it.
+  const root = createRootRoute({
+    component: () => (
+      <>
+        <ActionsRoot dot={() => null} fold={() => undefined} />
+        {node}
+      </>
+    ),
+  });
   const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [at] }) });
   render(
     <QueryClientProvider client={queryClient}>
@@ -31,6 +40,7 @@ function show(node: ReactNode, at: string) {
       <Toasts />
     </QueryClientProvider>,
   );
+  return router;
 }
 
 const ME = 'human:me';
@@ -85,7 +95,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Tasks board and list @s0 @s9 @s10', () => {
-  it('a board card opens its task under the pipeline, with a count per stage and Late only when late', async () => {
+  it('a board card opens its task under the pipeline, with a count per stage and Late only when late @s8', async () => {
     serve(() => ({ status: 200, body: {} }));
     seed([task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Write the notes', 's2', { late: { level: 'told', since: ago(60) } })]);
     show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
@@ -153,12 +163,21 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     expect(await screen.findByRole('button', { name: 'Clear Late' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Clear' })).toBeTruthy();
   });
+
+  it('Filter › Late puts the filter in the address @s17', async () => {
+    serve(() => ({ status: 200, body: { tasks: [], cursor: 'c1' } }));
+    seed([]);
+    const router = show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+    fireEvent.click(await screen.findByRole('button', { name: 'Filter' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Late' }));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ late: true }));
+  });
 });
 
 describe('Tasks: more of the page @s0 @s9 @s10', () => {
   const rows = () => [task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Write the notes', 's1')];
 
-  it('Archived shows snoozed, done and closed tasks, each naming its stage', async () => {
+  it('Archived shows snoozed, done and closed tasks, each naming its stage @s12 @s13 @s14', async () => {
     serve((url) => {
       if (url.includes('snoozed=only')) return { status: 200, body: { tasks: [task('z1', 3, 'Try the new font', 's1', { snoozed: true })], cursor: 'c' } };
       // Done holds more than one page: its count is the server's total
@@ -228,7 +247,7 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
   });
 
-  it("a stage's + files the task, then moves it into that stage", async () => {
+  it("a stage's + files the task, then moves it into that stage @s24", async () => {
     serve((url, method) => {
       if (method === 'POST' && url === '/api/v2/tasks') return { status: 200, body: { task: task('n1', 9, 'Check the copy', 's1') } };
       if (method === 'POST' && url === '/api/v2/tasks/n1/move') return { status: 200, body: { task: task('n1', 9, 'Check the copy', 's2', { version: 2 }) } };
@@ -298,7 +317,7 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     expect(screen.getByRole('button', { name: 'Clear Due this week' })).toBeTruthy();
   });
 
-  it('Edit pipeline saves the stages whole; a removed stage that holds tasks asks where they go', async () => {
+  it('Edit pipeline saves the stages whole; a removed stage that holds tasks asks where they go @s138', async () => {
     const rec = {
       id: 'eng',
       name: 'Engineering',
@@ -364,7 +383,7 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
   });
 });
 
-describe('Flow @s24', () => {
+describe('Flow @s5 @s112', () => {
   const item = { id: 'a1', number: 7, title: 'Approve the copy', pipeline_id: 'eng', stage_id: 's2', owner_id: null, late: false, stuck: false, since: ago(5) };
 
   it('a row opens the task in Flow, under its pipeline and stage', async () => {

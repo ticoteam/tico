@@ -13,6 +13,7 @@ import {
   renameTask,
   setTaskDue,
   setTaskParent,
+  snoozeTask,
   tagTask,
   dropLink,
 } from './queries';
@@ -116,6 +117,17 @@ export const done = defineAction({
   input: s.object({ task }),
   run: (_ctx, i) => said(markDone(i.task)),
   did: () => 'Marked done',
+  target: (i) => ({ kind: 'task-stage', id: i.task }),
+});
+
+/** Out of the open list until `until`; null brings it back now. */
+export const snooze = defineAction({
+  id: 'task.snooze',
+  title: 'Snooze a task',
+  kind: 'change',
+  input: s.object({ task, until: s.nullable(s.string({ min: 10, max: 40, what: 'an ISO date and time' })) }),
+  run: (_ctx, i) => said(snoozeTask(i.task, i.until)),
+  did: (i) => (i.until ? 'Snoozed' : 'Unsnoozed'),
   target: (i) => ({ kind: 'task-stage', id: i.task }),
 });
 

@@ -129,11 +129,13 @@ export const subtask = defineAction({
   target: ({ parent }) => ({ kind: 'task', id: parent }),
 });
 
-/** Merge a task into another: `into` stays and gets its details, the task is closed as a duplicate. */
+/** Merge a task into another: `into` stays and gets its details, the task is closed as a duplicate. It cannot be undone
+    (backend/task_merge.py has no way back), so it is the person's own press. */
 export const merge = defineAction({
   id: 'tasks.merge',
   title: 'Merge a task into another',
   kind: 'change',
+  tico: false,
   input: s.object({ task, into: task, owner: clearable(actor) }),
   run: (_ctx, { task, into, owner }) => said(() => mergeTask(task, into, owner), "Couldn't merge the tasks"),
   did: (_input, out) => (out ? `Merged #${out.closed.number ?? out.closed.id} into #${out.task.number ?? out.task.id}` : 'Merged the tasks'),

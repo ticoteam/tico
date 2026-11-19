@@ -4,7 +4,7 @@ import { FlowCover } from './FlowCover';
 
 afterEach(() => vi.useRealTimers());
 
-describe('Getting ready to flow', () => {
+describe('Getting ready to flow @s135', () => {
   it('covers a walk’s first task for a moment, and not the next one', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-11-19T10:00:00Z'));

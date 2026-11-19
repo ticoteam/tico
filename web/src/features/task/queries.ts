@@ -211,6 +211,12 @@ export const giveTask = (id: string, owner: string, setAnyway?: boolean) =>
 
 export const markDone = (id: string) => change(id, { status: 'done' }, (idem) => post(`${taskPath(id)}/done`, {}, idem));
 
+/** `until`: an ISO time the task wakes at; null wakes it now (ui/app/task-props.ts snoozeMenu, Unsnooze). */
+export const snoozeTask = (id: string, until: string | null) =>
+  until
+    ? change(id, { snoozed: true }, (idem) => post(`${taskPath(id)}/snooze`, { until }, idem))
+    : change(id, { snoozed: false, snooze: null }, (idem) => post(`${taskPath(id)}/unsnooze`, {}, idem));
+
 /** Approve or send back one requirement. The row leaves Flow at once and comes back if the server refuses. */
 export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: string): Promise<TaskResult> {
   const answered = (t: TaskData): Fields => ({

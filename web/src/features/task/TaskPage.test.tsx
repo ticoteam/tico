@@ -42,6 +42,7 @@ function show(node: ReactNode, at = '/tasks/p1/12') {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
+  return router;
 }
 
 /* Made-up rows only. */
@@ -111,7 +112,7 @@ afterEach(() => {
 });
 
 describe('one open task', () => {
-  it('opens on the page that waits on the person, with every tab a link, and follows the task', async () => {
+  it('opens on the page that waits on the person, with every tab a link, and follows the task @s51 @s54 @s74 @s780 @s789', async () => {
     serve(base);
     show(<TaskPage task="12" pipeline="p1" />);
     expect(await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' })).toBeTruthy();
@@ -124,7 +125,7 @@ describe('one open task', () => {
     expect(vi.mocked(useFollow)).toHaveBeenCalledWith({ task: 't1' });
   });
 
-  it('draws Details: what it needs to leave its stage, with what is met folded', async () => {
+  it('draws Details: what it needs to leave its stage, with what is met folded @s58', async () => {
     serve(base);
     show(<TaskPage task="12" pipeline="p1" tab="details" />, '/tasks/p1/12/details');
     expect(await screen.findByRole('heading', { name: /To leave Review/ })).toBeTruthy();
@@ -132,7 +133,7 @@ describe('one open task', () => {
     expect(screen.queryByText('Spec approved')).toBeNull();
   });
 
-  it('inside Flow, keeps the tab in the search', async () => {
+  it('inside Flow, keeps the tab in the search @s126', async () => {
     serve(base);
     show(<TaskPage task="12" tab="spec" flow />, '/flow/12?tab=spec');
     const tabs = await screen.findByRole('navigation', { name: 'Fix the sign-in page pages' });
@@ -140,7 +141,7 @@ describe('one open task', () => {
     expect(screen.getByRole('link', { name: 'Flow' }).getAttribute('href')).toBe('/flow');
   });
 
-  it('shows an approval at once and takes it back with the server’s reason when refused', async () => {
+  it('shows an approval at once and takes it back with the server’s reason when refused @s109', async () => {
     let refuse!: () => void;
     serve((url, method) => {
       if (url.includes('/api/v2/oks/')) return { status: 404, body: { error: { code: 'not_found', detail: 'none' } } };
@@ -248,7 +249,7 @@ describe('one open task', () => {
     expect(screen.queryByText(/\u2753/u)).toBeNull();
   });
 
-  it('draws a file that is not a page or a picture with the library preview', async () => {
+  it('draws a file that is not a page or a picture with the library preview @s56', async () => {
     const notes = {
       id: 'f6',
       name: 'notes.txt',
@@ -313,7 +314,7 @@ describe('a page’s versions, a new page and a picture', () => {
   };
   const frame = (title: string) => screen.findByTitle(title) as Promise<HTMLIFrameElement>;
 
-  it('opens an older version and marks what changed since the one before', async () => {
+  it('opens an older version and marks what changed since the one before @s55', async () => {
     serve((url) => (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1') ? { status: 200, body: detail(withVersions()) } : (html(url) ?? base(url))));
     show(<TaskPage task="12" pipeline="p1" tab="spec" />, '/tasks/p1/12/spec');
     fireEvent.click(await screen.findByRole('button', { name: 'Version 2' }));
@@ -330,7 +331,7 @@ describe('a page’s versions, a new page and a picture', () => {
     expect(screen.getByRole('button', { name: 'Next change' })).toBeTruthy();
   });
 
-  it('writes a new page from Add and opens it', async () => {
+  it('writes a new page from Add and opens it @s79', async () => {
     serve((url, method) => {
       if (method === 'POST' && url.endsWith('/api/v2/pages'))
         return { status: 200, body: { page: { id: 'pg9', file_id: 'f9', title: 'Release notes' }, unembedded: [] } };
@@ -352,7 +353,7 @@ describe('a page’s versions, a new page and a picture', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
-  it('opens a picture full size from its file', async () => {
+  it('opens a picture full size from its file @s78', async () => {
     const pic = {
       id: 'f5',
       name: 'shot.png',
@@ -368,5 +369,52 @@ describe('a page’s versions, a new page and a picture', () => {
     show(<TaskPage task="12" pipeline="p1" tab="details" file="f5" />, '/tasks/p1/12/details?file=f5');
     fireEvent.click(await screen.findByRole('button', { name: 'Sign-in screen, full size' }));
     expect(await screen.findByRole('dialog', { name: 'Sign-in screen' })).toBeTruthy();
+  });
+});
+
+describe('the task’s More menu', () => {
+  const flowServe = () =>
+    serve((url, method) => {
+      if (url.includes('/needs-you'))
+        return { status: 200, body: { items: [{ task: { id: 't1', number: 12, pipeline_id: 'p1' } }, { task: { id: 't9', number: 13, pipeline_id: 'p1' } }] } };
+      if (method === 'POST') return { status: 200, body: { task: task() } };
+      return base(url);
+    });
+  const more = async () => fireEvent.click((await screen.findAllByRole('button', { name: 'More' }))[0] as HTMLElement);
+
+  it('snoozes the task until a day the person picks @s51', async () => {
+    serve((url, method) => (method === 'POST' ? { status: 200, body: { task: task() } } : base(url)));
+    show(<TaskPage task="12" pipeline="p1" tab="details" />, '/tasks/p1/12/details');
+    await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' });
+    await more();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Snooze' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Tomorrow' }));
+    await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/tasks/t1/snooze'));
+    const until = new Date(String(sent.at(-1)?.body.until));
+    expect(until.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('in Flow, Give to hands the task over and goes on to the next one @s113', async () => {
+    const actors = [{ id: 'bot:b2', kind: 'agent', name: 'Reviewer' }];
+    queryClient.setQueryData(['directory'], { actors, byId: Object.fromEntries(actors.map((a) => [a.id, a])) });
+    flowServe();
+    const router = show(<TaskPage task="12" tab="details" flow />, '/flow/12?tab=details');
+    await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' });
+    await more();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Give to' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Reviewer' }));
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/owner', body: { owner: 'bot:b2' } }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/flow/13'));
+  });
+
+  it('in Flow, Move back sends it to an earlier stage and goes on to the next one @s114', async () => {
+    flowServe();
+    const router = show(<TaskPage task="12" tab="details" flow />, '/flow/12?tab=details');
+    await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' });
+    await more();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Move back' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Build' }));
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/move', body: { to: 's1' } }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/flow/13'));
   });
 });

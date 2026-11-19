@@ -266,6 +266,10 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
     if (r.ok) setAsking(null);
     else setError(reasonOf(r.error));
   };
+  const snooze = async (until: string | null) => {
+    const r = await run('task.snooze', { task: t.id, until }, { via: 'click' });
+    if (!r.ok) failed(r);
+  };
   const moveBack = async (to: string) => {
     const r = await run('task.moveBack', { task: t.id, to }, { via: 'click' });
     if (r.ok) order.next();
@@ -297,6 +301,15 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
         <MenuItem label="Tags" icon="rules" onSelect={() => open('tags')} />
         {t.status === 'open' && (
           <>
+            {t.snoozed ? (
+              <MenuItem label="Unsnooze" icon="clock" onSelect={() => void snooze(null)} />
+            ) : (
+              <MenuSub label="Snooze" icon="clock">
+                {snoozeChoices().map(([label, at]) => (
+                  <MenuItem key={label} label={label} onSelect={() => void snooze(at.toISOString())} />
+                ))}
+              </MenuSub>
+            )}
             <MenuRule />
             <MenuItem
               label="Mark done"
@@ -342,6 +355,23 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
       </Dialog>
     </>
   );
+}
+
+/** Snooze's choices: the start of that day, local time (ui/app/task-props.ts snoozeItems). */
+export function snoozeChoices(now = new Date()): [string, Date][] {
+  const day = (n: number) => {
+    const at = new Date(now);
+    at.setHours(0, 0, 0, 0);
+    at.setDate(at.getDate() + n);
+    return at;
+  };
+  const monday = (8 - now.getDay()) % 7 || 7;
+  return [
+    ['Tomorrow', day(1)],
+    ['Next week', day(monday)],
+    ['In two weeks', day(14)],
+    ['In a month', day(30)],
+  ];
 }
 
 /** "bug, checkout" to its tags, once each. */

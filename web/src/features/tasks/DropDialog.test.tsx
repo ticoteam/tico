@@ -3,7 +3,7 @@ import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } fr
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ActionsRoot } from '@/actions';
+import { ActionsRoot, run } from '@/actions';
 import { queryClient } from '@/data';
 import { DropDialog } from './DropDialog';
 import type { DropChecks } from './queries';
@@ -57,7 +57,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-describe('a card let go over another card', () => {
+describe('a card let go over another card @s25', () => {
   it('makes it a subtask by default', async () => {
     serve(checks());
     const close = vi.fn();
@@ -80,6 +80,14 @@ describe('a card let go over another card', () => {
     const go = within(dialog).getAllByRole('button', { name: 'Merge' }).at(-1) as HTMLElement;
     fireEvent.click(go);
     await waitFor(() => expect(posts).toEqual([{ url: '/api/v2/tasks/t1/merge', body: { into: 't2' } }]));
+  });
+
+  it('a merge cannot be undone, so Tico may not do it for the person', async () => {
+    serve(checks());
+    show(<DropDialog task="t1" onto="t2" onClose={() => undefined} />);
+    await screen.findByRole('dialog', { name: 'Drop #7 on #8' });
+    expect(await run('tasks.merge', { task: 't1', into: 't2', owner: null }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(posts).toEqual([]);
   });
 
   it('says why a choice cannot be made, and does not offer it', async () => {
