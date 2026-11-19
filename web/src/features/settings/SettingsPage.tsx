@@ -1,6 +1,6 @@
 import { useQuery, type UseQueryOptions } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Suspense, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { meQuery } from '@/data';
 import { AddAgentButton } from '@/features/team/exports';
 import { Empty } from '@/kit/Empty';
@@ -9,13 +9,12 @@ import { Icon } from '@/kit/Icon';
 import { Link as To } from '@/kit/Link';
 import { Section, Settings } from '@/pagekinds';
 import { StateBody } from '@/pagekinds';
-import { AddComputer, Agents, Computers, Models } from './Agents';
 import { Billing, Changelog, CheckNow, Health } from './Records';
 import { History, type HistoryWho } from './HistoryViews';
 import { Account, General, People, Security } from './Basics';
 import { Contacts, Tasks } from './Catalog';
 import { AddPersonButton } from './People';
-import { mainQuery } from './main';
+import { AddComputer, Agents, Computers, Models, mainQuery } from './main';
 import { NO_ACCESS, isForbidden } from './parts';
 import { accessQuery, settingsCatalogQuery, type SettingHit } from './queries';
 import { NAV, sectionName, type SectionId } from './sections';
@@ -243,7 +242,7 @@ export function SettingsPage({ section, open, who, list = false }: { section: Se
       className="set-page"
       open={!list || searching}
       nav={<Nav current={section} />}
-      actions={!searching && !forbidden && HEAD[section]}
+      actions={!searching && !forbidden && HEAD[section] && <Suspense fallback={null}>{HEAD[section]}</Suspense>}
       search={
         <div onKeyDown={keys}>
           <Search
@@ -270,7 +269,9 @@ export function SettingsPage({ section, open, who, list = false }: { section: Se
             {null}
           </StateBody>
         ) : (
-          <Body open={open} who={who} />
+          <Suspense fallback={null}>
+            <Body open={open} who={who} />
+          </Suspense>
         )
       }
     />

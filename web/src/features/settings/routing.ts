@@ -16,11 +16,14 @@ export interface UsageSearch {
 
 /** For the route's loader: the view's first read. Never throws. Read before, it draws from the cache at once; gone
     stale, it is read again behind the page. */
-export const loadUsage = (qc: QueryClient, search: UsageSearch) =>
-  (search.view === 'limits'
+export function loadUsage(qc: QueryClient, { view, range = '7d', by }: UsageSearch) {
+  // Start the chart with the figures so it can load while the route is opening.
+  if (view !== 'limits') void qc.prefetchQuery(usageQuery(range, 'day'));
+  return (view === 'limits'
     ? qc.ensureQueryData({ ...limitsQuery, revalidateIfStale: true })
-    : qc.ensureQueryData({ ...usageQuery(search.range ?? '7d', 'bot'), revalidateIfStale: true })
+    : qc.ensureQueryData({ ...usageQuery(range, by === 'model' ? 'model' : 'bot'), revalidateIfStale: true })
   ).then(
     () => undefined,
     () => undefined,
   );
+}

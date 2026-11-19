@@ -111,6 +111,7 @@ div.row{cursor:default}
 .set-more summary{cursor:pointer;font-size:var(--t-sm);color:var(--ink-2)}
 
 /* Usage (more.css): the range, the sum of an opened row, its token bar and key */
+.usage-page .pk-widgets{grid-template-columns:minmax(0,1fr)}
 .chart-sec{padding:var(--s-0) var(--s-2) var(--s-2h)}
 .u-tools{flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-2);padding:var(--s-1) 0 var(--s-2)}
 /* History: one list that scrolls inside the section, its page read as it nears the end */

@@ -88,10 +88,13 @@ beforeEach(() => {
   queryClient.setQueryData(directoryQuery.queryKey, directory([ana, pat, kim]));
   queryClient.setQueryData(groupsQuery.queryKey, groups);
   queryClient.setQueryData(agentsQuery.queryKey, roster);
-  queryClient.setQueryData(peopleQuery.queryKey, [
-    { id: 'p1', name: 'Pat Doe' },
-    { id: 'p2', name: 'Kim Roe', email: 'kim@example.com' },
-  ]);
+  queryClient.setQueryData(peopleQuery.queryKey, {
+    people: [
+      { id: 'p1', name: 'Pat Doe' },
+      { id: 'p2', name: 'Kim Roe', email: 'kim@example.com' },
+    ],
+    seats: [],
+  });
   queryClient.setQueryData(computersQuery.queryKey, [studio]);
   queryClient.setQueryData(modelsQuery.queryKey, { models: [], harnesses: [{ id: 'codex', name: 'Codex', capabilities: { browser_sign_in: true } }] });
 });
@@ -340,13 +343,15 @@ describe('Add teammate', () => {
 describe('A team', () => {
   it('has Teammates and Rules tabs, the month’s spend, the mock’s pills and its open seats', async () => {
     queryClient.setQueryData(agentsQuery.queryKey, [{ ...roster[0], status: 'paused' } as AgentRow]);
-    serve((url) =>
-      url.includes('/api/humans')
-        ? { status: 200, body: { seats: [{ id: 's1', title: 'Security Owner', team: 'g1' }, { id: 's2', title: 'Elsewhere', team: 'g9' }] } }
-        : url.includes('/api/v2/usage')
-          ? { status: 200, body: { totals: { est_cost_usd: 782 } } }
-          : undefined,
-    );
+    queryClient.removeQueries({ queryKey: peopleQuery.queryKey });
+    let rosterReads = 0;
+    serve((url) => {
+      if (url === '/api/humans') {
+        rosterReads++;
+        return { status: 200, body: { seats: [{ id: 's1', title: 'Security Owner', team: 'g1' }, { id: 's2', title: 'Elsewhere', team: 'g9' }] } };
+      }
+      if (url.includes('/api/v2/usage')) return { status: 200, body: { totals: { est_cost_usd: 782 } } };
+    });
     show(<TeamWho who="design" />, '/team/design');
     expect((await screen.findByRole('link', { name: 'Rules' })).getAttribute('href')).toBe('/company/rules?who=group%3Ag1');
     expect(screen.getByRole('link', { name: 'Teammates' })).toBeTruthy();
@@ -354,6 +359,7 @@ describe('A team', () => {
     expect(await screen.findByText('Security Owner')).toBeTruthy();
     expect(screen.queryByText('Elsewhere')).toBeNull();
     expect(screen.getByText('Stopped')).toBeTruthy();
+    expect(rosterReads).toBe(1);
   });
 });
 
