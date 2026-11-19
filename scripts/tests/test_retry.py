@@ -144,6 +144,9 @@ def test_remote_reports_missing_results_and_recovers_from_transient_downloads(
 ):
     monkeypatch.setenv('ERROR', error)
     monkeypatch.setenv('FAILURES', failures)
+    # A person's run needs no permit; in a bot's task turn these are set and remote.run would ask the live Tico.
+    for name in ('HUB_API_URL', 'HUB_TOKEN', 'HUB_TASK_ID'):
+        monkeypatch.delenv(name, raising=False)
     wrapper = downloads / 'scripts/ci/retry.sh'
     wrapper.parent.mkdir(parents=True)
     shutil.copyfile(ROOT / 'scripts/ci/retry.sh', wrapper)
