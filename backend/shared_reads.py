@@ -3,7 +3,7 @@
 Nov 19 relief for the hosted TIDY company: one person with the app open on ten computers and tabs sent ten identical
 GETs on every live event, each seconds of SQL, and the server fell behind. Here every GET under /api/ by one caller,
 with the same path, query and validators, is computed once for everyone who asks while it is being computed, and the
-answer serves the same request again for FRESH_SECONDS (TICO_READ_CACHE_SECONDS, default 1; 0 shares only while
+answer serves the same request again for FRESH_SECONDS (TICO_READ_CACHE_SECONDS, default 5; 0 shares only while
 computing). An answer can be up to that long behind a change: a deliberate, short-lived trade for load.
 
 - Never across callers: the key holds the caller's whole identity (actor, role, token, scope, view, ...).
@@ -28,10 +28,10 @@ UNSHARED_PLACES = frozenset({"growth"})
 
 
 def fresh_seconds() -> float:
-    """How long one person's answer serves the same request again (TICO_READ_CACHE_SECONDS, default 1); 0 shares an
+    """How long one person's answer serves the same request again (TICO_READ_CACHE_SECONDS, default 5); 0 shares an
     answer only while it is being computed."""
     try:
-        return max(0.0, float(os.environ.get("TICO_READ_CACHE_SECONDS", "1")))
+        return max(0.0, float(os.environ.get("TICO_READ_CACHE_SECONDS", "5")))
     except ValueError:
         return 1.0
 
