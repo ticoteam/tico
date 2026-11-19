@@ -1174,5 +1174,25 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "original",
+   "ops@acme.test",
+   "18c2f0a1b2c3d4e5",
+   "--raw"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "mail/messages/18c2f0a1b2c3d4e5/original?mailbox=ops%40acme.test&raw=true",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
  }
 ]

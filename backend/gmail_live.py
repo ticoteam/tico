@@ -423,17 +423,22 @@ def trash(c, mailbox, ids, restore=False):
         builtins.list(pool.map(one, ids))
 
 
-def thread_message_ids(c, mailbox, thread_ids, limit=500):
-    """The message ids of these threads, in order and at most `limit`: what an action on whole threads changes."""
+def thread_message_ids(c, mailbox, thread_ids):
+    """Every message id of these threads, in order, drafts left out (Gmail files no label on a draft, and an unsent
+    reply is the person's): what an action on whole threads changes, however many there are."""
     token, ids = _token(c, mailbox), []
     for tid in thread_ids:
         rows = _get(
-            mailbox, "threads/" + urllib.parse.quote(tid, safe=""), token, format="minimal", fields="messages(id)"
+            mailbox,
+            "threads/" + urllib.parse.quote(tid, safe=""),
+            token,
+            format="minimal",
+            fields="messages(id,labelIds)",
         ).get("messages")
         if not isinstance(rows, builtins.list) or any(not isinstance(r, dict) or not r.get("id") for r in rows):
             raise Problem("gmail_unavailable", "Gmail returned an incomplete thread; try again", 502, retryable=True)
-        ids.extend(str(r["id"]) for r in rows if str(r["id"]) not in ids)
-    return ids[:limit]
+        ids.extend(str(r["id"]) for r in rows if "DRAFT" not in (r.get("labelIds") or []) and str(r["id"]) not in ids)
+    return ids
 
 
 LABEL_COUNTS = ("messagesTotal", "messagesUnread", "threadsTotal", "threadsUnread")
