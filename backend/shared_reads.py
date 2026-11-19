@@ -25,7 +25,7 @@ session, or any other route reads as before."""
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 from starlette.responses import FileResponse, Response, StreamingResponse
@@ -58,7 +58,7 @@ KEPT_ONE = 8 * 1024 * 1024  # a bigger answer is shared only while it is being c
 
 clock: Callable[[], float] = time.monotonic
 
-Compute = Callable[[], Awaitable[Response]]
+Compute = Callable[[], Coroutine[Any, Any, Response]]
 
 
 def key_of(request: Any, route: str) -> tuple[Any, ...] | None:
