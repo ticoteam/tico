@@ -517,14 +517,20 @@ def _named_commits(conn: "sqlite3.Connection", review: Row, refs: Iterable[str])
             saved = cast("dict[str, object]", requested)
             named.extend((ref, str(sha).lower()) for ref, sha in saved.items() if sha)
     # Only messages about this review: a conversation several tasks share carries other tasks' PRs and commits too.
-    for (body,) in conn.execute(
-        "SELECT m.body FROM messages m LEFT JOIN conversations cv ON cv.id = m.conversation_id "
-        "WHERE m.conversation_id=? AND m.kind='say' AND m.deleted_at IS NULL AND m.superseded_at IS NULL "
-        f"AND {MESSAGE_TASK_SQL}=? ORDER BY m.created_at, m.id",
-        (review["conversation_id"], review["id"]),
-    ).fetchall():
+    for (body,) in conn.execute(_review_messages_sql(MESSAGE_TASK_SQL), (review["conversation_id"], review["id"])):
         named.extend(requested_commits(str(body or ""), refs).items())
     return named
+
+
+def _review_messages_sql(message_task_sql: str) -> str:
+    """A review's messages in its conversation, oldest first. `+m.kind` keeps the planner off the kind index: with no
+    sqlite_stat1 it chose (kind, created_at, id) for its order, a walk over every said message of the company
+    (TIDY, Nov 19: 20 ms a review, 11 reviews per Needs-you read), over the conversation's few."""
+    return (
+        "SELECT m.body FROM messages m LEFT JOIN conversations cv ON cv.id = m.conversation_id "
+        "WHERE m.conversation_id=? AND +m.kind='say' AND m.deleted_at IS NULL AND m.superseded_at IS NULL "
+        f"AND {message_task_sql}=? ORDER BY m.created_at, m.id"
+    )
 
 
 def _json_object(text: object) -> dict[str, Any]:
