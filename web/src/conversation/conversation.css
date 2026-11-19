@@ -51,28 +51,13 @@ textarea.composer-text::placeholder{color:var(--muted)}
 /* a picture in a message opens full size over the page (kit/PictureViewer) */
 .msg .md-img{cursor:zoom-in}
 
-/* Good and Not good under what others said: quiet fold-style words, shown on hover; a chosen one stays. The mocks draw
-   no rating, so these are the steps fold's look. */
-.rate{display:flex;gap:var(--s-3);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
-.rate .fold{cursor:pointer;font-family:inherit}
-.rate .fold:hover,.rate .fold[aria-pressed="true"]{color:var(--ink)}
-.msg:hover .rate,.rate:focus-within,.rate.is-rated{opacity:1}
-.rate.is-rated .fold[aria-pressed="false"]{visibility:hidden}
-.msg:hover .rate.is-rated .fold,.rate.is-rated:focus-within .fold{visibility:visible}
-@media (hover:none){.rate{opacity:1}}
-/* on a phone a long press on a message opens its actions as a sheet (platforms.md 2.8): the row under it keeps only a
-   chosen rating, and the pressed text is not selected instead */
+/* on a phone a long press on a message opens its actions as a sheet (platforms.md 2.8), so the pressed text is not
+   selected instead */
 :where(html[data-layout="cards"]){
   @media (hover:none){
-    .rate:not(.is-rated){display:none}
     .msg:not(.st-list .msg){-webkit-user-select:none;user-select:none}
   }
 }
-.rate-chips{display:flex;flex-wrap:wrap;gap:var(--s-1h)}
-.rate-chip{height:28px;padding:0 var(--s-2);border:0;border-radius:var(--r-chip);background:var(--well-2);color:var(--ink-2);font-family:inherit;font-size:var(--t-sm);cursor:pointer}
-.rate-chip:hover{color:var(--ink)}
-.rate-chip[aria-pressed="true"]{color:var(--ink);box-shadow:inset 0 0 0 1px var(--line-strong)}
-.rate-note{color:var(--muted);font-size:var(--t-sm)}
 .msg-from{text-decoration:none;cursor:pointer;font-family:inherit}
 .msg-from:hover{color:var(--ink)}
 
@@ -100,12 +85,6 @@ button.quote:hover span{color:var(--ink)}
   button.quote::before{content:"";position:absolute;inset:-11px 0}
 }
 
-/* Reaction chips (parts.css .reacts/.react) as buttons: mine is marked by weight and a ring, never a color. */
-button.react{border:0;color:var(--ink);font-family:inherit;cursor:pointer}
-button.react:hover{background:var(--well-2)}
-button.react[aria-pressed="true"]{box-shadow:inset 0 0 0 1px var(--line-strong)}
-button.react[aria-pressed="true"] b{font-weight:var(--w-strong);color:var(--ink-2)}
-
 /* Long words, links and inline code wrap inside the message wherever they must; a code block keeps its lines and
    scrolls inside itself. A bubble and its column never grow past the row. */
 .msg-main,.bubble{overflow-wrap:anywhere}
@@ -121,7 +100,7 @@ button.react[aria-pressed="true"] b{font-weight:var(--w-strong);color:var(--ink-
 a.head-name{color:inherit;text-decoration:underline;text-decoration-color:transparent;text-underline-offset:3px;transition:text-decoration-color var(--dur-fast) var(--ease)}
 a.head-name:hover{text-decoration-color:var(--line-strong)}
 
-/* Reply and React on the message under the pointer, at its top corner; a phone has the long press instead. */
+/* Reply on the message under the pointer, at its top corner; a phone has the long press instead. */
 .chat-body .msg{position:relative}
 .msg-acts{position:absolute;top:var(--s-2);right:0;display:flex;gap:var(--s-0);border-radius:var(--r-ctl);background:var(--surface-chat);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
 .msg.is-mine .msg-acts{right:auto;left:0}
