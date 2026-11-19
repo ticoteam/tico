@@ -99,6 +99,11 @@
 button.add-pick,button.add-person,button.tpl{border:0;background:none;text-align:left}
 button.add-pick:hover,button.add-person:hover,button.tpl:hover,button.tpl.is-on{background:var(--raised-hover)}
 
+/* ---------- a copy of an agent: the pick beside its name (mates.css .copy-pick) ---------- */
+.copy-pick{margin:var(--s-1) 0 0 calc(var(--s-0) * -1);flex:none}
+.copy-pick .ico{width:14px;height:14px;stroke-width:1.8}
+.rec.is-col .copy-pick{height:var(--ctl-sm);margin:0 0 0 var(--s-1)}
+
 /* ---------- a secret shown once; who can reach a teammate ---------- */
 .once{display:block;padding:var(--s-2h) var(--s-3);border-radius:var(--r-ctl);background:var(--well);font-family:var(--font-code);font-size:var(--t-sm);overflow-wrap:anywhere;user-select:all}
 .lvl{display:grid;gap:var(--s-1h);margin:0;padding:0;border:0;min-width:0}

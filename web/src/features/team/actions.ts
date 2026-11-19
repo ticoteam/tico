@@ -11,6 +11,7 @@ import {
   controlAgent,
   giveTask,
   invitePerson,
+  makeCopy,
   makePassword,
   moveAgent,
   moveToTeam,
@@ -20,6 +21,8 @@ import {
   restartComputer,
   sendLoginCode,
   setAgentModel,
+  setAgentStatus,
+  setProfile,
   setPersonRole,
   setPersonTitle,
   setTeammateAccess,
@@ -163,6 +166,55 @@ export const archive = defineAction({
     return { name };
   },
   did: ({ slug }, out) => `Archived ${out?.name ?? slug}. It takes no more work; its tasks and history stay.`,
+});
+
+/** My copy of an agent that allows copies: on my computer, or planned until I add one. Opens it. */
+export const copy = defineAction({
+  id: 'agents.makeCopy',
+  title: 'Make my copy of an agent',
+  kind: 'change',
+  input: s.object({ slug, computer: s.optional(s.string({ min: 1, max: 100, what: "one of my computers' ids" })) }),
+  run: async ({ router }, { slug, computer }) => {
+    const made = await said("Couldn't make your copy", () => makeCopy(slug, computer));
+    await router.navigate({ to: page(made.slug), search: { tab: 'settings' } });
+    return made;
+  },
+  did: (_input, out) => (out?.status === 'planned' ? 'Made your copy. It starts once you add a computer.' : 'Made your copy'),
+  target: (_input, out) => (out ? onPage(out.slug) : null),
+});
+
+export const status = defineAction({
+  id: 'agents.setStatus',
+  title: "Set a copy's status: setting up, active or paused",
+  kind: 'change',
+  input: s.object({ slug, status: s.oneOf(['planned', 'active', 'paused'] as const) }),
+  run: (_ctx, { slug, status }) => said("Couldn't change it", () => setAgentStatus(slug, status)),
+  did: () => 'Changed its status',
+  target: ({ slug }) => onPage(slug),
+});
+
+/** Leaving Custom deletes the wake rules it copied: refused unless `dropRules`, which only a person sends. */
+export const profile = defineAction({
+  id: 'agents.setProfile',
+  title: 'Change how an agent takes work (its profile)',
+  kind: 'change',
+  input: s.object({
+    slug,
+    profile: s.oneOf(['doer', 'reviewer', 'lead', 'manager', 'responder', 'monitor', 'custom'] as const),
+    dropRules: s.optional(s.boolean()),
+  }),
+  can: (ctx, { dropRules }) => !(dropRules && ctx.via === 'tico'),
+  run: async (_ctx, { slug, profile, dropRules }) => {
+    try {
+      return await setProfile(slug, profile, dropRules);
+    } catch (e) {
+      // Leaving Custom: the page asks, then sends it again with dropRules.
+      if (!(e instanceof ApiError && e.code === 'conflict')) toast({ text: reason(e, "Couldn't change it"), kind: 'failed' });
+      throw e;
+    }
+  },
+  did: () => 'Changed its profile',
+  target: ({ slug }) => onPage(slug),
 });
 
 export const moveComputer = defineAction({

@@ -43,6 +43,8 @@ export interface AgentRow {
   cloud_machine?: { mode?: string; placement?: string; shared?: boolean; size?: string; state?: string } | null;
   can_manage?: boolean;
   online?: boolean;
+  /** The person who runs it (a bare person id). */
+  owner_id?: string | null;
   /** Who it works for (its owner ids), as people. */
   users?: { id: string; name?: string }[];
   /** An agent that runs elsewhere (a Hermes or OpenClaw profile) on a standing credential instead of a computer. */
@@ -331,6 +333,8 @@ export interface Computer {
   online: boolean;
   last_seen_at?: string | null;
   revoked_at?: string | null;
+  /** The person whose computer it is (a bare person id). */
+  owner_id?: string;
   version?: string;
   platform?: string;
   /** Bot ids. */
@@ -729,3 +733,86 @@ export const signOutStopsQuery = (rid: string, runtime: string) =>
       (await api.get<{ bots?: { bot: string; name?: string }[] }>(`${logins(rid)}/logouts/bots?${q({ runtime })}`, { signal })).bots ?? [],
     staleTime: 0,
   });
+
+/* ---------------------------------------------------------------- copies of an agent */
+
+/** A person's own copy of an agent that allows them (a roster row that follows the original: `shared_from`). */
+export interface Branch {
+  id: string;
+  slug: string;
+  display_name?: string;
+  owner_id?: string | null;
+  status?: string;
+  revision?: number;
+  shared_from?: string | null;
+  profile?: { name?: string; label?: string; summary?: string } | null;
+}
+export interface Branches {
+  /** The original's bot id. */
+  original: string;
+  /** Whether the original allows copies. */
+  shared?: boolean;
+  branches?: Branch[];
+}
+
+/** The original and its copies, from either one's page. Null to anyone who may not read them. */
+export const branchesQuery = (slug: string) =>
+  queryOptions({
+    queryKey: ['team', 'branches', slug] as const,
+    queryFn: async ({ signal }): Promise<Branches | null> => {
+      try {
+        return await api.get<Branches>(`/api/v2/bots/${at(slug)}/branches`, { signal });
+      } catch (e) {
+        if (e instanceof ApiError && (e.status === 403 || e.status === 401 || e.status === 404)) return null;
+        throw e;
+      }
+    },
+    staleTime: QUIET_STALE_MS,
+  });
+
+const copiesAgain = () => {
+  void queryClient.invalidateQueries({ queryKey: ['team', 'branches'] });
+  void queryClient.invalidateQueries({ queryKey: agentsQuery.queryKey });
+  directoryAgain();
+};
+
+/** My copy of `source`, on my computer, or planned until I add one (no computer). */
+export async function makeCopy(source: string, runner?: string) {
+  const made = await api.post<Branch & { created?: boolean }>(`/api/v2/bots/${at(source)}/copies`, runner ? { runner_id: runner } : {});
+  copiesAgain();
+  return made;
+}
+
+/** A copy's own status: Setting up (planned), Active or Paused. */
+export async function setAgentStatus(slug: string, status: 'planned' | 'active' | 'paused') {
+  const out = await write({
+    key: agentsQuery.queryKey,
+    optimistic: patchRows(slug, { status }),
+    send: (idempotencyKey) => api.post<{ revision?: number }>(`/api/v2/bots/${at(slug)}/definition`, { status, expected_revision: revisionOf(slug) }, { idempotencyKey }),
+  });
+  copiesAgain();
+  return out;
+}
+
+export interface Profile {
+  name: string;
+  label: string;
+  description: string;
+}
+
+export const profilesQuery = queryOptions({
+  queryKey: ['team', 'profiles'] as const,
+  queryFn: async ({ signal }) => (await api.get<{ profiles?: Profile[] }>('/api/v2/profiles', { signal })).profiles ?? [],
+  staleTime: QUIET_STALE_MS,
+});
+
+/** How it takes work. Leaving Custom deletes the wake rules it copied: refused (409 conflict) unless `dropRules`. */
+export async function setProfile(slug: string, profile: string, dropRules?: boolean) {
+  const out = await api.post<{ revision?: number }>(`/api/v2/bots/${at(slug)}/profile`, {
+    profile,
+    expected_revision: revisionOf(slug),
+    ...(dropRules ? { confirm_drop_rules: true } : {}),
+  });
+  copiesAgain();
+  return out;
+}

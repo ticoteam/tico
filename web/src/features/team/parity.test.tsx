@@ -138,3 +138,68 @@ describe('Team parity', () => {
     await waitFor(() => expect(sent.find((s) => s.url.includes('/computers/r1/logouts'))?.body).toEqual({ runtime: 'claude' }));
   });
 });
+
+describe('Copies of an agent', () => {
+  const copy: Actor = { id: 'bot:0191-anb', kind: 'agent', name: 'Ana', slug: 'ana-pat' };
+  const family = (branches: unknown[]) => ({ status: 200, body: { original: '0190-ana', shared: true, branches } });
+  const mine = { id: '0191-anb', slug: 'ana-pat', owner_id: 'p1', status: 'active', revision: 4, profile: { name: 'custom', label: 'Custom' } };
+  const pick = async (name: string, option: string) => {
+    fireEvent.click(await screen.findByRole('combobox', { name }));
+    const o = await screen.findByRole('option', { name: option });
+    fireEvent.pointerDown(o, { pointerType: 'mouse' });
+    fireEvent.click(o);
+  };
+  beforeEach(() => {
+    const all = [...actors, copy];
+    queryClient.setQueryData(directoryQuery.queryKey, { actors: all, byId: { ...byId, [copy.id]: copy, 'ana-pat': copy } });
+    queryClient.setQueryData(agentsQuery.queryKey, [...roster, { id: '0191-anb', slug: 'ana-pat', display_name: 'Ana', revision: 4, owner_id: 'p1' } as AgentRow]);
+    queryClient.setQueryData(computersQuery.queryKey, [
+      { ...studio, owner_id: 'p1' },
+      { ...studio, id: 'r2', label: 'Annex', bots: [], owner_id: 'p1' },
+    ]);
+  });
+
+  it('makes my copy of a shared agent on my computer that does not run it', async () => {
+    serve((url, method) => {
+      if (url.includes('/bots/ana/branches')) return family([]);
+      if (method === 'POST' && url.includes('/bots/ana/copies')) return { status: 201, body: { ...mine, status: 'active' } };
+      return undefined;
+    });
+    show(<TeamWho who="ana" />, '/team/ana');
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy: Original' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Make my copy' }));
+    expect(await screen.findByRole('combobox', { name: 'Computer' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Make copy' }));
+    await waitFor(() => expect(sent.find((s) => s.url.includes('/bots/ana/copies'))?.body).toEqual({ runner_id: 'r2' }));
+  });
+
+  it('pauses my copy against its revision', async () => {
+    serve((url) => (url.includes('/bots/ana-pat/branches') ? family([mine]) : undefined));
+    show(<TeamWho who="ana-pat" tab="settings" />, '/team/ana-pat?tab=settings');
+    expect(await screen.findByRole('link', { name: /Ana/ })).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button', { name: /Status/ }));
+    await pick('Status', 'Paused');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(sent.find((s) => s.url.includes('/bots/ana-pat/definition'))?.body).toEqual({ status: 'paused', expected_revision: 4 }));
+  });
+
+  it('asks before leaving Custom drops its own wake rules, then sends the change again', async () => {
+    let tries = 0;
+    serve((url, method) => {
+      if (url.includes('/bots/ana-pat/branches')) return family([mine]);
+      if (url.includes('/api/v2/profiles')) return { status: 200, body: { profiles: [{ name: 'custom', label: 'Custom' }, { name: 'doer', label: 'Doer' }] } };
+      if (method === 'POST' && url.includes('/bots/ana-pat/profile'))
+        return tries++ ? { status: 200, body: {} } : { status: 409, body: { error: { code: 'conflict', detail: 'Wake rules would be deleted' } } };
+      return undefined;
+    });
+    show(<TeamWho who="ana-pat" tab="settings" />, '/team/ana-pat?tab=settings');
+    fireEvent.click(await screen.findByRole('button', { name: /Profile/ }));
+    await pick('Profile', 'Doer');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Leave Custom' }));
+    await waitFor(() => expect(sent.filter((s) => s.url.includes('/profile')).map((s) => s.body)).toEqual([
+      { profile: 'doer', expected_revision: 4 },
+      { profile: 'doer', expected_revision: 4, confirm_drop_rules: true },
+    ]));
+  });
+});

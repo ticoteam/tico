@@ -17,6 +17,7 @@ import type { Tab } from './actions';
 import { ComputerPage } from './ComputerPage';
 import { bareId, historyOf, modelLine, runFigures, startOfWeek, teamOf, type HistLine } from './model';
 import { ModelPicker } from './ModelPicker';
+import { CopiesSection, CopyFacts, CopyPick } from './Copies';
 import { CredentialDialog, WorksForDialog } from './dialogs';
 import { ConfirmDialog, EditDialog, Foot, Fold, OwnRow, PickDialog, SecLink, waitsOn } from './parts';
 import {
@@ -122,6 +123,7 @@ function AgentHead({
     lead: <Avatar kind="agent" name={actor.name} hue={actor.hue} live={actor.working} size={36} />,
     after: (
       <>
+        <CopyPick slug={slug} botId={row?.id ?? bareId(actor.id)} />
         {paused && <Pill flag>Paused</Pill>}
         {sub && <p className="col-sub">{sub}</p>}
       </>
@@ -254,6 +256,7 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
             ))}
             {doneN > 0 && <Fold label="Done" text={`${doneN} this week`} />}
           </Section>
+          <CopiesSection slug={slug} botId={bareId(actor.id)} actors={actors} />
         </>
       }
     />
@@ -312,6 +315,7 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
         <>
           <Section name="Info">
             <Facts label="Info">
+              <CopyFacts slug={slug} botId={botId} manage={manage} />
               <LabelValue label="Role" onEdit={() => setEditing('role')}>
                 {role || 'None'}
               </LabelValue>
