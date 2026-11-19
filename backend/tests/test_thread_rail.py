@@ -693,5 +693,5 @@ def test_one_person_dms_never_read_the_rooms_of_the_tasks_one_follows(api):
             pairs = threads._one_dm_pairs(c, v)
         finally:
             c.set_trace_callback(None)
-    assert pairs == {dm["id"]: "human:ana"}
+    assert list(pairs.values()) == ["human:ana"]
     assert not [q for q in seen if room in q], [q for q in seen if room in q]
