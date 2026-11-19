@@ -501,7 +501,7 @@ def test_a_failed_instant_payout_returns_its_gross_to_transit_and_its_fee_off_fe
 def test_a_payout_never_clears_a_brex_deposit_whose_sign_is_still_unchecked(books):
     """A Brex cash row waits unposted until its connection's sign is checked: its amount is not trusted, so a payout
     never takes it as its deposit."""
-    from backend.tests.test_finance_brex import CASH, FakeBrex, brex_pass, cash_txn, connect_brex
+    from backend.tests.helpers.finance_brex import CASH, FakeBrex, brex_pass, cash_txn, connect_brex
 
     brex = FakeBrex()
     connect_brex(books, brex)
