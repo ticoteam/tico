@@ -97,7 +97,13 @@ def test_the_turns_list_takes_the_same_statements_however_many_turns_it_reads(tm
         api = next(install)
         try:
             machine = None
-            shapes = ({}, {"room": True}, {"room": True, "failed": True}, {"task": True}, {"task": True, "failed": True})
+            shapes = (
+                {},
+                {"room": True},
+                {"room": True, "failed": True},
+                {"task": True},
+                {"task": True, "failed": True},
+            )
             for shape in shapes:
                 machine = runs(api, count, machine=machine, **shape)
             body, counted[name] = turns_statements(api, monkeypatch, "/api/v2/bots/ops/turns")
