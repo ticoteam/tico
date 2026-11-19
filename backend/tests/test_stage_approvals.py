@@ -496,6 +496,25 @@ def test_two_qa_pages_kept_together_name_each_page_and_how_to_drop_one(api):
         assert E.task(c, row["id"])["stage_id"] == "approvals-build"
 
 
+def test_a_new_version_of_one_of_two_kept_pages_keeps_the_other_judged(api):
+    """Two pages kept together with add; attaching a new version of either one replaces nothing, so the other still
+    has to pass (review of tico#4422: the default replace dropped it and the gate passed unjudged)."""
+    _, row = _flow(api, "QA report", who_oks="none")
+    first = _write(api, row["id"], SPEC, "ana-test", "QA report")
+    _say_on(api, row["id"], first["file_id"], "not_met")
+    second = _attach_second_spec(api, row, "rebuilt.html", add=True)
+    entry = _entry(api, row["id"])
+    again = post(
+        api,
+        f"tasks/{row['id']}/pages",
+        {"requirement": entry["requirement_id"], "page": f"page:{second['file_id']}@1"},
+    )
+    assert "replaced" not in again
+    assert sorted(_qa_report_links(api, row["id"])) == sorted([first["file_id"], second["file_id"]])
+    _say_on(api, row["id"], second["file_id"], "met")
+    assert _standing(api, row["id"]).state == R.NOT_MET
+
+
 def test_a_pages_spec_ok_does_not_approve_its_other_document_role(api):
     from backend import page_links as L
     from backend import task_documents as TD

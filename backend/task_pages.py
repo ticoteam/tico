@@ -392,12 +392,15 @@ def _replace_submitted(
     conn: "sqlite3.Connection", row: Row, found: Row, document: str, file_id: str, by: str
 ) -> list[str]:
     """Take off the task, in this document role, each other page submitted to `found` on the task's open visit; gives
-    their `page:<file id>@<version>`. A page linked in the role but not submitted on this visit stays (another
+    their `page:<file id>@<version>`. A new version of a page already submitted replaces nothing. A page linked in the role but not submitted on this visit stays (another
     stage's, or one left from an earlier visit): only what this stage visit judged is replaced."""
     from . import page_links as L
 
+    submitted = current_pages(conn, row["visit"]["id"], found["id"])
+    if any(str(page["file_id"]) == file_id for page in submitted):
+        return []  # a new version of a page already in the set: the pages kept beside it (`add`) stay
     replaced: list[str] = []
-    for page in current_pages(conn, row["visit"]["id"], found["id"]):
+    for page in submitted:
         other = str(page["file_id"])
         if other != file_id and L.unlink(conn, other, "task:" + str(row["id"]), document, by):
             replaced.append(f"page:{other}@{page['version']}")
