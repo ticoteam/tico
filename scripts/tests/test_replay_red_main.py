@@ -58,6 +58,7 @@ PINNED_CAUGHT = {
     56,
     57,
     58,
+    59,
 }
 # Case numbers whose failing checks must run in the light PR plan.
 PINNED_CAUGHT_AT_PR = {
@@ -106,6 +107,7 @@ PINNED_CAUGHT_AT_PR = {
     56,
     57,
     58,
+    59,
 }
 
 

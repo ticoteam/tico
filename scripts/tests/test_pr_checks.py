@@ -3219,6 +3219,17 @@ def test_a_cli_command_change_runs_the_cli_spec_test_even_in_a_light_plan(event,
 
 
 @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+def test_a_cli_command_change_runs_the_frozen_command_lines_even_in_a_light_plan(event, repo_map):
+    # Nov 18: #3798 added `advice` to `tico computer performance` in clients/commands/computers.py; its plan never ran
+    # test_cli_fixtures.py, whose cases are argv lists in JSON, and release validation for v0.6.66 went red (#4303).
+    changed = ["clients/commands/computers.py", "backend/performance.py"]
+    light = light_plan(changed, event, repo_map, added=[])
+    assert checks.CLI_FIXTURES in light["python"] and light["narrow"]["tier"][checks.CLI_FIXTURES] == 0
+    assert checks.CLI_FIXTURES in light["guards"] and (ROOT / checks.CLI_FIXTURES).is_file()
+    assert checks.CLI_FIXTURES not in light_plan(["backend/performance.py"], event, repo_map, added=[])["guards"]
+
+
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
 @pytest.mark.parametrize(
     "path",
     [
