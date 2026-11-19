@@ -170,9 +170,9 @@ function UpdateOpen({ id, tab }: { id: string; tab: UpdateTab }) {
   const marked = useRef<string | null>(null);
   useEffect(() => {
     // Opening an update reads it, as the old app does; once per update shown.
-    if (u.read || marked.current === u.id) return;
+    if (marked.current === u.id) return;
     marked.current = u.id;
-    void press('updates.markRead', { ids: [u.id] });
+    if (!u.read) void press('updates.markRead', { ids: [u.id] });
   }, [u]);
   const title = updateTitle(u);
   const more = (

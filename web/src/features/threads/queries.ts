@@ -308,7 +308,18 @@ export const textListQuery = textsBySenderQuery();
 export const textQuery = (id: string) =>
   queryOptions({
     queryKey: textKeys.one(id),
-    queryFn: ({ signal }) => api.get<{ text: string; message_id: string }>(`/api/v2/inbound/messages/${enc(id)}`, { signal }),
+    queryFn: async ({ signal }) => {
+      let text = '';
+      let offset = 0;
+      while (true) {
+        const part = await api.get<{ text: string; next_offset?: number | null }>(
+          `/api/v2/inbound/messages/${enc(id)}${qs({ offset: offset || undefined })}`, { signal },
+        );
+        text += part.text;
+        if (part.next_offset == null || part.next_offset <= offset) return { text };
+        offset = part.next_offset;
+      }
+    },
   });
 
 /* ---------------------------------------------------------------- updates */
@@ -351,9 +362,13 @@ const setRead = (ids: string[] | 'all', read: boolean) => (d: UpdateList | undef
   };
 
 export function markUpdatesRead(ids: string[] | 'all', read = true) {
+  const details = ids === 'all'
+    ? queryClient.getQueriesData<Update>({ queryKey: ['updates', 'one'] }).map(([key]) => key)
+    : ids.map(updateKeys.one);
+  const markList = setRead(ids, read);
   return write({
-    key: TABS.map(updateKeys.list),
-    optimistic: setRead(ids, read),
+    key: [...TABS.map(updateKeys.list), ...details],
+    optimistic: (d: UpdateList | Update | undefined) => d && ('pages' in d ? markList(d) : { ...d, read }),
     send: (idempotencyKey) =>
       api.post('/api/v2/updates/read', ids === 'all' ? { all: true } : { ids, read }, { idempotencyKey }),
   });

@@ -1,6 +1,7 @@
 import { act, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AssetRecovery } from './AssetRecovery';
+import { Cover } from './Cover';
 import { isAssetFailure } from './recovery';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -17,6 +18,25 @@ const link = (rel: string, href: string) => Object.assign(document.createElement
 const rejected = (reason: unknown) => Object.assign(new Event('unhandledrejection'), { reason });
 
 describe('Asset recovery @s1197', () => {
+  it('keeps the app and the notice behind a recovery card out of the focus order', () => {
+    const view = (planLocked: boolean, recover: boolean) => (
+      <>
+        <div data-testid="app">App</div>
+        {planLocked && <Cover label="Plan"><button className="btn-fill">Billing</button></Cover>}
+        {recover && <AssetRecovery />}
+      </>
+    );
+    const { rerender } = render(view(true, true));
+    const plan = screen.getByRole('alertdialog', { name: 'Plan' }) as HTMLElement;
+    act(() => window.dispatchEvent(new Event('vite:preloadError')));
+    expect(plan.inert).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Reload' }));
+    rerender(view(false, true));
+    expect((screen.getByTestId('app') as HTMLElement).inert).toBe(true);
+    rerender(view(false, false));
+    expect((screen.getByTestId('app') as HTMLElement).inert).toBe(false);
+  });
+
   it('counts only our own files failing', () => {
     expect(isAssetFailure(new Event('vite:preloadError'))).toBe(true);
     expect(isAssetFailure(failedLoad(script('/assets/tasks-a1b2.js')))).toBe(true);

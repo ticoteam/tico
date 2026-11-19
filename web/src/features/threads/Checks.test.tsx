@@ -14,7 +14,7 @@ import { ChatSheet } from './ChatSheet';
 import { LearnedPage } from './LearnedPage';
 import { MailPage, MessagingPage } from './MailPage';
 import type { Thread } from './model';
-import { learnedQuery, mailboxesQuery, threadKeys, updateListQuery, viewersQuery } from './queries';
+import { learnedQuery, mailboxesQuery, threadKeys, updateListQuery, updateQuery, viewersQuery } from './queries';
 import { ThreadHead } from './ThreadHead';
 import { ThreadsPage } from './ThreadsPage';
 import { UpdatesPage } from './UpdatesPage';
@@ -272,11 +272,23 @@ describe('Mail @s159', () => {
 });
 
 describe('Mailboxes @s1203', () => {
+  it('shows the first mailbox when an old link points to one no longer available', async () => {
+    serve((url) => (url.includes('/mail/messages') ? ok({ messages: [letter()] }) : undefined));
+    queryClient.setQueryData(mailboxesQuery.queryKey, [{ address: 'help@example.test' }]);
+    show(<MailPage box="old@example.test" open="old-thread" />, '/threads/mail?box=old%40example.test&open=old-thread');
+    const row = await screen.findByTitle('Sam Lee: Invoice question');
+    expect(row.closest('main')?.classList.contains('is-list')).toBe(true);
+    expect(all('GET', '/mail/messages').map((c) => new URL(c.url, location.origin).searchParams.get('mailbox'))).toEqual(['help@example.test']);
+    expect(all('GET', '/mail/threads/old-thread')).toEqual([]);
+  });
+
   it('offers a pick between mailboxes under the filter, even from an empty one, and picking one reads it', async () => {
     serve((url) => (url.includes('/mail/messages') ? ok({ messages: [] }) : undefined));
     queryClient.setQueryData(mailboxesQuery.queryKey, [{ address: 'help@example.test' }, { address: 'sales@example.test' }]);
     const router = show(<MailPage />, '/threads/mail');
-    fireEvent.click(await screen.findByRole('button', { name: 'Mailbox' }));
+    const filter = await screen.findByRole('button', { name: 'Mailbox' });
+    expect(filter.hasAttribute('data-phone')).toBe(true);
+    fireEvent.click(filter);
     expect(await screen.findByRole('menuitem', { name: 'sales@example.test' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'No mail' })).toBeTruthy();
     expect((await run('mail.pickBox', { box: 'sales@example.test' }, { via: 'click' })).ok).toBe(true);
@@ -324,6 +336,15 @@ const openMail = (extra: Record<string, unknown> = {}) =>
   );
 
 describe('An open mail @s159', () => {
+  it('keeps an undated letter readable in the list and in the open thread', async () => {
+    const undated = letter({ epoch: 0, date: '', body: 'Can I change the size?' });
+    serve((url) => (url.includes('/mail/messages') || url.includes('/mail/threads/') ? ok({ messages: [undated] }) : undefined));
+    queryClient.setQueryData(mailboxesQuery.queryKey, [box]);
+    show(<MailPage box={box.address} open="th1" />, '/threads/mail?box=help%40example.test&open=th1');
+    expect(await screen.findByTitle('Sam Lee: Invoice question')).toBeTruthy();
+    expect(await screen.findByText('Can I change the size?')).toBeTruthy();
+  });
+
   it('heads with the sender, their address, the agent and Archive; letters show the full date and their files', async () => {
     openMail({ epoch: Date.UTC(2026, 10, 18, 17, 21) / 1000 });
     queryClient.setQueryData(mailboxesQuery.queryKey, [box]);
@@ -418,6 +439,24 @@ describe('Mail: search @s159', () => {
 });
 
 describe('Messaging @s160', () => {
+  it('reads every part of a text when the server pages its body', async () => {
+    const contact = '+15550199';
+    serve((url) => {
+      const path = new URL(url, location.origin);
+      if (path.pathname.endsWith('/inbound/messages/x1')) {
+        return path.searchParams.get('offset') === '13'
+          ? ok({ text: 'Second part.', next_offset: null })
+          : ok({ text: 'First part.  ', next_offset: 13 });
+      }
+      if (path.pathname.endsWith('/inbound/messages')) {
+        return ok({ messages: [{ message_id: 'x1', from: contact, received_at: ago(1), preview: 'First part.' }] });
+      }
+    });
+    show(<MessagingPage open={contact} />, '/threads/messaging?open=%2B15550199');
+    expect(await screen.findByText('First part. Second part.')).toBeTruthy();
+    expect(all('GET', '/inbound/messages/x1')).toHaveLength(2);
+  });
+
   it('finds a contact outside the loaded page', async () => {
     const older = '+15550199';
     const recent = Array.from({ length: 50 }, (_, i) => ({
@@ -526,6 +565,25 @@ describe('Updates, one feed @s986 @s987', () => {
 });
 
 describe('An update, open @s992', () => {
+  it('keeps an already-read update unread after choosing Mark unread', async () => {
+    const u = update('u1', 'daily', '2026-01-02', 'Shipped the page');
+    serve((url, method) => {
+      if (url.endsWith('/updates/read') && method === 'POST') {
+        u.read = (calls.at(-1)?.body as { read: boolean }).read;
+        return ok({});
+      }
+      if (url.endsWith('/updates/u1')) return ok({ update: u });
+      if (url.includes('/updates?')) return ok({ updates: [u], unread: u.read ? 0 : 1 });
+    });
+    show(<UpdatesPage open="u1" />, '/updates?open=u1');
+    await screen.findByRole('heading', { name: 'Shipped the page' });
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Mark unread' }));
+    await waitFor(() => expect(queryClient.getQueryData(updateQuery('u1').queryKey)?.read).toBe(false));
+    await waitFor(() => expect(queryClient.getQueryState(updateQuery('u1').queryKey)?.fetchStatus).toBe('idle'));
+    expect(all('POST', '/updates/read').map((c) => c.body)).toEqual([{ ids: ['u1'], read: false }]);
+  });
+
   it('reads in full, is marked read on opening, and its writer is a press away', async () => {
     const u = update('u1', 'daily', '2026-01-02', 'Shipped the page\n\nThe launch page is live.', { read: false });
     serve((url) =>
