@@ -14,9 +14,9 @@ vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: 
 
 // Made-up figures and names only.
 type Reply = { status: number; body: unknown };
-function serve(reply: (url: string, method: string) => Reply | Promise<Reply>) {
+function serve(reply: (url: string, method: string, body: Record<string, unknown>) => Reply | Promise<Reply>) {
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
-    const r = await reply(String(url), init?.method ?? 'GET');
+    const r = await reply(String(url), init?.method ?? 'GET', typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {});
     return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
   });
 }
@@ -169,5 +169,59 @@ describe('Growth @s400 @s444', () => {
     show('growth', '/company/growth');
     expect(await screen.findByText('No numbers yet')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Set up' })).toBeTruthy();
+  });
+});
+
+describe('Finance dialogs @s449 @s461 @s453 @s454', () => {
+  const access = { can_edit_defaults: false, teammates: [{ teammate: 'human:me', kind: 'human', default: 'everything', rights: [] }] };
+
+  it('a transfer that needs approval names the approver and what the budget keeps, then sends', async () => {
+    const posted: Record<string, unknown>[] = [];
+    serve((url, method, body) => {
+      if (method === 'POST') {
+        posted.push(body);
+        return ok(
+          body.dry_run
+            ? { kind: 'payment_create', status: 'needs_approval', approver: 'human:lee', impact: { budgets: [{ name: 'Operations', remaining: 50000, remaining_after: 40000 }] } }
+            : { kind: 'payment_create', status: 'needs_approval', approver: 'human:lee' },
+        );
+      }
+      if (url.endsWith('/finance/access')) return ok(access);
+      if (url.endsWith('/finance/pay-from')) return ok({ accounts: [{ id: 'a1', name: 'Checking', last4: '0001' }, { id: 'a2', name: 'Reserve', last4: '0002' }], currency: 'usd', view_version: 1 });
+      return ok({ rows: [] });
+    });
+    show('finance', '/company/finance?tab=transactions');
+    fireEvent.click(await screen.findByRole('button', { name: 'New transfer' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Transfer' });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Amount' }), { target: { value: '100' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Transfer' }));
+
+    expect(await within(dialog).findByText('Approval from lee')).toBeTruthy();
+    expect(within(dialog).getByText('Operations left')).toBeTruthy();
+    expect(posted).toEqual([{ kind: 'payment_create', payload: { method: 'internal', from_account: 'a1', to_account: 'a2', amount: 10000 }, dry_run: true }]);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Send' }));
+    expect(await screen.findByText('Sent to lee for approval')).toBeTruthy();
+    expect(posted[1]).toEqual({ kind: 'payment_create', payload: { method: 'internal', from_account: 'a1', to_account: 'a2', amount: 10000 } });
+  });
+
+  it("Stripe's webhook shows its address and secret once", async () => {
+    serve((url, method) => {
+      if (url.endsWith('/finance/access')) return ok(access);
+      if (url.endsWith('/finance/sources'))
+        return ok({ groups: [{ group: 'payments', name: 'Payments', count: 1, rows: [{ id: 'c1', kind: 'connection', name: 'Stripe', provider: 'stripe', sync: { status: 'active' } }] }] });
+      if (url.endsWith('/signing')) return ok({ trigger: { signing_secret: 'whsec_made_up' } });
+      if (url.endsWith('/triggers')) return ok(method === 'POST' ? { trigger: { id: 't1', url: 'https://hooks.example.test/t1' } } : { triggers: [] });
+      return { status: 404, body: {} };
+    });
+    show('finance', '/company/finance?tab=sources');
+    fireEvent.click(await screen.findByRole('button', { name: 'More for Stripe' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Add webhook' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Stripe webhook' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
+
+    const once = await screen.findByRole('alertdialog', { name: 'Stripe webhook' });
+    expect(within(once).getByText('https://hooks.example.test/t1')).toBeTruthy();
+    expect(within(once).getByText('whsec_made_up')).toBeTruthy();
+    expect(within(once).getAllByText('Shown once')).toHaveLength(2);
   });
 });

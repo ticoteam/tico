@@ -8,13 +8,18 @@ import type {
   FinanceBrief,
   FinanceCards,
   FinanceInbox,
+  FinanceConnectionRequest,
+  FinanceConnectionResult,
   FinanceInvoices,
+  FinanceMercuryUsers,
   FinanceMetric,
+  FinancePayFrom,
   FinancePnl,
   FinanceSalesTax,
   FinanceTransactions,
 } from '@/api/schema';
-import { QUIET_STALE_MS, quietRoot, write } from '@/data';
+import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
+import { newId } from '@/lib';
 
 /* Finance, budgets and Growth. None has a live topic: each root is read again after the person's own writes, on
    reconnect and on open when older than a minute. Another builder draws Company widgets under ['finance', ...]. */
@@ -107,6 +112,8 @@ export interface SourceRow {
   invoices?: number | null;
   manual?: boolean;
   sync?: { status?: string | null; last_ok_at?: string | null; last_sync_at?: string | null; last_error?: string | null } | null;
+  /** A books connection: `native`, `mirror` (it is the books), `exporting` or `reconnect` (tab.py _books_mirror). */
+  mirror?: string | null;
 }
 export interface SourceGroup {
   group: string;
@@ -129,8 +136,14 @@ export interface AccessTeammate {
   grants?: { lines?: string[]; teams?: string[] }[] | unknown[];
   team?: string | null;
 }
+export interface AccessDefaults {
+  manager: string;
+  manager_payroll: string;
+  member: string;
+}
 export interface Access {
   can_edit_defaults?: boolean;
+  defaults?: AccessDefaults;
   teammates: AccessTeammate[];
 }
 export const accessQuery = queryOptions({
@@ -279,6 +292,157 @@ export const addBudget = (at: string, row: { name: string; line: string; cents: 
     send: (idem) =>
       act('budget_create', { name: row.name, period: 'month', account_id: row.line, amount: row.cents, effective_from: `${at.slice(0, 7)}-01` }, idem),
   });
+
+// ---------------------------------------------------------------- decisions, sources and access (the old app's dialogs)
+
+/** What a decision waiting for approval would leave in each budget it charges (cents). */
+export interface Impact {
+  budgets?: { name: string; remaining: number | null; remaining_after: number | null }[];
+}
+export type Decided = FinanceAction & { approver?: string | null; impact?: Impact };
+
+/** A decision, tried first: the rules say whether it goes through or whom it waits for. Nothing is written. */
+export const tryDecision = (kind: string, payload: object) => api.post<Decided>('/api/v2/finance/actions', { kind, payload, dry_run: true });
+
+/** A decision sent: done, or waiting for its approver (said by the caller). Anything else is refused and throws. */
+export async function decide(kind: string, payload: object): Promise<Decided> {
+  // One key for this press, so a request sent twice (a retry on a dropped answer) moves money once.
+  const out = await api.post<Decided>('/api/v2/finance/actions', { kind, payload }, { idempotencyKey: newId() });
+  void queryClient.invalidateQueries({ queryKey: ['finance'] });
+  if (out.status === 'committed' || out.status === 'needs_approval') return out;
+  throw Object.assign(new Error(out.reason || out.status), { code: out.code || out.status });
+}
+
+export const payFromQuery = queryOptions({
+  queryKey: ['finance', 'pay-from'],
+  queryFn: ({ signal }) => api.get<FinancePayFrom>('/api/v2/finance/pay-from', { signal }),
+  ...quiet,
+});
+
+export const mercuryUsersQuery = queryOptions({
+  queryKey: ['finance', 'mercury-users'],
+  queryFn: ({ signal }) => orNull(api.get<FinanceMercuryUsers>('/api/v2/finance/mercury-users', { signal })),
+  ...quiet,
+});
+
+export interface Hook {
+  id: string;
+  preset?: string | null;
+  last_received?: string | null;
+}
+/** The company's webhooks; Finance looks for its Stripe one (preset stripe_finance). */
+export const hooksQuery = queryOptions({
+  queryKey: ['finance', 'hooks'],
+  queryFn: ({ signal }) => orNull(api.get<{ triggers?: Hook[] }>('/api/v2/triggers', { signal })),
+  ...quiet,
+});
+
+export type KeyProvider = 'mercury' | 'brex' | 'stripe';
+export const KEY_SOURCES: Record<KeyProvider, string> = { mercury: 'Mercury', brex: 'Brex', stripe: 'Stripe' };
+export const BOOKS: Record<'quickbooks' | 'xero', string> = { quickbooks: 'QuickBooks', xero: 'Xero' };
+export interface ToolKey {
+  id: string;
+  access_level?: string;
+  stored?: boolean;
+  preview?: string | null;
+}
+export interface ServiceKey {
+  tool: { id: string; name: string };
+  key: ToolKey;
+}
+
+/** The service's keys on Tools (GET /api/v2/tool-index, then each API tool). A failed read throws: guessing "none"
+    would store a second copy of a key already there. */
+export async function serviceKeys(service: KeyProvider): Promise<{ tools: { id: string; name: string; keys: ToolKey[] }[] }> {
+  const idx = await api.get<{ rows?: { id: string; kind: string; name: string; service?: string | null }[] }>('/api/v2/tool-index');
+  const rows = (idx.rows ?? []).filter((r) => r.kind === 'api' && String(r.service ?? '').trim().toLowerCase().replace(/_/g, '-') === service);
+  const tools = await Promise.all(
+    rows.map(async (r) => {
+      const id = String(r.id).replace(/^api:/, '');
+      const t = await api.get<{ keys?: ToolKey[] }>(`/api/v2/api-tools/${enc(id)}`);
+      return { id, name: r.name, keys: t.keys ?? [] };
+    }),
+  );
+  return { tools };
+}
+export const serviceKeysQuery = (service: KeyProvider) =>
+  queryOptions({ queryKey: ['finance', 'keys', service], queryFn: () => serviceKeys(service), staleTime: 0 });
+
+/** A pasted key lands on Tools at its level: on the service's first tool with no key at that level, else on a new
+    tool. Someone who may not change Tools keeps it in the vault for Finance alone. `undo` takes it off Tools again. */
+async function storeKey(service: KeyProvider, name: string, token: string, level: string): Promise<{ id: string; undo: () => Promise<void> }> {
+  const { tools } = await serviceKeys(service);
+  let tool = tools.find((t) => !t.keys.some((k) => k.access_level === level))?.id;
+  let made = false;
+  const drop = async (key?: string) => {
+    if (!tool) return;
+    // Best effort: a key left behind shows on Tools.
+    if (key) await api.delete(`/api/v2/api-tools/${enc(tool)}/keys/${enc(key)}`).catch(() => undefined);
+    if (made) await api.delete(`/api/v2/api-tools/${enc(tool)}`).catch(() => undefined);
+  };
+  try {
+    if (!tool) {
+      tool = (await api.post<{ id: string }>('/api/v2/api-tools', { name, service })).id;
+      made = true;
+    }
+    const key = await api.post<{ id: string }>(`/api/v2/api-tools/${enc(tool)}/keys`, { name, value: token, access_level: level });
+    return { id: key.id, undo: () => drop(key.id) };
+  } catch (err) {
+    await drop();
+    if (!(err instanceof ApiError && err.status === 403)) throw err;
+  }
+  const cred = await api.post<{ id: string }>('/api/v2/credentials', { name, kind: 'token', secret: token, username: '', env: '', source: 'finance' });
+  return { id: cred.id, undo: async () => undefined };
+}
+
+/** Connects a bank, card or Stripe account with a key from Tools or one pasted now. A pasted key whose connect fails
+    is taken off Tools again, so a retry starts clean. The key never comes back. */
+export async function connectSource(
+  provider: KeyProvider,
+  name: string,
+  key: { id: string } | { token: string; level: string },
+  extra: Pick<FinanceConnectionRequest, 'approver_email' | 'history_from'>,
+): Promise<FinanceConnectionResult> {
+  const stored = 'id' in key ? { id: key.id, undo: async () => undefined } : await storeKey(provider, name, key.token, key.level);
+  try {
+    const out = await api.post<FinanceConnectionResult>('/api/v2/finance/connections', { provider, credential_id: stored.id, name, ...extra });
+    if (out.status !== 'committed' && out.status !== 'needs_approval') throw Object.assign(new Error(out.reason || 'Not connected'), { code: out.code || out.status });
+    void queryClient.invalidateQueries({ queryKey: ['finance'] });
+    return out;
+  } catch (err) {
+    await stored.undo();
+    throw err;
+  }
+}
+
+/** QuickBooks or Xero: the address of its sign-in page. The server takes the browser's return. */
+export async function booksSignIn(provider: 'quickbooks' | 'xero'): Promise<string> {
+  const r = await api.post<{ url?: string }>('/api/v2/finance/books/connect', { provider });
+  if (!String(r.url ?? '').startsWith('https://')) throw Object.assign(new Error('did not answer'), { code: 'no_answer' });
+  return r.url!;
+}
+
+export async function disconnectBooks(connection: string): Promise<void> {
+  await api.post(`/api/v2/finance/books/${enc(connection)}/disconnect`, {});
+  void queryClient.invalidateQueries({ queryKey: ['finance'] });
+}
+
+/** Stripe's webhook: a Finance trigger. Its address and a made signing secret show once. */
+export async function addStripeHook(secret: string | undefined): Promise<[string, string][]> {
+  const made = (await api.post<{ trigger: { id: string; url: string; replayed?: boolean } }>('/api/v2/triggers', { name: 'Stripe (Finance)' })).trigger;
+  const signed = (
+    await api.post<{ trigger: { signing_secret?: string; replayed?: boolean } }>(`/api/v2/triggers/${enc(made.id)}/signing`, {
+      preset: 'stripe_finance',
+      ...(secret ? { secret } : {}),
+    })
+  ).trigger;
+  void queryClient.invalidateQueries({ queryKey: ['finance', 'hooks'] });
+  const shown: [string, string | undefined][] = [
+    ['Address', made.replayed ? undefined : made.url],
+    ['Signing secret', secret || signed.replayed ? undefined : signed.signing_secret],
+  ];
+  return shown.filter((p): p is [string, string] => !!p[1]);
+}
 
 // ---------------------------------------------------------------- Growth (dollars; rates are 0 to 1)
 

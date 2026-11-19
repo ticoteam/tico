@@ -1,14 +1,14 @@
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { fmtAge, fmtMoney } from '@/lib';
 import { Button } from '@/kit/Button';
-import { Funnel, Sparkline } from '@/kit/Chart';
+import { Funnel, Lines, Sparkline } from '@/kit/Chart';
 import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import { EmptyRow, Table } from '@/kit/Table';
-import { Dashboard, FiguresStrip, List, Section, SidePanel, type Figure } from '@/pagekinds';
+import { Dashboard, FiguresStrip, List, Section, SidePanel, type Figure, type PageTab } from '@/pagekinds';
 import { GROWTH } from './head';
 import { axis, count, funnelSteps, growthMonths, monShort, monthName, pct, ratio, statusWord } from './model';
-import { ActLink, LineChart, Pfig, Ptrace, SearchTabs, usePress } from './parts';
+import { ActLink, Pfig, Ptrace, usePress } from './parts';
 import {
   growthReadQuery,
   growthSourcesQuery,
@@ -57,9 +57,10 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
     return pts.length > 1 ? <Sparkline points={pts} /> : undefined;
   };
 
-  const tabs = [
-    { id: 'all', label: 'All', search: { segment: undefined, panel: undefined }, action: 'growth.setSegment', input: {} },
-    ...segs.map((s) => ({ id: s.slug, label: s.name, search: { segment: s.slug, panel: undefined }, action: 'growth.setSegment', input: { segment: s.slug } })),
+  // A scope tab starts the board clean: no month, no channel open.
+  const tabs: PageTab[] = [
+    { label: 'All', to: GROWTH, target: 'tab:all' },
+    ...segs.map((s) => ({ label: s.name, to: GROWTH, target: `tab:${s.slug}`, search: { segment: s.slug } })),
   ];
   const figures: Figure[] = [
     { label: 'New customers', value: orWhy(h.new_customers, count), spark: spark((p) => p.new_customers), target: 'figure:new' },
@@ -94,12 +95,8 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
           />
         </div>
       }
-      figures={
-        <>
-          <SearchTabs to={GROWTH} tabs={tabs} on={one?.slug ?? 'all'} label="Growth segments" />
-          <FiguresStrip figures={figures} />
-        </>
-      }
+      tabs={tabs}
+      figures={<FiguresStrip figures={figures} />}
       chart={
         one ? (
           <Section name="Funnel">
@@ -224,7 +221,7 @@ function Trend({ title, points, fmt }: { title: string; points: readonly (readon
   return (
     <Section name={title}>
       <div className="chart-sec">
-        <LineChart
+        <Lines
           series={[{ name: fmt(pts[n - 1]!), end: '', pts, cls: 'l1' }]}
           height={150}
           left={52}

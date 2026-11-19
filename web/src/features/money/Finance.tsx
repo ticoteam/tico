@@ -1,14 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { fmtDate } from '@/lib';
 import { Button } from '@/kit/Button';
-import { Sparkline } from '@/kit/Chart';
+import { Lines, Sparkline } from '@/kit/Chart';
 import { Table } from '@/kit/Table';
 import { Dashboard, FiguresStrip, Section } from '@/pagekinds';
 import { BooksPage } from './Books';
 import { BudgetsPage } from './Budgets';
 import { axis, cash, connected, dayOf, monShort, monthSpan, nowCol, ymOf } from './model';
-import { FIN, FinanceTabs, financeHead, plural, TAB_NAME } from './head';
-import { ActLink, LineChart, usePress } from './parts';
+import { FIN, financeHead, plural, TAB_NAME } from './head';
+import { ActLink, usePress } from './parts';
 import { PnlPage } from './Pnl';
 import {
   billsQuery,
@@ -83,15 +83,13 @@ function Overview() {
       empty={{
         title: 'No source connected',
         action: (
-          <Button variant="primary" onClick={() => void press('finance.addSource', {})}>
+          <Button variant="primary" onClick={() => void press('finance.setTab', { tab: 'sources' })}>
             Add source
           </Button>
         ),
       }}
       figures={
-        <>
-          <FinanceTabs on="overview" />
-          <FiguresStrip
+        <FiguresStrip
             figures={[
               { label: 'Cash', value: typeof cv === 'number' ? cash(cv) : '', target: 'figure:cash' },
               {
@@ -115,13 +113,12 @@ function Overview() {
               },
             ]}
           />
-        </>
       }
       chart={
         n > 1 && (
           <Section name="Revenue and spend, by week">
             <div className="chart-sec">
-              <LineChart
+              <Lines
                 series={[
                   { name: 'Revenue', end: cash(w?.income[n - 1]), pts: income, cls: 'l1' },
                   { name: 'Spend', end: cash(w?.expense[n - 1]), pts: expense, cls: 'l2' },

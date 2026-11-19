@@ -8,15 +8,16 @@ import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import { EmptyRow, GroupRow, Table } from '@/kit/Table';
 import { List, Section, SidePanel } from '@/pagekinds';
-import { FIN, FinanceTabs, financeHead } from './head';
+import { FIN, financeHead } from './head';
 import { addMonths, budgetDay, budgetGroups, cash, centsOf, monShort, monthName, monthSpan, paceOf, type BudgetLine } from './model';
-import { ActLink, Meter, Pfig, Prow, usePress } from './parts';
+import { ActLink, Meter, Pfig, Prow, usePhone, usePress } from './parts';
 import { budgetHistoryQuery, budgetsQuery, pnlQuery, type PnlRow } from './queries';
 import { panelOf, type FinanceSearch } from './search';
 
 /** Budgets: each line's month so far against its budget, by section, with where today is in the month. */
 export function BudgetsPage({ search }: { search: FinanceSearch }) {
   const press = usePress();
+  const phone = usePhone();
   const at = budgetDay();
   const ym = at.slice(0, 7);
   const list = useQuery(budgetsQuery(at));
@@ -37,8 +38,64 @@ export function BudgetsPage({ search }: { search: FinanceSearch }) {
       state={list.isPending ? 'loading' : list.isError ? 'fault' : 'ready'}
       onRetry={() => void list.refetch()}
       actions={<IconButton icon="plus" label="New budget" onClick={() => void press('budget.newRow', {})} />}
-      filter={<FinanceTabs on="budgets" />}
       sections={
+        phone ? (
+          <div className="frs">
+            {all.length === 0 && <div className="fold">No budgets yet</div>}
+            {groups.map((g) => [
+              <div key={`g:${g.name}`} className="fr-group">
+                <span>{g.name}</span>
+                <span className="count">{g.rows.filter((r) => r.depth === 0).length}</span>
+              </div>,
+              ...g.rows.map((r) => (
+                <ActLink
+                  key={r.budget.id}
+                  to={FIN}
+                  search={{ tab: 'budgets', panel: `budget:${r.budget.id}` }}
+                  action="budget.openRow"
+                  input={{ budget: r.budget.id }}
+                  className={['row fr', r.depth > 0 && 'is-sub', r.budget.id === id && 'is-selected'].filter(Boolean).join(' ')}
+                  data-target={`budget:${r.budget.id}`}
+                >
+                  <span className="fr-main">
+                    <span className="row-title">
+                      {r.budget.name}
+                      {r.flag && <Pill flag>{r.flag}</Pill>}
+                    </span>
+                    <span className="fr-sub">
+                      {r.amount != null && <span>{`of ${cash(r.amount)}`}</span>}
+                      {r.amount != null && (
+                        <span>
+                          Left <Left v={leftOf(r)} />
+                        </span>
+                      )}
+                    </span>
+                  </span>
+                  <span className="row-fig">{cash(r.spent)}</span>
+                  {r.amount ? (
+                    <span className="fr-bar">
+                      <Meter pct={((r.spent ?? 0) / r.amount) * 100} pace={pace.pace} />
+                    </span>
+                  ) : null}
+                </ActLink>
+              )),
+            ])}
+            {all.length > 0 && (
+              <div className="row fr is-total">
+                <span className="fr-main">
+                  <span className="row-title">Total</span>
+                  <span className="fr-sub">
+                    <span>{`of ${cash(amount)}`}</span>
+                    <span>
+                      Left <Left v={leftOf({ spent, amount })} />
+                    </span>
+                  </span>
+                </span>
+                <span className="row-fig">{cash(spent)}</span>
+              </div>
+            )}
+          </div>
+        ) : (
         <div className="t-scroll">
           <Table label="Budgets" stick>
             <colgroup>
@@ -102,6 +159,7 @@ export function BudgetsPage({ search }: { search: FinanceSearch }) {
             </tbody>
           </Table>
         </div>
+        )
       }
       panel={id === 'new' ? <NewBudget lines={lines} /> : row ? <BudgetPanel line={row} kids={all.filter((r) => r.budget.parent_id === row.budget.id)} /> : undefined}
     />

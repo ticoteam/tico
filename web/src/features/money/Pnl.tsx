@@ -7,9 +7,9 @@ import { IconButton } from '@/kit/IconButton';
 import { Segmented } from '@/kit/Segmented';
 import { GroupRow, Table } from '@/kit/Table';
 import { List, Section, SidePanel } from '@/pagekinds';
-import { FIN, FinanceTabs, financeHead } from './head';
+import { FIN, financeHead } from './head';
 import { cash, colLabel, monShort, nowCol, paceOf, pnlRange, rangeLabel, statement, stepRange, valueAt, type Period, type StatementRow } from './model';
-import { ActLink, Meter, Pfig, Prow, usePress } from './parts';
+import { ActLink, Meter, Pfig, Prow, usePhone, usePress } from './parts';
 import { lineQuery, pnlQuery, type LineDetail, type Pnl } from './queries';
 import { panelOf, type FinanceSearch } from './search';
 
@@ -26,6 +26,7 @@ const BASES = [
 /** The P&L: one line per account, by month, quarter or year, with the plan for the periods ahead. A line opens beside. */
 export function PnlPage({ search }: { search: FinanceSearch }) {
   const press = usePress();
+  const phone = usePhone();
   const period: Period = search.period ?? 'month';
   const basis = search.basis ?? 'accrual';
   const range = pnlRange(period, search.from);
@@ -52,10 +53,61 @@ export function PnlPage({ search }: { search: FinanceSearch }) {
           <Segmented label="Basis" options={BASES} value={basis} onValueChange={(v) => void press('finance.setBasis', { basis: v })} />
         </>
       }
-      filter={<FinanceTabs on="pnl" />}
-      sections={q.data && <Statement pnl={q.data} open={lineId} />}
+      sections={q.data && (phone ? <PhoneStatement pnl={q.data} open={lineId} /> : <Statement pnl={q.data} open={lineId} />)}
       panel={q.data && lineId && <LinePanel pnl={q.data} account={lineId} />}
     />
+  );
+}
+
+/** On a phone: the open period's figure for each line, the one before it under the name (finance.js rowsPhone). */
+function PhoneStatement({ pnl, open }: { pnl: Pnl; open: string | null }) {
+  const rows = statement(pnl);
+  const cols = pnl.columns;
+  const i = nowCol(cols);
+  const prev = i > 0 ? cols[i - 1] : undefined;
+  const was = prev ? (pnl.period === 'month' ? monShort(prev.start.slice(0, 7)) : colLabel(prev, pnl.period)) : '';
+  const fig = (v: number | null | undefined, pct: boolean) => (v == null ? '' : pct ? `${v}%` : cash(v));
+  return (
+    <div className="frs">
+      {rows.map((r: StatementRow, k) => {
+        if (r.kind === 'group')
+          return (
+            <div key={`g${k}`} className="fr-group">
+              <span>{r.name}</span>
+            </div>
+          );
+        const pct = r.kind === 'pct';
+        const then = prev ? r.values[i - 1] : null;
+        const body = (
+          <>
+            <span className="fr-main">
+              <span className="row-title">{r.name}</span>
+              <span className="fr-sub">{then != null && <span>{`${was} ${fig(then, pct)}`}</span>}</span>
+            </span>
+            <span className="row-fig">{fig(r.values[i], pct)}</span>
+          </>
+        );
+        if (r.kind === 'line')
+          return (
+            <ActLink
+              key={r.id}
+              to={FIN}
+              search={{ tab: 'pnl', panel: `line:${r.id}` }}
+              action="finance.openLine"
+              input={{ account: r.id }}
+              className={['row fr', r.depth > 0 && 'is-sub', r.id === open && 'is-selected'].filter(Boolean).join(' ')}
+              data-target={`line:${r.id}`}
+            >
+              {body}
+            </ActLink>
+          );
+        return (
+          <div key={`${r.kind}${k}`} className={`row fr is-${r.kind}`}>
+            {body}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

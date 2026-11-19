@@ -1,41 +1,51 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, useState, type CSSProperties, type ReactNode } from 'react';
 import { useActor } from '@/data';
 import { fmtAge, fmtDate } from '@/lib';
 import { Button } from '@/kit/Button';
 import { Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
+import { IconButton } from '@/kit/IconButton';
+import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
+import { toast } from '@/kit/Toast';
 import { EmptyRow, Table } from '@/kit/Table';
 import { List, Section, type PageState } from '@/pagekinds';
-import { FinanceTabs, financeHead, plural } from './head';
+import { financeHead, plural } from './head';
 import { cash, count } from './model';
-import { Meter, usePress, Who } from './parts';
+import { CardDialog, ConfirmDialog, ConnectBooksDialog, ConnectKeyDialog, DefaultsDialog, ShownOnce, TransferDialog, useMay, WebhookDialog } from './dialogs';
+import { Meter, usePhone, usePress, Who } from './parts';
 import {
   accessQuery,
+  BOOKS,
   balanceQuery,
   billsQuery,
   cardsQuery,
+  hooksQuery,
   invoicesQuery,
+  KEY_SOURCES,
+  payFromQuery,
   rulesQuery,
   sourcesQuery,
   taxQuery,
   transactionsQuery,
   type AccessTeammate,
   type DocRow,
+  type KeyProvider,
+  type SourceGroup,
   type SourceRow,
   type Tx,
 } from './queries';
 import type { FinanceTab } from './search';
 
-/* The rest of Finance, each a list read from its endpoint and drawn as the mock draws it. Changes to bills, cards,
-   rules and access are dialogs in the old app, not built here yet. */
+/* The rest of Finance, each a list read from its endpoint and drawn as the mock draws it, with the old app's dialogs
+   for a transfer, a card, connecting a source, the books, Stripe's webhook and the access defaults. */
 
 type Read = { isPending: boolean; isError: boolean; refetch: () => unknown };
 const stateOf = (q: Read, empty = false): PageState => (q.isPending ? 'loading' : q.isError ? 'fault' : empty ? 'empty' : 'ready');
 
-function Page({ tab, q, empty, actions, children }: { tab: FinanceTab; q: Read; empty?: { title: string; action?: ReactNode }; actions?: ReactNode; children: ReactNode }) {
+function Page({ q, empty, actions, children }: { q: Read; empty?: { title: string; action?: ReactNode }; actions?: ReactNode; children: ReactNode }) {
   return (
     <List
       {...financeHead}
@@ -43,7 +53,6 @@ function Page({ tab, q, empty, actions, children }: { tab: FinanceTab; q: Read; 
       empty={empty}
       onRetry={() => void q.refetch()}
       actions={actions}
-      filter={<FinanceTabs on={tab} />}
       sections={children}
     />
   );
@@ -90,42 +99,101 @@ function sourceOf(t: Tx): string {
 }
 const describe = (t: Tx) => t.vendor_name || (typeof t.vendor === 'object' ? t.vendor?.name : t.vendor) || t.description || t.counterparty || '';
 
-/** Every entry, newest first. Past 100 rows only the rows in view are drawn. */
+/** Every entry, newest first. Past 100 rows only the rows in view are drawn; on a phone, rows under each day. */
 function Transactions() {
+  const may = useMay();
+  const qc = useQueryClient();
+  const phone = usePhone();
   const q = useQuery(transactionsQuery);
   const [find, setFind] = useState('');
+  const [moving, setMoving] = useState(false);
   const words = find.trim().toLowerCase();
   const all = q.data?.rows ?? [];
   const rows = words ? all.filter((t) => `${describe(t)} ${t.account ?? ''} ${sourceOf(t)}`.toLowerCase().includes(words)) : all;
+  // A transfer needs two bank accounts to move between (finance-books.ts finXferAdd).
+  const transfer = async () => {
+    try {
+      const d = await qc.fetchQuery(payFromQuery);
+      if (d.accounts.length < 2) toast({ text: 'Needs two bank accounts', kind: 'failed' });
+      else setMoving(true);
+    } catch {
+      toast({ text: "Couldn't read the accounts", kind: 'failed' });
+    }
+  };
   return (
-    <Page tab="transactions" q={q}>
+    <Page
+      q={q}
+      actions={
+        may('finance.pay') && (
+          <>
+            <IconButton icon="plus" label="New transfer" onClick={() => void transfer()} />
+            {moving && <TransferDialog onOpenChange={setMoving} />}
+          </>
+        )
+      }
+    >
       <div className="ctl-row">
         <Search label="Search transactions" value={find} onValueChange={setFind} placeholder="Search" />
         <span className="grow" />
         <span className="count">{plural(rows.length, 'entry', 'entries')}</span>
       </div>
-      <div className="t-scroll">
-        <Table label="Transactions" stick>
-          <colgroup>
-            <col className="t-date" />
-            <col />
-            <col className="t-line" />
-            <col className="t-src" />
-            <col className="t-col" />
-          </colgroup>
-          <thead>
-            <tr>
-              <Th>Date</Th>
-              <Th>Description</Th>
-              <Th>Line</Th>
-              <Th>Source</Th>
-              <Th num>Amount</Th>
-            </tr>
-          </thead>
-          <TxBody rows={rows} />
-        </Table>
-      </div>
+      {phone ? (
+        <TxPhone rows={rows} />
+      ) : (
+        <div className="t-scroll">
+          <Table label="Transactions" stick>
+            <colgroup>
+              <col className="t-date" />
+              <col />
+              <col className="t-line" />
+              <col className="t-src" />
+              <col className="t-col" />
+            </colgroup>
+            <thead>
+              <tr>
+                <Th>Date</Th>
+                <Th>Description</Th>
+                <Th>Line</Th>
+                <Th>Source</Th>
+                <Th num>Amount</Th>
+              </tr>
+            </thead>
+            <TxBody rows={rows} />
+          </Table>
+        </div>
+      )}
     </Page>
+  );
+}
+
+/** On a phone: each day a group, each entry its words, line and source, and its amount. */
+function TxPhone({ rows }: { rows: readonly Tx[] }) {
+  if (rows.length === 0) return <div className="fold">No entries</div>;
+  return (
+    <div className="frs" role="list" aria-label="Transactions">
+      {rows.map((t, i) => (
+        <Fragment key={t.id}>
+          {(i === 0 || rows[i - 1]?.date !== t.date) && (
+            <div className="fr-group" role="presentation">
+              <span>{fmtDate(t.date)}</span>
+            </div>
+          )}
+          <div className={t.pending ? 'row fr is-quiet' : 'row fr'} role="listitem">
+            <span className="fr-main">
+              <span className="row-title">
+                {describe(t)}
+                {!t.account && <Pill flag>No line</Pill>}
+              </span>
+              <span className="fr-sub">
+                {t.account && <span>{t.account}</span>}
+                {sourceOf(t) && <span>{sourceOf(t)}</span>}
+              </span>
+            </span>
+            <span className="row-fig">{cash(t.amount, true)}</span>
+          </div>
+        </Fragment>
+      ))}
+    </div>
   );
 }
 
@@ -254,7 +322,7 @@ function Payables() {
   const week = bills.filter((b) => !late(b) && soon(b));
   const later = bills.filter((b) => !late(b) && !soon(b));
   return (
-    <Page tab="payables" q={q} empty={q.data && bills.length === 0 ? { title: 'Nothing to pay' } : undefined}>
+    <Page q={q} empty={q.data && bills.length === 0 ? { title: 'Nothing to pay' } : undefined}>
       <DocTable
         label="Bills"
         name="Bill"
@@ -282,7 +350,7 @@ function Receivables() {
   const aging = q.data?.open.aging;
   const max = aging ? Math.max(1, ...AGES.map(([k]) => aging[k])) : 1;
   return (
-    <Page tab="receivables" q={q} empty={q.data && list.length === 0 ? { title: 'Nobody owes you' } : undefined}>
+    <Page q={q} empty={q.data && list.length === 0 ? { title: 'Nobody owes you' } : undefined}>
       {aging && (
         <Section name="By age">
           <div className="hbars">
@@ -364,7 +432,7 @@ function Balance() {
   const d = q.data;
   const head = d ? fmtDate(d.as_of) : '';
   return (
-    <Page tab="balance" q={q}>
+    <Page q={q}>
       {d && (
         <div className="two-col">
           <div>
@@ -391,12 +459,25 @@ function Balance() {
 const STATUS: Record<string, string> = { frozen: 'Frozen', paused: 'Frozen', closed: 'Closed', canceled: 'Closed', inactive: 'Off' };
 
 function Cards() {
+  const may = useMay();
+  const [making, setMaking] = useState(false);
   const q = useQuery(cardsQuery);
   const cards = q.data?.cards ?? [];
   const spent = cards.reduce((a, c) => a + (c.spent ?? 0), 0);
   const limit = cards.reduce((a, c) => a + (c.limit ?? 0), 0);
   return (
-    <Page tab="cards" q={q} empty={q.data && cards.length === 0 ? { title: 'No cards yet' } : undefined}>
+    <Page
+      q={q}
+      actions={
+        may('finance.cards') && (
+          <>
+            <IconButton icon="plus" label="New card" onClick={() => setMaking(true)} />
+            {making && <CardDialog onOpenChange={setMaking} />}
+          </>
+        )
+      }
+      empty={q.data && cards.length === 0 ? { title: 'No cards yet' } : undefined}
+    >
       <div className="t-scroll">
         <Table label="Cards" stick>
           <colgroup>
@@ -501,7 +582,7 @@ function Tax() {
     </Table>
   );
   return (
-    <Page tab="tax" q={q} empty={q.data && rows.length === 0 ? { title: 'No sales tax yet' } : undefined}>
+    <Page q={q} empty={q.data && rows.length === 0 ? { title: 'No sales tax yet' } : undefined}>
       {due.length > 0 && (
         <Section name="Due" count={due.length}>
           {table('Due', due, false)}
@@ -528,7 +609,7 @@ function Attribution() {
   const q = useQuery(rulesQuery);
   const rules = q.data?.rules ?? [];
   return (
-    <Page tab="attribution" q={q} empty={q.data && rules.length === 0 ? { title: 'No rules yet' } : undefined}>
+    <Page q={q} empty={q.data && rules.length === 0 ? { title: 'No rules yet' } : undefined}>
       <Section name="Rules" count={rules.length}>
         {rules.map((r) => (
           <div key={r.id} className={r.enabled ? 'row rule' : 'row rule is-quiet'} data-target={`rule:${r.id}`}>
@@ -559,18 +640,102 @@ const holds = (r: SourceRow) =>
     .join(', ');
 const failing = (r: SourceRow) => r.sync?.status === 'error' || r.sync?.status === 'failed' || !!r.sync?.last_error;
 
+type SourceDialog =
+  | { kind: 'key'; provider: KeyProvider }
+  | { kind: 'books'; provider: keyof typeof BOOKS }
+  | { kind: 'mirror' | 'stop' | 'disconnect'; row: SourceRow; books: boolean }
+  | { kind: 'hook' };
+
+const ADS: [string, string][] = [
+  ['google-ads', 'Google Ads'],
+  ['meta-ads', 'Meta Ads'],
+];
+const live = (r: SourceRow) => r.sync?.status === 'active' || r.sync?.status === 'new';
+const mirroring = (r: SourceRow) => r.mirror === 'mirror' || r.mirror === 'exporting';
+const booksName = (r: SourceRow) => BOOKS[r.provider as keyof typeof BOOKS] ?? r.name;
+
+/** Each feed, with a finance admin's way to connect another and, per source, the books, its webhook and Disconnect. */
 function Sources() {
   const press = usePress();
+  const may = useMay();
+  const admin = may('finance.admin');
   const q = useQuery(sourcesQuery);
+  const hooks = useQuery({ ...hooksQuery, enabled: admin });
+  const [open, setOpen] = useState<SourceDialog | null>(null);
+  const [shown, setShown] = useState<[string, string][] | null>(null);
   const groups = q.data?.groups ?? [];
   const rows = groups.flatMap((g) => g.rows.map((r) => ({ g, r })));
-  const add = (
-    <Button variant="primary" onClick={() => void press('finance.addSource', {})}>
-      Add source
-    </Button>
+  const hooked = (hooks.data?.triggers ?? []).some((t) => t.preset === 'stripe_finance');
+  const close = (o: boolean) => !o && setOpen(null);
+
+  // What a source's ⋯ holds (finance-admin.ts, the source rail's controls).
+  const items = (g: SourceGroup, r: SourceRow) => {
+    const books = g.group === 'accounting' && r.kind === 'connection';
+    const out: ReactNode[] = [];
+    if (books && may('finance.book') && live(r))
+      out.push(
+        mirroring(r) ? (
+          <MenuItem key="stop" label="Stop using as books" onSelect={() => setOpen({ kind: 'stop', row: r, books })} />
+        ) : (
+          <MenuItem key="mirror" label="Use as books" onSelect={() => setOpen({ kind: 'mirror', row: r, books })} />
+        ),
+      );
+    if (admin && r.provider === 'stripe' && (r.kind === 'connection' || r.kind === 'stripe') && hooks.data && !hooked)
+      out.push(<MenuItem key="hook" label="Add webhook" onSelect={() => setOpen({ kind: 'hook' })} />);
+    if (admin && r.kind === 'connection' && r.sync?.status !== 'disconnected') {
+      if (out.length) out.push(<MenuRule key="rule" />);
+      out.push(<MenuItem key="off" label={`Disconnect ${r.name}`} onSelect={() => setOpen({ kind: 'disconnect', row: r, books })} />);
+    }
+    return out;
+  };
+
+  const connect = admin && (
+    <Menu trigger={<Button variant="primary">Add source</Button>}>
+      {(Object.keys(KEY_SOURCES) as KeyProvider[]).map((p) => (
+        <MenuItem key={p} label={KEY_SOURCES[p]} onSelect={() => setOpen({ kind: 'key', provider: p })} />
+      ))}
+      {(Object.keys(BOOKS) as (keyof typeof BOOKS)[]).map((p) => (
+        <MenuItem key={p} label={BOOKS[p]} onSelect={() => setOpen({ kind: 'books', provider: p })} />
+      ))}
+      <MenuRule />
+      {ADS.map(([id, name]) => (
+        // Ad spend is set up on the platform's page in Tools.
+        <MenuItem key={id} label={name} onSelect={() => void press('finance.addSource', {})} />
+      ))}
+    </Menu>
+  );
+  const dialogs = (
+    <>
+      {open?.kind === 'key' && <ConnectKeyDialog provider={open.provider} onOpenChange={close} />}
+      {open?.kind === 'books' && <ConnectBooksDialog provider={open.provider} onOpenChange={close} />}
+      {open?.kind === 'mirror' && (
+        <ConfirmDialog title={`Use ${booksName(open.row)} as the books`} submit="Use as books" action="finance.startMirror" input={{ connection: open.row.id }} onOpenChange={close} />
+      )}
+      {open?.kind === 'stop' && <ConfirmDialog title={`Stop using ${booksName(open.row)}`} submit="Stop" action="finance.stopMirror" input={{}} onOpenChange={close} />}
+      {open?.kind === 'disconnect' && (
+        <ConfirmDialog
+          title={`Disconnect ${open.row.name}`}
+          submit="Disconnect"
+          action="finance.disconnect"
+          input={{ connection: open.row.id, ...(open.books ? { books: true } : {}) }}
+          onOpenChange={close}
+        />
+      )}
+      {open?.kind === 'hook' && <WebhookDialog onOpenChange={close} onShown={setShown} />}
+      {shown && <ShownOnce title="Stripe webhook" pairs={shown} onClose={() => setShown(null)} />}
+    </>
   );
   return (
-    <Page tab="sources" q={q} actions={add} empty={q.data !== undefined && rows.length === 0 ? { title: 'No source connected', action: add } : undefined}>
+    <Page
+      q={q}
+      actions={
+        <>
+          {connect}
+          {dialogs}
+        </>
+      }
+      empty={q.data !== undefined && rows.length === 0 ? { title: 'No source connected' } : undefined}
+    >
       <div className="t-scroll">
         <Table label="Sources" stick>
           <colgroup>
@@ -578,6 +743,7 @@ function Sources() {
             <col className="t-line" />
             <col className="t-line" />
             <col className="t-col" />
+            <col className="t-act" />
           </colgroup>
           <thead>
             <tr>
@@ -585,20 +751,25 @@ function Sources() {
               <Th>Feeds</Th>
               <Th>Holds</Th>
               <Th num>Last sync</Th>
+              <Th />
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ g, r }) => (
-              <tr key={`${g.group}:${r.id}`}>
-                <td className="t-title">
-                  {r.name}
-                  {failing(r) && <Pill flag>Sign in again</Pill>}
-                </td>
-                <td className="t-words">{g.name}</td>
-                <td className="t-words">{r.manual ? 'Entered by hand' : holds(r)}</td>
-                <td className="num t-words">{r.sync?.last_ok_at ? fmtAge(r.sync.last_ok_at) : ''}</td>
-              </tr>
-            ))}
+            {rows.map(({ g, r }) => {
+              const more = items(g, r);
+              return (
+                <tr key={`${g.group}:${r.id}`} data-target={`source:${r.id}`}>
+                  <td className="t-title">
+                    {r.name}
+                    {failing(r) && <Pill flag>Sign in again</Pill>}
+                  </td>
+                  <td className="t-words">{g.name}</td>
+                  <td className="t-words">{r.manual ? 'Entered by hand' : holds(r)}</td>
+                  <td className="num t-words">{r.sync?.last_ok_at ? fmtAge(r.sync.last_ok_at) : ''}</td>
+                  <td className="t-act">{more.length > 0 && <Menu trigger={<IconButton icon="more" label={`More for ${r.name}`} size="sm" quiet />}>{more}</Menu>}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </Table>
       </div>
@@ -614,12 +785,24 @@ const SEES: Record<AccessTeammate['default'], string> = {
 };
 
 function Access() {
+  const [editing, setEditing] = useState(false);
   const q = useQuery(accessQuery);
   const all = q.data?.teammates ?? [];
   const sees = all.filter((t) => t.default !== 'none' || (t.grants?.length ?? 0) > 0);
   const rest = all.length - sees.length;
   return (
-    <Page tab="access" q={q} empty={q.data === null ? { title: "You don't see who has access" } : undefined}>
+    <Page
+      q={q}
+      actions={
+        q.data?.can_edit_defaults && (
+          <>
+            <Button onClick={() => setEditing(true)}>Edit defaults</Button>
+            {editing && <DefaultsDialog defaults={q.data.defaults ?? {}} onOpenChange={setEditing} />}
+          </>
+        )
+      }
+      empty={q.data === null ? { title: "You don't see who has access" } : undefined}
+    >
       <Table label="Access" stick>
         <colgroup>
           <col />

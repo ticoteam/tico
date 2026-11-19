@@ -48,22 +48,16 @@
 .money col.t-src{width:130px}
 .money col.t-no{width:88px}
 .money col.t-who{width:196px}
+.money col.t-act{width:var(--s-10)}
+.money .table td.t-act{padding:0;text-align:right}
 
 /* the row of controls over a table: a search, a count */
 .money .ctl-row{display:flex;align-items:center;gap:var(--s-2);padding:var(--s-2h) var(--s-3);position:sticky;top:0;z-index:var(--z-stick);background:var(--surface)}
 .money .ctl-row+.t-scroll .table.is-stick thead th{top:52px}
 .money .ctl-row .count{font-size:var(--t-sm)}
 
-/* charts: lines in greys, the dot at each line's end */
+/* a chart under its section name */
 .money .chart-sec{padding:0 var(--s-3) var(--s-3h)}
-.money .chart text{font-size:var(--t-xs)}
-.money .chart .l1,.money .chart .l2,.money .chart .l3{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.money .chart .l1{stroke:var(--ink-2)}
-.money .chart .l2{stroke:var(--muted)}
-.money .chart .l3{stroke:var(--faint)}
-.money .chart .d1{fill:var(--ink-2)}
-.money .chart .d2{fill:var(--muted)}
-.money .chart .d3{fill:var(--faint)}
 
 /* two statements side by side (the balance sheet, a funnel per segment) */
 .money .two-col{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:var(--s-2);align-items:start}
@@ -97,6 +91,35 @@
 .money .facts .field{width:84px;height:var(--ctl-sm);padding:0 var(--s-2);font-size:var(--t-sm)}
 .money .facts .field input{text-align:right;font-variant-numeric:tabular-nums}
 .money.new-budget{display:grid;gap:var(--s-3);padding:var(--s-2)}
+
+/* a dialog's fields, the approver a decision waits for, values shown once */
+.money .dlg-form{display:grid;gap:var(--s-4)}
+.money .dlg-form .prow{padding:0}
+.money .dlg-ask{font-weight:var(--w-strong)}
+.money .dlg-error{color:var(--ink);font-size:var(--t-sm)}
+.money .once{display:grid;gap:var(--s-1)}
+.money .once p span{color:var(--muted);font-size:var(--t-sm)}
+.money .once-row{display:flex;align-items:center;gap:var(--s-2)}
+.money .once-row code{flex:1;min-width:0;font-family:var(--font-code);font-size:var(--t-sm);line-height:var(--lh-code);color:var(--ink);overflow-wrap:anywhere;user-select:all}
+
+/* on a phone a table becomes rows: the name and its words, one figure, a meter under them (finance.css .fr) */
+.money .fr{grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h);height:auto;min-height:44px;padding:calc(var(--s-2) - 1px) var(--s-2);color:inherit}
+.money .fr+.fr{box-shadow:0 -1px 0 var(--line)}
+.money .fr-bar{grid-column:1/-1;padding:calc(var(--s-2) - 1px) 0 calc(var(--s-1) - 1px)}
+.money .fr-main{display:grid;gap:calc(var(--s-0) / 2);min-width:0}
+.money .fr-main .row-title{white-space:normal;line-height:20px}
+.money .fr-sub{display:flex;flex-wrap:wrap;gap:0 var(--s-2h);font-size:var(--t-sm);color:var(--muted);line-height:18px;font-variant-numeric:tabular-nums}
+.money .fr-sub:empty{display:none}
+.money .fr .row-title .pill{margin-left:var(--s-2);vertical-align:1px}
+.money .fr .row-fig{align-self:start;line-height:20px}
+.money .fr.is-total .row-title,.money .fr.is-total .row-fig{font-weight:var(--w-strong)}
+.money .fr.is-net{border-top:1.5px solid var(--ink-2);border-radius:0;margin-top:var(--s-1)}
+.money .fr.is-net .row-title,.money .fr.is-net .row-fig{font-family:var(--font-display);font-size:var(--t-base);font-weight:var(--w-title);line-height:20px}
+.money .fr.is-sub{padding-left:var(--s-6)}
+.money .fr.is-pct .row-title,.money .fr.is-pct .row-fig{color:var(--muted);font-size:var(--t-sm)}
+.money .fr.is-quiet .row-title,.money .fr.is-quiet .row-fig{color:var(--muted)}
+.money .fr-group{height:var(--s-10);display:flex;align-items:flex-end;gap:var(--s-2);padding:0 var(--s-2) var(--s-1h);font-family:var(--font-text);font-size:var(--t-sec);font-weight:var(--w-title);line-height:var(--lh-tight);color:var(--ink);border-bottom:1px solid var(--line)}
+.money .fr-group .count{font-size:var(--t-sm)}
 
 @media (max-width:760px){
   .money .chart-sec{padding:0 var(--s-2) var(--s-3)}
