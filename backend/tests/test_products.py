@@ -193,8 +193,20 @@ def test_tico_products_adds_edits_and_clears_a_set(api, repos, monkeypatch):
         ["Lumen Parts"],
     )
 
-    tico("update", product["key"], "--repo", "", "--tax-kind", "software_service", "--agreement", "App Terms")
+    tico(
+        "update",
+        product["key"],
+        "--name",
+        "Show App",
+        "--repo",
+        "",
+        "--tax-kind",
+        "software_service",
+        "--agreement",
+        "App Terms",
+    )
     product = ok(api, "get", "products/" + product["key"])["product"]
+    assert product["name"] == "Show App"
     assert product["repositories"] == [] and product["tax_kind"] == "software_service"
     assert names(product["agreements"]) == ["App Terms"] and names(product["depends_on"]) == ["Lumen Parts"]
 
