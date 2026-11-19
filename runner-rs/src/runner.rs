@@ -707,15 +707,13 @@ impl Runner {
         let (agent_instructions, versions) =
             readiness::changed_agent_instructions(&self.config, &assignments, &published);
         let mut readiness_doc = readiness::document(&runtimes, &checks, &self.state.directory);
-        let mut capabilities = crate::lanes::capabilities();
-        // Reads a Claude plan's week on request (subscription_refresh.rs `read_claude_plan`; backend/subscription_refresh.py `request_plan_read`).
-        capabilities.push("plan_usage_v1");
+        // Every advertised capability, less what an older server refused in the last ten minutes (lanes.rs).
+        let capabilities = crate::lanes::capabilities(computer_logins);
         if computer_logins {
             readiness_doc["computer_profile"] =
                 json!(crate::profiles::computer_login(&config.data)
                     .map(|p| p.name)
                     .unwrap_or_default());
-            capabilities.push("computer_logins_v1");
         }
         if let Some(screen) = crate::screen::readiness() {
             readiness_doc["screen"] = screen; // only while turned on here (crate::screen)
@@ -1564,6 +1562,59 @@ mod tests {
             "{}",
             seen[3]
         );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the holds lock is held only to keep other tests' holds out of this one
+    async fn a_new_runner_checks_in_with_a_floor_hub_that_refuses_plan_usage_and_the_browser_report(
+    ) {
+        let _turn = crate::lanes::holding();
+        let capabilities = crate::lanes::capabilities(true);
+        let index = capabilities
+            .iter()
+            .position(|c| *c == "plan_usage_v1")
+            .unwrap();
+        // What a 0.6.0 hub (backend/app.py validation_error) answers each, word for word but for the long enum.
+        let plan_usage: &'static str = Box::leak(
+            format!(
+                r#"{{"error":{{"code":"validation","detail":"body.capabilities.{index}: Input should be 'assignment_instances_v1', 'task_lanes_v2' or 'make_page'"}}}}"#
+            )
+            .into_boxed_str(),
+        );
+        let (url, seen) = crate::client::tests::serve(vec![
+            (422, plan_usage),
+            (422, r#"{"error":{"code":"validation","detail":"body.readiness.StructuredReadiness.browser: Extra inputs are not permitted; body.readiness.dict[constrained-str,bool].schema_version: Input should be a valid boolean"}}"#),
+            (200, r#"{"ok": true}"#),
+        ])
+        .await;
+        let dir =
+            std::env::temp_dir().join(format!("tico-floor-hub-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": url, "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Runner::new(config, client, State::open(&dir.join("state")).unwrap());
+        let mut body = json!({"version": "test", "platform": "linux", "capabilities": capabilities,
+                              "readiness": {"schema_version": 1, "browser": {"found": true}}});
+        let (beat, tries) = runner.post_heartbeat(&mut body).await;
+        let next = crate::lanes::capabilities(true);
+        crate::lanes::release("plan_usage_v1");
+        crate::lanes::release("readiness.browser");
+        assert_eq!((beat.is_ok(), tries), (true, 3));
+        let seen = seen.lock().unwrap();
+        assert!(seen[0].contains("\"plan_usage_v1\"") && !seen[1].contains("\"plan_usage_v1\""));
+        assert!(
+            seen[1].contains("\"browser\":{") && !seen[2].contains("\"browser\":{"),
+            "{}",
+            seen[2]
+        );
+        // Every other capability goes on, and the next heartbeat leaves plan usage out from the start.
+        for c in capabilities.iter().filter(|c| **c != "plan_usage_v1") {
+            assert!(seen[2].contains(&format!("\"{c}\"")), "{c}: {}", seen[2]);
+        }
+        assert!(!next.contains(&"plan_usage_v1") && next.contains(&"computer_logins_v1"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
