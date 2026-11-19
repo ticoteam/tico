@@ -415,7 +415,7 @@ def test_one_persons_streams_of_a_round_build_each_topic_once_and_read_what_each
     alone = {person.actor: lone_read(api, person, after, **topics) for person in (ana, ben)}
     for result, person in zip(got, [ana] * 5 + [ben], strict=True):
         assert [(s, t, dict(d)) for s, t, d in result[0]] == [(s, t, dict(d)) for s, t, d in alone[person.actor][0]]
-    assert {t for _, t, _ in got[0][0]} >= {"tasks", "threads", "runs"}
+    assert {t for _, t, _ in got[0][0]} >= {"threads", "runs"}  # no task views here (no_views): tasks send none
 
 
 def test_a_page_access_change_resets_a_round_stream_reading_across_it_as_a_lone_read_does(api):  # noqa: F811
