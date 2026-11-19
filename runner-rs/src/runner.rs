@@ -1321,10 +1321,14 @@ impl Runner {
                 log("Tico runner: no turn running; exiting so the supervisor starts the updated runner");
                 break;
             }
-            // The stream's word (a `work` event) wakes the loop at once instead of at the next quarter second.
-            let _ =
-                tokio::time::timeout(Duration::from_secs_f64(delay), self.events.wake.notified())
-                    .await;
+            // The stream's word (a `work` event) wakes the loop at once instead of at the next quarter second, and a
+            // release's catch-up pass is not left waiting behind a failing hub's longer retry.
+            let wait = Duration::from_secs_f64(delay).min(
+                self.events
+                    .catch_up_in()
+                    .map_or(Duration::MAX, |d| d + Duration::from_millis(50)),
+            );
+            let _ = tokio::time::timeout(wait, self.events.wake.notified()).await;
         }
         self.stop.store(true, Ordering::SeqCst);
         self.events.close();

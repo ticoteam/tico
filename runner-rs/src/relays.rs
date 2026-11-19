@@ -179,8 +179,12 @@ pub fn poll(runner: &Arc<Runner>) {
                 // The bots' runtimes: while the event stream is up, from the run loop's own assignments answer, which
                 // it reads again whenever the server says they changed (and on its backup timer), so this relay asks
                 // for nothing the loop already has; with the stream down, read here every minute as before.
+                // Loaded first: the loop publishes the list before it says so, so `seen` is then the server's answer.
+                // A branch follows its original's runtimes, and the hub tells only the original's computer when they
+                // change: a computer that runs a branch keeps reading here every minute.
+                let loaded = me.events.live() && me.assignments_read();
                 let seen = me.assignments_seen();
-                let shared = me.events.live() && me.assignments_read();
+                let shared = loaded && !has_branch(&seen);
                 if due || (shared && moved(harness.rows.as_ref(), &seen)) {
                     if due {
                         harness.default_at = Some(Instant::now());
@@ -225,6 +229,12 @@ pub fn poll(runner: &Arc<Runner>) {
             note("harness", result, "harness step");
         });
     }
+}
+
+/// Whether any of these bots is a branch of another bot (backend/shared_bots.py `shared_from`).
+fn has_branch(rows: &[Value]) -> bool {
+    rows.iter()
+        .any(|row| !text_of(&row["config"]["shared_from"]).is_empty())
 }
 
 /// Whether the run loop's assignments answer is another than the one the harness runtimes were worked out from: it
@@ -282,5 +292,13 @@ mod tests {
         // A full pass replaces the list whole, even with the same rows: worked out again.
         let again = Arc::new((*first).clone());
         assert!(moved(kept.as_ref(), &again));
+    }
+
+    #[test]
+    fn a_computer_that_runs_a_branch_reads_its_assignments_itself() {
+        let own = vec![json!({"bot": "a", "config": {"runtime": "claude"}})];
+        assert!(!has_branch(&own));
+        let branch = json!({"bot": "b", "config": {"runtime": "claude", "shared_from": "a"}});
+        assert!(has_branch(&[own[0].clone(), branch]));
     }
 }
