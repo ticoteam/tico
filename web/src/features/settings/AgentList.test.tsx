@@ -9,7 +9,7 @@ import { queryClient } from '@/data';
 import { agentsQuery, computersQuery as teamComputers } from '@/features/team/exports';
 import { Toasts } from '@/kit/Toast';
 import { providerName } from './Agents';
-import { botsQuery, computersQuery, limitsQuery, modelsQuery, providersQuery, subscriptionsQuery } from './queries';
+import { botAccessQuery, botsQuery, computersQuery, limitsQuery, modelsQuery, providersQuery, subscriptionsQuery } from './queries';
 import { SettingsPage, hitHref } from './SettingsPage';
 
 vi.mock('@/search', () => ({ SearchDialog: () => null }));
@@ -83,7 +83,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Settings › Agents', () => {
-  it('checking agents shows how many, and Change model moves each one on its own harness', async () => {
+  it('checking agents shows how many, and Change model moves each one on its own harness @s713', async () => {
     serve(() => ({ status: 200, body: {} }));
     show(<SettingsPage section="agents" />, '/settings/agents');
     expect(await screen.findByText('2 agents')).toBeTruthy();
@@ -101,7 +101,7 @@ describe('Settings › Agents', () => {
     expect(moves.find((m) => m.url.includes('alpha'))?.body).toMatchObject({ harness: 'claude', expected_generation: 7, expected_revision: 3 });
   });
 
-  it('the search narrows the list by name, team or model', async () => {
+  it('the search narrows the list by name, team or model @s1074', async () => {
     serve(() => ({ status: 200, body: {} }));
     show(<SettingsPage section="agents" />, '/settings/agents');
     fireEvent.change(await screen.findByRole('textbox', { name: 'Search agents, models or computers' }), { target: { value: 'growth' } });
@@ -185,7 +185,7 @@ describe('Settings › Agents', () => {
     expect(sent.at(-1)).toMatchObject({ url: '/api/v2/bots/b2/task-model', body: { task_model: null, expected_revision: 5 } });
   });
 
-  it('folded, Subscriptions and keys shows a chip for each kind and a count of keys', async () => {
+  it('folded, Subscriptions and keys shows a chip for each kind and a count of keys @s709', async () => {
     const sub = (id: string, kind: string, status = 'working') => ({ id, kind, name: `Plan ${id}`, label: 'sample', status, in_use_on: [] }) as never;
     queryClient.setQueryData(subscriptionsQuery.queryKey, {
       kinds: [],
@@ -282,7 +282,7 @@ describe('Settings › Agents › a computer', () => {
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/computers/r1/revoke', method: 'POST' }));
   });
 
-  it('Settings › Computers opens the same panel', async () => {
+  it('Settings › Computers opens the same panel @s1075', async () => {
     byComputer();
     show(<SettingsPage section="computers" open="r1" />, '/settings/computers?open=r1');
     const panel = await screen.findByRole('complementary', { name: 'Shared One' });
@@ -379,7 +379,7 @@ describe('Settings actions', () => {
     expect(sent).toEqual([]);
   });
 
-  it('the default model shows at once and goes back when the server refuses', async () => {
+  it('the default model shows at once and goes back when the server refuses @s711 @s1076', async () => {
     let refuse!: () => void;
     serve((url, method) =>
       method === 'PUT' && url === '/api/v2/providers'
@@ -430,5 +430,41 @@ describe('Settings search', () => {
     expect(hit.getAttribute('href')).toBe('/settings/general');
     expect(screen.queryByRole('link', { name: 'Company name' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Who can sign in' })).toBeNull();
+  });
+});
+
+describe('Settings › Agents › an opened agent', () => {
+  const EVERY = { everyone: true, people: [], teams: [], bots: [] };
+  const PEOPLE = [...ACTORS, { id: 'human:p2', kind: 'person', name: 'Ben Sample', hue: 4 }];
+  const open = () => {
+    queryClient.setQueryData(['directory'], { actors: PEOPLE, byId: Object.fromEntries(PEOPLE.map((a) => [a.id, a])) });
+    queryClient.setQueryData(botsQuery.queryKey, [{ id: 'a1', slug: 'alpha', display_name: 'Alpha Agent', state: 'active', owner_id: 'human:p1', bot_owners: [] }]);
+    queryClient.setQueryData(botAccessQuery('a1').queryKey, { bot: 'a1', see: EVERY, read: EVERY, write: EVERY, revision: 2 });
+    serve((_url, method) => (method === 'GET' ? { status: 404, body: { detail: 'not_found' } } : { status: 200, body: {} }));
+    show(<SettingsPage section="agents" open="alpha" />, '/settings/agents?open=alpha');
+  };
+
+  it('Access: Private with one person sends the same people for see, read and write; Tico cannot @s1112', async () => {
+    open();
+    const line = (await screen.findByText('Open')).closest('.fact') as HTMLElement;
+    fireEvent.click(within(line).getByRole('button', { name: 'Edit' }));
+    const dlg = await screen.findByRole('dialog', { name: 'Who can use Alpha Agent' });
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Private' }));
+    fireEvent.click(within(dlg).getByRole('checkbox', { name: 'Ben Sample' }));
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Save' }));
+    const only = { everyone: false, people: ['p2'], teams: [], bots: [] };
+    await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/bots/a1/access', method: 'PUT', body: { see: only, read: only, write: only, revision: 2 } }));
+    expect(await run('settings.agentAccess', { agent: 'a1', see: EVERY, read: EVERY, write: EVERY }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+  });
+
+  it('Owners: the maker stays, a checked person is added @s1113', async () => {
+    open();
+    const line = (await screen.findByText('Owners')).closest('.fact') as HTMLElement;
+    fireEvent.click(within(line).getByRole('button', { name: 'Edit' }));
+    const dlg = await screen.findByRole('dialog', { name: 'Who owns Alpha Agent' });
+    expect(within(dlg).getByRole('checkbox', { name: 'Ana Test' }).hasAttribute('data-disabled')).toBe(true);
+    fireEvent.click(within(dlg).getByRole('checkbox', { name: 'Ben Sample' }));
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/bots/a1/co-owners', method: 'POST', body: { add: ['p2'], remove: [] } }));
   });
 });

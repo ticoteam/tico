@@ -168,6 +168,7 @@ export const invite = defineAction({
   title: 'Add a person',
   kind: 'change',
   input: s.object({ email: s.string({ min: 3, max: 320, pattern: /^[^\s@]+@[^\s@]+$/, what: 'an email address' }), name: s.optional(s.string({ max: 120 })) }),
+  // Inviting a member is Tico's too, as on Team (people.invite): setup is an agent's work.
   run: (_ctx, { email, name }) => addPerson(email, name ?? ''),
   did: ({ email }) => `Invited ${email}`,
   target: (_input, out) => (out ? { kind: 'person', id: out.person } : setting('people')),
@@ -353,7 +354,8 @@ export const screenMode = defineAction({
   title: 'Change how a door is screened',
   kind: 'change',
   input: s.object({ door: s.oneOf(['webhook', 'mail', 'idea', 'watcher', 'document', 'slack'] as const), mode: s.oneOf(['off', 'warn', 'hold'] as const) }),
-  tico: false,
+  // Holding is the strict side and stays Tico's; anything looser is the person's own press.
+  can: (ctx, { mode }) => !(mode !== 'hold' && ctx.via === 'tico'),
   run: (_ctx, { door, mode }) => setScreening({ [door]: mode }),
   did: ({ mode }) => `Screening set to ${mode}`,
   target: ({ door }) => setting(`screen-${door}`),
@@ -364,7 +366,8 @@ export const detector = defineAction({
   title: 'Turn a screening detector on or off',
   kind: 'change',
   input: s.object({ detector: s.oneOf(['patterns', 'model'] as const), on: s.boolean() }),
-  tico: false,
+  // Turning a detector on is Tico's; turning one off loosens security.
+  can: (ctx, { on }) => !(!on && ctx.via === 'tico'),
   run: (_ctx, { detector, on }) => setScreening({ [detector]: on }),
   did: ({ on }) => (on ? 'Turned on' : 'Turned off'),
   target: ({ detector }) => setting(`detector-${detector}`),
@@ -375,7 +378,8 @@ export const support = defineAction({
   title: 'Let Tico support reach the computers',
   kind: 'change',
   input: s.object({ on: s.boolean() }),
-  tico: false,
+  // Letting Tico support in widens who can reach the computers; shutting it out is Tico's.
+  can: (ctx, { on }) => !(on && ctx.via === 'tico'),
   run: (_ctx, { on }) => setSupport(on),
   did: ({ on }) => (on ? 'Turned on' : 'Turned off'),
   target: () => setting('support'),
@@ -549,6 +553,8 @@ export const startHosted = defineAction({
   title: 'Start a hosted server',
   kind: 'change',
   input: s.object({ server: id('a hosted server id') }),
+  // A hosted server runs on the company's credit: money, the person's own press.
+  tico: false,
   run: async (ctx, { server }) => {
     const r = await startServer(server);
     if (r.state === 'started') void ctx.queryClient.invalidateQueries({ queryKey: ['settings', 'hosted'] });
@@ -756,7 +762,8 @@ export const roadmapApproval = defineAction({
   title: "Ask a person before an agent's words go public",
   kind: 'change',
   input: s.object({ on: s.boolean() }),
-  tico: false,
+  // Asking first is Tico's; dropping the ask lets an agent's words leave the company unread.
+  can: (ctx, { on }) => !(!on && ctx.via === 'tico'),
   run: (_ctx, { on }) => setRoadmap({ bot_public_approval: on }),
   did: ({ on }) => (on ? 'Turned on' : 'Turned off'),
   target: () => setting('roadmap-approval'),
@@ -857,6 +864,8 @@ export const clearQueue = defineAction({
   title: 'Clear the automatic queue',
   kind: 'change',
   input: s.object({ scope: s.optional(s.string({ max: 200, what: "'company' or 'group:<id>'" })) }),
+  // Cancelled wakes do not come back.
+  tico: false,
   run: (ctx, { scope }) => {
     const done = purgeQueue(scope || 'company');
     void done.then(() => ctx.queryClient.invalidateQueries({ queryKey: ['usage'] }));

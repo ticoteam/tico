@@ -87,7 +87,7 @@ describe('Settings › the desktop app', () => {
   });
 });
 
-describe('Settings › Tico Gateway', () => {
+describe('Settings › Tico Gateway @s710', () => {
   it('a new address while a key is saved asks first, and Keep sends it again with the answer', async () => {
     const sent: unknown[] = [];
     vi.stubGlobal('fetch', async (_url: string, init?: RequestInit) => {

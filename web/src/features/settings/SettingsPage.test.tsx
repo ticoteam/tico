@@ -7,7 +7,20 @@ import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { Agents } from './Agents';
-import { accessQuery, computersQuery, limitsQuery, subscriptionsQuery, usageQuery, type AccessView } from './queries';
+import { run } from '@/actions/run';
+import {
+  accessQuery,
+  agentUsageQuery,
+  billingQuery,
+  computersQuery,
+  historyFor,
+  limitsQuery,
+  screeningQuery,
+  sleepQuery,
+  subscriptionsQuery,
+  usageQuery,
+  type AccessView,
+} from './queries';
 import { SettingsPage } from './SettingsPage';
 import { UsagePage } from './Usage';
 
@@ -74,7 +87,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Settings', () => {
-  it('lists the sections as links and marks the open one', async () => {
+  it('lists the sections as links and marks the open one @s1065', async () => {
     serve(() => ({ status: 200, body: {} }));
     queryClient.setQueryData(accessQuery.queryKey, ACCESS);
     show(<SettingsPage section="people" />, '/settings/people');
@@ -83,7 +96,7 @@ describe('Settings', () => {
     expect(within(nav).getByRole('link', { name: 'Billing' }).getAttribute('href')).toBe('/settings/billing');
   });
 
-  it('a person row opens that person in the address, with their role to change', async () => {
+  it('a person row opens that person in the address, with their role to change @s1073', async () => {
     serve(() => ({ status: 200, body: {} }));
     queryClient.setQueryData(accessQuery.queryKey, ACCESS);
     show(<SettingsPage section="people" />, '/settings/people');
@@ -100,7 +113,7 @@ describe('Settings', () => {
     expect(screen.getByTitle('Ben Sample').getAttribute('href')).toBe('/settings/people');
   });
 
-  it('a switch shows at once and is taken back when the server refuses', async () => {
+  it('a switch shows at once and is taken back when the server refuses @s1072', async () => {
     let refuse!: () => void;
     serve((url, method) => {
       if (method === 'PUT' && url.endsWith('/api/v2/access/rules'))
@@ -145,7 +158,7 @@ describe('Settings', () => {
 });
 
 describe('Usage', () => {
-  it('an agent row opens that agent in the address', async () => {
+  it('an agent row opens that agent in the address @s1066 @s1086', async () => {
     serve(() => ({ status: 200, body: { from: '', to: '', totals: FIG, rows: [] } }));
     const one = { ...FIG, bot: 'builder', name: 'Builder', runs: 4, est_cost_usd: 2.5 };
     queryClient.setQueryData(usageQuery('7d', 'bot').queryKey, { from: '2026-11-13', to: '2026-11-19', totals: one, rows: [one] });
@@ -156,7 +169,7 @@ describe('Usage', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Usage' })).toBeTruthy();
   });
 
-  it('a limit row says when an agent is paused', async () => {
+  it('a limit row says when an agent is paused @s1087', async () => {
     serve(() => ({ status: 200, body: {} }));
     const none = { daily_usd: null, hourly_usd: null, per_30m_usd: null, weekly_usd: null };
     const lim = {
@@ -191,7 +204,7 @@ describe('Usage', () => {
   });
 });
 
-describe('A model sign-in', () => {
+describe('A model sign-in @s746', () => {
   const CODE = 'WDJB-MJHT';
   const PAGE = `https://auth.example/device?user_code=${CODE}`;
 
@@ -212,5 +225,196 @@ describe('A model sign-in', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Connect Codex' });
     expect((await within(dialog).findByRole('link', { name: 'Open page' })).getAttribute('href')).toBe(PAGE);
     expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => [q.queryKey, q.state.data]))).not.toContain(CODE);
+  });
+});
+
+describe('Settings › Account › API tokens', () => {
+  const LIST = { tokens: [{ id: 't1', label: 'Script', created_at: '2026-11-01T00:00:00Z', last_used_at: null, revoked_at: null }], can_create: true };
+
+  it('a new token shows once with its shell line, and is kept nowhere else @s726', async () => {
+    const SECRET = 'tico_sample_secret_1234';
+    serve((url, method) =>
+      url.endsWith('/api/v2/me/tokens')
+        ? method === 'POST'
+          ? { status: 200, body: { id: 't2', token: SECRET, label: 'CI', expires_at: null } }
+          : { status: 200, body: LIST }
+        : { status: 200, body: { people: [] } },
+    );
+    show(<SettingsPage section="account" />, '/settings/account');
+    fireEvent.click(await screen.findByRole('button', { name: 'Make token' }));
+    const make = await screen.findByRole('dialog', { name: 'Make a token' });
+    fireEvent.change(within(make).getByLabelText('Name'), { target: { value: 'CI' } });
+    fireEvent.click(within(make).getByRole('button', { name: 'Make' }));
+    const shown = await screen.findByRole('dialog', { name: 'Your new token' });
+    expect(within(shown).getByLabelText('Token').textContent).toBe(SECRET);
+    expect(within(shown).getByLabelText('Shell line').textContent).toBe(`export HUB_API_URL=${window.location.origin} HUB_TOKEN=${SECRET}`);
+    expect(sent[0]).toMatchObject({ url: '/api/v2/me/tokens', method: 'POST', body: { label: 'CI' } });
+    expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => q.state.data))).not.toContain(SECRET);
+  });
+
+  it('Revoke asks first, and only Revoke in the question sends it @s706', async () => {
+    serve((url) => (url.endsWith('/api/v2/me/tokens') ? { status: 200, body: LIST } : { status: 200, body: { people: [] } }));
+    show(<SettingsPage section="account" />, '/settings/account');
+    fireEvent.click(await screen.findByRole('button', { name: 'Revoke' }));
+    const ask = await screen.findByRole('alertdialog', { name: 'Revoke Script?' });
+    expect(sent).toHaveLength(0);
+    fireEvent.click(within(ask).getByRole('button', { name: 'Revoke' }));
+    await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/me/tokens/t1/revoke', method: 'POST' }));
+  });
+});
+
+describe('Settings › People › the owner', () => {
+  const MINE: AccessView = { ...ACCESS, people: ACCESS.people.map((p) => (p.id === 'p2' ? { ...p, sign_in: true } : p)) };
+  const held = (url: string, method: string): Reply =>
+    method === 'POST' ? { status: 409, body: { error: { code: 'version_conflict', detail: 'Changed' } } } : url.startsWith('/api/v2/access') ? { status: 200, body: MINE } : { status: 200, body: {} };
+
+  it('Make owner needs the email typed, keeps no admin unless chosen, and sends the hand-over @s753', async () => {
+    serve(held);
+    queryClient.setQueryData(accessQuery.queryKey, MINE);
+    show(<SettingsPage section="people" open="p2" />, '/settings/people?open=p2');
+    fireEvent.click(await screen.findByRole('button', { name: 'Make owner' }));
+    const ask = await screen.findByRole('alertdialog', { name: 'Make Ben Sample the owner?' });
+    const go = within(ask).getByRole('button', { name: 'Make owner' });
+    expect(go.hasAttribute('disabled')).toBe(true);
+    expect(within(ask).getByRole('checkbox', { name: 'Keep Ana Test as an admin' }).getAttribute('aria-checked')).toBe('false');
+    fireEvent.change(within(ask).getByLabelText('Type ben@example.test to confirm'), { target: { value: 'ben@example.test' } });
+    fireEvent.click(go);
+    await waitFor(() =>
+      expect(sent[0]).toMatchObject({ url: '/api/v2/access/owner', method: 'POST', body: { person: 'p2', previous_owner_bot_admin: false, confirm: true } }),
+    );
+    expect(await run('settings.makeOwner', { person: 'p2', keepAdmin: false }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+  });
+
+  it('Change email needs the new address twice and sends both @s752', async () => {
+    serve(held);
+    queryClient.setQueryData(accessQuery.queryKey, MINE);
+    show(<SettingsPage section="people" open="p1" />, '/settings/people?open=p1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Change email' }));
+    const ask = await screen.findByRole('alertdialog', { name: 'Change your sign-in email?' });
+    const go = within(ask).getByRole('button', { name: 'Change email' });
+    fireEvent.change(within(ask).getByLabelText('New sign-in email'), { target: { value: 'new@example.test' } });
+    expect(go.hasAttribute('disabled')).toBe(true);
+    fireEvent.change(within(ask).getByLabelText('Type it again'), { target: { value: 'new@example.test' } });
+    fireEvent.click(go);
+    await waitFor(() =>
+      expect(sent[0]).toMatchObject({
+        url: '/api/v2/access/owner/email',
+        method: 'POST',
+        body: { email: 'new@example.test', confirm_email: 'new@example.test', confirm: true },
+      }),
+    );
+  });
+});
+
+describe('Settings › Computers › when idle', () => {
+  it('the computers-sleep switch sends at once @s705', async () => {
+    serve(() => ({ status: 404, body: { detail: 'not_found' } }));
+    queryClient.setQueryData(accessQuery.queryKey, ACCESS);
+    queryClient.setQueryData(computersQuery.queryKey, []);
+    queryClient.setQueryData(sleepQuery.queryKey, { hosted: true, managed: false, hours: 2, runners: false });
+    show(<SettingsPage section="computers" />, '/settings/computers');
+    const sw = await screen.findByRole('switch', { name: "Agents' computers sleep too" });
+    fireEvent.click(sw);
+    await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/sleep', method: 'POST', body: { runners: true } }));
+  });
+});
+
+describe('Settings › Agents › a subscription', () => {
+  it('Edit renames it and sends only the name when the holder is unchanged @s747', async () => {
+    serve((url, method) => (method === 'POST' ? { status: 200, body: {} } : url.startsWith('/api/v2/access') ? { status: 200, body: ACCESS } : { status: 404, body: { detail: 'not_found' } }));
+    const kind = { connect: true, help: '', kind: 'claude_login' as const, label: 'Claude', owned: true, runtime: 'claude' as const, secret_label: '' };
+    const plan = { id: 's1', kind: 'claude_login', name: 'Plan One', label: 'Claude', status: 'working', in_use_on: [], owner_id: 'human:p1', owner_name: 'Ana Test' };
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [kind], subscriptions: [plan] } as never);
+    queryClient.setQueryData(computersQuery.queryKey, []);
+    queryClient.setQueryData(accessQuery.queryKey, ACCESS);
+    show(<Agents open="s1" />, '/settings/agents?open=s1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const edit = await screen.findByRole('dialog', { name: 'Edit Plan One' });
+    fireEvent.change(within(edit).getByLabelText('Name'), { target: { value: 'Plan Two' } });
+    fireEvent.click(within(edit).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/model-subscriptions/s1', method: 'POST', body: { name: 'Plan Two' } }));
+    expect((sent[0]?.body as Record<string, unknown>).owner_id).toBeUndefined();
+  });
+});
+
+describe('Settings › Security', () => {
+  it('a detector switch sends at once; Tico may turn one on but not off, nor open Tico support @s1079', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    queryClient.setQueryData(screeningQuery.queryKey, { modes: { webhook: 'hold', mail: 'warn' }, layers: { patterns: true, model: true }, sources: [] });
+    show(<SettingsPage section="security" />, '/settings/security');
+    fireEvent.click(await screen.findByRole('switch', { name: 'Known patterns' }));
+    await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/screening', method: 'PUT', body: { patterns: false } }));
+    expect(await run('settings.setDetector', { detector: 'model', on: false }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(await run('settings.setScreening', { door: 'webhook', mode: 'off' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(await run('settings.setSupport', { on: true }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(sent).toHaveLength(1);
+  });
+});
+
+describe('Settings › Billing and History', () => {
+  it('Billing shows the balance, the credit left and where the plan changes @s1081', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    queryClient.setQueryData(billingQuery.queryKey, {
+      state: 'ok',
+      month: '2026-11',
+      balance_micros: 12_000_000,
+      min_balance_micros: 0,
+      cloud: { plan: 'Team', billing_url: 'https://billing.example.test' },
+      credits: [{ label: 'Welcome credit', amount_micros: 20_000_000, left_micros: 12_000_000, expires: null, current: true }],
+      usage: [{ period: '2026-11', total_micros: 8_000_000 }],
+      statement: { opening_micros: 0, closing_micros: 0, debits_by_product: {} },
+      months: ['2026-11'],
+    });
+    show(<SettingsPage section="billing" />, '/settings/billing');
+    expect(await screen.findByTitle('Welcome credit')).toBeTruthy();
+    expect(screen.getByText('Team')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Change plan' }).getAttribute('href')).toBe('https://billing.example.test');
+  });
+
+  it("History lists the changes, one person's when filtered, with its CSV @s1080", async () => {
+    serve(() => ({ status: 200, body: {} }));
+    queryClient.setQueryData(historyFor('human:p2').queryKey, {
+      items: [{ id: 'h1', at: '2026-11-18T10:00:00Z', actor: 'human:p2', kind: 'task', subject: 'Plan the launch', result: 'Done' }],
+      names: { 'human:p2': 'Ben Sample' },
+    });
+    queryClient.setQueryData(historyFor().queryKey, { items: [], names: {} });
+    show(<SettingsPage section="history" who="human:p2" />, '/settings/history?who=human:p2');
+    expect(await screen.findByTitle('Ben Sample, Plan the launch: Done')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Download CSV' }).getAttribute('href')).toBe('/api/v2/history.csv?person=p2');
+  });
+});
+
+describe('Usage › an agent, opened', () => {
+  it('shows its spend, the share from cache, its tokens by kind and its tasks @s1093', async () => {
+    serve(() => ({ status: 200, body: { from: '', to: '', totals: FIG, rows: [] } }));
+    const one = { ...FIG, bot: 'builder', name: 'Builder', runs: 4, est_cost_usd: 2.5, input_tokens: 10, cached_tokens: 90 };
+    queryClient.setQueryData(usageQuery('7d', 'bot').queryKey, { from: '2026-11-13', to: '2026-11-19', totals: one, rows: [one] });
+    queryClient.setQueryData(usageQuery('7d', 'day').queryKey, { from: '2026-11-13', to: '2026-11-19', totals: one, rows: [] });
+    queryClient.setQueryData(agentUsageQuery('7d', 'builder').queryKey, {
+      totals: one,
+      tasks: [{ ...FIG, value: '12', name: 'Plan the launch', runs: 3, est_cost_usd: 2, share: 0.8 }],
+      models: [],
+    });
+    show(<UsagePage search={{ open: 'builder' }} />, '/company/usage?open=builder');
+    expect(await screen.findByRole('img', { name: 'Tokens by kind' })).toBeTruthy();
+    expect(screen.getByText('90%').parentElement?.textContent).toBe('90% from cache');
+    expect(screen.getByTitle('Plan the launch')).toBeTruthy();
+  });
+});
+
+describe('Usage › Set limit', () => {
+  it('an agent’s limit opens its dialog and saves dollars a month; Tico cannot change it @s1114', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    const none = { daily_usd: null, hourly_usd: null, per_30m_usd: null, weekly_usd: null };
+    const lim = { ...none, blocked: null, blocked_by: null, monthly_usd: 10, month_spent: 2, day_spent: null, hour_spent: null, week_spent: null, percent: 20, may_edit: true, own_monthly_usd: 10, own_daily_usd: null, own_hourly_usd: null, own_per_30m_usd: null, own_weekly_usd: null, source: {} };
+    queryClient.setQueryData(usageQuery('7d', 'bot').queryKey, { from: '', to: '', totals: FIG, rows: [] });
+    queryClient.setQueryData(limitsQuery.queryKey, { bots: { builder: lim }, default: { ...none, monthly_usd: 50, count_subscription: false }, may_edit_default: true, pools: null });
+    show(<UsagePage search={{ view: 'limits', open: 'builder' }} />, '/company/usage?view=limits&open=builder');
+    fireEvent.click(await screen.findByRole('button', { name: /^Limit\$/ }));
+    const dlg = await screen.findByRole('dialog', { name: 'Monthly limit for builder' });
+    fireEvent.change(within(dlg).getByLabelText('Dollars a month'), { target: { value: '25' } });
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/usage/limits/builder', method: 'PUT', body: { monthly_usd: 25 } }));
+    expect(await run('usage.setLimit', { agent: 'builder', monthly: 500 }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
   });
 });

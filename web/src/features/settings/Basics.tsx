@@ -145,7 +145,8 @@ const looksLikeEmail = (s: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s);
 
 /** The owner hands the company to another person: typed to confirm, and only by the owner's own press. */
 function OwnerDialog({ p, ownerName, onClose }: { p: AccessPerson; ownerName: string; onClose: () => void }) {
-  const [keep, setKeep] = useState(true);
+  // Off unless chosen, as the old app had it: handing over does not keep extra rights by default.
+  const [keep, setKeep] = useState(false);
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
   const ready = typed.trim().toLowerCase() === p.email.toLowerCase();
@@ -656,7 +657,10 @@ function Tokens() {
   const [making, setMaking] = useState(false);
   const [shown, setShown] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [revoking, setRevoking] = useState<{ id: string; label: string } | null>(null);
   const live = (tokens.data?.tokens ?? []).filter((t) => !t.revoked_at);
+  // The line a terminal or script needs, as the old app gave it: built here from the secret, never kept.
+  const line = shown ? `export HUB_API_URL=${window.location.origin} HUB_TOKEN=${shown}` : '';
   const make = async () => {
     setBusy(true);
     const r = await run('settings.createToken', { label: label.trim() }, { via: 'click' });
@@ -712,7 +716,7 @@ function Tokens() {
               <span className="row-cell">{new Date(t.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
               <span className="row-cell">{t.last_used_at ? new Date(t.last_used_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'Never'}</span>
               <span className="hl-act">
-                <Verb quiet onClick={() => void act('settings.revokeToken', { token: t.id })}>
+                <Verb quiet onClick={() => setRevoking({ id: t.id, label: t.label })}>
                   Revoke
                 </Verb>
               </span>
@@ -720,25 +724,59 @@ function Tokens() {
           ))}
         </>
       )}
+      {/* Revoking cannot be taken back: asked first, as the old app did (ui/app/settings-devices.ts). */}
+      <Dialog
+        open={revoking != null}
+        onOpenChange={(o) => !o && setRevoking(null)}
+        alert
+        title={`Revoke ${revoking?.label ?? 'token'}?`}
+        description="Anything using it stops at once."
+        actions={
+          <>
+            <Button variant="quiet" onClick={() => setRevoking(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                if (revoking) void act('settings.revokeToken', { token: revoking.id });
+                setRevoking(null);
+              }}
+            >
+              Revoke
+            </Button>
+          </>
+        }
+      />
       <Dialog
         open={shown != null}
         onOpenChange={(o) => !o && setShown(null)}
         title="Your new token"
         description="Copy it now. It is not shown again."
         actions={
-          <Button
-            variant="primary"
-            icon="copy"
-            onClick={() => {
-              if (shown) void navigator.clipboard?.writeText(shown);
-              setShown(null);
-            }}
-          >
-            Copy
-          </Button>
+          <>
+            <Button variant="quiet" onClick={() => void navigator.clipboard?.writeText(line)}>
+              Copy line
+            </Button>
+            <Button
+              variant="primary"
+              icon="copy"
+              onClick={() => {
+                if (shown) void navigator.clipboard?.writeText(shown);
+                setShown(null);
+              }}
+            >
+              Copy
+            </Button>
+          </>
         }
       >
-        <code className="fs-code">{shown}</code>
+        <code className="fs-code" aria-label="Token">
+          {shown}
+        </code>
+        <code className="fs-code" aria-label="Shell line">
+          {line}
+        </code>
       </Dialog>
     </Section>
   );
@@ -832,7 +870,8 @@ export function Security() {
                 look="quiet"
                 value={v.modes[door] ?? 'off'}
                 onValueChange={(mode) => void act('settings.setScreening', { door, mode })}
-                options={MODES}
+                // Email can warn but not hold (old app ui/app/settings-release.ts screeningHTML).
+                options={door === 'mail' ? MODES.filter((m) => m.value !== 'hold') : MODES}
               />
             </Line>
           ))}

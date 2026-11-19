@@ -103,6 +103,9 @@ function AgentOpen({ range, bot }: { range: UsageRange; bot: string }) {
     ['Output', t.output_tokens],
   ] as const;
   const all = Math.max(1, tokens(t));
+  // The share of input read from cache, as the old app and the mock give it (ui/app/usage.ts useCacheRate).
+  const input = t.input_tokens + t.cached_tokens + t.cache_write_tokens;
+  const cache = input ? t.cached_tokens / input : null;
   return (
     <>
       <div className="u-sum">
@@ -115,6 +118,11 @@ function AgentOpen({ range, bot }: { range: UsageRange; bot: string }) {
         <span>
           <b>{fmtTok(tokens(t))}</b> tokens
         </span>
+        {cache != null && (
+          <span>
+            <b>{cache > 0 && cache < 0.005 ? '<1%' : `${Math.round(cache * 100)}%`}</b> from cache
+          </span>
+        )}
       </div>
       <div className="tokbar" role="img" aria-label="Tokens by kind">
         {parts.map(([k, n], i) => (n > 0 ? <i key={k} className={`tok-${i}`} style={{ width: `${((n / all) * 100).toFixed(1)}%` }} /> : null))}
