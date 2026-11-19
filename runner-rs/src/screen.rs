@@ -75,6 +75,10 @@ const POLL_EVERY: Duration = Duration::from_secs(10);
 /// With the stream up, `screen_open` is how a session arrives: the hub writes it as a change row, which a resumed
 /// stream sends again. The read is then only a backstop, and once more whenever the stream comes back.
 const BACKUP_EVERY: Duration = Duration::from_secs(300);
+/// After a `screen_open`, a stream that came back, or a read or bridge that failed, the sessions are read every
+/// POLL_EVERY for this long whatever the stream says: past the hub's 30 s answer window. A push can land before its
+/// session is listed, and a failure is tried again in time.
+const URGENT_FOR: Duration = Duration::from_secs(40);
 /// The hub ends a session at 60 minutes; this is the runner's own backstop.
 const SESSION_CAP: Duration = Duration::from_secs(61 * 60);
 /// How often a computer with its screen on asks whether the hub takes screens (a hub update can add it).
@@ -197,6 +201,8 @@ struct Shared {
     /// Sessions with a bridge running here, so a poll never opens a second one.
     bridging: Mutex<HashSet<String>>,
     wake: Notify,
+    /// Until when the sessions are read every POLL_EVERY (URGENT_FOR).
+    urgent_until: Mutex<Option<Instant>>,
     switch: watch::Sender<bool>,
 }
 
@@ -214,6 +220,7 @@ fn shared() -> &'static Shared {
         missing: Mutex::new(vec![]),
         bridging: Mutex::new(HashSet::new()),
         wake: Notify::new(),
+        urgent_until: Mutex::new(None),
         switch: watch::channel(false).0,
     })
 }
@@ -243,9 +250,15 @@ pub fn display() -> Option<String> {
         .map(|n| format!(":{n}"))
 }
 
-/// The event stream said the hub opened a session: poll for it now.
+/// The event stream said the hub opened a session, or came back after a gap: read the sessions now, and every
+/// POLL_EVERY for URGENT_FOR.
 pub fn heard() {
+    urgent();
     shared().wake.notify_one();
+}
+
+fn urgent() {
+    *shared().urgent_until.lock().unwrap() = Some(Instant::now() + URGENT_FOR);
 }
 
 // ------------------------------------------------------------------------------------------ the supervisor
@@ -719,35 +732,35 @@ pub async fn shutdown() {
 
 // ------------------------------------------------------------------------------------------ sessions
 
-/// Whether the sessions loop reads the hub's pending sessions now: on `screen_open` (`hinted`), on the stream coming
-/// back (`back`), every POLL_EVERY while the stream is not up, and every BACKUP_EVERY while it is.
-fn read_due(hinted: bool, live: bool, back: bool, read_at: Option<Instant>, now: Instant) -> bool {
-    hinted
-        || back
-        || !live
-        || read_at.is_none_or(|at| now.saturating_duration_since(at) >= BACKUP_EVERY)
+/// Whether the sessions loop reads the hub's pending sessions now: every POLL_EVERY while `urgent` (URGENT_FOR) or
+/// while sessions are not pushed (the stream down or gone quiet, or a server without one), else every BACKUP_EVERY.
+fn read_due(urgent: bool, pushed: bool, read_at: Option<Instant>, now: Instant) -> bool {
+    urgent || !pushed || read_at.is_none_or(|at| now.saturating_duration_since(at) >= BACKUP_EVERY)
 }
 
 /// While the display is up: the hub's pending sessions, at once on `screen_open`, and on the clock `read_due` keeps.
 async fn sessions(client: Client, events: Arc<crate::events::Events>) {
     let s = shared();
     let mut said: Option<String> = None;
-    let (mut read_at, mut was_live) = (None, false);
+    let mut read_at = None;
     loop {
-        let hinted = tokio::select! {
-            _ = tokio::time::sleep(POLL_EVERY) => false,
-            _ = s.wake.notified() => true,
-        };
-        let live = events.live();
-        let back = live && !was_live;
-        was_live = live;
+        tokio::select! {
+            _ = tokio::time::sleep(POLL_EVERY) => {}
+            _ = s.wake.notified() => {}
+        }
         if !s.up.load(Ordering::SeqCst) || !s.hub.load(Ordering::SeqCst) {
+            continue; // a hint heard meanwhile keeps its URGENT_FOR window for when the display is back
+        }
+        let now = Instant::now();
+        let urgent = s
+            .urgent_until
+            .lock()
+            .unwrap()
+            .is_some_and(|until| now < until);
+        if !read_due(urgent, events.pushing(), read_at, now) {
             continue;
         }
-        if !read_due(hinted, live, back, read_at, Instant::now()) {
-            continue;
-        }
-        read_at = Some(Instant::now());
+        read_at = Some(now);
         let rows = match client.get("runners/me/screen/sessions").await {
             Ok(v) => {
                 said = None;
@@ -761,6 +774,7 @@ async fn sessions(client: Client, events: Arc<crate::events::Events>) {
                     ));
                     said = Some(text);
                 }
+                urgent();
                 continue;
             }
         };
@@ -781,6 +795,7 @@ async fn sessions(client: Client, events: Arc<crate::events::Events>) {
             tokio::spawn(async move {
                 if let Err(e) = bridge(&client, &id, endpoint).await {
                     log(&format!("Tico runner: screen session {id} ended: {e}"));
+                    urgent(); // a session still waiting is found again within its answer window
                 }
                 shared().bridging.lock().unwrap().remove(&id);
             });
@@ -893,14 +908,17 @@ mod tests {
     fn with_the_stream_up_sessions_come_by_push_and_the_read_is_a_backstop() {
         let now = Instant::now();
         let just = Some(now - Duration::from_secs(10));
-        // Stream down, or a hub without one: every POLL_EVERY, as before.
-        assert!(read_due(false, false, false, just, now));
-        // Stream up: no read until BACKUP_EVERY, except on `screen_open` or when the stream comes back.
-        assert!(!read_due(false, true, false, just, now));
-        assert!(read_due(true, true, false, just, now));
-        assert!(read_due(false, true, true, just, now));
-        assert!(read_due(false, true, false, Some(now - BACKUP_EVERY), now));
-        assert!(read_due(false, true, false, None, now));
+        // Not pushed (stream down or quiet, or a hub without one): every POLL_EVERY, as before.
+        assert!(read_due(false, false, just, now));
+        // Pushed: no read until BACKUP_EVERY, except within URGENT_FOR of a hint, a stream back or a failure.
+        assert!(!read_due(false, true, just, now));
+        assert!(read_due(true, true, just, now));
+        assert!(read_due(false, true, Some(now - BACKUP_EVERY), now));
+        assert!(read_due(false, true, None, now));
+        // A hint keeps the reads coming past the hub's answer window, whether or not the display was up for it.
+        heard();
+        let until = shared().urgent_until.lock().unwrap().unwrap();
+        assert!(until >= now + Duration::from_secs(30));
     }
 
     #[test]

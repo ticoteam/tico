@@ -53,6 +53,8 @@ const VOICE_BACKUP: Duration = Duration::from_secs(3);
 /// A stream quiet this long may be dead without having failed yet: voice keeps its own poll until it is heard again.
 /// The server sends a keepalive every 15 s by default (20 s is a common setting).
 const VOICE_QUIET: Duration = Duration::from_secs(25);
+/// A stream quiet this long (keepalives come every 15 s by default) is not counted on for pushed hints.
+const STREAM_QUIET: Duration = Duration::from_secs(35);
 /// Every channel the runner reads on its own clock. A channel's bit in `Events::pending` is its index here.
 pub const CHANNELS: [&str; 10] = [
     "claim",
@@ -235,6 +237,17 @@ impl Events {
         if self.voice_push.swap(taken, Ordering::SeqCst) && !taken {
             self.voice_unpushed();
         }
+    }
+
+    /// Whether the stream is up and has said something (a keepalive at least) within STREAM_QUIET: hints that come by
+    /// push can be waited for. A stalled connection can stay `Up` until READ_TIMEOUT_S.
+    pub fn pushing(&self) -> bool {
+        self.live()
+            && self
+                .heard_at
+                .lock()
+                .unwrap()
+                .is_some_and(|at| at.elapsed() < STREAM_QUIET)
     }
 
     /// Whether voice hints reach this computer now: the server takes them and the stream is up and not gone quiet.
@@ -556,6 +569,10 @@ impl Events {
                 let resumed = self.resume.lock().unwrap().is_some_and(|after| {
                     frame.after == Some(after) && frame.seq.is_some_and(|seq| seq >= after)
                 });
+                if recovering {
+                    // Back after a gap: the screen sessions are read again, whatever the stream replays.
+                    crate::screen::heard();
+                }
                 if recovering && !resumed {
                     self.catch_up_now();
                 } else {
@@ -617,6 +634,7 @@ impl Events {
                 }
             }
             "reset" => {
+                crate::screen::heard();
                 self.catch_up_now();
                 let _ = self.voice.send(VoiceWake::CatchUp);
             }
