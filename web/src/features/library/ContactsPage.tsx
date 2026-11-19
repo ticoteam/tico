@@ -9,7 +9,7 @@ import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Link } from '@/kit/Link';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Table, Td, Th, Tr } from '@/kit/Table';
-import { List, RecordPanel, Section, type PageState, type PageTab } from '@/pagekinds';
+import { FilterRow, List, RecordPanel, Section, type PageState, type PageTab } from '@/pagekinds';
 import { Face, Find, More, OwnerButton, press, Who } from './parts';
 import {
   attributesQuery,
@@ -49,11 +49,42 @@ export function shown(v: FactValue | FactValue[] | undefined): string {
 
 const EDITABLE = new Set(['text', 'string', 'email', 'phone', 'url', 'number', 'date', 'money']);
 
+// How a link to us reads as a relationship (directory.ts DIR_RELATIONS, backend/entities/schema.py link types).
+export const RELATIONS: Record<string, string> = {
+  customer_of: 'Customer',
+  vendor_to: 'Vendor',
+  partner_of: 'Partner',
+  invests_in: 'Investor',
+  advises: 'Advisor',
+  represents: 'Represents',
+  regulates: 'Regulator',
+  sells_to: 'Reseller',
+  competes_with: 'Competitor',
+};
+// Where a contact is known from (directory.ts DIR_SOURCES: entity_sources.source_type).
+const SOURCES: Record<string, string> = {
+  mailbox: 'Mail',
+  meeting: 'Meetings',
+  finance_book: 'Finance',
+  note_me: 'My note',
+  market: 'Market',
+  hub: 'Tico',
+  system: 'Tico',
+  counsel: 'Rules Owner',
+  company_page: 'Company page',
+  places: 'Shared',
+};
+const words = (map: Record<string, string>) => (key: string) => map[key] ?? key.replace(/_/g, ' ');
+export const relation = words(RELATIONS);
+export const fromWhere = (keys: readonly string[] | undefined) => [...new Set((keys ?? []).map(words(SOURCES)))].join(' · ');
+/** A person with no link of their own reads as their organization's (a vendor's account manager is a vendor). */
+const relationsOf = (r: ContactRow) => (r.links_to_us?.length ? r.links_to_us : r.type === 'person' ? (r.organization?.links_to_us ?? []) : []);
+
 export function ContactsPage({ search }: { search: ContactsSearch }) {
   const type = search.type ?? 'person';
   const types = useQuery(typesQuery);
   const counts = useQuery(countsQuery);
-  const list = useInfiniteQuery(contactsQuery(type, search.q ?? ''));
+  const list = useInfiniteQuery(contactsQuery(type, search.q ?? '', search.link ?? ''));
   const rows = list.data?.pages.flatMap((p) => p.rows) ?? [];
   const kinds = types.data ?? [];
   const kind = kinds.find((k) => k.key === type);
@@ -62,10 +93,15 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
   let state: PageState = 'ready';
   if (list.isError) state = (list.error as { status?: number } | null)?.status === 403 ? 'no-access' : 'fault';
   else if (!list.data) state = 'loading';
-  else if (!rows.length && !search.q) state = 'empty';
+  else if (!rows.length && !search.q && !search.link) state = 'empty';
   // An empty tab beside full ones names its own kind; with none at all, the page says so.
   const none = !(counts.data ?? []).some((c) => c.count > 0);
   const emptyTitle = none || !kind ? 'No contacts yet' : `No ${kind.plural_name.toLowerCase()} yet`;
+
+  // Organization for people, Domain for organizations, Relationship for both (directory.ts dirTable).
+  const person = type === 'person';
+  const org = type === 'organization';
+  const listed = (to: { type?: string; q?: string; link?: string }) => void press('contacts.list', to);
 
   // People, organizations, places: one tab each (records.js contactsPage). People is the page with no `type`.
   const tabs: PageTab[] = kinds.map((k) => ({
@@ -85,9 +121,18 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
       search={<Find label="Search contacts" value={search.q} onFind={(q) => void press('contacts.list', { type: search.type, q })} />}
       actions={
         <>
+          {(person || org) && (
+            <Menu trigger={<IconButton icon="filter" label="Relationship" on={!!search.link} />}>
+              <MenuItem label="All" on={!search.link} onSelect={() => listed({ type: search.type, q: search.q })} />
+              {Object.keys(RELATIONS).map((k) => (
+                <MenuItem key={k} label={relation(k)} on={k === search.link} onSelect={() => listed({ type: search.type, q: search.q, link: k })} />
+              ))}
+            </Menu>
+          )}
           <OwnerButton page="contacts" />
         </>
       }
+      filter={search.link && <FilterRow filters={[{ label: relation(search.link), onClear: () => listed({ type: search.type, q: search.q }) }]} />}
       state={state}
       empty={{ title: emptyTitle }}
       onRetry={() => void list.refetch()}
@@ -98,7 +143,9 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
               <thead>
                 <tr>
                   <Th>Name</Th>
-                  <Th>Organization</Th>
+                  {person && <Th>Organization</Th>}
+                  {org && <Th>Domain</Th>}
+                  {(person || org) && <Th>Relationship</Th>}
                   <Th>From</Th>
                   <Th>Owner</Th>
                   <Th num>Last</Th>
@@ -122,7 +169,7 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
 }
 
 function ContactLine({ r, search, selected }: { r: ContactRow; search: ContactsSearch; selected: boolean }) {
-  const owner = r.owner?.id ? `${r.owner.type === 'Bot' || r.owner.type === 'bot' ? 'bot' : 'human'}:${r.owner.id}` : null;
+  const type = search.type ?? 'person';
   return (
     <Tr selected={selected}>
       <Td>
@@ -131,9 +178,11 @@ function ContactLine({ r, search, selected }: { r: ContactRow; search: ContactsS
           <span>{r.name}</span>
         </Link>
       </Td>
-      <Td>{r.organization?.name ?? ''}</Td>
-      <Td>{(r.sources ?? []).join(' · ')}</Td>
-      <Td>{owner && <Face actor={owner} name={r.owner?.name} />}</Td>
+      {type === 'person' && <Td>{r.organization?.name ?? ''}</Td>}
+      {type === 'organization' && <Td>{r.primary_domain ?? ''}</Td>}
+      {(type === 'person' || type === 'organization') && <Td>{relationsOf(r).map(relation).join(', ')}</Td>}
+      <Td>{fromWhere(r.sources)}</Td>
+      <Td>{r.owner && <Face actor={r.owner} />}</Td>
       <Td num>{r.last_activity_at ? <Ago at={r.last_activity_at} /> : null}</Td>
     </Tr>
   );
@@ -176,12 +225,13 @@ function ContactPanel({ id, search }: { id: string; search: ContactsSearch }) {
                   onHistory={() => setPast(a)}
                 />
               ))}
-              {c.owner?.name && (
+              {relationsOf(c).length > 0 && <LabelValue label="Relationship">{relationsOf(c).map(relation).join(', ')}</LabelValue>}
+              {c.owner && (
                 <LabelValue label="Owner">
-                  <Who actor={c.owner.id ? `${c.owner.type === 'Bot' || c.owner.type === 'bot' ? 'bot' : 'human'}:${c.owner.id}` : null} name={c.owner.name} className="fact-who" />
+                  <Who actor={c.owner} className="fact-who" />
                 </LabelValue>
               )}
-              {(c.sources?.length ?? 0) > 0 && <LabelValue label="From">{c.sources?.join(' · ')}</LabelValue>}
+              {(c.sources?.length ?? 0) > 0 && <LabelValue label="From">{fromWhere(c.sources)}</LabelValue>}
             </Facts>
           )
         )
@@ -311,18 +361,21 @@ function Threads({ words }: { words: string }) {
   );
 }
 
+/** A note for the company, or (the lock pressed) for the person alone (directory-entity.ts: Company / Only me). */
 function NoteBox({ id }: { id: string }) {
   const [text, setText] = useState('');
+  const [mine, setMine] = useState(false);
   const send = async (e?: FormEvent) => {
     e?.preventDefault();
     const body = text.trim();
     if (!body) return;
     setText('');
-    if (!(await press('contacts.note', { contact: id, body }, 'Note not added'))) setText(body);
+    if (!(await press('contacts.note', { contact: id, body, audience: mine ? 'me' : 'company' }, 'Note not added'))) setText(body);
   };
   return (
     <form className="note-box" onSubmit={(e) => void send(e)}>
       <Field label="Add a note" labelHidden value={text} onValueChange={setText} placeholder="Add a note" wide />
+      <IconButton icon="lock" label="Only me" quiet on={mine} onClick={() => setMine((m) => !m)} />
       <IconButton icon="send" label="Add the note" type="submit" disabled={!text.trim()} />
     </form>
   );

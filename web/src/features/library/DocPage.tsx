@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { refusal, run } from '@/actions';
+import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
@@ -40,6 +41,9 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
   const past = search.v && doc && search.v !== doc.version ? old.data : undefined;
   const body = past?.body ?? doc?.body ?? '';
   const outline = headings(body);
+  // A locked doc changes only by an owner (docs-page.ts canChange; the server lets agent administrators too).
+  const owner = useQuery(meQuery).data?.role === 'owner';
+  const canChange = !!doc && (owner || !doc.locked);
   // Keyed by the doc, not its version: a save's shown version and its rollback must not reset what the person typed.
   if (editing && doc) return <EditDoc key={doc.id} doc={doc} />;
 
@@ -74,7 +78,7 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
       after={versionPick}
       actions={
         <>
-          {doc && !past && !doc.locked && (
+          {doc && !past && canChange && (
             <IconButton icon="edit" label="Edit" onClick={() => void press('docs.open', { doc: id, edit: true })} data-target={`doc-edit:${id}`} />
           )}
           <OwnerButton page="docs" phone />
@@ -85,6 +89,12 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
         !past &&
         !doc.archived && (
           <PageMore>
+            {owner && (
+              <MenuItem
+                label={doc.locked ? 'Unlock' : 'Lock'}
+                onSelect={() => void press('docs.lock', { doc: id, version: doc.version, locked: !doc.locked }, doc.locked ? 'Not unlocked' : 'Not locked')}
+              />
+            )}
             <MenuItem label="Archive" onSelect={() => void press('docs.archive', { doc: id, version: doc.version, archived: true }, 'Not archived')} />
           </PageMore>
         )
@@ -111,9 +121,11 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
             <Button variant="quiet" onClick={() => void press('docs.open', { doc: id })}>
               Latest
             </Button>
-            <Button variant="primary" onClick={() => void press('docs.restore', { doc: id, version: past.version })}>
-              Restore
-            </Button>
+            {canChange && (
+              <Button variant="primary" onClick={() => void press('docs.restore', { doc: id, version: past.version })}>
+                Restore
+              </Button>
+            )}
           </>
         )
       }

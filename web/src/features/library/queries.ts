@@ -197,6 +197,20 @@ export function archiveDoc(id: string, version: number, archived: boolean) {
   });
 }
 
+/** Lock a doc (only owners and agent administrators may change it then), or unlock it. */
+export function lockDoc(id: string, version: number, locked: boolean) {
+  return write<InternalDocResult>({
+    key: ['docs', 'detail', id],
+    optimistic: (cur: Doc | undefined) => cur && { ...cur, locked },
+    send: (idempotencyKey) => api.patch<InternalDocResult>(`/api/v2/docs/${enc(id)}`, { version, locked }, { idempotencyKey }),
+    settle: (_cur: Doc | undefined, answer) => answer.doc,
+  }).then(async (r) => {
+    // the list marks a locked doc
+    await queryClient.invalidateQueries({ queryKey: docsListQuery.queryKey });
+    return r;
+  });
+}
+
 /** The types the import reads (backend/docs_import.py), up to 20 MB. */
 export const IMPORT_TYPES = '.md,.markdown,.txt,.html,.htm,.docx,.pdf';
 export const IMPORT_MAX = 20_000_000;
@@ -912,8 +926,11 @@ export interface ContactRow {
   primary_email: string | null;
   primary_domain: string | null;
   last_activity_at: string | null;
-  organization?: { id: string; name: string } | null;
-  owner?: { type?: string; id?: string; name?: string | null } | null;
+  /** Its links to us (customer_of, vendor_to...): what it is to the company. */
+  links_to_us?: string[];
+  organization?: { id: string; name: string; links_to_us?: string[] } | null;
+  /** `human:<id>` or `bot:<slug>` (store._owner). */
+  owner?: string | null;
   sources?: string[];
 }
 export interface FactValue {
@@ -948,11 +965,12 @@ export const attributesQuery = (type: string) =>
     ...quiet,
   });
 
-export const contactsQuery = (type: string, name: string) =>
+/** One type's contacts by name, and `link`: only those with that link to us (customer_of...). */
+export const contactsQuery = (type: string, name: string, link = '') =>
   infiniteQueryOptions({
-    queryKey: ['contacts', 'find', type, name],
+    queryKey: ['contacts', 'find', type, name, link],
     queryFn: ({ pageParam }) =>
-      api.get<{ rows: ContactRow[]; next: string | null }>(`/api/v2/entities/find/${enc(type)}${q({ name, after: pageParam, limit: 100, detail: true })}`),
+      api.get<{ rows: ContactRow[]; next: string | null }>(`/api/v2/entities/find/${enc(type)}${q({ name, link, after: pageParam, limit: 100, detail: true })}`),
     initialPageParam: '',
     getNextPageParam: (last) => last.next ?? undefined,
     ...quiet,

@@ -82,13 +82,16 @@ export const toolsSearch = (raw: Record<string, unknown>): ToolsSearch =>
     github: raw.github === undefined ? undefined : (GITHUB_RETURNS.find((w) => w === raw.github) ?? ('other' as const)),
   });
 
-/** `type`: person, organization, place...; `panel`: the contact open beside the list. */
+/** `type`: person, organization, place...; `link`: only those with that link to us (customer_of...); `panel`: the
+   contact open beside the list. */
 export interface ContactsSearch {
   type?: string;
   q?: string;
+  link?: string;
   panel?: string;
 }
-export const contactsSearch = (raw: Record<string, unknown>): ContactsSearch => clean({ type: str(raw.type), q: str(raw.q), panel: str(raw.panel) });
+export const contactsSearch = (raw: Record<string, unknown>): ContactsSearch =>
+  clean({ type: str(raw.type), q: str(raw.q), link: str(raw.link), panel: str(raw.panel) });
 
 /* ---------------------------------------------------------------- Cmd+K: one group per Library page */
 

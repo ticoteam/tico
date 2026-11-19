@@ -12,7 +12,7 @@ import { Link } from '@/kit/Link';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Row } from '@/kit/Row';
 import { Document, FilterRow, List, Section, type PageState } from '@/pagekinds';
-import { Preview } from './FileViewer';
+import { FileGet, linkOf, Preview } from './FileViewer';
 import { ChatWith, Face, Find, KindGlyph, More, press, size, when, Who } from './parts';
 import { fileQuery, fileSearchQuery, filesQuery, fileUrl, fileVersionsQuery, type FileRow } from './queries';
 import type { FilesSearch } from './search';
@@ -226,16 +226,16 @@ function FilePage({ id, version }: { id: string; version?: number }) {
       className="lib"
       actions={
         <>
-          <a className="ib" href={url} download aria-label="Download" title="Download">
-            <Icon name="download" />
-          </a>
+          <FileGet url={url} link={linkOf(file)} />
           {file?.bot && <ChatWith actor={file.bot.includes(':') ? file.bot : `bot:${file.bot}`} />}
         </>
       }
       state={state}
       onRetry={() => void f.refetch()}
       framed
-      body={file && <Preview id={id} version={n ?? 1} mime={mime} kind={file.library_kind} title={file.title} url={url} name={shown?.name ?? file.name} />}
+      body={
+        file && <Preview id={id} version={n ?? 1} mime={mime} kind={file.library_kind} title={file.title} url={url} name={shown?.name ?? file.name} link={linkOf(file)} />
+      }
       side={
         file && (
           <div className="fv-side">

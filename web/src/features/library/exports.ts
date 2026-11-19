@@ -62,9 +62,9 @@ export const loadSkills = (qc: QueryClient, s: Pick<SkillsSearch, 'skill' | 'pro
   );
 export const loadTools = (qc: QueryClient, s: Pick<ToolsSearch, 'tool'>) =>
   quietly(qc.ensureQueryData(toolsQuery), s.tool?.startsWith('api:') ? qc.ensureQueryData(apiToolQuery(s.tool.slice(4))) : Promise.resolve());
-export const loadContacts = (qc: QueryClient, s: Pick<ContactsSearch, 'type' | 'q' | 'panel'>) =>
+export const loadContacts = (qc: QueryClient, s: Pick<ContactsSearch, 'type' | 'q' | 'panel'> & { link?: string }) =>
   quietly(
     qc.ensureQueryData(typesQuery),
-    qc.ensureInfiniteQueryData(contactsQuery(s.type ?? 'person', s.q ?? '')),
+    qc.ensureInfiniteQueryData(contactsQuery(s.type ?? 'person', s.q ?? '', s.link ?? '')),
     s.panel ? qc.ensureQueryData(cardQuery(s.panel)) : Promise.resolve(),
   );

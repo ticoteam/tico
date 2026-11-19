@@ -119,7 +119,7 @@ describe('archived docs', () => {
 });
 
 describe('editing a doc', () => {
-  it('keeps what the person typed when the save is refused, and sends the version they started from again', async () => {
+  it('keeps what the person typed when the save is refused, and sends the version they started from again @s815', async () => {
     const full = { ...doc('d1', 'Notes'), body: 'Old text', archived: false, created_at: '', created_by_id: '', created_by_name: '' };
     const patches: unknown[] = [];
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
@@ -149,7 +149,7 @@ describe('editing a doc', () => {
 });
 
 describe('docs list', () => {
-  it('names a section as a person reads it, and puts the head’s ⋯ after New doc', async () => {
+  it('names a section as a person reads it, and puts the head’s ⋯ after New doc @s773', async () => {
     serve();
     queryClient.setQueryData(docsListQuery.queryKey, {
       docs: [

@@ -225,7 +225,7 @@ describe('Add tool', () => {
     expect(nameFromUrl('not an address')).toBe('');
   });
 
-  it('sends only the login fields that changed, and null to take the authenticator off', async () => {
+  it('sends only the login fields that changed, and null to take the authenticator off @s925', async () => {
     const sent: unknown[] = [];
     vi.stubGlobal('fetch', async (_url: string, init?: RequestInit) => {
       sent.push(JSON.parse(String(init?.body)));

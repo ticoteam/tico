@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { refusal, run } from '@/actions';
 import type { ApiTool, LetterOut, ToolIndexRow, WebsiteTool } from '@/api/schema';
-import { meQuery } from '@/data';
+import { directoryQuery, meQuery } from '@/data';
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
@@ -471,8 +471,13 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
             ))}
             {t.can_manage && t.keys.length > 0 && <More onClick={() => void press('tools.check', { tool: id }, 'Not checked')}>Check now</More>}
           </Section>
-          {t.access.length > 0 && (
-            <Section name="Who may use it" count={t.access.length} target={`tool-who:${id}`}>
+          {(t.access.length > 0 || t.can_manage) && (
+            <Section
+              name="Who may use it"
+              count={t.access.length || undefined}
+              target={`tool-who:${id}`}
+              actions={t.can_manage && <AddWho tool={id} taken={t.access.map((a) => a.subject)} />}
+            >
               {t.access.map((a) => (
                 <Who
                   key={a.subject}
@@ -608,6 +613,21 @@ const VERB: Record<WebsiteTool['recent'][number]['verb'], string> = {
 };
 
 type SiteDialog = { is: 'sites' } | { is: 'password' | 'code'; account: string };
+
+/** Who may use an API tool, one more: a teammate not listed yet, at Read (tools-api.ts taWhoCard's Add). Its level
+   changes on its row after. */
+function AddWho({ tool, taken }: { tool: string; taken: string[] }) {
+  const dir = useQuery(directoryQuery).data;
+  const left = (dir?.actors ?? []).filter((a) => !taken.includes(a.id));
+  if (!left.length) return null;
+  return (
+    <Menu trigger={<IconButton icon="plus" label="Add someone" size="sm" />}>
+      {left.map((a) => (
+        <MenuItem key={a.id} label={a.name} onSelect={() => void press('tools.setAccess', { tool, subject: a.id, level: 'read' }, 'Not added')} />
+      ))}
+    </Menu>
+  );
+}
 
 function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined }) {
   const q = useQuery(websiteToolQuery(id));

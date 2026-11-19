@@ -3,7 +3,7 @@ import { ContactsPage, contactsSearch, loadContacts } from '@/features/library/e
 
 export const Route = createFileRoute('/library/contacts')({
   validateSearch: contactsSearch,
-  loaderDeps: ({ search }) => ({ type: search.type, q: search.q, panel: search.panel }),
+  loaderDeps: ({ search }) => ({ type: search.type, q: search.q, link: search.link, panel: search.panel }),
   loader: ({ deps, context: { queryClient } }) => loadContacts(queryClient, deps),
   component: Contacts,
 });

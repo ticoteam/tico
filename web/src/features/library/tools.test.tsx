@@ -62,7 +62,7 @@ function at(path: string, node: ReactNode = null) {
 const file = (o: Record<string, unknown>) => ({ id: 'f1', title: 'Sample notes', name: 'notes.txt', version: 1, library_kind: 'doc', mime: 'text/plain', bot: 'helper', ...o });
 
 describe('the file viewer', () => {
-  it('opens a file over the page in a dialog from files.view, and closes it', async () => {
+  it('opens a file over the page in a dialog from files.view, and closes it @s75 @s198', async () => {
     serve(() => 'plain words');
     queryClient.setQueryData(fileQuery('f1').queryKey, file({}) as never);
     queryClient.setQueryData(fileVersionsQuery('f1').queryKey, []);
@@ -78,7 +78,7 @@ describe('the file viewer', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Sample notes' })).toBeNull());
   });
 
-  it('shows a picture full size, not in the dialog', async () => {
+  it('shows a picture full size, not in the dialog @s77', async () => {
     serve();
     queryClient.setQueryData(fileQuery('f2').queryKey, file({ id: 'f2', title: 'Shelf photo', name: 'shelf.png', mime: 'image/png', library_kind: 'image' }) as never);
     queryClient.setQueryData(fileVersionsQuery('f2').queryKey, []);
@@ -101,7 +101,7 @@ describe('the Tools filter', () => {
     expect(narrow(rows, { kind: 'website', needs: 1 })).toEqual([]);
   });
 
-  it('puts the filter in the address', async () => {
+  it('puts the filter in the address @s908', async () => {
     serve();
     const router = at('/library/tools');
     await act(async () => void (await run('tools.filter', { kind: 'api', needs: true }, { via: 'click' })));
@@ -143,7 +143,7 @@ describe('tool changes', () => {
 describe('a shown secret', () => {
   const FAKE = 'sk-test-0000-fake';
 
-  it('lands in the dialog only: not the query cache', async () => {
+  it('lands in the dialog only: not the query cache @s840', async () => {
     const sent = serve((url) => (url.endsWith('/reveal') ? { value: FAKE } : {}));
     at('/library/tools', <RevealDialog credential="cred1" title="Main key" onClose={() => {}} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Show' }));

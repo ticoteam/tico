@@ -27,6 +27,7 @@ import {
   installSkill,
   importDoc,
   archiveDoc,
+  lockDoc,
   addSource,
   addWebsite,
   apiToolQuery,
@@ -206,6 +207,19 @@ export const docsRestore = defineAction({
     await set(router, { v: undefined }, true);
   },
   did: (i) => `Brought back version ${i.version}`,
+  target: (i) => ({ kind: 'page', id: `/library/${i.doc}` }),
+});
+
+/** Lock a doc (only owners and agent administrators may change it), or unlock it. Unlocking lets everyone change it
+   again, so it is the person's own press; Tico may only lock. */
+export const docsLock = defineAction({
+  id: 'docs.lock',
+  title: 'Lock or unlock a doc',
+  kind: 'change',
+  input: s.object({ doc: id, version: s.number({ int: true, min: 1 }), locked: s.boolean() }),
+  can: (ctx, i) => ctx.via !== 'tico' || i.locked,
+  run: (_ctx, i) => lockDoc(i.doc, i.version, i.locked),
+  did: (i) => (i.locked ? 'Locked' : 'Unlocked'),
   target: (i) => ({ kind: 'page', id: `/library/${i.doc}` }),
 });
 
@@ -913,8 +927,9 @@ export const contactsList = defineAction({
   id: 'contacts.list',
   title: 'Open Contacts',
   kind: 'view',
-  input: s.object({ type: s.optional(text(60)), q: s.optional(text(200)) }),
-  run: ({ router }, i) => go(router, '/library/contacts', { type: i.type, q: i.q }, true),
+  // `link`: only the contacts with that link to us (customer_of, vendor_to...), the Relationship filter.
+  input: s.object({ type: s.optional(text(60)), q: s.optional(text(200)), link: s.optional(text(60)) }),
+  run: ({ router }, i) => go(router, '/library/contacts', { type: i.type, q: i.q, link: i.link }, true),
   target: () => ({ kind: 'page', id: '/library/contacts' }),
 });
 

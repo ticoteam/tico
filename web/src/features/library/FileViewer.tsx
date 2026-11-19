@@ -27,11 +27,64 @@ export interface PreviewProps {
   url: string;
   /** The file's own name, when it says more than the mime (`notes.md`). */
   name?: string | null;
+  /** A linked file's own address (a Google doc): shown by Google, or opened where it lives. */
+  link?: string;
+}
+
+/** Where a linked file lives (file-review.ts frvLink): only a web address, so a link never runs anything here. */
+export function linkOf(f: { locator?: string; open?: Record<string, unknown> | null } | undefined): string {
+  const url = f?.locator === 'remote_link' && f.open?.type === 'external' ? f.open.url : undefined;
+  return typeof url === 'string' && /^https?:\/\//i.test(url) ? url : '';
+}
+
+/** Google's own preview of a Google doc or Drive file (file-review-route.ts googlePreviewUrl); '' for anything else. */
+export function googlePreview(href: string): string {
+  let u: URL;
+  try {
+    u = new URL(href);
+  } catch {
+    return '';
+  }
+  if (u.protocol !== 'https:') return '';
+  if (u.hostname === 'docs.google.com') {
+    const m = /^\/(document|spreadsheets|presentation|drawings)\/(?:u\/\d+\/)?d\/([\w-]{10,200})(?:\/|$)/.exec(u.pathname);
+    if (m) return `https://docs.google.com/${m[1]}/d/${m[2]}/preview`;
+  }
+  if (u.hostname === 'drive.google.com') {
+    const m = /^\/file\/(?:u\/\d+\/)?d\/([\w-]{10,200})(?:\/|$)/.exec(u.pathname);
+    if (m) return `https://drive.google.com/file/d/${m[1]}/preview`;
+  }
+  return '';
+}
+
+/** Download, or for a linked file the way to where it lives (it has nothing here to download). */
+export function FileGet({ url, link }: { url: string; link: string }) {
+  const label = link ? (/^https:\/\/(docs|drive)\.google\.com\//.test(link) ? 'Open in Google' : 'Open where it lives') : 'Download';
+  return (
+    <a className="ib" href={link || url} {...(link ? { target: '_blank', rel: 'noreferrer' } : { download: true })} aria-label={label} title={label}>
+      <Icon name={link ? 'popout' : 'download'} />
+    </a>
+  );
 }
 
 /** One file's face: a picture, a video or a sound, a page or a PDF in a frame, Markdown as reading text, other text
     as it is. Anything else offers Download. */
-export function Preview({ id, version, mime, kind, title, url, name }: PreviewProps) {
+export function Preview({ id, version, mime, kind, title, url, name, link }: PreviewProps) {
+  if (link) {
+    const g = googlePreview(link);
+    // Google draws its own file, signed in as the viewer; Tico passes it nothing but the address.
+    if (g) return <iframe className="fv-frame" src={g} title={title} referrerPolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-forms" />;
+    return (
+      <div className="fv-none">
+        <Empty title="Linked file" icon="link">
+          <a className="btn" href={link} target="_blank" rel="noreferrer">
+            <Icon name="popout" />
+            Open
+          </a>
+        </Empty>
+      </div>
+    );
+  }
   if (mime.startsWith('image/') || kind === 'image')
     return (
       <div className="fv-desk">
@@ -130,6 +183,7 @@ export function FilePreview({ file, version }: { file: string; version?: number 
         title={f.data.title}
         url={fileUrl(file, n)}
         name={shown?.name ?? f.data.name}
+        link={linkOf(f.data)}
       />
     </div>
   );
@@ -169,10 +223,7 @@ export function FileViewer({ file, version, onClose }: { file: string; version?:
         <>
           <ChatWith actor={chatOf(d.bot)} />
           <span className="grow" />
-          <a className="btn" href={url} download>
-            <Icon name="download" />
-            Download
-          </a>
+          <FileGet url={url} link={linkOf(d)} />
           <Button variant="primary" onClick={page}>
             Open
           </Button>
@@ -180,7 +231,7 @@ export function FileViewer({ file, version, onClose }: { file: string; version?:
       }
     >
       <div className="fv-view">
-        <Preview id={file} version={n ?? 1} mime={mime} kind={d.library_kind} title={d.title} url={url} name={shown?.name ?? d.name} />
+        <Preview id={file} version={n ?? 1} mime={mime} kind={d.library_kind} title={d.title} url={url} name={shown?.name ?? d.name} link={linkOf(d)} />
       </div>
     </Dialog>
   );
