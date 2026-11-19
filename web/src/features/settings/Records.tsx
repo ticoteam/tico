@@ -1,6 +1,7 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { meQuery } from '@/data';
 import { taskDetailQuery } from '@/features/task/exports';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -10,12 +11,18 @@ import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Link as To } from '@/kit/Link';
 import { Markdown } from '@/kit/Markdown';
+import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import { run } from '@/actions/run';
+import { refusal } from '@/actions';
+import { fmtAge, fmtDate } from '@/lib';
+import { toast } from '@/kit/Toast';
 import { FiguresStrip, Section } from '@/pagekinds';
 import { fixHref } from './fixes';
-import { Foot, Verb, Word, act, isForbidden, micros } from './parts';
+import { Foot, SwitchLine, Verb, Word, act, isForbidden, micros } from './parts';
 import { activityQuery, billingDayQuery, billingFor, changelogQuery, healthQuery, type BillingLine, type BillingMonth, type HealthFix } from './queries';
+import type { ChangelogEntry, ChangelogList } from '@/api/schema';
+import { changelogPage, findingsQuery, type HealthCheck, type SetupCheckRow, type StuckAgent } from './queries';
 
 /* The sections that are mostly read: Billing, History, Health, Changelog. */
 
@@ -279,30 +286,188 @@ function Fix({ f }: { f: HealthFix }) {
   );
 }
 
+/** "Checked 9:41 AM", with the day when it was not today. */
+function checkedWords(at: string | undefined): string {
+  const d = at ? new Date(at) : null;
+  if (!d || Number.isNaN(d.getTime())) return '';
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return `Checked ${d.toDateString() === new Date().toDateString() ? time : `${fmtDate(d)}, ${time}`}`;
+}
+
+function CheckRow({ c }: { c: HealthCheck }) {
+  const fine = c.status === 'ok' || c.status === 'info';
+  return (
+    <div className={fine ? 'row g-hl' : 'row g-hl is-bad'} title={c.label} data-target={`check:${c.id}`}>
+      <span className="row-title">{c.label}</span>
+      <span className="row-sub">{c.summary}</span>
+      <span className="hl-act">{c.fixes?.[0] && <Fix f={c.fixes[0]} />}</span>
+      <span className="row-state">
+        <Word fine={fine}>{SAY[c.status] ?? c.status}</Word>
+      </span>
+    </div>
+  );
+}
+
+/** The page head's one button: read every check again now. */
+export function CheckNow() {
+  const [busy, setBusy] = useState(false);
+  const check = async () => {
+    setBusy(true);
+    const r = await run('settings.checkHealth', {}, { via: 'click' });
+    setBusy(false);
+    if (!r.ok) toast(refusal(r, "Couldn't check"));
+  };
+  return (
+    <Button busy={busy} onClick={() => void check()}>
+      Check now
+    </Button>
+  );
+}
+
+/** An agent's queue as Pipeline splits it (backend/health.py `_queue_words`). */
+const queueWords = (r: StuckAgent & { queued?: number; dead?: number; held?: number }) =>
+  [r.queued ? `${r.queued} queued` : '', r.dead ? `${r.dead} behind an interrupted run` : '', r.held ? `${r.held} held on purpose` : ''].filter(Boolean);
+
+/** Agents with queued work that is not starting, or left in setup: each opens its own page. */
+function Stuck({ rows }: { rows: StuckAgent[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <Section name="Stuck agents" count={rows.length} target="setting:stuck">
+      {rows.map((r) => (
+        <To key={r.bot} href={`/team/${encodeURIComponent(r.bot)}`} className="row g-hl is-bad" title={r.name} data-target={`agent:${r.bot}`}>
+          <span className="row-title">{r.name}</span>
+          <span className="row-sub">{[r.why, ...queueWords(r)].join(', ')}</span>
+          <span className="hl-act" />
+          <span className="row-state">
+            <Word>Stuck</Word>
+          </span>
+        </To>
+      ))}
+    </Section>
+  );
+}
+
+/** What Check health still has open: a setup problem BotOps is fixing, or a Tico bug to report to Tico support. */
+function Findings() {
+  const found = useQuery({ ...findingsQuery, retry: false });
+  const me = useQuery(meQuery);
+  const owner = me.data?.role === 'owner';
+  const list = found.data?.findings ?? [];
+  if (!found.data?.findings || (list.length === 0 && !owner)) return null;
+  const botops = found.data.botops;
+  return (
+    <Section name="Findings" count={list.length} target="setting:findings">
+      {owner && (
+        <Facts label="Findings">
+          <SwitchLine
+            label="Report Tico bugs without asking"
+            checked={!!found.data.reports_without_asking}
+            onChange={(on) => void act('settings.reportRule', { on })}
+          />
+        </Facts>
+      )}
+      {list.map((f) => {
+        const setup = f.kind === 'setup';
+        const state = setup
+          ? botops === false
+            ? 'Not fixed: no BotOps agent'
+            : 'Being fixed by BotOps'
+          : f.ticket_id
+            ? 'Reported to Tico support'
+            : f.approval_id
+              ? 'Report waits in Needs you'
+              : 'Tico bug, not reported';
+        const n = Number(f.occurrences) || 1;
+        const seen = `seen ${n.toLocaleString('en-US')} ${n === 1 ? 'time' : 'times'}${f.last_seen_at ? `, last ${fmtAge(f.last_seen_at)}` : ''}`;
+        return (
+          <div key={f.key} className="row g-hl is-bad" title={f.title} data-target={`finding:${f.key}`}>
+            <span className="row-title">{f.title}</span>
+            <span className="row-sub">{`${state}, ${seen}`}</span>
+            <span className="hl-act">
+              {!setup && !f.ticket_id && !f.approval_id && <Verb onClick={() => void act('settings.reportFinding', { key: f.key })}>Report</Verb>}
+              {setup && f.task_id && (
+                <To className="verb" href={`/task/${encodeURIComponent(f.task_id)}`}>
+                  Open task
+                </To>
+              )}
+            </span>
+            <span className="row-state">
+              <Word>{setup ? 'Setup' : 'Bug'}</Word>
+            </span>
+          </div>
+        );
+      })}
+    </Section>
+  );
+}
+
+/** The installer's checks, run by the server against its own address; kept beside the list, not in it. */
+function SetupCheck() {
+  const [busy, setBusy] = useState(false);
+  const [rows, setRows] = useState<SetupCheckRow[] | null>(null);
+  const [head, setHead] = useState('');
+  const check = async () => {
+    setBusy(true);
+    const r = await run('settings.setupCheck', {}, { via: 'click' });
+    setBusy(false);
+    if (!r.ok) return toast(refusal(r, "Couldn't run the checks"));
+    setRows((r.out as { checks?: SetupCheckRow[] } | undefined)?.checks ?? []);
+    setHead(r.did ?? '');
+  };
+  return (
+    <>
+      {rows && (
+        <Section name="Setup check" count={rows.length} summary={head} target="setting:setup-check">
+          {rows.map((c, i) => {
+            const fine = c.status === 'ok' || c.status === 'info';
+            return (
+              <div key={`${c.name}-${i}`} className={fine ? 'row g-hl' : 'row g-hl is-bad'} title={c.name}>
+                <span className="row-title">{c.name}</span>
+                <span className="row-sub">{!fine && c.fix ? `${c.detail} Fix: ${c.fix}` : c.detail}</span>
+                <span className="hl-act" />
+                <span className="row-state">
+                  <Word fine={fine}>{SAY[c.status] ?? c.status}</Word>
+                </span>
+              </div>
+            );
+          })}
+        </Section>
+      )}
+      <Foot>
+        <Verb onClick={() => void (busy ? undefined : check())}>{busy ? 'Checking' : 'Setup check'}</Verb>
+      </Foot>
+    </>
+  );
+}
+
 export function Health() {
   const health = useQuery(healthQuery);
   const h = health.data;
   if (!h) return null;
+  const isFine = (c: HealthCheck) => c.status === 'ok' || c.status === 'info';
+  const bad = h.checks.filter((c) => !isFine(c));
+  const ok = h.checks.filter(isFine);
+  const checked = checkedWords(h.checked);
   return (
-    <Section name="Checks" count={h.checks.length} target="setting:health">
-      {h.checks.length === 0 ? (
-        <Empty title="No checks yet" />
-      ) : (
-        h.checks.map((c) => {
-          const fine = c.status === 'ok' || c.status === 'info';
-          return (
-            <div key={c.id} className={fine ? 'row g-hl' : 'row g-hl is-bad'} title={c.label} data-target={`check:${c.id}`}>
-              <span className="row-title">{c.label}</span>
-              <span className="row-sub">{c.summary}</span>
-              <span className="hl-act">{c.fixes?.[0] && <Fix f={c.fixes[0]} />}</span>
-              <span className="row-state">
-                <Word fine={fine}>{SAY[c.status] ?? c.status}</Word>
-              </span>
-            </div>
-          );
-        })
+    <>
+      {bad.length > 0 && (
+        <Section name="Needs a look" count={bad.length} summary={checked} target="setting:health-bad">
+          {bad.map((c) => (
+            <CheckRow key={c.id} c={c} />
+          ))}
+        </Section>
       )}
-    </Section>
+      <Section name={bad.length ? 'Fine' : 'Every part is fine'} count={ok.length} summary={bad.length ? undefined : checked} target="setting:health">
+        {h.checks.length === 0 ? (
+          <Empty title="No checks yet" />
+        ) : (
+          ok.map((c) => <CheckRow key={c.id} c={c} />)
+        )}
+      </Section>
+      <Stuck rows={h.stuck ?? []} />
+      <Findings />
+      <SetupCheck />
+    </>
   );
 }
 
@@ -395,12 +560,39 @@ function Activity() {
   );
 }
 
+/** A version's day: when it was published, else the day it shipped (UTC). */
+const versionDay = (e: ChangelogEntry | undefined) => (e ? fmtDate(e.published_at ?? e.shipped_at?.slice(0, 10)) : '');
+
 export function Changelog({ open }: { open?: string }) {
   const log = useQuery(changelogQuery);
-  const entries = log.data?.entries ?? [];
   if (!log.data) return null;
-  const add = log.data.can_add ? <AddUpdate /> : undefined;
-  const versions = new Map<string, typeof entries>();
+  return <Versions first={log.data} open={open} />;
+}
+
+function Versions({ first, open }: { first: ChangelogList; open?: string }) {
+  // Load older adds the next page's offset; each page is its own read.
+  const [offsets, setOffsets] = useState<number[]>([]);
+  const older = useQueries({ queries: offsets.map((o) => changelogPage(o)) });
+  const pages = [first, ...older.flatMap((q) => (q.data ? [q.data] : []))];
+  const seen = new Set<string>();
+  const entries = pages.flatMap((p) => p.entries).filter((e) => !seen.has(e.id) && !!seen.add(e.id));
+  const loading = older.some((q) => q.isPending);
+  const next = loading ? (offsets.at(-1) ?? null) : (pages.at(-1)?.next_offset ?? null);
+  // Opening the page is reading it: what was unread is acknowledged at once, and stays marked New for this visit
+  // (the list is not read again until the next one).
+  const sent = useRef(new Set<string>());
+  const unread = entries
+    .filter((e) => e.kind === 'product' && e.unread)
+    .map((e) => e.id)
+    .join(' ');
+  useEffect(() => {
+    const ids = unread.split(' ').filter((id) => id && !sent.current.has(id));
+    if (ids.length === 0) return;
+    for (const id of ids) sent.current.add(id);
+    void run('settings.changelogRead', { ids: ids.slice(0, 250) }, { via: 'click' });
+  }, [unread]);
+  const add = first.can_add ? <AddUpdate /> : undefined;
+  const versions = new Map<string, ChangelogEntry[]>();
   for (const e of entries) {
     const v = e.version ?? 'Earlier';
     versions.set(v, [...(versions.get(v) ?? []), e]);
@@ -416,7 +608,23 @@ export function Changelog({ open }: { open?: string }) {
         </Section>
       ) : (
         [...versions].map(([version, list], i) => (
-          <Section key={version} name={version} count={list.length} actions={i === 0 ? add : undefined} target={`version:${version}`}>
+          <Section
+            key={version}
+            name={
+              list.some((e) => e.unread) ? (
+                <>
+                  {version} <Pill>New</Pill>
+                </>
+              ) : (
+                version
+              )
+            }
+            label={version}
+            count={list.length}
+            summary={versionDay(list[0])}
+            actions={i === 0 ? add : undefined}
+            target={`version:${version}`}
+          >
             <ul className="cl-list">
               {list.map((e) => (
                 <li key={e.id}>
@@ -427,6 +635,18 @@ export function Changelog({ open }: { open?: string }) {
             </ul>
           </Section>
         ))
+      )}
+      {next != null && (
+        <Foot>
+          <Verb
+            onClick={() => {
+              if (loading) return;
+              const failed = older.find((q) => q.isError);
+              if (failed) void failed.refetch();
+              else setOffsets((o) => (o.includes(next) ? o : [...o, next]));
+            }}
+          >{loading ? 'Loading' : 'Load older'}</Verb>
+        </Foot>
       )}
       <Activity />
       {open && <Outcome task={open} />}

@@ -182,20 +182,28 @@ export const resume = defineAction({
   target: ({ slug }) => onPage(slug),
 });
 
-/** Archive: the page asks first. Its open tasks stay where they are. */
+/** Archive: the page asks first, and who takes its open tasks (its operator unless another agent is picked). */
 export const archive = defineAction({
   id: 'agents.archive',
   title: 'Archive an agent',
   kind: 'change',
-  input: s.object({ slug }),
+  input: s.object({ slug, successor: s.optional(s.string({ max: 100, what: "the id of the agent that takes its open tasks; empty for the person who runs it" })) }),
   // The page asks first; Tico may archive without that question, so the did line says plainly what happened.
-  run: async ({ router, queryClient }, { slug }) => {
-    const name = queryClient.getQueryData(directoryQuery.queryKey)?.byId[slug]?.name ?? slug;
-    await said("Couldn't archive it", () => archiveAgent(slug));
+  run: async ({ router, queryClient }, { slug, successor }) => {
+    const dir = queryClient.getQueryData(directoryQuery.queryKey);
+    const name = dir?.byId[slug]?.name ?? slug;
+    const roster = queryClient.getQueryData(agentsQuery.queryKey);
+    const row = roster?.find((r) => r.slug === slug);
+    const heir = successor
+      ? (dir?.byId[`bot:${successor}`]?.name ?? roster?.find((r) => r.id === successor)?.display_name ?? 'the agent you picked')
+      : row?.owner_id
+        ? (dir?.byId[`human:${row.owner_id}`]?.name ?? 'the person who runs it')
+        : 'the person who runs it';
+    await said("Couldn't archive it", () => archiveAgent(slug, successor));
     await router.navigate({ to: '/' });
-    return { name };
+    return { name, heir };
   },
-  did: ({ slug }, out) => `Archived ${out?.name ?? slug}. It takes no more work; its tasks and history stay.`,
+  did: ({ slug }, out) => `Archived ${out?.name ?? slug}. Its open tasks went to ${out?.heir ?? 'the person who runs it'}.`,
 });
 
 /** My copy of an agent that allows copies: on my computer, or planned until I add one. Opens it. */
@@ -684,13 +692,14 @@ export const controlScreen = defineAction({
   target: ({ computer }) => ({ kind: 'screen', id: computer }),
 });
 
-/** Who may open the screen from the app. Its operator or an admin, in person. */
+/** Who may open the screen from the app. Its operator or an admin. */
 export const setScreen = defineAction({
   id: 'computers.setScreen',
   title: "Turn a computer's screen off, view only or on",
   kind: 'change',
-  tico: false,
   input: s.object({ computer, mode: s.oneOf(['off', 'view', 'control'] as const) }),
+  // Off and view only only take access away, so Tico may; turning control on gives it, so that is the person's own press.
+  can: (ctx, { mode }) => !(mode === 'control' && ctx.via === 'tico'),
   run: (_ctx, { computer, mode }) => said("Couldn't change it", () => setScreenMode(computer, mode)),
   did: ({ mode }) => (mode === 'off' ? 'Turned the screen off' : mode === 'view' ? 'The screen is view only' : 'Turned the screen on'),
   target: ({ computer }) => ({ kind: 'screen', id: computer }),

@@ -1,4 +1,6 @@
+import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
+import { groupsQuery } from '@/features/team/exports';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Facts, LabelValue } from '@/kit/LabelValue';
@@ -38,6 +40,10 @@ export function Settings({ thread: t, onClose }: { thread: Thread; onClose: () =
   const notify: Notify = t.me?.following === false || isMuted(t) ? 'muted' : ((t.me?.notify as Notify | undefined) ?? 'live');
   const keep: Keep = t.retention_days === 30 || t.retention_days === 90 || t.retention_days === 365 ? (String(t.retention_days) as Keep) : 'always';
   const audience = t.audience === 'company' || t.audience === 'members' || t.audience === 'team' ? t.audience : null;
+  const groups = useQuery({ ...groupsQuery, enabled: manage && !!audience });
+  const teams = Array.isArray(groups.data) ? groups.data : [];
+  // A team reads it as `team:<id>` (ui threads-page "A team" and its pick).
+  const reader = audience === 'team' ? `team:${t.audience_group_id ?? ''}` : audience;
   const deletable = root && manage && t.audience !== 'home' && t.deletable !== false;
 
   const del = async () => {
@@ -76,11 +82,18 @@ export function Settings({ thread: t, onClose }: { thread: Thread; onClose: () =
                 look="quiet"
                 options={[
                   { value: 'members', label: 'Its members' },
-                  ...(audience === 'team' ? [{ value: 'team' as const, label: 'Its team', disabled: true }] : []),
+                  ...teams.map((g) => ({ value: `team:${g.id}`, label: g.name || 'A team' })),
+                  ...(reader?.startsWith('team:') && !teams.some((g) => `team:${g.id}` === reader) ? [{ value: reader, label: 'A team' }] : []),
                   { value: 'company', label: 'Everyone' },
                 ]}
-                value={audience}
-                onValueChange={(v) => v !== 'team' && void press('threads.whoCanRead', { thread: t.id, audience: v })}
+                value={reader}
+                onValueChange={(v) =>
+                  v !== reader &&
+                  void press(
+                    'threads.whoCanRead',
+                    v.startsWith('team:') ? { thread: t.id, audience: 'team', team: v.slice(5) } : { thread: t.id, audience: v },
+                  )
+                }
               />
             </LabelValue>
           )}

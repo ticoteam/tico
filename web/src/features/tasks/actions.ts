@@ -20,6 +20,7 @@ import {
   type Skipped,
 } from './queries';
 import { VIEW_PREF } from './search';
+import { createTag, createTaggedTask, makeTagFrom, moreTagTasks, releaseChecklist, saveTag, tagKeyOf, tagQuery } from './queries';
 import { chatAddress } from '@/lib';
 
 const pipeline = s.string({ min: 1, max: 100, what: 'a pipeline id' });
@@ -390,4 +391,157 @@ export const removeTaskRequester = defineAction({
   input: s.object({ task, requester: s.string({ min: 1, max: 100, what: 'a requester id' }) }),
   run: (_ctx, { task, requester }) => said(() => removeRequester(task, requester), "Couldn't remove the requester"),
   did: () => 'Removed a requester',
+});
+
+/* ---------------------------------------------------------------- tags (ui/app/tags.ts) */
+
+const tagId = s.string({ min: 1, max: 100, what: "a tag's id or key" });
+const tagKey = s.string({ min: 1, max: 40, pattern: /^[a-z0-9][a-z0-9-]*$/, what: 'a tag key: lowercase words joined by hyphens' });
+const metadata = s.optional(s.string({ max: 4000, what: 'a JSON object of fields, such as {"date": "2030-01-02"}' }));
+/** The metadata as written, as an object; anything else is refused before it is sent. */
+function fieldsOf(json: string | undefined): Record<string, unknown> | undefined {
+  if (json === undefined || !json.trim()) return undefined;
+  let v: unknown;
+  try {
+    v = JSON.parse(json);
+  } catch {
+    v = null;
+  }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) {
+    toast({ text: 'Metadata must be a JSON object', kind: 'failed' });
+    throw new Error('metadata');
+  }
+  return v as Record<string, unknown>;
+}
+const onTag = (id: string) => ({ kind: 'page', id: `/tags/${id}` });
+/** Tags (`/tags`) or a tag's page (`/tags/<id>`) is on screen. */
+const onTags = (pathname: string) => /^\/tags(\/[^/]+)?\/?$/.test(pathname);
+
+/** Narrows Tags or a tag's page in the address: words (`q`), and on a tag's page its owner and Late. Null clears one. */
+export const filterTags = defineAction({
+  id: 'tags.filter',
+  title: 'Search or filter tags, or a tag\'s tasks',
+  kind: 'view',
+  input: s.object({ q: clearable(s.string({ max: 200 })), owner: clearable(actor), late: clearable(s.boolean()) }),
+  can: ({ router }) => onTags(router.state.location.pathname),
+  run: async ({ router }, change) => {
+    await router.navigate({
+      to: '.',
+      replace: true,
+      search: (prev: Record<string, unknown>) => {
+        const next: Record<string, unknown> = { ...prev };
+        for (const [k, v] of Object.entries(change)) {
+          if (v === undefined) continue;
+          if (v === null || v === '' || v === false) delete next[k];
+          else next[k] = v;
+        }
+        return next;
+      },
+    });
+  },
+  did: () => 'Filtered',
+  target: () => ({ kind: 'tags', id: 'filter' }),
+});
+
+export const newTag = defineAction({
+  id: 'tags.create',
+  title: 'New tag or template',
+  kind: 'change',
+  input: s.object({
+    name: s.string({ min: 1, max: 100 }),
+    key: s.optional(tagKey),
+    notes: s.optional(s.string({ max: 20000, what: 'markdown; "- [ ] step" lines are its checklist' })),
+    template: s.optional(s.boolean()),
+  }),
+  run: async ({ router }, { name, key, notes, template }) => {
+    const made = await said(
+      () => createTag({ key: key || tagKeyOf(name), label: name, markdown: notes ?? '', is_template: !!template }),
+      "Couldn't make the tag",
+    );
+    await router.navigate({ to: '/tags/$tag', params: { tag: made.id } });
+    return made;
+  },
+  did: ({ name }) => `Made ${name}`,
+  target: (_input, out) => (out ? onTag(out.id) : null),
+});
+
+/** The release checklist template: opened, made first when there is none. */
+export const startRelease = defineAction({
+  id: 'tags.releaseChecklist',
+  title: 'Open the release checklist template, made if there is none',
+  kind: 'change',
+  input: s.object({}),
+  run: async ({ router }) => {
+    const tag = await said(() => releaseChecklist(), "Couldn't open it");
+    await router.navigate({ to: '/tags/$tag', params: { tag: tag.id } });
+    return tag;
+  },
+  did: () => 'Opened the release checklist',
+  target: (_input, out) => (out ? onTag(out.id) : null),
+});
+
+export const fromTemplate = defineAction({
+  id: 'tags.makeFromTemplate',
+  title: 'Make a tag from a template',
+  kind: 'change',
+  input: s.object({ template: tagId, key: tagKey, metadata }),
+  run: async ({ router }, { template, key, metadata }) => {
+    const fields = fieldsOf(metadata);
+    const made = await said(() => makeTagFrom(template, { key, ...(fields ? { metadata: fields } : {}) }), "Couldn't make the tag");
+    await router.navigate({ to: '/tags/$tag', params: { tag: made.id } });
+    return made;
+  },
+  did: ({ key }) => `Made ${key}`,
+  target: (_input, out) => (out ? onTag(out.id) : null),
+});
+
+export const editTag = defineAction({
+  id: 'tags.edit',
+  title: "Change a tag's name, notes or metadata",
+  kind: 'change',
+  input: s.object({ tag: tagId, name: s.optional(s.string({ min: 1, max: 100 })), notes: s.optional(s.string({ max: 20000 })), metadata }),
+  run: (_ctx, { tag, name, notes, metadata }) => {
+    const fields = fieldsOf(metadata);
+    return said(() => saveTag(tag, { label: name, markdown: notes, metadata: fields }), "Couldn't save the tag");
+  },
+  did: () => 'Saved the tag',
+  target: ({ tag }) => onTag(tag),
+});
+
+/** Ticks or clears one box of a tag's checklist: its line in the notes, counted from 0. */
+export const tickTag = defineAction({
+  id: 'tags.tick',
+  title: "Tick or clear a box in a tag's checklist",
+  kind: 'change',
+  input: s.object({ tag: tagId, line: s.number({ int: true, min: 0 }), done: s.boolean() }),
+  run: async ({ queryClient }, { tag, line, done }) => {
+    const notes = (queryClient.getQueryData(tagQuery(tag).queryKey) ?? (await queryClient.fetchQuery(tagQuery(tag)))).tag.markdown.split('\n');
+    const was = notes[line];
+    const now = was?.replace(/^(\s*(?:[-*+]|\d+\.)\s+)\[[ xX]\]/, `$1[${done ? 'x' : ' '}]`);
+    if (was === undefined || now === was) return;
+    notes[line] = now!;
+    await said(() => saveTag(tag, { markdown: notes.join('\n') }), "Couldn't save the tag");
+  },
+  did: ({ done }) => (done ? 'Ticked it' : 'Cleared it'),
+  target: ({ tag }) => onTag(tag),
+});
+
+export const tagMore = defineAction({
+  id: 'tags.moreTasks',
+  title: "Read the next 500 of a tag's tasks",
+  kind: 'view',
+  input: s.object({ tag: tagId }),
+  run: (_ctx, { tag }) => said(() => moreTagTasks(tag), "Couldn't read more"),
+  did: () => 'Read more',
+  target: ({ tag }) => onTag(tag),
+});
+
+export const newTaggedTask = defineAction({
+  id: 'tags.newTask',
+  title: 'New task with a tag on it',
+  kind: 'change',
+  input: s.object({ tag: tagId, key: s.string({ min: 1, max: 120, what: "the tag's key" }), title: s.string({ min: 1, max: 300 }), pipeline, owner: clearable(actor) }),
+  run: (_ctx, { tag, key, ...input }) => said(() => createTaggedTask(tag, key, input), "Couldn't create the task"),
+  did: (_input, out) => (out?.number ? `Filed #${out.number}` : 'Filed a task'),
+  target: (_input, out) => (out ? { kind: 'task', id: out.number ?? out.id } : null),
 });

@@ -2,9 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
-import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
-import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
@@ -16,12 +14,12 @@ import { BUILTINS, ROUTINES, type Builtin, type RoutineState } from './actions';
 import { BuiltinPanel } from './BuiltinPanel';
 import { EndpointDialog, EndpointRow } from './Endpoints';
 import { NewInbox } from './Templates';
-import { Face, Find, press, pressOut, Word } from './parts';
-import { endpointsQuery, heartbeatQuery, hooksQuery, maintenanceQuery, routinesQuery, systemJobsQuery, type Endpoint, type RunRange, type RunStatus } from './queries';
+import { Face, Find, press, Word } from './parts';
+import { endpointsQuery, heartbeatQuery, hooksQuery, maintenanceQuery, routinesQuery, systemJobsQuery, type Endpoint, type RunRange, type RunStatus, type RunTrigger } from './queries';
 import { RoutinePanel } from './RoutinePanel';
 import { RunsTab } from './RunsTab';
 import type { Hook, Routine } from './types';
-import { WebhookPanel } from './WebhookPanel';
+import { HookDialog, WebhookPanel } from './WebhookPanel';
 import { maintenanceWords, startsWords, triggerWords } from './words';
 import './routines.css';
 
@@ -35,6 +33,9 @@ export interface RoutinesSearch {
   /** Runs: which runs, and over what time. */
   status?: RunStatus;
   range?: RunRange;
+  /** Runs: what started them, and whose routine. */
+  trigger?: RunTrigger;
+  owner?: string;
   /** Routines: the words searched for, and which state shows. */
   q?: string;
   state?: RoutineState;
@@ -56,8 +57,18 @@ const head = { title: 'Routines', path: ROUTINES, tabs: routinesTabs, className:
 
 export function RoutinesPage({ search }: { search: RoutinesSearch }) {
   if (search.tab === 'runs') {
-    const { status, range } = search;
-    return <RunsTab head={head} status={status} range={range} panel={search.panel} href={(panel) => routinesHref({ tab: 'runs', status, range, panel })} />;
+    const { status, range, trigger, owner } = search;
+    return (
+      <RunsTab
+        head={head}
+        status={status}
+        range={range}
+        trigger={trigger}
+        owner={owner}
+        panel={search.panel}
+        href={(panel) => routinesHref({ tab: 'runs', status, range, trigger, owner, panel })}
+      />
+    );
   }
   return search.tab === 'webhooks' ? <WebhooksTab panel={search.panel} /> : <RoutinesTab panel={search.panel} q={search.q} state={search.state} />;
 }
@@ -234,7 +245,7 @@ function WebhooksTab({ panel }: { panel?: string }) {
   const [endpoint, setEndpoint] = useState<Endpoint | 'new' | null>(null);
   const out = endpoints.data ?? [];
   // a new webhook's full address, secret included, shown once: this state only, never the cache or the address
-  const [made, setMade] = useState<{ hook: string; url: string } | null>(null);
+  const [made, setMade] = useState<{ hook: string; url: string; signing?: string } | null>(null);
   const list = hooks.data ?? [];
   const open = panel?.startsWith('hook:') ? panel.slice(5) : null;
   const add = (
@@ -251,7 +262,7 @@ function WebhooksTab({ panel }: { panel?: string }) {
       actions={
         <>
           {add}
-          <AddWebhook open={adding} onOpenChange={setAdding} onMade={setMade} />
+          {adding && <HookDialog onMade={setMade} onClose={() => setAdding(false)} />}
           {endpoint && <EndpointDialog endpoint={endpoint === 'new' ? null : endpoint} onClose={() => setEndpoint(null)} />}
         </>
       }
@@ -283,6 +294,7 @@ function WebhooksTab({ panel }: { panel?: string }) {
             key={open}
             id={open}
             shown={made?.hook === open ? made.url : null}
+            signing={made?.hook === open ? made.signing : null}
             onShown={(url) => setMade({ hook: open, url })}
             onClose={() => {
               setMade(null);
@@ -312,41 +324,5 @@ function HookRow({ h, selected }: { h: Hook; selected: boolean }) {
       {h.last_received ? <Ago at={h.last_received} className="row-age" /> : <span className="row-age">Never</span>}
       {h.url ? <IconButton icon="link" label="Copy address" size="sm" quiet onClick={copy} /> : <span />}
     </Row>
-  );
-}
-
-function AddWebhook({ open, onOpenChange, onMade }: { open: boolean; onOpenChange: (o: boolean) => void; onMade: (m: { hook: string; url: string }) => void }) {
-  const [name, setName] = useState('');
-  const [busy, setBusy] = useState(false);
-  const save = async () => {
-    if (!name.trim()) return;
-    setBusy(true);
-    const r = await pressOut<{ hook: string; url: string }>('webhooks.add', { name: name.trim() });
-    setBusy(false);
-    if (r) {
-      if (r.out?.url) onMade(r.out);
-      setName('');
-      onOpenChange(false);
-    }
-  };
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title="Add webhook"
-      description="Its address is shown once, after you add it."
-      actions={
-        <>
-          <Button variant="quiet" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button variant="primary" busy={busy} disabled={!name.trim()} onClick={() => void save()}>
-            Add
-          </Button>
-        </>
-      }
-    >
-      <Field label="Name" value={name} onValueChange={setName} placeholder="Shipping" autoFocus />
-    </Dialog>
   );
 }

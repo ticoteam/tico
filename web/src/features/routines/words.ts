@@ -331,3 +331,53 @@ export const startsWords = (h: Pick<Hook, 'automations'>) => {
   const names = (h.automations ?? []).map((a) => a.name);
   return names.length ? `Starts ${names.join(', ')}` : 'Starts nothing yet';
 };
+
+// ---------------------------------------------------------------- a version against another
+
+type FlowLike = { trigger?: Trigger; steps?: { type?: string; [k: string]: unknown }[] };
+const condLine = (c: unknown) => {
+  const x = (c ?? {}) as { field?: unknown; op?: unknown; value?: unknown };
+  return [x.field, x.op ?? 'is', JSON.stringify(x.value ?? '')].map(String).join(' ');
+};
+
+/** A routine's trigger and steps as lines to compare (automations-editors.ts auFlowLines, shorter). */
+export function flowLines(flow: FlowLike | null | undefined): string[] {
+  const out: string[] = [];
+  const t = flow?.trigger;
+  if (t) out.push(`Trigger: ${triggerWords(t)}`, ...(t.filters ?? []).map((c) => `  filter ${condLine(c)}`));
+  const walk = (steps: FlowLike['steps'], pad: string) => {
+    for (const s of steps ?? []) {
+      const off = s.enabled === false ? ' (off)' : '';
+      if (s.type === 'bot_turn') out.push(`${pad}Agent turn ${String(s.bot ?? '')}: ${String(s.prompt ?? '')}${off}`);
+      else if (s.type === 'action') out.push(`${pad}${String(s.do ?? 'action')} ${s.args ? JSON.stringify(s.args) : ''}${off}`.trimEnd());
+      else if (s.type === 'filter') for (const r of (s.rules as { when?: unknown[] }[] | undefined) ?? []) out.push(`${pad}filter ${(r.when ?? []).map(condLine).join(', ')}${off}`);
+      else if (s.type === 'paths') {
+        for (const p of (s.paths as { name?: string; steps?: FlowLike['steps'] }[] | undefined) ?? []) {
+          out.push(`${pad}path ${p.name ?? ''}`);
+          walk(p.steps, `${pad}  `);
+        }
+      } else out.push(`${pad}${String(s.type ?? 'step')}${s.prompt ? `: ${String(s.prompt)}` : ''}${off}`);
+    }
+  };
+  walk(flow?.steps, '');
+  return out;
+}
+
+/** The lines added (`+ `) and taken out (`- `) from `a` to `b`, in order (a longest common run of lines). */
+export function lineDiff(a: string[], b: string[]): string[] {
+  const n = a.length;
+  const m = b.length;
+  const L = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i]![j] = a[i] === b[j] ? L[i + 1]![j + 1]! + 1 : Math.max(L[i + 1]![j]!, L[i]![j + 1]!);
+  const out: string[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i] === b[j]) {
+      i++;
+      j++;
+    } else if (j < m && (i >= n || L[i]![j + 1]! >= L[i + 1]![j]!)) out.push(`+ ${b[j++]!.trim()}`);
+    else out.push(`- ${a[i++]!.trim()}`);
+  }
+  return out;
+}

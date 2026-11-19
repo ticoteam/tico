@@ -553,6 +553,8 @@ function Hosted() {
   const hosted = useQuery({ ...hostedQuery, retry: false });
   const admin = useAdmin();
   const [said, setSaid] = useState<Record<string, string>>({});
+  // A start refused for want of credit: where to ask Tico support for more (old settings-hosted.ts).
+  const [credit, setCredit] = useState<Record<string, string>>({});
   const v = hosted.data;
   if (v?.state === 'deactivated')
     return (
@@ -563,9 +565,11 @@ function Hosted() {
   if (v?.state !== 'ok' || !v.servers?.length) return null;
   const start = async (id: string) => {
     const r = await run('settings.startServer', { server: id }, { via: 'click' });
-    const out = r.out as { state?: string; message?: string } | undefined;
+    const out = r.out as { state?: string; message?: string; credit_url?: string } | undefined;
     if (!r.ok) return toast(refusal(r, "Couldn't start"));
     if (out?.state !== 'started') setSaid((s) => ({ ...s, [id]: out?.message ?? 'Not started' }));
+    const url = out?.state === 'paused' && /^(https:\/\/|mailto:)\S+$/.test(out.credit_url ?? '') ? (out.credit_url ?? '') : '';
+    setCredit((c) => ({ ...c, [id]: url }));
   };
   return (
     <Section name="Hosted servers" count={v.servers.length} target="setting:hosted">
@@ -575,7 +579,15 @@ function Hosted() {
           <span className="row-state">
             <Word fine={s.power === 'on'}>{s.power === 'on' ? 'On' : (said[s.server_id] ?? 'Stopped')}</Word>
           </span>
-          <span>{admin && s.power !== 'on' && <Verb onClick={() => void start(s.server_id)}>Start</Verb>}</span>
+          <span>
+            {credit[s.server_id] ? (
+              <a className="verb" href={credit[s.server_id]} target="_blank" rel="noreferrer" title="Contact Tico support for more credit">
+                Tico support
+              </a>
+            ) : (
+              admin && s.power !== 'on' && <Verb onClick={() => void start(s.server_id)}>Start</Verb>
+            )}
+          </span>
         </div>
       ))}
     </Section>

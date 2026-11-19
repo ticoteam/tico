@@ -2,14 +2,16 @@ import { useQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
-import { MenuItem } from '@/kit/Menu';
+import { Dialog } from '@/kit/Dialog';
+import { IconButton } from '@/kit/IconButton';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { pipelinesQuery, type Pipeline } from '@/features/tasks/exports';
-import { List, PageMore, Section, type PageTab } from '@/pagekinds';
-import { ROUTINES, RULES, type RuleTab } from './actions';
-import { CompanyRules, holdsOf, OrgRuleRow, partiesOf } from './CompanyRules';
-import { press, RemoveItem, RuleRow, useConfirmRemove, useName } from './parts';
+import { FilterRow, List, PageMore, Section, type PageTab } from '@/pagekinds';
+import { DUE_STATUSES, hasWho, ROUTINES, RULES, type RuleTab } from './actions';
+import { CompanyRules, holdsOf, OrgRuleRow, partiesOf, PartyPick } from './CompanyRules';
+import { Find, press, RemoveItem, RuleRow, useConfirmRemove, useName, Verb } from './parts';
 import { ReadDocument } from './ReadDocument';
-import { dueQuery, holdsQuery, orgRulesQuery, routinesQuery, ruleGroupsQuery, stageRulesQuery, teamsQuery } from './queries';
+import { dueQuery, holdsQuery, orgRulesQuery, routinesQuery, ruleGroupsQuery, ruleSourcesQuery, stageRulesQuery, teamsQuery } from './queries';
 import { RulePanel } from './RulePanel';
 import { runnerOf } from './RoutinesPage';
 import type { DueDate, Group, OrgRule, Routine, StageRule } from './types';
@@ -26,7 +28,17 @@ export interface RulesSearch {
   panel?: string;
   /** Company: whose rules, a party (`group:<id>`, `bot:<id>`, `human:<id>`); none is Everyone. */
   who?: string;
+  /** Any tab: the words searched for. */
+  q?: string;
+  /** Outside: one From's id. */
+  from?: string;
+  /** Due: late, soon or later. */
+  status?: (typeof DUE_STATUSES)[number];
 }
+
+const DUE_WORDS: Record<(typeof DUE_STATUSES)[number], string> = { overdue: 'Late', due_soon: 'Due soon', upcoming: 'Later' };
+/** Every word searched for is in the text, in any order. */
+export const hasWords = (text: string, q: string | undefined) => !q || q.toLowerCase().split(/\s+/).every((w) => text.toLowerCase().includes(w));
 
 const tab = (label: string, t: RuleTab): PageTab => ({ label, to: RULES, search: { tab: t }, target: `tab:${t || 'company'}` });
 export const rulesTabs: readonly PageTab[] = [
@@ -68,8 +80,33 @@ export function RulesPage({ search }: { search: RulesSearch }) {
       Add rule
     </Button>
   );
-  const body = useTab(t, search, remove.confirm);
+  const [whoFor, setWhoFor] = useState<OrgRule | null>(null);
+  const body = useTab(t, search, remove.confirm, setWhoFor);
   const [reading, setReading] = useState(false);
+  const sources = useQuery({ ...ruleSourcesQuery, enabled: t === 'outside' }).data ?? [];
+  const list = (to: Omit<RulesSearch, 'tab' | 'panel' | 'who'>) => void press('rules.list', { tab: t, ...to });
+  const { q, from, status } = search;
+  const fromName = sources.find((x) => x.id === from)?.name ?? 'One From';
+  const chips = [
+    ...(from ? [{ label: fromName, onClear: () => list({ q }) }] : []),
+    ...(status ? [{ label: DUE_WORDS[status], onClear: () => list({ q }) }] : []),
+  ];
+  const filter =
+    t === 'outside' && sources.length ? (
+      <Menu trigger={<IconButton icon="filter" label="Filter" on={!!from} data-phone />}>
+        <MenuItem label="Every From" on={!from} onSelect={() => list({ q })} />
+        {sources.map((x) => (
+          <MenuItem key={x.id} label={x.name} on={x.id === from} onSelect={() => list({ q, from: x.id })} />
+        ))}
+      </Menu>
+    ) : t === 'due' ? (
+      <Menu trigger={<IconButton icon="filter" label="Filter" on={!!status} data-phone />}>
+        <MenuItem label="All" on={!status} onSelect={() => list({ q })} />
+        {DUE_STATUSES.map((x) => (
+          <MenuItem key={x} label={DUE_WORDS[x]} on={x === status} onSelect={() => list({ q, status: x })} />
+        ))}
+      </Menu>
+    ) : null;
   const more = (
     <PageMore>
       <MenuItem label="Add due date" icon="calendar" onSelect={() => void press('rules.newDue', {})} />
@@ -82,11 +119,15 @@ export function RulesPage({ search }: { search: RulesSearch }) {
       path={RULES}
       tabs={rulesTabs}
       className="rr"
+      search={<Find label="Search rules" value={q} onFind={(words) => list({ q: words, from, status })} />}
+      filter={chips.length > 0 && <FilterRow filters={chips} />}
       actions={
         <>
+          {filter}
           {add}
           {remove.node}
           {reading && <ReadDocument onClose={() => setReading(false)} />}
+          {whoFor && <AcceptWho rule={whoFor} onClose={() => setWhoFor(null)} />}
         </>
       }
       more={more}
@@ -106,7 +147,7 @@ interface Body {
   sections: ReactNode;
 }
 
-function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () => void) => void): Body {
+function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () => void) => void, askWho: (r: OrgRule) => void): Body {
   const org = useQuery(orgRulesQuery('active'));
   const stage = useQuery(stageRulesQuery('active'));
   const groups = useQuery(ruleGroupsQuery);
@@ -118,6 +159,7 @@ function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () 
   const teams = useQuery(teamsQuery).data ?? [];
   const pipes = useQuery(pipelinesQuery).data ?? [];
   const panel = search.panel;
+  const q = search.q;
   const opened = (k: 'org' | 'stage', id: string) => panel === `${k}:${id}`;
   const removeOrg = (r: OrgRule) => () => confirm('this rule', () => void press('rules.remove', { rule: r.id, kind: 'org' }));
   const teamName = (id: string) => teams.find((g) => g.id === id)?.name;
@@ -128,11 +170,11 @@ function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () 
         state: org.isPending ? 'loading' : org.isError ? 'fault' : 'ready',
         retry: () => void org.refetch(),
         empty: 'No rules yet',
-        sections: <CompanyRules who={search.who ?? '*'} panel={panel} confirm={confirm} />,
+        sections: <CompanyRules who={search.who ?? '*'} panel={panel} confirm={confirm} q={q} />,
       };
     }
     case 'stages': {
-      const items = stage.data?.items ?? [];
+      const items = (stage.data?.items ?? []).filter((r) => hasWords([r.name, r.pipeline_name, ...stageParts(r, teamName), r.jev, r.reason].join(' '), q));
       const every = 'Every pipeline';
       return {
         state: stateOf(stage, items.length),
@@ -148,7 +190,7 @@ function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () 
       };
     }
     case 'built-in': {
-      const list = groups.data?.built_in ?? [];
+      const list = (groups.data?.built_in ?? []).filter((b) => hasWords(`${b.name} ${b.what ?? ''}`, q));
       return {
         state: stateOf(groups, list.length),
         retry: () => void groups.refetch(),
@@ -163,7 +205,9 @@ function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () 
       };
     }
     case 'outside': {
-      const list = (org.data ?? []).filter((r) => r.kind === 'external');
+      const list = (org.data ?? []).filter(
+        (r) => r.kind === 'external' && (!search.from || r.source?.id === search.from) && hasWords(`${r.text} ${r.description ?? ''} ${r.source?.name ?? ''}`, q),
+      );
       const dueOf = (id: string) => due.data?.find((d) => d.rule.id === id);
       return {
         state: stateOf(org, list.length),
@@ -190,7 +234,7 @@ function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () 
       };
     }
     case 'due': {
-      const list = due.data ?? [];
+      const list = (due.data ?? []).filter((d) => (!search.status || d.status === search.status) && hasWords(d.rule.text, q));
       const soon = dayIn(30);
       const when = (d: DueDate) => (d.status === 'overdue' ? 'Late' : d.due_on <= soon ? 'Next 30 days' : 'Later');
       return {
@@ -224,8 +268,12 @@ function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () 
     }
     case 'wakes':
     case 'on-tasks': {
-      const list = (t === 'wakes' ? groups.data?.wakes : groups.data?.automations) ?? [];
       const byId = new Map((routines.data ?? []).map((r) => [r.id, r]));
+      const words = (w: { id: string; name: string }) => {
+        const r = byId.get(w.id);
+        return `${w.name} ${r ? triggerWords(r.trigger) : ''}`;
+      };
+      const list = ((t === 'wakes' ? groups.data?.wakes : groups.data?.automations) ?? []).filter((w) => hasWords(words(w), q));
       const sectionOf = (r: Routine | undefined) => (t === 'wakes' ? wakeSection(r, teams, pipes) : pipelineSection(r, pipes));
       return {
         state: stateOf(groups, list.length),
@@ -241,17 +289,25 @@ function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () 
       };
     }
     case 'suggested': {
-      const orgs = orgSugg.data ?? [];
-      const stages = stageSugg.data?.items ?? [];
+      const orgs = (orgSugg.data ?? []).filter((r) => hasWords(`${r.text} ${r.description ?? ''}`, q));
+      const stages = (stageSugg.data?.items ?? []).filter((r) => hasWords([r.name, ...stageParts(r, teamName)].join(' '), q));
       const n = orgs.length + stages.length;
-      const q = { isPending: orgSugg.isPending && stageSugg.isPending, isError: orgSugg.isError && stageSugg.isError };
+      const both = { isPending: orgSugg.isPending && stageSugg.isPending, isError: orgSugg.isError && stageSugg.isError };
       const cols = { who: true, at: true };
+      const live = stage.data?.items ?? [];
+      // Add all takes the ones that say who follows them; the rest wait for a Who
+      const ready = orgs.filter(hasWho).length + stages.length;
       return {
-        state: stateOf(q, n),
+        state: stateOf(both, n),
         retry: () => void Promise.all([orgSugg.refetch(), stageSugg.refetch()]),
         empty: 'No suggestions',
         sections: (
-          <Section name="Suggested" count={n} target="section:suggested">
+          <Section
+            name="Suggested"
+            count={n}
+            target="section:suggested"
+            actions={ready > 1 ? <Verb onClick={() => void press('rules.acceptAll', {})}>Add all</Verb> : undefined}
+          >
             {orgs.map((r) => (
               <RuleRow
                 key={r.id}
@@ -261,25 +317,33 @@ function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () 
                 cols={cols}
                 who={r.suggested_by}
                 at={r.created_at ? <Ago at={r.created_at} /> : ''}
-                verb={{ label: 'Add', onClick: () => void press('rules.accept', { rule: r.id, kind: 'org' }) }}
+                verb={{ label: 'Add', onClick: () => (hasWho(r) ? void press('rules.accept', { rule: r.id, kind: 'org' }) : askWho(r)) }}
                 more={<MenuItem label="Set aside" icon="archive" onSelect={() => void press('rules.skip', { rule: r.id, kind: 'org' })} />}
                 target={`rule:${r.id}`}
               />
             ))}
-            {stages.map((r) => (
-              <RuleRow
-                key={r.id}
-                how={r.jev ? 'model' : 'fixed'}
-                parts={stageParts(r, teamName)}
-                cost={!!r.jev}
-                cols={cols}
-                who={r.created_by}
-                at={r.updated_at ? <Ago at={r.updated_at} /> : ''}
-                verb={{ label: 'Add', onClick: () => void press('rules.accept', { rule: r.id, kind: 'stage' }) }}
-                more={<MenuItem label="Set aside" icon="archive" onSelect={() => void press('rules.skip', { rule: r.id, kind: 'stage' })} />}
-                target={`rule:${r.id}`}
-              />
-            ))}
+            {stages.map((r) => {
+              const was = r.suggests ? live.find((x) => x.id === r.suggests) : undefined;
+              const retires = !!r.suggests && !!r.then_params?.retire;
+              const shown = retires && was ? was : r;
+              return (
+                <RuleRow
+                  key={r.id}
+                  how={shown.jev ? 'model' : 'fixed'}
+                  parts={retires ? [`Retire: ${stageParts(shown, teamName)[0] ?? ''}`, ...stageParts(shown, teamName).slice(1)] : stageParts(r, teamName)}
+                  cost={!!shown.jev}
+                  cols={cols}
+                  who={r.created_by}
+                  at={r.updated_at ? <Ago at={r.updated_at} /> : ''}
+                  to={RULES}
+                  search={{ tab: 'suggested', panel: `stage:${r.id}` }}
+                  selected={opened('stage', r.id)}
+                  verb={{ label: retires ? 'Retire' : r.suggests ? 'Accept change' : 'Add', onClick: () => void press('rules.accept', { rule: r.id, kind: 'stage' }) }}
+                  more={<MenuItem label="Set aside" icon="archive" onSelect={() => void press('rules.skip', { rule: r.id, kind: 'stage' })} />}
+                  target={`rule:${r.id}`}
+                />
+              );
+            })}
           </Section>
         ),
       };
@@ -388,5 +452,39 @@ function AutoRuleRow({ id, name, on, r, wake }: { id: string; name: string; on: 
       at={at ? <Ago at={at} /> : ''}
       target={`routine:${id}`}
     />
+  );
+}
+
+/** A suggestion that names no one is added once someone is picked to follow it (the server takes none without). */
+function AcceptWho({ rule, onClose }: { rule: OrgRule; onClose: () => void }) {
+  const [who, setWho] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const add = async () => {
+    setBusy(true);
+    const ok = await press('rules.accept', { rule: rule.id, kind: 'org', who });
+    setBusy(false);
+    if (ok) onClose();
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title="Who follows it?"
+      description={agentWords(rule.text)}
+      actions={
+        <>
+          <Button variant="quiet" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" busy={busy} disabled={!who.length} onClick={() => void add()}>
+            Add
+          </Button>
+        </>
+      }
+    >
+      <div className="rr-form">
+        <PartyPick label="Who" value={who} onChange={setWho} />
+      </div>
+    </Dialog>
   );
 }

@@ -122,3 +122,6 @@ html[data-layout="cards"] .stage-fold a{min-height:var(--ctl);display:inline-fle
 
 /* The ask: on a phone the head's face stays (marked for the phone) and opens a pipeline agent's chat card */
 .tk-ask{display:contents}
+
+/* a tag's notes: text, and a box per "- [ ] step" line (ui tags.ts tagChecklist) */
+.tag-notes{display:grid;gap:var(--s-1);padding:var(--s-1) 0 var(--s-2) var(--s-8)}

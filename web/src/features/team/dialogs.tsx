@@ -6,8 +6,9 @@ import { Button } from '@/kit/Button';
 import { Checkbox } from '@/kit/Checkbox';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
+import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
-import { groupsQuery, peopleQuery, type AccessView, type AgentRow, type Credential, type Levels } from './queries';
+import { agentsQuery, groupsQuery, peopleQuery, type AccessView, type AgentRow, type Credential, type Levels } from './queries';
 
 const copy = (text: string, what: string) =>
   void navigator.clipboard.writeText(text).then(
@@ -256,6 +257,50 @@ export function PasswordDialog({ open, onOpenChange, person, name }: Open & { pe
       }
     >
       <code className="once">{made.password}</code>
+    </Dialog>
+  );
+}
+
+const OPERATOR = '-';
+
+/** Archive, asked first: who takes its open tasks, the person who runs it unless another agent is picked (ui settingsArchiveConfirm). */
+export function ArchiveDialog({ open, onOpenChange, slug, name, row }: Open & { slug: string; name: string; row: AgentRow | undefined }) {
+  const roster = useQuery(agentsQuery);
+  const people = useQuery(peopleQuery);
+  const archive = useAction('agents.archive');
+  const [heir, setHeir] = useState(OPERATOR);
+  const operator = people.data?.find((p) => p.id === row?.owner_id)?.name ?? 'The person who runs it';
+  const options = [
+    { value: OPERATOR, label: operator },
+    ...(roster.data ?? []).filter((r) => r.slug !== slug && r.state !== 'archived').map((r) => ({ value: r.id, label: r.display_name || r.slug })),
+  ];
+  const to = heir === OPERATOR ? operator : (options.find((o) => o.value === heir)?.label ?? operator);
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (o) setHeir(OPERATOR);
+        onOpenChange(o);
+      }}
+      title={`Archive ${name}?`}
+      description={`It stops taking work. Its open tasks go to ${to}; its history stays.`}
+      alert
+      actions={
+        <>
+          <Button onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button
+            variant="primary"
+            onClick={() => {
+              onOpenChange(false);
+              void archive.run({ slug, ...(heir === OPERATOR ? {} : { successor: heir }) });
+            }}
+          >
+            Archive
+          </Button>
+        </>
+      }
+    >
+      <Select label="Hand its work to" options={options} value={heir} onValueChange={setHeir} />
     </Dialog>
   );
 }

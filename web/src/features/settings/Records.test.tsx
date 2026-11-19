@@ -146,7 +146,7 @@ const SYNC = {
 };
 
 describe('Settings › People › Directory sync', () => {
-  it('a new SCIM token shows once, in its dialog, and is kept nowhere else', async () => {
+  it('a new SCIM token shows once, in its dialog, and is kept nowhere else @s812', async () => {
     serve((url, method) =>
       method === 'POST' && url === '/api/v2/directory/scim-token' ? { status: 200, body: { token: 'scim-sample-0000' } } : { status: 200, body: SYNC },
     );
@@ -164,7 +164,7 @@ describe('Settings › People › Directory sync', () => {
     await waitFor(() => expect(screen.queryByText('scim-sample-0000')).toBeNull());
   });
 
-  it('Sync now previews first, and a first sync applies only once the list is checked', async () => {
+  it('Sync now previews first, and a first sync applies only once the list is checked @s812', async () => {
     const plan = { hash: 'h1', adds: [{ email: 'new@example.test' }], updates: [], restores: [], leaves: [], protected: [], skipped: [] };
     serve((url) => {
       if (url === '/api/v2/directory/preview') return { status: 200, body: { plan, needs_confirmation: { first: true }, mass_leave_limit: 10 } };

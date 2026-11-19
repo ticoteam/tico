@@ -68,13 +68,14 @@ export function LimitDialog({ who, now, agent, scope, onClose }: NonNullable<Edi
   );
 }
 
-/** Cancel the queued automatic wakes and waits, company-wide; asked first. */
-function ClearQueue() {
+/** Cancel the queued automatic wakes and waits, company-wide or for one team; asked first. */
+function ClearQueue({ teams }: { teams: [string, UsagePool, number][] }) {
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [scope, setScope] = useState('company');
   const clear = async () => {
     setBusy(true);
-    const r = await run('usage.clearQueue', { scope: 'company' }, { via: 'click' });
+    const r = await run('usage.clearQueue', { scope }, { via: 'click' });
     setBusy(false);
     setAsking(false);
     toast(r.ok ? { text: r.did ?? 'Cleared', kind: 'done' } : refusal(r, "Couldn't clear"));
@@ -100,10 +101,23 @@ function ClearQueue() {
             </Button>
           </>
         }
-      />
+      >
+        {teams.length > 0 && (
+          <Select
+            label="Applies to"
+            value={scope}
+            options={[
+              { value: 'company', label: 'Whole company' },
+              ...teams.map(([gid, g, depth]) => ({ value: `group:${gid}`, label: `${'\u2003'.repeat(depth)}${g.name ?? gid}` })),
+            ]}
+            onValueChange={setScope}
+          />
+        )}
+      </Dialog>
     </>
   );
 }
+
 /** The teams as their tree: each after its parent, with its depth. */
 export function teamTree(groups: Record<string, UsagePool>): [string, UsagePool, number][] {
   const out: [string, UsagePool, number][] = [];
@@ -196,7 +210,7 @@ export function Limits({ search }: { search: UsageSearch }) {
           <LabelValue label="When reached">New work waits</LabelValue>
           <LabelValue label="Count plan runs">{v.default.count_subscription ? 'Yes' : 'No'}</LabelValue>
         </Facts>
-        {v.may_edit_default && <ClearQueue />}
+        {v.may_edit_default && <ClearQueue teams={teams} />}
       </Section>
       {pools?.company && (
         <Section name="Company" target="limit:company">

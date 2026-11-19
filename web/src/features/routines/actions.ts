@@ -6,16 +6,21 @@ import { ACTS, applyFlow, dropItem, flowOf, putItem, routineBoard, type Part } f
 import {
   addDue,
   addOrgRule,
+  addRuleSource,
   createEndpoint,
   createInbox,
   endpointsQuery,
   fillTemplate,
   RUN_RANGES,
   RUN_STATUSES,
+  RUN_TRIGGERS,
   setFlow,
   updateEndpoint,
   addStageRule,
   createHook,
+  recoverHook,
+  replayDelivery,
+  updateHook,
   createRoutine,
   createWatch,
   decideOrgRule,
@@ -24,6 +29,7 @@ import {
   discardVersion,
   hooksQuery,
   orgRulesQuery,
+  partiesOf,
   readDocument,
   removeDue,
   removeHook,
@@ -53,10 +59,12 @@ import {
   updateStageRule,
   watchesQuery,
   watchQuery,
+  type OrgRuleFields,
   type RoutineFields,
   type StageRules,
 } from './queries';
-import type { OrgRule, Routine, StageRule, Trigger } from './types';
+
+import type { Hook, ListenSource, OrgRule, Routine, StageRule, Trigger } from './types';
 import { browserZone } from './words';
 
 /* Every change and every move a person makes on Routines, Rules and Listening. A tab is `?tab=` and one routine, rule
@@ -144,8 +152,14 @@ export const showRuns = defineAction({
   id: 'routines.showRuns',
   title: 'Show every run across routines',
   kind: 'view',
-  input: s.object({ status: s.optional(s.oneOf(RUN_STATUSES)), range: s.optional(s.oneOf(RUN_RANGES)) }),
-  run: ({ router }, i) => go(router, ROUTINES, { tab: 'runs', status: i.status, range: i.range === RUNS_RANGE ? undefined : i.range }),
+  input: s.object({
+    status: s.optional(s.oneOf(RUN_STATUSES)),
+    range: s.optional(s.oneOf(RUN_RANGES)),
+    // what started them, and whose routine they are (`bot:<id>`, `human:<id>`)
+    trigger: s.optional(s.oneOf(RUN_TRIGGERS)),
+    owner: s.optional(s.string({ min: 1, max: 200 })),
+  }),
+  run: ({ router }, i) => go(router, ROUTINES, { tab: 'runs', status: i.status, range: i.range === RUNS_RANGE ? undefined : i.range, trigger: i.trigger, owner: i.owner }),
   did: () => 'Opened the runs',
   target: () => ({ kind: 'tab', id: 'runs' }),
 });
@@ -156,9 +170,13 @@ const cached = (ctx: Ctx, rid: string): Routine | undefined =>
   ctx.queryClient.getQueryData<Routine>(routineQuery(rid).queryKey) ??
   ctx.queryClient.getQueryData<Routine[]>(routinesQuery.queryKey)?.find((r) => r.id === rid);
 
+/** The trigger an edit saves: a change to the same kind is merged into the one it has, so its filters (and anything
+   else the editor does not draw) stay; another kind starts fresh, as the old editor did (its filters test another
+   kind's fields). */
 const triggerOf = (i: { cron?: string; tz?: string; event?: string }, was?: Trigger): Trigger => {
-  if (i.cron) return { type: 'schedule', cron: i.cron, tz: i.tz ?? was?.tz ?? browserZone() };
-  if (i.event) return { type: 'event', name: i.event };
+  if (i.cron) return was?.type === 'schedule' ? { ...was, cron: i.cron, tz: i.tz || was.tz || browserZone() } : { type: 'schedule', cron: i.cron, tz: i.tz || browserZone() };
+  if (i.event) return was?.type === 'event' ? { ...was, name: i.event } : { type: 'event', name: i.event };
+  if (i.tz && was?.type === 'schedule') return { ...was, tz: i.tz };
   return was ?? { type: 'schedule', cron: '0 9 * * 1-5', tz: browserZone() };
 };
 
@@ -194,11 +212,13 @@ export const updateRoutineAction = defineAction({
     instruction: s.optional(s.string({ min: 1, max: 20_000 })),
     cron: s.optional(cron),
     tz: s.optional(s.string({ max: 64 })),
-    event: s.optional(s.string({ min: 1, max: 100 })),
+    // a catalog event (task.created) or a custom one (custom.<name>)
+    event: s.optional(s.string({ min: 1, max: 100, pattern: /^[a-z][a-z0-9_]*(\.[a-z0-9_*-]+)+$/, what: 'an event name, like task.created or custom.order_paid' })),
   }),
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
-  run: (ctx, i) => {
-    const was = cached(ctx, i.routine);
+  run: async (ctx, i) => {
+    // read it first when it is not loaded, so its trigger's filters and its other steps are kept
+    const was = cached(ctx, i.routine) ?? (await ctx.queryClient.ensureQueryData(routineQuery(i.routine)));
     const step = was?.steps?.find((x) => x.type === 'bot_turn');
     const f: RoutineFields = {
       name: (i.name ?? was?.name ?? '').trim(),
@@ -535,20 +555,81 @@ export const openWebhook = defineAction({
   target: ({ hook }) => ({ kind: 'hook', id: hook }),
 });
 
+const PRESETS = ['hmac', 'github', 'standard', 'stripe', 'slack'] as const;
+const hookSettings = {
+  // where a call's type is read: a header, or a /json/path; '' for the preset's own
+  typeFrom: s.optional(s.string({ max: 120 })),
+  hourly: s.optional(s.number({ int: true, min: 1, max: 600 })),
+  keepDays: s.optional(s.number({ int: true, min: 1, max: 30 })),
+  unheard: s.optional(s.oneOf(['log', 'note'] as const)),
+};
+const settingsBody = (i: { typeFrom?: string; hourly?: number; keepDays?: number; unheard?: 'log' | 'note' }) => ({
+  ...(i.typeFrom !== undefined ? { type_from: i.typeFrom.trim() } : {}),
+  ...(i.hourly !== undefined ? { hourly: i.hourly } : {}),
+  ...(i.keepDays !== undefined ? { keep_days: i.keepDays } : {}),
+  ...(i.unheard ? { unheard: i.unheard } : {}),
+});
+
 export const addWebhook = defineAction({
   id: 'webhooks.add',
   title: 'Add a webhook',
   kind: 'change',
+  // Its address carries a secret shown once, and so may its signing secret: the person's own press.
   tico: false,
-  input: s.object({ name }),
-  // The full address (secret included) goes back to the page that added it, held in its state: never cached
+  input: s.object({ name, preset: s.optional(s.oneOf(PRESETS)), secret: s.optional(s.string({ max: 300 })), ...hookSettings }),
+  // The full address (secret included) and a made signing secret go back to the page that added it, held in its
+  // state: never cached. Making one is three calls, as the old app made it: create, signing, settings.
   run: async ({ router }, i) => {
     const made = await said(createHook(i.name.trim()));
     await go(router, ROUTINES, { tab: 'webhooks', panel: `hook:${made.id}` });
-    return { hook: made.id, url: made.url };
+    const signed = i.preset ? await said(signHook(made.id, i.preset, i.secret?.trim() || undefined)) : undefined;
+    const settings = settingsBody(i);
+    if (Object.keys(settings).length) await said(updateHook(made.id, settings));
+    return { hook: made.id, url: made.url, ...(signed?.secret ? { signing: signed.secret } : {}) };
   },
   did: (i) => `Added ${i.name}`,
   target: (_i, made) => (made ? { kind: 'hook', id: made.hook } : null),
+});
+
+export const updateWebhook = defineAction({
+  id: 'webhooks.update',
+  title: "Change a webhook's name or settings",
+  kind: 'change',
+  input: s.object({ hook: id, name: s.optional(name), ...hookSettings }),
+  // Tico may tighten it; taking more calls an hour raises a limit: the person's own press.
+  can: (ctx, i) => {
+    if (ctx.via !== 'tico' || i.hourly === undefined) return true;
+    const was = ctx.queryClient.getQueryData<Hook[]>(hooksQuery.queryKey)?.find((h) => h.id === i.hook);
+    return !!was && i.hourly <= (was.hourly ?? 60);
+  },
+  run: (_ctx, i) => said(updateHook(i.hook, { ...(i.name ? { name: i.name.trim() } : {}), ...settingsBody(i) })).then(() => undefined),
+  did: () => 'Saved',
+  target: (i) => ({ kind: 'hook', id: i.hook }),
+});
+
+export const replayWebhook = defineAction({
+  id: 'webhooks.replay',
+  title: "Run a webhook's kept call again",
+  kind: 'change',
+  input: s.object({ hook: id, delivery: s.string({ min: 1, max: 300 }) }),
+  run: async (_ctx, i) => (await said(replayDelivery(i.hook, i.delivery))).replay,
+  did: (_i, out) => (out ? `Ran again: ${out.tasks} ${out.tasks === 1 ? 'task' : 'tasks'}` : 'Ran again'),
+  target: (i) => ({ kind: 'hook', id: i.hook }),
+});
+
+export const recoverWebhook = defineAction({
+  id: 'webhooks.recover',
+  title: "Check a webhook's refused calls again under its current secret",
+  kind: 'change',
+  // how far back, in hours (1 to 720); left out, as long as its calls are kept
+  input: s.object({ hook: id, sinceHours: s.optional(s.number({ int: true, min: 1, max: 720 })) }),
+  run: async (ctx, i) => {
+    const keep = ctx.queryClient.getQueryData<Hook[]>(hooksQuery.queryKey)?.find((h) => h.id === i.hook)?.keep_days ?? 7;
+    return (await said(recoverHook(i.hook, i.sinceHours ?? Math.min(720, keep * 24)))).recover;
+  },
+  did: (_i, r) =>
+    r ? [`Recovered ${r.recovered} of ${r.found}`, r.duplicate ? `${r.duplicate} already in` : '', r.still_refused ? `${r.still_refused} still refused` : '', r.more ? 'more wait' : ''].filter(Boolean).join(', ') : 'Recovered',
+  target: (i) => ({ kind: 'hook', id: i.hook }),
 });
 
 export const rotateWebhook = defineAction({
@@ -687,7 +768,7 @@ export const updateEndpointAction = defineAction({
 
 // ---------------------------------------------------------------- rules: views
 
-const ruleTab = (router: AnyRouter, t: RuleTab, panel: string) => go(router, RULES, { tab: t || undefined, panel });
+const ruleTab = (router: AnyRouter, t: RuleTab, panel?: string) => go(router, RULES, { tab: t || undefined, panel: panel || undefined });
 
 export const openRule = defineAction({
   id: 'rules.open',
@@ -719,6 +800,24 @@ export const pickScope = defineAction({
   target: (i) => ({ kind: 'scope', id: i.who }),
 });
 
+/** Due dates by status, as the Due tab's filter names them. */
+export const DUE_STATUSES = ['overdue', 'due_soon', 'upcoming'] as const;
+
+export const listRules = defineAction({
+  id: 'rules.list',
+  title: 'Search or filter the rules on a tab',
+  kind: 'view',
+  // `from`: Outside, one From's id; `status`: Due, late, soon or later
+  input: s.object({ tab: s.optional(s.oneOf(RULE_TABS)), q: s.optional(s.string({ max: 200 })), from: s.optional(id), status: s.optional(s.oneOf(DUE_STATUSES)) }),
+  run: ({ router }, i) => {
+    // whose rules (Company) stay as they are
+    const prev = router.state.location.search as { tab?: string; who?: string };
+    return go(router, RULES, { tab: i.tab === undefined ? prev.tab : i.tab || undefined, who: prev.who, q: i.q?.trim() || undefined, from: i.from, status: i.status });
+  },
+  did: () => 'Listed the rules',
+  target: (i) => ({ kind: 'tab', id: i.tab || 'company' }),
+});
+
 export const closeRule = defineAction({
   id: 'rules.closePanel',
   title: 'Close the rule',
@@ -740,13 +839,41 @@ const stageRule = (ctx: Ctx, rid: string): StageRule | undefined =>
   );
 const missing = () => Object.assign(new Error('That rule is not loaded'), { code: 'not_found: That rule is not loaded' });
 
+const teammate = s.string({ min: 1, max: 200, pattern: /^(group|bot|human):\S+$/, what: 'group:<id>, bot:<id> or human:<id>' });
+const SOURCE_KINDS = ['vendor', 'customer', 'government', 'other'] as const;
 const orgFields = {
   text: s.string({ min: 1, max: 2000 }),
   ifBroken: s.oneOf(['block', 'escalate', 'warn'] as const),
+  // under Ask first: the person who OKs it; left out, the manager above whoever broke it
   reviewer: s.optional(party),
-  who: s.optional(party),
+  // who follows it: ['*'] (Everyone, the default) or teams, agents and people
+  who: s.optional(s.array(party, { max: 100 })),
+  // a company rule: the teammates it is about
+  with: s.optional(s.array(teammate, { max: 100 })),
+  description: s.optional(s.string({ max: 2000 })),
   outside: s.optional(s.boolean()),
+  // an outside rule: who it is from, an existing From's id, or a new one by name and kind
+  source: s.optional(id),
+  newSource: s.optional(s.object({ name: s.string({ min: 1, max: 200 }), kind: s.oneOf(SOURCE_KINDS) })),
 };
+type OrgIn = { text: string; ifBroken: 'block' | 'escalate' | 'warn'; reviewer?: string; who?: string[]; with?: string[]; description?: string; outside?: boolean; source?: string; newSource?: { name: string; kind: string } };
+
+/** An outside rule's From: the one picked, or a new one made first. */
+async function sourceOf(o: OrgIn, was?: string): Promise<string | undefined> {
+  if (o.newSource) return (await said(addRuleSource(o.newSource.name.trim(), o.newSource.kind))).source.id;
+  return o.source ?? was;
+}
+const orgOut = (o: OrgIn, kind: 'internal' | 'external', source?: string): OrgRuleFields => ({
+  kind,
+  text: o.text.trim(),
+  if_broken: o.ifBroken,
+  reviewer: o.reviewer?.replace(/^human:/, '') || null,
+  who: o.who?.length ? o.who : ['*'],
+  ...(kind === 'internal' ? { with: o.with ?? [] } : {}),
+  description: o.description?.trim() ?? '',
+  ...(source ? { source_id: source } : {}),
+});
+const noFrom = () => Object.assign(new Error('Pick who it is from'), { code: 'bad_input: Pick who it is from' });
 const stageFields = {
   name: s.optional(s.string({ max: 200 })),
   pipeline: s.string({ max: 100 }),
@@ -768,10 +895,11 @@ export const addRule = defineAction({
   run: async ({ router }, i) => {
     if (i.kind === 'org' && i.org) {
       const o = i.org;
-      const made = await said(
-        addOrgRule({ kind: o.outside ? 'external' : 'internal', text: o.text.trim(), if_broken: o.ifBroken, reviewer: o.reviewer?.replace(/^human:/, ''), who: o.who ?? '*' }),
-      );
-      await ruleTab(router, o.outside ? 'outside' : '', `org:${made.id}`);
+      // the server refuses an outside rule with no From
+      const source = o.outside ? await sourceOf(o) : undefined;
+      if (o.outside && !source) throw noFrom();
+      const made = await said(addOrgRule(orgOut(o, o.outside ? 'external' : 'internal', source)));
+      await ruleTab(router, made.status === 'suggested' ? 'suggested' : o.outside ? 'outside' : '', made.status === 'suggested' ? '' : `org:${made.id}`);
       return made.id;
     }
     if (i.kind === 'stage' && i.stage) {
@@ -809,7 +937,9 @@ export const updateRule = defineAction({
       const was = orgRule(ctx, i.rule);
       if (!was) throw missing();
       const o = i.org;
-      await said(updateOrgRule(was, { kind: was.kind, text: o.text.trim(), if_broken: o.ifBroken, reviewer: o.reviewer?.replace(/^human:/, ''), who: o.who ?? '*' }));
+      const source = was.kind === 'external' ? await sourceOf(o, was.source?.id) : undefined;
+      // a Who left out keeps the one it has, every team, agent and person in it
+      await said(updateOrgRule(was, orgOut({ ...o, who: o.who ?? partiesOf(was.who) }, was.kind, source)));
       return;
     }
     if (i.kind === 'stage' && i.stage) {
@@ -860,12 +990,14 @@ export const acceptRule = defineAction({
   id: 'rules.accept',
   title: 'Add a suggested rule',
   kind: 'change',
-  input: s.object({ rule: id, kind: s.oneOf(['org', 'stage'] as const) }),
+  // `who`: who follows it, for a suggestion that names no one (the server takes none without)
+  input: s.object({ rule: id, kind: s.oneOf(['org', 'stage'] as const), who: s.optional(s.array(party, { max: 100 })) }),
   run: async (ctx, i) => {
     if (i.kind === 'org') {
       const was = orgRule(ctx, i.rule);
       if (!was) throw missing();
-      await said(decideOrgRule(was, 'accept'));
+      if (!i.who?.length && !hasWho(was)) throw Object.assign(new Error('Say who follows it'), { code: 'bad_input: Say who follows it' });
+      await said(decideOrgRule(was, 'accept', i.who));
     } else {
       const was = stageRule(ctx, i.rule);
       if (!was) throw missing();
@@ -874,6 +1006,26 @@ export const acceptRule = defineAction({
   },
   did: () => 'Added the rule',
   target: (i) => ({ kind: 'rule', id: i.rule }),
+});
+
+/** A suggestion names who follows it (Everyone, a team, an agent or a person). */
+export const hasWho = (r: Pick<OrgRule, 'who'>) => !!r.who && (!!r.who.everyone || !!r.who.all_bots || !!(r.who.groups?.length || r.who.bots?.length || r.who.people?.length));
+
+export const acceptAll = defineAction({
+  id: 'rules.acceptAll',
+  title: 'Add every suggested rule that says who follows it',
+  kind: 'change',
+  input: s.object({}),
+  run: async (ctx) => {
+    const orgs = (ctx.queryClient.getQueryData<OrgRule[]>(orgRulesQuery('suggested').queryKey) ?? []).filter(hasWho);
+    const stages = ctx.queryClient.getQueryData<StageRules>(stageRulesQuery('suggested').queryKey)?.items ?? [];
+    // one at a time, so a refusal stops before the rest
+    for (const r of orgs) await said(decideOrgRule(r, 'accept'));
+    for (const r of stages) await said(decideStageRule(r, 'accept'));
+    return orgs.length + stages.length;
+  },
+  did: (_i, n) => `Added ${n ?? 0} ${n === 1 ? 'rule' : 'rules'}`,
+  target: () => ({ kind: 'tab', id: 'suggested' }),
 });
 
 export const skipRule = defineAction({
@@ -935,8 +1087,9 @@ export const newDue = defineAction({
   id: 'rules.newDue',
   title: 'Start a new due date',
   kind: 'view',
-  input: s.object({}),
-  run: ({ router }) => ruleTab(router, 'due', 'due:new'),
+  // `rule`: the rule it is for, already picked
+  input: s.object({ rule: s.optional(id) }),
+  run: ({ router }, i) => ruleTab(router, 'due', i.rule ? `due:new:${i.rule}` : 'due:new'),
   did: () => 'Opened a new due date',
   target: () => ({ kind: 'panel', id: 'due:new' }),
 });
@@ -1057,6 +1210,16 @@ export const openMatch = defineAction({
   target: (i) => (i.match ? { kind: 'match', id: i.match } : null),
 });
 
+export const listWatches = defineAction({
+  id: 'listening.list',
+  title: 'Search the listening watches',
+  kind: 'view',
+  input: s.object({ q: s.optional(s.string({ max: 200 })) }),
+  run: ({ router }, i) => go(router, LISTENING, { q: i.q?.trim() || undefined }),
+  did: () => 'Listed the watches',
+  target: () => ({ kind: 'section', id: 'watches' }),
+});
+
 export const addWatch = defineAction({
   id: 'listening.add',
   title: 'Add a listening watch',
@@ -1109,18 +1272,94 @@ export const removeWatch = defineAction({
   did: () => 'Removed the watch',
 });
 
+const REPO = /^[\w.-]+\/[\w.-]+$/;
+const repoOf = (v: string) => v.trim().replace(/^https?:\/\/(www\.)?github\.com\//i, '').replace(/\.git$|\/+$/g, '');
+const badSource = (why: string) => Object.assign(new Error(why), { code: `bad_input: ${why}` });
+
 export const addSource = defineAction({
   id: 'listening.addSource',
   title: 'Add a source to a listening watch',
   kind: 'change',
-  input: s.object({ watch: id, kind: s.oneOf(['search', 'page'] as const), target: s.string({ min: 1, max: 500 }), site: s.optional(s.string({ max: 200 })) }),
+  input: s.object({
+    watch: id,
+    // search: words on a site; page: an address; github: owner/repo; push: a name (posts are sent to its own address)
+    kind: s.oneOf(['search', 'page', 'github', 'push'] as const),
+    target: s.optional(s.string({ max: 500 })),
+    site: s.optional(s.string({ max: 200 })),
+    follow: s.optional(s.oneOf(['prs', 'releases'] as const)),
+  }),
+  // A push source's address carries a secret, shown once: the person's own press.
+  can: (ctx, i) => !(i.kind === 'push' && ctx.via === 'tico'),
+  run: async (ctx, i) => {
+    const w = watchOf(ctx, i.watch);
+    if (!w) throw Object.assign(new Error('That watch is not loaded'), { code: 'not_found: That watch is not loaded' });
+    const sid = `src_${Math.random().toString(36).slice(2, 10)}`;
+    const target = i.target?.trim() ?? '';
+    const site = i.site?.trim() ?? '';
+    let src: ListenSource;
+    if (i.kind === 'push') {
+      if (!site) throw badSource('Name the push source');
+      src = { id: sid, kind: 'push', site };
+    } else if (i.kind === 'github') {
+      const repo = repoOf(target);
+      if (!REPO.test(repo)) throw badSource('A GitHub source is owner/repo');
+      src = { id: sid, kind: 'github', site: 'github', target: repo, follow: i.follow ?? 'prs' };
+    } else {
+      if (!target) throw badSource('Say what to read');
+      if (i.kind === 'page' && !/^https?:\/\/\S+$/i.test(target)) throw badSource('A page is a web address');
+      src = { id: sid, kind: i.kind, target, ...(site ? { site } : i.kind === 'page' ? { site: target.replace(/^https?:\/\/(www\.)?/i, '').split('/')[0] ?? '' } : {}) };
+    }
+    const saved = await said(setWatchTrigger(w, { ...w.trigger, sources: [...(w.trigger.sources ?? []), src] }));
+    // the push address goes back to the press that made it, held in the page's state only
+    return { address: saved.push_addresses?.[sid] };
+  },
+  did: () => 'Added the source',
+  target: (i) => ({ kind: 'watch', id: i.watch }),
+});
+
+const LIMIT_UNITS = ['hour', 'day', 'week', 'month'] as const;
+const TAG = /^[a-z0-9][a-z0-9-]{0,23}$/;
+
+export const updateWatch = defineAction({
+  id: 'listening.update',
+  title: "Rename a listening watch, or change what it keeps, how many it sends and when",
+  kind: 'change',
+  input: s.object({
+    watch: id,
+    name: s.optional(name),
+    // keep (with a tag) or drop what a sentence describes
+    rules: s.optional(s.array(s.object({ do: s.oneOf(['keep', 'drop'] as const), tag: s.optional(s.string({ max: 24 })), text: s.string({ min: 1, max: 300 }) }), { max: 20 })),
+    // at most `count` sent each hour, day, week or month
+    limits: s.optional(s.array(s.object({ count: s.number({ int: true, min: 1, max: 100 }), per: s.oneOf(LIMIT_UNITS) }), { max: 4 })),
+    // when a day's batch is sent (no hourly limit), HH:MM
+    at: s.optional(s.string({ min: 5, max: 5, pattern: /^([01]\d|2[0-3]):[0-5]\d$/, what: 'a time, HH:MM' })),
+  }),
+  // Tico may tighten its limits; sending more is the person's own press.
+  can: (ctx, i) => {
+    if (ctx.via !== 'tico' || !i.limits) return true;
+    const was = watchOf(ctx, i.watch)?.trigger.limits ?? [];
+    return was.every((o) => {
+      const n = i.limits?.find((l) => l.per === o.per);
+      return !!n && n.count <= o.count;
+    });
+  },
   run: (ctx, i) => {
     const w = watchOf(ctx, i.watch);
     if (!w) throw Object.assign(new Error('That watch is not loaded'), { code: 'not_found: That watch is not loaded' });
-    const src = { id: `src_${Math.random().toString(36).slice(2, 10)}`, kind: i.kind, target: i.target.trim(), ...(i.site ? { site: i.site } : {}) };
-    return said(setWatchTrigger(w, { ...w.trigger, sources: [...(w.trigger.sources ?? []), src] }).then(() => undefined));
+    if (i.limits && !i.limits.length) throw badSource('Add a limit');
+    if (i.limits && new Set(i.limits.map((l) => l.per)).size !== i.limits.length) throw badSource('One limit for each of hour, day, week and month');
+    const tags = (i.rules ?? []).filter((r) => r.do === 'keep').map((r) => r.tag?.trim() ?? '');
+    if (tags.some((t) => !TAG.test(t))) throw badSource('A tag is lowercase letters, numbers and dashes');
+    if (new Set(tags).size !== tags.length) throw badSource('Each tag is used once');
+    const trigger: Trigger = {
+      ...w.trigger,
+      ...(i.rules ? { rules: i.rules.map((r) => (r.do === 'drop' ? { do: 'drop', text: r.text.trim() } : { do: 'keep', tag: r.tag?.trim() ?? '', text: r.text.trim() })) } : {}),
+      ...(i.limits ? { limits: [...i.limits].sort((a, b) => LIMIT_UNITS.indexOf(a.per) - LIMIT_UNITS.indexOf(b.per)) } : {}),
+      ...(i.at ? { at: i.at } : {}),
+    };
+    return said(setWatchTrigger(w, trigger, i.name?.trim())).then(() => undefined);
   },
-  did: () => 'Added the source',
+  did: () => 'Saved',
   target: (i) => ({ kind: 'watch', id: i.watch }),
 });
 

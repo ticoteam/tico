@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useLocation } from '@tanstack/react-router';
+import { useLocation, useNavigate } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { directoryQuery, meQuery } from '@/data';
 import { retryStart, screenFor, type StartScreenKind } from './queries';
@@ -28,6 +28,13 @@ export function useStartGate(): StartGate {
   const [late, setLate] = useState(false);
   const [round, setRound] = useState(0);
   const settled = me.isError || (me.isSuccess && !dir.isPending);
+  const navigate = useNavigate();
+  // Only the owner sets a company up: anyone else sent to `?setup=` lands on Tasks (old app: welcome.ts pageWelcome).
+  const owner = me.data?.role === 'owner';
+  const turnAway = step !== null && me.isSuccess && !owner;
+  useEffect(() => {
+    if (turnAway) void navigate({ to: '/tasks', replace: true });
+  }, [turnAway, navigate]);
 
   useEffect(() => {
     if (settled) return;
@@ -45,6 +52,6 @@ export function useStartGate(): StartGate {
     error: me.error,
     retry,
     busy: me.isFetching,
-    firstRun: step !== null && me.isSuccess,
+    firstRun: step !== null && me.isSuccess && owner,
   };
 }

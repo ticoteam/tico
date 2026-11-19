@@ -11,6 +11,8 @@ export interface ListenSource {
   kind: 'search' | 'page' | 'github' | 'push' | string;
   site?: string;
   target?: string;
+  /** github: what it follows. */
+  follow?: 'prs' | 'releases' | string;
 }
 export interface ListenRule {
   do: 'keep' | 'drop' | string;
@@ -36,6 +38,10 @@ export interface Trigger {
   rules?: ListenRule[];
   limits?: { count: number; per: string }[];
   at?: string;
+  /** Conditions on what the trigger hands a run; a run starts only when they hold. Kept as they are by every edit. */
+  filters?: unknown[];
+  /** due: the rule's due date it was made for. */
+  rule_due_id?: string;
 }
 
 export interface Step {
@@ -65,6 +71,8 @@ export type Routine = Omit<Automation, 'trigger' | 'steps' | 'last_run' | 'spend
   listening?: { dot?: string; sources?: { id: string }[] } | null;
   /** A "What wakes" routine's scope: `bot`, `department` (a name), `pipeline`, `task` or `team` (every agent). */
   wakes?: { scope_kind: string; scope_id: string | null } | null;
+  /** due: the next due day, YYYY-MM-DD. */
+  next_due_at?: string | null;
 };
 
 export interface RunStep {
@@ -139,6 +147,14 @@ export interface Hook {
   signed?: boolean;
   preset?: string;
   automations?: { id: string; name: string; owner_id?: string }[];
+  /** Where a call's type is read: a header or a /json/path; '' for the preset's own. */
+  type_from?: string;
+  /** Calls taken an hour, at most. */
+  hourly?: number;
+  /** Days a call's body is kept. */
+  keep_days?: number;
+  /** A call nothing listens for: `log` it, or `note` it to whoever made the webhook. */
+  unheard?: 'log' | 'note' | string;
 }
 export interface Delivery {
   delivery: string;
@@ -166,6 +182,8 @@ export interface Version {
   created_at: string;
   status: 'active' | 'pending';
   summary?: string;
+  /** Its trigger and steps as saved (a proposal's, to compare). */
+  flow?: { trigger?: Trigger; steps?: Step[] };
 }
 export interface ShownOnce {
   id: string;
@@ -190,6 +208,14 @@ export interface OrgRule {
   version: number;
   can_edit: boolean;
   who?: Scope | null;
+  /** Internal: whom it is about (a rule the Who follows toward these teammates). */
+  with?: Scope | null;
+  description?: string | null;
+  /** The part of a document it rests on; `quote` only where the reader may read the file. */
+  cite?: { file_id?: string; version?: number | null; section?: string | null; quote?: string | null; hidden?: boolean; removed?: boolean } | null;
+  /** Its due dates (the first twenty) and how many more. */
+  due?: { id: string; due_on: string; status: string; repeats?: string; task_days?: number | null }[];
+  due_more?: number;
   source?: { id: string; name: string; kind?: string } | null;
   if_broken?: 'block' | 'escalate' | 'warn' | null;
   reviewer?: { id: string; name?: string } | null;

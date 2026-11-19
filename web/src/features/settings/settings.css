@@ -67,6 +67,7 @@ div.row{cursor:default}
 .g-road{--g:minmax(0,1fr) minmax(0,1.6fr) 28px}
 .g-ctype{--g:minmax(0,1fr) 96px}
 .g-cfield{--g:minmax(0,1fr) 120px 150px}
+.g-line{--g:minmax(0,1fr) var(--ctl-sm)}
 .row.g-ctype[aria-current="true"]{background:var(--selected)}
 .g-cfield .row-cell .icon{margin-left:var(--s-1)}
 
@@ -105,6 +106,7 @@ div.row{cursor:default}
 /* Add computer: a command, its note above, its copy button at the right */
 .set-cmd{display:grid;gap:var(--s-1)}
 .set-cmd-note{font-size:var(--t-sm);color:var(--ink-2)}
+.set-pre{white-space:pre-wrap;overflow-wrap:anywhere}
 .set-cmd-row{display:flex;align-items:flex-start;gap:var(--s-2)}
 .set-cmd-row .fs-code{flex:1;min-width:0}
 .set-more{display:grid;gap:var(--s-3)}
@@ -251,6 +253,7 @@ html[data-layout="cards"] .fl-tools .search{flex:1 1 100%}
    gutter by that much (the row and the section body put its edge on 16) */
 html[data-layout="cards"] .g-fleet>.fl-more{margin-right:calc(var(--s-3) * -1)}
 .set-leaves{margin:0;white-space:normal;overflow-wrap:anywhere;font-size:var(--t-sm)}
+.row.set-link.is-selected{background:var(--selected)}
 .set-link .set-out{display:grid;margin-left:auto;color:var(--faint)}
 .set-link .set-out .ico{width:13px;height:13px;stroke-width:2}
 /* gap wave (Usage, History, Billing): runs, changes, billing days, the limit panel's figure and lines, the filter */
@@ -275,3 +278,4 @@ html[data-layout="cards"] .g-set .row-title{grid-area:title;white-space:normal;l
 html[data-layout="cards"] .g-set .row-act{grid-area:act}
 html[data-layout="cards"] .g-set .row-age{grid-area:date;text-align:left}
 html[data-layout="cards"] .g-bday{--g:minmax(0,1fr) auto}
+html[data-layout="cards"] .g-line .row-title{white-space:normal;line-height:1.35}

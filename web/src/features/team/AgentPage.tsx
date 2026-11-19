@@ -18,12 +18,12 @@ import { ComputerPage } from './ComputerPage';
 import { bareId, historyOf, modelLine, runFigures, startOfWeek, teamOf, type HistLine } from './model';
 import { ModelPicker } from './ModelPicker';
 import { CopiesSection, CopyFacts, CopyPick } from './Copies';
-import { CredentialDialog, WorksForDialog } from './dialogs';
+import { ArchiveDialog, CredentialDialog, WorksForDialog } from './dialogs';
 import { FilesSection } from './Files';
 import { LastRun } from './LastRun';
 import { DecisionsSection, DreamSection } from './Learnings';
 import { ListEditor, ListSections, useLists } from './Lists';
-import { AllTasks, ConfirmDialog, EditDialog, Foot, Fold, OwnRow, PickDialog, waitsOn } from './parts';
+import { AllTasks, EditDialog, Foot, Fold, OwnRow, PickDialog, waitsOn } from './parts';
 import {
   agentFilesQuery,
   agentQuery,
@@ -118,7 +118,6 @@ function AgentHead({
   const open = useAction('team.open');
   const pause = useAction('agents.pause');
   const resume = useAction('agents.resume');
-  const archive = useAction('agents.archive');
   const dream = useAction('agents.dream');
   const rename = useAction('agents.rename');
   const [archiving, setArchiving] = useState(false);
@@ -165,14 +164,7 @@ function AgentHead({
           <MenuRule />
           <MenuItem label={`Archive ${actor.name}`} icon="archive" disabled={row?.can_manage === false} onSelect={() => setArchiving(true)} />
         </PageMore>
-        <ConfirmDialog
-          open={archiving}
-          onOpenChange={setArchiving}
-          title={`Archive ${actor.name}?`}
-          text="It stops taking work. Its tasks and history stay."
-          verb="Archive"
-          onConfirm={() => void archive.run({ slug })}
-        />
+        <ArchiveDialog open={archiving} onOpenChange={setArchiving} slug={slug} name={actor.name} row={row} />
         <ListEditor open={listing} onOpenChange={setListing} slug={slug} />
       </>
     ),

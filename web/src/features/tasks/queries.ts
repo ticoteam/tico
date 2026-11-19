@@ -1,5 +1,7 @@
 import { infiniteQueryOptions, keepPreviousData, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
 import { api } from '@/api/client';
+import { ApiError } from '@/api/client';
+import type { TagCreate, TagResult, TagUpdate } from '@/api/schema';
 import type {
   FactoryMap,
   NeedsYou,
@@ -859,4 +861,115 @@ export async function removeRequester(task: string, id: string): Promise<void> {
     revert: (cur: RequesterPages | undefined) =>
       gone && !there(cur) ? withRows(cur, (rows, page) => (page === from && gone ? rows.toSpliced(at, 0, gone) : rows)) : cur,
   });
+}
+
+/* ---------------------------------------------------------------- tags: making and changing them (ui/app/tags.ts) */
+
+/** The templates a tag is made from (`is_template=true`). Read when someone looks for one, not with the Tags list. */
+export const templatesQuery = queryOptions({
+  queryKey: ['tags', { templates: true }] as const,
+  queryFn: async ({ signal }): Promise<Tag[]> =>
+    (await api.get<TagList>('/api/v2/tags?is_template=true', { signal })).tags.filter((t) => t.is_template),
+  staleTime: QUIET_STALE_MS,
+});
+
+const tagsAgain = () => void queryClient.invalidateQueries({ queryKey: ['tags'] });
+
+/** A key as the old form made it from a name: lowercase words joined by hyphens, cut at 40 (hubdb cuts there). */
+export const tagKeyOf = (name: string) =>
+  name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/, '');
+
+/** A new tag or template (POST /api/v2/tags). */
+export async function createTag(body: TagCreate): Promise<Tag> {
+  const { tag } = await api.post<TagResult>('/api/v2/tags', body);
+  tagsAgain();
+  return tag;
+}
+
+/** A tag made from a template: the template's notes, under its own key (POST /api/v2/tags/{id}/instances). */
+export async function makeTagFrom(template: string, body: Pick<TagCreate, 'key' | 'metadata'>): Promise<Tag> {
+  const { tag } = await api.post<TagResult>(`/api/v2/tags/${encodeURIComponent(template)}/instances`, body);
+  tagsAgain();
+  return tag;
+}
+
+export const RELEASE_KEY = 'release-checklist';
+const RELEASE_NOTES = '- [ ] Run release scripts and migrations\n- [ ] Deploy\n- [ ] Run smoke checks\n- [ ] Tell the team';
+
+/** The release checklist starter: the template when it is there, made when it is not (someone may make it meanwhile). */
+export async function releaseChecklist(): Promise<Tag> {
+  const there = (await queryClient.fetchQuery(templatesQuery)).find((t) => t.key === RELEASE_KEY);
+  if (there) return there;
+  try {
+    return await createTag({ key: RELEASE_KEY, label: 'release', is_template: true, markdown: RELEASE_NOTES });
+  } catch (e) {
+    if (!(e instanceof ApiError && e.code === 'duplicate')) throw e;
+    return (await api.get<TagDetail>(`/api/v2/tags/${RELEASE_KEY}`)).tag;
+  }
+}
+
+/** A tag's name, notes or metadata, against the version on screen (409 when someone changed it): shown at once. */
+export async function saveTag(id: string, fields: Omit<TagUpdate, 'version' | 'owner' | 'bot_writers'>): Promise<Tag> {
+  const cur = queryClient.getQueryData(tagQuery(id).queryKey);
+  const version = cur?.tag.version ?? (await queryClient.fetchQuery(tagQuery(id))).tag.version;
+  const patch = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined && v !== null));
+  const { tag } = await write<TagResult>({
+    key: tagQuery(id).queryKey,
+    optimistic: (d: TagDetail | undefined) => d && { ...d, tag: { ...d.tag, ...patch } },
+    send: (idempotencyKey) => api.post<TagResult>(`/api/v2/tags/${encodeURIComponent(id)}`, { version, ...patch }, { idempotencyKey }),
+    settle: (d: TagDetail | undefined, answer) => d && { ...d, tag: answer.tag },
+  });
+  void queryClient.invalidateQueries({ queryKey: tagsQuery.queryKey, exact: true });
+  return tag;
+}
+
+/** The next 500 of a tag's tasks (`offset`), added under the ones read. */
+export async function moreTagTasks(id: string): Promise<void> {
+  const cur = queryClient.getQueryData(tagQuery(id).queryKey);
+  if (cur?.next_offset == null) return;
+  const next = await api.get<TagDetail>(`/api/v2/tags/${encodeURIComponent(id)}?offset=${cur.next_offset}`);
+  queryClient.setQueryData(tagQuery(id).queryKey, (d: TagDetail | undefined) => {
+    if (!d) return d;
+    const seen = new Set(d.tasks.map((t) => t.id));
+    return { ...d, tasks: [...d.tasks, ...next.tasks.filter((t) => !seen.has(t.id))], next_offset: next.next_offset };
+  });
+}
+
+/** A task filed with this tag on it (POST /api/v2/tasks `labels`): it shows on the tag's page at once. */
+export async function createTaggedTask(id: string, key: string, input: NewTask): Promise<TaskItem> {
+  const tmp = `tmp:${newId()}`;
+  const first = queryClient.getQueryData<Pipeline[]>(pipelinesQuery.queryKey)?.find((p) => p.id === input.pipeline)?.stages[0];
+  const now = new Date().toISOString();
+  const row = {
+    id: tmp,
+    number: null,
+    title: input.title,
+    status: 'open',
+    pipeline_id: input.pipeline,
+    stage_id: first?.id ?? null,
+    owner_id: input.owner ?? null,
+    labels: [key],
+    late: null,
+    turn: null,
+    updated_at: now,
+    version: 0,
+  } as unknown as Task;
+  const { task } = await write<{ task: TaskItem }>({
+    key: tagQuery(id).queryKey,
+    optimistic: (d: TagDetail | undefined) => d && { ...d, tasks: [row, ...d.tasks] },
+    send: (idempotencyKey) =>
+      api.post<{ task: TaskItem }>(
+        '/api/v2/tasks',
+        { title: input.title, pipeline: input.pipeline, labels: [key], ...(input.owner ? { owner: input.owner } : {}) },
+        { idempotencyKey },
+      ),
+    settle: (d: TagDetail | undefined, answer) => d && { ...d, tasks: d.tasks.map((t) => (t.id === tmp ? (answer.task as unknown as Task) : t)) },
+  });
+  return task;
 }

@@ -7,8 +7,8 @@ import { Row } from '@/kit/Row';
 import { fmtMoney } from '@/lib';
 import { FilterRow, List, Section, type PageTab } from '@/pagekinds';
 import { LISTENING, RUNS_RANGE } from './actions';
-import { Face, press, Word } from './parts';
-import { allRunsQuery, RUN_RANGES, RUN_STATUSES, type AnyRun, type RunRange, type RunStatus } from './queries';
+import { actorKey, Face, press, useName, Word } from './parts';
+import { allRunsQuery, RUN_RANGES, RUN_STATUSES, RUN_TRIGGERS, type AnyRun, type RunRange, type RunStatus, type RunTrigger } from './queries';
 import { RoutinePanel } from './RoutinePanel';
 import { runWords } from './words';
 
@@ -30,31 +30,60 @@ interface Head {
   className: string;
 }
 
-export function RunsTab({ head, status, range, panel, href }: { head: Head; status?: RunStatus; range?: RunRange; panel?: string; href: (panel: string) => string }) {
+const TRIGGER: Record<RunTrigger, string> = {
+  schedule: 'Scheduled',
+  event: 'Events',
+  webhook: 'Webhooks',
+  due: 'Due dates',
+  message: 'Messages',
+  task_received: 'Tasks received',
+  listening: 'Listening',
+  system: 'System jobs',
+};
+
+type RunPick = { status?: RunStatus; range?: RunRange; trigger?: RunTrigger; owner?: string };
+
+export function RunsTab({ head, status, range, trigger, owner, panel, href }: { head: Head; panel?: string; href: (panel: string) => string } & RunPick) {
   const r = range ?? RUNS_RANGE;
   const q = useInfiniteQuery(allRunsQuery(r, status));
-  const runs = q.data?.pages.flatMap((p) => p.runs) ?? [];
+  const all = q.data?.pages.flatMap((p) => p.runs) ?? [];
+  // what started them and whose they are narrow the runs read (the server filters by status and time only)
+  const runs = all.filter((x) => (!trigger || x.trigger === trigger) && (!owner || actorKey(x.owner_id) === actorKey(owner)));
   const open = panel?.startsWith('routine:') ? panel.slice(8) : null;
-  const show = (next: { status?: RunStatus; range?: RunRange }) => void press('routines.showRuns', next);
+  const now = { status, range: r, trigger, owner };
+  const show = (next: RunPick) => void press('routines.showRuns', next);
+  const ownerName = useName(owner);
+  const owners = [...new Set(all.map((x) => x.owner_id).filter((o): o is string => !!o))];
+  const triggers = RUN_TRIGGERS.filter((t) => t === trigger || all.some((x) => x.trigger === t));
   const filters = [
-    ...(status ? [{ label: STATUS[status], onClear: () => show({ range: r }) }] : []),
-    ...(r !== RUNS_RANGE ? [{ label: RANGE[r], onClear: () => show({ status }) }] : []),
+    ...(status ? [{ label: STATUS[status], onClear: () => show({ ...now, status: undefined }) }] : []),
+    ...(r !== RUNS_RANGE ? [{ label: RANGE[r], onClear: () => show({ ...now, range: undefined }) }] : []),
+    ...(trigger ? [{ label: TRIGGER[trigger], onClear: () => show({ ...now, trigger: undefined }) }] : []),
+    ...(owner ? [{ label: ownerName || 'One owner', onClear: () => show({ ...now, owner: undefined }) }] : []),
   ];
   return (
     <List
       {...head}
-      state={q.isPending ? 'loading' : q.isError ? 'fault' : runs.length ? 'ready' : 'empty'}
+      state={q.isPending ? 'loading' : q.isError ? 'fault' : runs.length || (all.length && (trigger || owner)) ? 'ready' : 'empty'}
       onRetry={() => void q.refetch()}
       // the filter row shows only with rows, so an empty filtered list clears from here
       empty={{ title: noRuns(r, status), action: filters.length ? <Button onClick={() => show({})}>Clear filters</Button> : undefined }}
       actions={
         <Menu trigger={<IconButton icon="filter" label="Filter runs" on={filters.length > 0} data-phone />}>
           {RUN_STATUSES.map((x) => (
-            <MenuItem key={x} label={STATUS[x]} on={x === status} onSelect={() => show({ status: x === status ? undefined : x, range: r })} />
+            <MenuItem key={x} label={STATUS[x]} on={x === status} onSelect={() => show({ ...now, status: x === status ? undefined : x })} />
           ))}
           <MenuRule />
           {RUN_RANGES.map((x) => (
-            <MenuItem key={x} label={RANGE[x]} on={x === r} onSelect={() => show({ status, range: x })} />
+            <MenuItem key={x} label={RANGE[x]} on={x === r} onSelect={() => show({ ...now, range: x })} />
+          ))}
+          {triggers.length > 0 && <MenuRule />}
+          {triggers.map((x) => (
+            <MenuItem key={x} label={TRIGGER[x]} on={x === trigger} onSelect={() => show({ ...now, trigger: x === trigger ? undefined : x })} />
+          ))}
+          {owners.length > 0 && <MenuRule />}
+          {owners.map((o) => (
+            <OwnerItem key={o} id={o} on={actorKey(o) === actorKey(owner)} onSelect={() => show({ ...now, owner: actorKey(o) === actorKey(owner) ? undefined : o })} />
           ))}
         </Menu>
       }
@@ -64,6 +93,7 @@ export function RunsTab({ head, status, range, panel, href }: { head: Head; stat
           {runs.map((run) => (
             <RunRow key={run.id} run={run} href={href} selected={run.automation_id === open} />
           ))}
+          {!runs.length && <p className="row-sub rr-none">No matches</p>}
           {q.hasNextPage && (
             <div className="rr-more">
               <Button busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()}>
@@ -76,6 +106,11 @@ export function RunsTab({ head, status, range, panel, href }: { head: Head; stat
       panel={open ? <RoutinePanel key={open} id={open} onClose={() => void press('routines.closePanel', {})} /> : null}
     />
   );
+}
+
+function OwnerItem({ id, on, onSelect }: { id: string; on: boolean; onSelect: () => void }) {
+  const name = useName(id);
+  return <MenuItem label={name || 'An agent'} on={on} onSelect={onSelect} />;
 }
 
 function RunRow({ run, href, selected }: { run: AnyRun; href: (panel: string) => string; selected: boolean }) {

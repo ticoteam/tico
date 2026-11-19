@@ -555,7 +555,22 @@ export const listKey = (tabs: TaskTab[], i: number) => tabs[i]?.builtin ?? `c${i
 export interface ListTasks {
   tasks: OwnTask[];
   count: number;
+  /** The next page's cursor (`before`), when it has more. */
+  next?: string | null;
 }
+
+async function listPage(slug: string, tab: string, before: string, signal?: AbortSignal): Promise<ListTasks> {
+  const out = await api.get<{ tabs?: { key: string; count: number; ids: string[]; next?: string | null }[]; tasks?: OwnTask[] }>(
+    `/api/v2/bots/${at(slug)}/task-tabs/tasks?${q({ tab, ...(before ? { before } : {}) })}`,
+    { signal },
+  );
+  const one = out.tabs?.find((t) => t.key === tab);
+  const byId = new Map((out.tasks ?? []).map((t) => [t.id, t]));
+  return { tasks: (one?.ids ?? []).flatMap((id) => byId.get(id) ?? []), count: one?.count ?? 0, next: one?.next ?? null };
+}
+
+/** A list's next 200, after a page's `next` (Show more: ui bot-tasks read `next`). */
+export const listTasksAfter = (slug: string, tab: string, before: string) => listPage(slug, tab, before);
 
 /**
  * What one of its lists shows the viewer: the count and the newest 200 (GET /api/v2/bots/{bot}/task-tabs/tasks?tab=).
@@ -564,15 +579,7 @@ export interface ListTasks {
 export const listTasksQuery = (slug: string, tab: string) =>
   queryOptions({
     queryKey: keys.tasks.list({ bot_tab: slug, tab }),
-    queryFn: async ({ signal }): Promise<ListTasks> => {
-      const out = await api.get<{ tabs?: { key: string; count: number; ids: string[] }[]; tasks?: OwnTask[] }>(
-        `/api/v2/bots/${at(slug)}/task-tabs/tasks?${q({ tab })}`,
-        { signal },
-      );
-      const one = out.tabs?.find((t) => t.key === tab);
-      const byId = new Map((out.tasks ?? []).map((t) => [t.id, t]));
-      return { tasks: (one?.ids ?? []).flatMap((id) => byId.get(id) ?? []), count: one?.count ?? 0 };
-    },
+    queryFn: ({ signal }) => listPage(slug, tab, '', signal),
   });
 
 /** The layout as the server takes it back: a default keeps its own filter; Done recently has none. */
@@ -607,12 +614,26 @@ export async function saveTabs(slug: string, change: (tabs: TaskTab[]) => TaskTa
 export type AgentFile = BotFileList['files'][number];
 const FILE_PAGE = 20;
 
-/** The files it made or keeps, newest first (GET /api/v2/bots/{bot}/files), 20 a page. */
-export const agentFilesQuery = (slug: string) =>
+/** What narrows its files: words (every one, in the name, text or path) and a Library kind (page, document, image…). */
+export interface FilesNarrow {
+  q?: string;
+  kind?: string;
+}
+
+/** The files it made or keeps, newest first (GET /api/v2/bots/{bot}/files), 20 a page; `narrow` is the server's q and kind. */
+export const agentFilesQuery = (slug: string, narrow: FilesNarrow = {}) =>
   infiniteQueryOptions({
-    queryKey: ['team', 'files', slug] as const,
+    queryKey: narrow.q || narrow.kind ? (['team', 'files', slug, { q: narrow.q ?? '', kind: narrow.kind ?? '' }] as const) : (['team', 'files', slug] as const),
     queryFn: ({ signal, pageParam }) =>
-      api.get<BotFileList>(`/api/v2/bots/${at(slug)}/files?${q({ limit: FILE_PAGE, ...(pageParam ? { cursor: pageParam } : {}) })}`, { signal }),
+      api.get<BotFileList>(
+        `/api/v2/bots/${at(slug)}/files?${q({
+          limit: FILE_PAGE,
+          ...(pageParam ? { cursor: pageParam } : {}),
+          ...(narrow.q ? { q: narrow.q } : {}),
+          ...(narrow.kind ? { kind: narrow.kind } : {}),
+        })}`,
+        { signal },
+      ),
     initialPageParam: '',
     getNextPageParam: (last) => (last.has_more && last.next_cursor) || undefined,
     staleTime: QUIET_STALE_MS,
@@ -712,13 +733,20 @@ export function controlAgent(slug: string, action: 'pause' | 'resume') {
   });
 }
 
-/** Archive: its open tasks stay where they are (no successor). */
-export async function archiveAgent(slug: string) {
+/**
+ * Archive: its open tasks go to `successor` (another agent's id), else to the person who runs it. The revision is read
+ * before the row leaves the roster, and from the server when nothing on screen has it (Tico, search).
+ */
+export async function archiveAgent(slug: string, successor?: string) {
+  const known =
+    queryClient.getQueryData(agentsQuery.queryKey)?.find((r) => r.slug === slug)?.revision ??
+    queryClient.getQueryData(agentQuery(slug).queryKey)?.revision;
+  const revision = known ?? (await queryClient.fetchQuery(agentQuery(slug))).revision ?? 1;
   const out = await write({
     key: agentsQuery.queryKey,
     optimistic: (rows: AgentRow[] | undefined) => rows?.filter((r) => r.slug !== slug),
     send: (idempotencyKey) =>
-      api.post(`/api/v2/bots/${at(slug)}/archive`, { successor: null, expected_revision: revisionOf(slug) }, { idempotencyKey }),
+      api.post(`/api/v2/bots/${at(slug)}/archive`, { successor: successor || null, expected_revision: revision }, { idempotencyKey }),
   });
   directoryAgain();
   return out;
