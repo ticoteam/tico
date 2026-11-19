@@ -6,6 +6,9 @@ import type {
   PipelineSettingsList,
   PipelineSettingsResult,
   RequesterInput,
+  TaskRequester,
+  TaskRequesterAdded,
+  TaskRequesterList,
   Task,
   TaskList,
   TaskManyResult,
@@ -620,37 +623,14 @@ export async function mergeTask(id: string, into: string, owner?: string | null)
 // Who asked for a task has no live topic: read again after the person's own writes and on reconnect.
 quietRoot('requesters');
 
-// These match TaskRequester, TaskRequesterList and TaskRequesterAdded in PR 4467 (backend/api_schemas/roadmaps.py).
-// Switch to the `@/api/schema` types once it merges; today the schema types these answers as unknown.
-export interface Requester {
-  id: string;
-  kind: 'teammate' | 'external';
-  /** A teammate's actor id; null for someone outside the team. */
-  actor: string | null;
-  name: string;
-  email: string;
-  phone: string;
-  other: string;
-  organization: string;
-  note: string;
-  source: 'manual' | 'public_form' | 'inbox' | 'meeting';
-  /** 1 for an important requester. */
-  important: 0 | 1;
-  created_at: string;
-}
-
-export interface RequesterList {
-  requesters: Requester[];
-  /** Pass back as offset; null on the last page. */
-  next_offset: number | null;
-  my_requester_id: string | null;
-}
+/** Who asked: a teammate (`actor`) or someone outside the team; `important` is 1 for an important requester. */
+export type Requester = TaskRequester;
+/** One page, oldest first; `next_offset` goes back as offset and is null on the last page. */
+export type RequesterList = TaskRequesterList;
 
 /* The answer also carries a removal token, for a person outside the team who asked on a public page. A teammate
    removes with Remove, so the token is never read here: it is not kept, shown or handed on. */
-interface RequesterAdded {
-  id?: string;
-}
+type RequesterAdded = Pick<TaskRequesterAdded, 'id'>;
 
 /** The server's most per page (backend/roadmaps.py). */
 export const REQUESTERS_PAGE = 100;
