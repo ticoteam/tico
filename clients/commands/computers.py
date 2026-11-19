@@ -469,13 +469,20 @@ def health_findings(api, args):
     "Report a health finding as a Tico bug. The server writes the report from the finding and attaches the "
     "redacted diagnostics bundle: one ticket per problem, and a message on it when it happens again. With the team rule "
     "off it asks a person for an OK first.",
-    {"key": _s("The finding's key or signature, from its task")},
+    {"key": _s("The finding's key or signature (hm-...), from its task")},
+    required=("key",),
     writes=True,
 )
 def health_report(api, args):
-    key = args.get("key") or ""
+    key = str(args.get("key") or "").strip()
     if not key:
-        raise ValueError("name a finding's key")
+        # A plain refusal, not a raw ValueError: the key is on the finding's task, which a bot can read even though
+        # `tico health findings` is for people and BotOps.
+        return {
+            "refused": "health_report",
+            "detail": "Name the finding's key: its signature (hm-...) on the finding's task, "
+            "or a key from `tico health findings` (people and BotOps).",
+        }
     from urllib.parse import quote
 
     return api.post("health/findings/" + quote(key, safe="") + "/report", {}, key=_key(args))
@@ -595,8 +602,8 @@ HEALTH = (
     Command(
         "health report",
         "report a finding as a Tico bug: one ticket per problem, with the redacted diagnostics",
-        args=(Arg("key", positional=True, nargs="?"),),
-        example="tico health report runner-crash-loop",
+        args=(Arg("key", positional=True, metavar="finding-key"),),
+        example="tico health report hm-0123456789ab",
     ),
     Command(
         "health ready",
