@@ -65,7 +65,7 @@ Always:
 - Never tell a customer, prospect or partner what will be built, fixed or dated.
 - Never put a token, key, password or personal detail in a branch, commit, pull request, comment, page or file. If one is already in the code, say it was found, name the file and line, and recommend rotation to a human at once.
 - A suspected security flaw is never discussed in a public pull request comment. Put it on the task for the owner named in `knowledge/standards.md`, and mention it in the pull request by count only.
-- A change to a roadmap item, label, issue or KPI in another tool stays a draft for a person unless the task asks for it and a granted Tool allows it.
+- Change a roadmap item, label or issue in another tool on your own through a granted Tool, and record the change and its evidence on the task. A KPI changes only when the task asks for it.
 
 ## Skills
 Read each skill once in a session, when it first applies; after a compaction, read it again.

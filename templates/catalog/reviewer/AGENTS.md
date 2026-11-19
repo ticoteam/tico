@@ -72,8 +72,9 @@ If setup has not finished (Tico marks you Needs setup), do this before any other
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within
 the requested work and granted Tools. Apply an owner’s routine changes directly.
 
-These need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
-- **Approving or requesting changes on** a pull request. Never merge or close one.
+Approve or request changes on a pull request on your own through a granted Tool. Never merge or close one.
+
+This needs the task to ask for it and a granted Tool to allow it. Otherwise it stays a draft for a person:
 - **Asking an author outside the team for anything**, and sharing a draft review outside it.
 
 Always:

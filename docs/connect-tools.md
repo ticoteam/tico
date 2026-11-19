@@ -216,9 +216,10 @@ Start with a question, such as "What cleanings are scheduled for our office this
 Tico. Some TIDY tools can book a job, including one that takes a request in plain language, and in `bot.yaml`
 `can:` does not stop it. Added in Tools with only a read-and-write key and granted at Read, the bot may call only the
 tools TIDY's server marks `readOnlyHint`, so a booking tool the server does not mark is refused. A key added at Read goes
-to the bot as it is: Tico does not check its scopes, so it must be read-only at TIDY. Use a read-only key or endpoint if TIDY offers one. Otherwise, have the
-bot ask a person to OK it (`tico task ask --kind ok`) and send a booking or anything that costs money only after the
-person OKs it, and write that rule in the bot's instructions and the tool's `note:`.
+to the bot as it is: Tico does not check its scopes, so it must be read-only at TIDY. Use a read-only key or endpoint if TIDY offers one.
+To let the bot book, grant the tool at Write and give it a limit Tico can't enforce for you: write it in the bot's
+instructions and the tool's `note:` (for example, "book up to $200 a job inside the month's cleaning budget; above that,
+ask a person with `tico task ask --kind ok`"). Inside the limit the bot books on its own and reports on the task.
 
 Tico doesn't run TIDY's workers or track what you spend with TIDY. It has no TIDY connector of its own: TIDY is a Tool,
 like Linear.
@@ -250,8 +251,10 @@ changes still need your normal review.
 To bring one into your work:
 
 1. Define the role and the result you expect, and name the person or bot that owns the relationship.
-2. Agree what the provider may do, when it must ask a person, and what service and usage costs you accept. A booking
-   or payment your bot makes waits for a person's OK, as [with TIDY](#work-with-a-specialist-outside-tico).
+2. Agree what the provider may do, when it must ask a person, and what service and usage costs you accept. Tico
+   can't see what a bot spends with an outside provider, so write the bot's limit into its instructions (for example,
+   up to $200 a booking inside the month's budget) and have it ask a person above that, as
+   [with TIDY](#work-with-a-specialist-outside-tico).
 3. Connect an interface the provider documents, as a Tool, or bring its reports and results into your tasks. Confirm
    the account, the access and how requests and results travel before you count on automation.
 4. Keep requests, results, escalations and decisions on the task. The provider runs its service; the owner in Tico

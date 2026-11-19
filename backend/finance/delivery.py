@@ -1,9 +1,14 @@
 """Invoice emails: the send approval a reminder or an invoice goes out under, and how each send went.
 
-A reminder or invoice enters the shared frozen send queue when the finance action commits. Its exact MIME,
-recipients and invoice document hash are bound to a send approval which still needs an authorized preview and yes.
-The finance decision alone never approves unseen MIME. The shared connector dispatches after approval and undo;
-the Finance Owner reports the delivery outcome. A failed send raises one Needs-you for the finance admin, and an
+A reminder or invoice enters the shared frozen send queue when the finance action commits. An invoice's own email and
+a late-stage reminder (60 or 90 days) are held: their exact MIME, recipients and invoice document hash are bound to a
+send approval which still needs an authorized preview and yes, so the finance decision alone never approves unseen
+MIME, and so is any reminder once the invoice is 60 days late (kinds.remind_held). An early reminder (1, 7 or 30 days,
+kinds.EARLY_REMIND_STAGES) is Tico's fixed text with no consequence in it: it is decided by the company's sending policy
+as a money email (its ask about money emails, and for a bot's request the lint and second review, apply), so it goes
+out on its own where the policy lets the sender send, and waits for the policy's OK where it does not. Each stage's
+subject names the stage, so each is its own send. The shared connector dispatches after approval and undo;
+the delivery outcome is reported back. A failed send raises one Needs-you for the finance admin, and an
 unreported send raises another after a day. Operation retries preserve the original frozen send.
 
 The ask carries the email's intent (`intent`: addresses, subject, text, document and mailbox), resolved when the action is
@@ -62,7 +67,9 @@ def recipients(emails: list[Any] | tuple[Any, ...] | None) -> list[str]:
 
 
 def subject_of(stage: int | None, number: str) -> str:
-    return f"Invoice {number} is unpaid" if stage is not None else f"Invoice {number}"
+    """The email's subject. A reminder's names its stage, so each stage is its own email: the send queue keys an email
+    on its content, and the same text twice would reuse the earlier stage's send."""
+    return f"Invoice {number} is unpaid ({stage}-day reminder)" if stage is not None else f"Invoice {number}"
 
 
 def mailbox(c: Any) -> str:
@@ -99,9 +106,13 @@ def issue(
     box: str,
     document: Mapping[str, Any],
     ref: str,
+    held: bool = True,
 ) -> str:
-    """Freeze an invoice email for its own preview and approval; the finance decision never approves unseen MIME."""
-    if not tico.is_person(decider):
+    """Freeze an invoice email. Held (the default): for its own preview and approval, which a person decides; the
+    finance decision never approves unseen MIME. Not held (an early reminder's fixed text): the sending policy decides
+    it as it would any email from `requester`, with no decider. What the invoice row keeps to follow the send: the OK's
+    id when one was asked, else SENT_PREFIX and the queued send's id."""
+    if held and not tico.is_person(decider):
         raise FinanceError(DENIED, "an invoice email is approved by a person, not by a bot")
     return tico.queue_email(
         c,
@@ -111,7 +122,28 @@ def issue(
         text,
         ref,
         {"mailbox": box, "document_sha256": document_digest(document), "ref": ref},
+        held=held,
     )
+
+
+SENT_PREFIX = "send:"  # an invoice email the sending policy let go with no OK: "send:<email_sends id>"
+
+
+def asked(follow: str) -> bool:
+    """Whether an invoice email's follow id (issue) is an OK a person decides, not a send the policy let go."""
+    return bool(follow) and not follow.startswith(SENT_PREFIX)
+
+
+def follow_ids(c: Any, follow: str) -> tuple[str | None, str | None]:
+    """An invoice email's follow id (issue) as (the OK a person decides, the queued send's id). A send the policy let go
+    has no OK, unless the queue asked for one since (the policy tightened during its undo window): then that OK."""
+    if follow.startswith(SENT_PREFIX):
+        sid = follow.removeprefix(SENT_PREFIX)
+        row = c.execute("SELECT approval_id FROM email_sends WHERE id=?", (sid,)).fetchone()
+        return (str(row[0]) if row and row[0] else None), sid
+    row = c.execute("SELECT subject FROM ok_grants WHERE requirement_id=?", (follow,)).fetchone()
+    subject = str(row[0]) if row else ""
+    return follow, (subject.removeprefix("email_send:") if subject.startswith("email_send:") else None)
 
 
 def pending(c: Any, invoice_id: str | None = None) -> list[dict[str, Any]]:
@@ -130,20 +162,24 @@ def pending(c: Any, invoice_id: str | None = None) -> list[dict[str, Any]]:
         + " ORDER BY since",
         args,
     ).fetchall()
-    return [
-        {
-            "invoice_id": str(r[0]),
-            "number": str(r[1]),
-            "stage": r[2],
-            "approval_id": str(r[3]),
-            "to": recipients(json.loads(r[4] or "[]")),
-            "subject": subject_of(r[2], str(r[1])),
-            "text": str(r[5] or ""),
-            "reason": r[6],
-            "since": str(r[7] or ""),
-        }
-        for r in rows
-    ]
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        approval, send = follow_ids(c, str(r[3]))
+        out.append(
+            {
+                "invoice_id": str(r[0]),
+                "number": str(r[1]),
+                "stage": r[2],
+                "approval_id": approval,  # the OK to send it under; None when the sending policy let it go
+                "send_id": send,
+                "to": recipients(json.loads(r[4] or "[]")),
+                "subject": subject_of(r[2], str(r[1])),
+                "text": str(r[5] or ""),
+                "reason": r[6],
+                "since": str(r[7] or ""),
+            }
+        )
+    return out
 
 
 def _which(stage: int | None) -> str:
@@ -246,6 +282,9 @@ def watch(ctx: Ctx) -> int:
 __all__ = [
     "FINANCE_OWNER",
     "MAIL",
+    "SENT_PREFIX",
+    "asked",
+    "follow_ids",
     "SEND",
     "digest",
     "document_digest",

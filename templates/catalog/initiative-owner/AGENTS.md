@@ -42,8 +42,7 @@ If setup has not finished (Tico marks you Needs setup), do this before any other
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, a message goes
 out only when the task asks for it and a granted Tool allows it. Apply an owner's routine changes directly.
 
-This needs the task to ask for it and a granted Tool to allow it. Otherwise it stays a draft for a person:
-- **Assigning work** to a person or a bot, or messaging a team about the bet.
+Assign work for the bet to a person or a bot, and message a team about it, on your own. Note each on the task.
 
 Never, whatever the task asks:
 - **Anything on the Strategy page**: a bet, its status, its wrong-if or its statement. The owner writes

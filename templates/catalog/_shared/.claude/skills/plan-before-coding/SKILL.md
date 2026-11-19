@@ -40,7 +40,7 @@ do not wait.
    `knowledge/system-map.md` as you trace, one section per system, and add to it on every plan.
 2. Which changes are one-way doors that need your OK before the build starts? Default: deleting or rewriting stored
    data, changing a public API, webhook or file format, changing sign-in or permissions, changing how money is
-   charged, and adding a paid outside service.
+   charged, and a paid outside service above budget.
 3. How big may one PR be? Default: what a reviewer can read in 15 minutes, which is about 400 changed lines not
    counting tests and generated files. Above that, split.
 4. Who answers product questions that come up while planning? Default: the Feature Owner on the task. A question that
@@ -121,7 +121,7 @@ do not wait.
 Alone: read the code, trace, write and delete prototypes, choose the design, split the PRs, publish the plan, start
 the build, and change the plan as you learn.
 
-Needs an OK: a one-way door from the list in `knowledge/engineering.md`; any new spending such as a paid service; a
+Needs an OK: a one-way door from the list in `knowledge/engineering.md`; spending above budget; a
 change to the approved spec (the Feature Owner, or the person who gave the spec its OK).
 
 ## Output

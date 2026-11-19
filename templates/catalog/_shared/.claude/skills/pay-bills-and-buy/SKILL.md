@@ -48,9 +48,10 @@ save the answers there with the date, and work on the defaults until they reply.
 1. **Which budgets do I pay and buy from?** Default: the budgets set in Tico Finance
    (`tico finance report budget_vs_actual`). A line with no budget has no room for a new purchase; a recurring bill
    from a known vendor within 10% of its usual amount is still paid.
-2. **May I pay without a person's OK on each payment?** Out of the box Tico asks a finance admin for every payment a
-   bot makes, and the owner for a payment over 1,000.00. Recommend: turn the first rule off so that approved, matched
-   bills to verified payees inside budget are paid on their own, and set the owner's limit from question 3.
+2. **May I pay without a person's OK on each payment?** Out of the box, yes: a bot pays on its own inside budget up to
+   1,000.00 a payment ("Bot payments over $1,000"). Above that, and for any payment over 1,000.00 ("Payments over
+   $1,000"), Tico asks; a new payee or changed bank details always ask a finance admin. Recommend: keep it, and set
+   the bot limit from question 3.
 3. **Approval bands.** Default: computed from the last 12 months of real purchases (`references/buying.md`), shown to
    the owner once and reviewed yearly. Until confirmed: band 1 to 200.00, band 2 to 1,000.00, band 3 above that,
    and Tico asks the owner for any payment or PO over 1,000.00.
