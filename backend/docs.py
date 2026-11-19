@@ -200,6 +200,55 @@ def label_names(c, actors):
     return lookup(c, {a for a in actors if a})
 
 
+# ------------------------------------------------------------------ parsed docs for search
+# Search reads every doc that matches any query word, and parsing them all again took a second on TIDY (Nov 19, 595
+# docs, 8.5 MB). A doc's parse (manual.page_text, less what search does not read) is kept per version, up to
+# PARSED_CHARS of body text, the oldest used dropped first. It takes about seven times its body in memory.
+PARSED_CHARS = 16_000_000
+_parsed = {}  # (id, version, updated_at, path, title) -> (page, body length), oldest use first
+_parsed_size = [0]
+_parsed_lock = threading.Lock()
+
+
+def _search_page(path, body, title):
+    """manual.page_text of a doc as search reads it: its sections and title words (not the whole body again, nor each
+    section's word set, which `sorted_words` holds too)."""
+    page = manual.page_text(path, body, title)
+    del page["body"]
+    for section in page["sections"]:
+        del section["words"]
+    return page
+
+
+def parsed_pages(c, rows):
+    """[(row, page)] for docs rows of `id, path, title, version, updated_at`, in their order: each doc parsed for
+    search once per version. Every write of a doc's body moves its version and updated_at, so a kept page is that
+    body's. The bodies of docs not kept yet are read in one query a chunk (a doc written in between reads as its newer
+    row)."""
+    key = lambda r: (r["id"], r["version"], r["updated_at"], r["path"], r["title"])
+    found = {}
+    with _parsed_lock:
+        for r in rows:
+            kept = _parsed.pop(key(r), None)
+            if kept is not None:
+                _parsed[key(r)] = kept  # back at the newest end
+                found[r["id"]] = (r, kept[0])
+    missing = [r["id"] for r in rows if r["id"] not in found]
+    for part in H.chunks(missing):
+        for r in c.execute(
+            "SELECT id,path,title,version,updated_at,body FROM docs WHERE id IN (%s)" % ",".join("?" * len(part)), part
+        ):
+            page = _search_page(r["path"], r["body"], r["title"])
+            found[r["id"]] = (r, page)
+            with _parsed_lock:
+                if key(r) not in _parsed:
+                    _parsed[key(r)] = (page, len(r["body"]))
+                    _parsed_size[0] += len(r["body"])
+                while _parsed_size[0] > PARSED_CHARS and len(_parsed) > 1:
+                    _parsed_size[0] -= _parsed.pop(next(iter(_parsed)))[1]
+    return [found[r["id"]] for r in rows if r["id"] in found]
+
+
 # ------------------------------------------------------------------ the store
 def has_fts(c):
     return c.execute("SELECT 1 FROM sqlite_master WHERE name='docs_fts'").fetchone() is not None
@@ -1027,13 +1076,12 @@ class Docs:
         weights = manual.query_weights(tokens)
         # All candidate titles use one glossary snapshot, rather than restatting every manual file per row.
         glossary = manual.pages().get('glossary', {}).get('body', '')
-        sql, params = "SELECT id,path,title,body FROM docs WHERE archived=0", ()
+        sql, params = "SELECT id,path,title,version,updated_at FROM docs WHERE archived=0", ()
         if has_fts(c):
             expression = " OR ".join('"' + manual._stem(token) + '"*' for token in tokens)
             sql += " AND rowid IN (SELECT rowid FROM docs_fts WHERE docs_fts MATCH ?)"
             params = (expression,)
-        for row in c.execute(sql, params):
-            page = manual.page_text(row["path"], row["body"], row["title"])
+        for row, page in parsed_pages(c, c.execute(sql, params).fetchall()):
             best = manual.best_section(page, tokens, weights)
             if not best:
                 continue
