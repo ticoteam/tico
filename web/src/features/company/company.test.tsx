@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { queryClient } from '@/data';
 import type { CompanyFloor, GoalTree, Kpi, KpiDetail, ProductList } from '@/api/schema';
 import { CompanyPage } from './CompanyPage';
+import { goalLink } from './exports';
 import { ProductsPage } from './ProductsPage';
 import { brandQuery, floorQuery, goalsTreeQuery, kpiQuery, productsQuery, strategyQuery, strategyVersionsQuery, type Brand, type Strategy } from './queries';
 import { RiskPage } from './RiskPage';
@@ -57,7 +58,26 @@ const floor = {
   ],
 } as unknown as CompanyFloor;
 
-describe('Company', () => {
+describe('Company @s248 @s250', () => {
+  it('opens a stage with its owner and its tasks, the ones waiting on you first @s270', async () => {
+    const tasks = {
+      tasks: [
+        { id: 't1', number: 4, title: 'Check the gift notes', turn: null, late: null, stage_since: null },
+        { id: 't2', number: 5, title: 'Approve the spring kit', turn: { state: 'person', who: 'human:me' }, late: null, stage_since: null },
+      ],
+      cursor: '',
+    };
+    serve((url) => (url.startsWith('/api/v2/tasks?') ? { status: 200, body: tasks } : nothing()));
+    queryClient.setQueryData(['directory'], { actors: [], byId: { 'bot:builder': { id: 'bot:builder', kind: 'agent', name: 'Builder' } } });
+    queryClient.setQueryData(floorQuery.queryKey, floor);
+    show(<CompanyPage search={{ panel: 'stage:p1:s2' }} />, '/company?panel=stage:p1:s2');
+    const panel = await screen.findByRole('complementary', { name: 'Review' });
+    expect(within(panel).getByText('Owner').nextElementSibling?.textContent).toContain('Builder');
+    const rows = await within(panel).findAllByRole('link', { name: /Check the gift notes|Approve the spring kit/ });
+    expect(rows.map((r) => r.textContent)).toEqual(['Approve the spring kit', 'Check the gift notes']);
+    expect(href(within(panel).getByRole('link', { name: 'All tasks' }))).toBe('/tasks/p1');
+  });
+
   it('draws each stage on the Floor, opening its tasks in the panel', async () => {
     serve(nothing);
     queryClient.setQueryData(floorQuery.queryKey, floor);
@@ -148,7 +168,7 @@ const tree = {
 const detail = { kpi, readings: [kpi.latest], links: [{ goal_id: 'g1', goal_title: 'Grow signups', kind: 'improve', target: 40, status: 'ok', target_label: '→ 40 by Dec 31' }], checkins: [], definitions: [], proposals: [], may_edit: true, may_log: true } as unknown as KpiDetail;
 
 describe('Goals', () => {
-  it('lists each goal with its KPIs, each opening its panel', async () => {
+  it('lists each goal with its KPIs, each opening its panel, as the tree only @s310 @s337 @s338 @s339', async () => {
     serve(nothing);
     queryClient.setQueryData(goalsTreeQuery.queryKey, tree);
     show(<StrategyPage tab="goals" />, '/company/strategy/goals');
@@ -156,9 +176,25 @@ describe('Goals', () => {
     expect(href(goal)).toBe('/company/strategy/goals?panel=goal:g1');
     expect(screen.getByText('Behind')).toBeTruthy();
     expect(href(screen.getByText('Weekly signups'))).toBe('/company/strategy/goals?panel=kpi:k1');
+    // the old Loops and Journey views are gone: Goals is the tree, with no view switch
+    expect(screen.queryByText(/Loops|Journey/)).toBeNull();
   });
 
-  it('shows a new reading at once with who recorded it, and takes it back when refused', async () => {
+  it('opens a goal from a teammate page in its panel: owner, KPIs and check-ins @s311 @s363 @s365 @s664', async () => {
+    const one = { goal: { ...tree.goals[0], checkins: [{ created_at: '2026-11-12T10:00:00Z', body: 'Signups held at 12 this week.' }] } };
+    serve((url) => (url.includes('/api/v2/goals/g1') ? { status: 200, body: one } : nothing()));
+    queryClient.setQueryData(goalsTreeQuery.queryKey, tree);
+    const link = goalLink('g1');
+    expect(link.href).toBe('/company/strategy/goals?panel=goal%3Ag1');
+    show(<StrategyPage tab="goals" search={link.search} />, link.href);
+    const panel = await screen.findByRole('complementary', { name: 'Grow signups' });
+    expect(within(panel).getByRole('combobox', { name: 'Owner' })).toBeTruthy();
+    expect(href(within(within(panel).getByRole('region', { name: 'KPIs' })).getByText('Weekly signups'))).toBe('/company/strategy/goals?panel=kpi:k1');
+    expect(await within(panel).findByText('Signups held at 12 this week.')).toBeTruthy();
+    expect(within(panel).getByRole('button', { name: 'Mark done' })).toBeTruthy();
+  });
+
+  it('shows a new reading at once with who recorded it, and takes it back when refused @s364', async () => {
     let refuse: (r: Reply) => void = () => {};
     serve((url, method) => {
       if (method === 'POST') return new Promise<Reply>((ok) => (refuse = ok));
@@ -275,7 +311,8 @@ describe('Tabs', () => {
     await screen.findByText('Grow signups');
     const strategy = tabHrefs('Strategy');
     expect(strategy).toHaveLength(6);
-    expect(strategy).toContain('/company/finance?tab=budgets');
+    // Budget is the agents' spend limits, in Usage (old #/strategy/budget)
+    expect(strategy).toContain('/company/usage?view=limits');
     cleanup();
     show(<RiskPage search={{}} />, '/company/risk');
     await screen.findByText('No risks yet');

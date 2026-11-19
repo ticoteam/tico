@@ -11,12 +11,12 @@ import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { toast } from '@/kit/Toast';
 import { EmptyRow, Table } from '@/kit/Table';
-import { List, PageMore, Section, SidePanel, type PageState } from '@/pagekinds';
+import { List, PageMore, Section, SidePanel } from '@/pagekinds';
 import { plural, useFinanceHead } from './head';
 import { cash, count } from './model';
 import { CardDialog, ConfirmDialog, ConnectBooksDialog, ConnectKeyDialog, DefaultsDialog, ShownOnce, TransferDialog, useMay, WebhookDialog } from './dialogs';
 import { BillsAddressDialog, copied, ImportDialog, RuleDialog, ShareDialog, StatementDialog, ViewAsDialog, type RuleRow } from './forms';
-import { Meter, usePhone, usePress, useViewAs, Who } from './parts';
+import { Meter, readState, usePhone, usePress, useViewAs, Who } from './parts';
 import {
   accessQuery,
   BOOKS,
@@ -44,8 +44,7 @@ import type { FinanceTab } from './search';
 /* The rest of Finance, each a list read from its endpoint and drawn as the mock draws it, with the old app's dialogs
    for a transfer, a card, connecting a source, the books, Stripe's webhook and the access defaults. */
 
-type Read = { isPending: boolean; isError: boolean; refetch: () => unknown };
-const stateOf = (q: Read, empty = false): PageState => (q.isPending ? 'loading' : q.isError ? 'fault' : empty ? 'empty' : 'ready');
+type Read = { isPending: boolean; isError: boolean; error: unknown; refetch: () => unknown };
 
 function Page({
   q,
@@ -64,7 +63,7 @@ function Page({
 }) {
   const head = useFinanceHead();
   return (
-    <List {...head} state={stateOf(q, !!empty)} empty={empty} onRetry={() => void q.refetch()} actions={actions} more={more || undefined} panel={panel || undefined} sections={children} />
+    <List {...head} state={readState(q, !!empty)} empty={empty} onRetry={() => void q.refetch()} actions={actions} more={more || undefined} panel={panel || undefined} sections={children} />
   );
 }
 

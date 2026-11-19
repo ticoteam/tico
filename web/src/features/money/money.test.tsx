@@ -2,6 +2,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useSearch } from '@tanstack/react-router';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { run } from '@/actions';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { FinancePage } from './Finance';
@@ -37,6 +38,14 @@ function show(page: 'finance' | 'growth', at: string) {
   return router;
 }
 const searchOf = (href: string | null) => Object.fromEntries(new URL(href ?? '', 'http://x').searchParams);
+/** Picks an option from a Select. */
+async function pick(box: HTMLElement, name: RegExp) {
+  fireEvent.click(box);
+  const option = await screen.findByRole('option', { name });
+  fireEvent.pointerDown(option, { pointerType: 'mouse' });
+  fireEvent.click(option);
+}
+const OWNER = { can_edit_defaults: false, teammates: [{ teammate: 'human:me', kind: 'human', default: 'everything', rights: [] }] };
 
 const COL = (start: string, state: 'past' | 'current' | 'future') => ({ start, end: start, label: start, state });
 const ROW = (account_id: string, name: string, type: string, section: Pnl['rows'][number]['section'], code: string, actual: number[]) => ({
@@ -107,21 +116,32 @@ describe('Finance @s398 @s403 @s399', () => {
     expect(await screen.findByRole('heading', { name: 'Finance did not load' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
+
+  it('a tab outside your view says you have no access, without Try again', async () => {
+    serve(() => ({ status: 403, body: { error: { code: 'forbidden' } } }));
+    show('finance', '/company/finance?tab=balance');
+    expect(await screen.findByText("You don't have access to this page")).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
 });
 
 describe('Budgets @s404 @s463', () => {
   const budget: Budget = { id: 'b1', name: 'Tools', account_id: 'acc_soft', parent_id: null, period: 'month', active: true, state: { amount: 50000, actual: 20000 } };
+  const ym = budgetDay().slice(0, 7);
+  const seed = (rows: Pnl['rows'] = []) => {
+    queryClient.setQueryData(budgetsKey(budgetDay()), { budgets: [budget] });
+    queryClient.setQueryData(pnlQuery({ ...monthSpan(ym), period: 'month', basis: 'accrual' }).queryKey, PNL([], rows));
+  };
 
   it('a new amount shows at once and is taken back when refused', async () => {
     let refuse!: () => void;
     serve((url, method) => {
       if (method === 'POST') return new Promise<Reply>((r) => (refuse = () => r(ok({ status: 'refused', code: 'over_limit', reason: 'Over the limit' }))));
       if (url.includes('budget_vs_actual')) return ok({ columns: [], budgets: [] });
+      if (url.endsWith('/finance/access')) return ok(OWNER);
       return ok({});
     });
-    const ym = budgetDay().slice(0, 7);
-    queryClient.setQueryData(budgetsKey(budgetDay()), { budgets: [budget] });
-    queryClient.setQueryData(pnlQuery({ ...monthSpan(ym), period: 'month', basis: 'accrual' }).queryKey, PNL([], []));
+    seed();
     show('finance', '/company/finance?tab=budgets&panel=budget:b1');
 
     const row = (await screen.findByRole('link', { name: 'Tools' })).closest('tr')!;
@@ -137,6 +157,81 @@ describe('Budgets @s404 @s463', () => {
     expect(within(row).queryByText('$900')).toBeNull();
     expect(await screen.findByText("Couldn't save")).toBeTruthy();
     expect((screen.getByRole('textbox', { name: /^Budget for / }) as HTMLInputElement).value).toBe('500');
+  });
+
+  it('a change pressed again after a lost answer sends the same key; after a refusal, a new one', async () => {
+    const sent: (string | null)[] = [];
+    const answers: ('lost' | 'refused')[] = ['lost', 'refused', 'lost'];
+    let release = () => {};
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } });
+      if (init?.method === 'POST') {
+        sent.push(new Headers(init.headers).get('Idempotency-Key'));
+        // Each answer waits for the test, so the change shows first.
+        await new Promise<void>((r) => (release = r));
+        if (answers[sent.length - 1] === 'lost') throw new TypeError('connection reset');
+        return json({ kind: 'budget_update', status: 'refused', code: 'over_limit', reason: 'Over the limit' });
+      }
+      if (String(url).includes('budget_vs_actual')) return json({ columns: [], budgets: [] });
+      if (String(url).endsWith('/finance/access')) return json(OWNER);
+      return json({});
+    });
+    seed();
+    show('finance', '/company/finance?tab=budgets&panel=budget:b1');
+    const press = async (n: number) => {
+      const field = await screen.findByRole('textbox', { name: /^Budget for / });
+      await waitFor(() => expect((field as HTMLInputElement).disabled).toBe(false));
+      fireEvent.change(field, { target: { value: '900' } });
+      fireEvent.submit(field.closest('form')!);
+      await waitFor(() => expect(sent).toHaveLength(n));
+      await waitFor(() => expect((screen.getByRole('textbox', { name: /^Budget for / }) as HTMLInputElement).value).toBe('900'));
+      release();
+      await waitFor(() => expect((screen.getByRole('textbox', { name: /^Budget for / }) as HTMLInputElement).value).toBe('500'));
+    };
+    await press(1);
+    await press(2);
+    expect(sent[1]).toBe(sent[0]);
+    await press(3);
+    expect(sent[2]).not.toBe(sent[1]);
+  });
+
+  it('without the budgets right a budget is read only', async () => {
+    serve((url) => {
+      if (url.includes('budget_vs_actual')) return ok({ columns: [], budgets: [] });
+      if (url.endsWith('/finance/access')) return ok({ teammates: [{ teammate: 'human:me', kind: 'human', default: 'team_expenses', rights: [] }] });
+      return ok({});
+    });
+    seed();
+    show('finance', '/company/finance?tab=budgets&panel=budget:b1');
+    expect(await screen.findByRole('complementary', { name: 'Tools' })).toBeTruthy();
+    await waitFor(() => expect(queryClient.getQueryData(['finance', 'access'])).toBeTruthy());
+    expect((screen.getByRole('textbox', { name: /^Budget for / }) as HTMLInputElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'New budget' })).toBeNull();
+  });
+
+  it('a new budget for a line is added from its panel @s462', async () => {
+    const posted: Record<string, unknown>[] = [];
+    serve((url, method, body) => {
+      if (method === 'POST') {
+        posted.push(body);
+        return ok({ kind: 'budget_create', status: 'committed' });
+      }
+      if (url.includes('budget_vs_actual')) return ok({ columns: [], budgets: [] });
+      if (url.endsWith('/finance/access')) return ok(OWNER);
+      return ok({ budgets: [budget] });
+    });
+    seed([ROW('acc_ads', 'Ads', 'expense', 'operating', '6200', [0])]);
+    show('finance', '/company/finance?tab=budgets');
+    fireEvent.click(await screen.findByRole('button', { name: 'New budget' }));
+    const panel = await screen.findByRole('complementary', { name: 'New budget' });
+    await pick(within(panel).getByRole('combobox', { name: 'Line' }), /^Ads$/);
+    expect((within(panel).getByRole('textbox', { name: 'Name' }) as HTMLInputElement).value).toBe('Ads');
+    fireEvent.change(within(panel).getByRole('textbox', { name: 'Amount a month' }), { target: { value: '300' } });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Add budget' }));
+    await waitFor(() =>
+      expect(posted).toEqual([{ kind: 'budget_create', payload: { name: 'Ads', period: 'month', account_id: 'acc_ads', amount: 30000, effective_from: `${ym}-01` } }]),
+    );
   });
 });
 
@@ -271,7 +366,7 @@ describe('Finance books @s420 @s455 @s456 @s458 @s459 @s464 @s465', () => {
   const tx = (id: string, name: string, amount: number) => ({ id, kind: 'entry', entry_id: `e_${id}`, date: '2026-10-02', description: name, account: 'Software', amount });
   const cursors = (urls: string[]) => urls.filter((u) => u.includes('cursor=')).map((u) => new URL(u, 'http://x').searchParams.get('cursor'));
 
-  it('transactions past the first page load as the last row is drawn', async () => {
+  it('transactions past the first page load as the last row is drawn @s405', async () => {
     const urls: string[] = [];
     serve((url) => {
       urls.push(url);
@@ -330,7 +425,7 @@ describe('Finance books @s420 @s455 @s456 @s458 @s459 @s464 @s465', () => {
     expect(await screen.findByText('Saved')).toBeTruthy();
   });
 
-  it('a rule is deleted from its row', async () => {
+  it('a rule is deleted from its row @s410', async () => {
     const posted: Record<string, unknown>[] = [];
     serve((url, method, body) => {
       if (method === 'POST') {
@@ -402,3 +497,191 @@ describe('Finance books @s420 @s455 @s456 @s458 @s459 @s464 @s465', () => {
     expect(screen.queryByRole('button', { name: 'More for Ink Co' })).toBeNull();
   });
 });
+
+describe('Finance tabs and sources', () => {
+  const access = {
+    can_edit_defaults: true,
+    can_view_as: true,
+    defaults: { manager: 'none', manager_payroll: 'totals', member: 'none' },
+    teammates: [
+      { teammate: 'human:me', kind: 'human', default: 'everything', rights: [] },
+      { teammate: 'human:lee', kind: 'human', default: 'team_expenses', rights: ['approve'] },
+      { teammate: 'human:sam', kind: 'human', default: 'none', rights: [] },
+    ],
+  };
+  const acct = (name: string, code: string, balance: number) => ({ name, code, balance });
+
+  it('the balance sheet sets assets beside liabilities and equity, with totals @s408', async () => {
+    serve((url) => {
+      if (url.endsWith('/finance/access')) return ok(access);
+      if (url.includes('/finance/balance-sheet'))
+        return ok({ as_of: '2026-10-31', assets: [acct('Checking', '1000', 500000)], liabilities: [acct('Card', '2000', 100000)], equity: [acct('Retained', '3000', 400000)] });
+      return { status: 404, body: {} };
+    });
+    show('finance', '/company/finance?tab=balance');
+    const assets = await screen.findByRole('table', { name: 'Assets' });
+    expect(within(assets).getByText('Total assets').closest('tr')!.textContent).toContain('$5,000');
+    const other = screen.getByRole('table', { name: 'Liabilities and equity' });
+    expect(within(other).getByText('Total liabilities').closest('tr')!.textContent).toContain('$1,000');
+    expect(within(other).getByText('Liabilities and Equity').closest('tr')!.textContent).toContain('$5,000');
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    expect(await screen.findByRole('menuitem', { name: 'Import history' })).toBeTruthy();
+  });
+
+  it('sales tax splits what is due from what is filed @s409', async () => {
+    const row = (code: string, period: string, due: number, collected: number) => ({ code, jurisdiction: code, period, taxable_sales: 100000, due, due_on: '2026-11-20', tax_collected: collected, tax_remitted: null });
+    serve((url) => {
+      if (url.endsWith('/finance/access')) return ok(access);
+      if (url.includes('/finance/tax/sales-tax')) return ok({ rows: [row('North', '2026-10', 7000, 7000), row('South', '2026-09', 0, 5000)] });
+      return { status: 404, body: {} };
+    });
+    show('finance', '/company/finance?tab=tax');
+    const due = await screen.findByRole('table', { name: 'Due' });
+    expect(within(due).getByText('North').closest('tr')!.textContent).toContain('$70');
+    const filed = screen.getByRole('table', { name: 'Filed' });
+    expect(within(filed).getByText('South').closest('tr')!.textContent).toContain('$50');
+  });
+
+  it('cards list spend against limit, and a new card is issued from a budget @s411 @s460', async () => {
+    const posted: Record<string, unknown>[] = [];
+    serve((url, method, body) => {
+      if (method === 'POST') {
+        posted.push(body);
+        return ok({ kind: 'card_create', status: 'committed' });
+      }
+      if (url.endsWith('/finance/access')) return ok(access);
+      if (url.includes('/finance/cards')) return ok({ cards: [{ id: 'c1', nickname: 'Travel', holder: 'Lee', last4: '4242', spent: 20000, limit: 100000, status: 'active' }] });
+      if (url.includes('/finance/budgets')) return ok({ budgets: [{ id: 'b1', name: 'Tools', account_id: 'acc_soft', parent_id: null, period: 'month', active: true, state: { amount: 50000 } }] });
+      if (url.endsWith('/finance/mercury-users')) return ok({ users: [{ id: 'u1', name: 'Lee' }] });
+      return { status: 404, body: {} };
+    });
+    show('finance', '/company/finance?tab=cards');
+    const cards = await screen.findByRole('table', { name: 'Cards' });
+    expect(within(cards).getByText('Travel').closest('tr')!.textContent).toContain('$1,000');
+    fireEvent.click(await screen.findByRole('button', { name: 'New card' }));
+    const dialog = await screen.findByRole('dialog', { name: 'New card' });
+    await waitFor(() => expect(within(dialog).getByRole('combobox', { name: 'Mercury user' }).textContent).toContain('Lee'));
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Limit / mo' }), { target: { value: '250' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(posted).toEqual([{ kind: 'card_create', payload: { holder: 'human:me', budget_id: 'b1', amount: 25000, provider_user_id: 'u1' } }]));
+  });
+
+  it('access lists who sees what and who approves; defaults are saved from Edit defaults @s413 @s457', async () => {
+    const posted: Record<string, unknown>[] = [];
+    serve((url, method, body) => {
+      if (method === 'POST') {
+        posted.push(body);
+        return ok({ kind: 'view_defaults_set', status: 'committed' });
+      }
+      if (url.endsWith('/finance/access')) return ok(access);
+      return { status: 404, body: {} };
+    });
+    show('finance', '/company/finance?tab=access');
+    const table = await screen.findByRole('table', { name: 'Access' });
+    expect(within(table).getByText("Their team's lines").closest('tr')!.textContent).toContain('Yes');
+    expect(screen.getByText('1 other sees nothing')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'View as' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit defaults' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit defaults' });
+    await pick(within(dialog).getByRole('combobox', { name: 'Managers' }), /^Own expenses$/);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(posted).toEqual([{ kind: 'view_defaults_set', payload: { manager: 'own_expenses' } }]));
+  });
+
+  it('a pasted key is stored on Tools, then the source connected with it; the key stays out of the cache @s450', async () => {
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    serve((url, method, body) => {
+      if (method === 'POST') {
+        calls.push({ url: new URL(url, 'http://x').pathname, body });
+        if (url.endsWith('/api-tools')) return ok({ id: 'tool1' });
+        if (url.endsWith('/keys')) return ok({ id: 'k1' });
+        return ok({ status: 'committed' });
+      }
+      if (url.endsWith('/finance/access')) return ok(access);
+      if (url.endsWith('/tool-index')) return ok({ rows: [] });
+      if (url.endsWith('/finance/sources')) return ok({ groups: [] });
+      return { status: 404, body: {} };
+    });
+    show('finance', '/company/finance?tab=sources');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add source' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Brex' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Connect Brex' });
+    fireEvent.change(await within(dialog).findByLabelText('API token'), { target: { value: 'made-up-token' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Connect' }));
+    expect(await screen.findByText('Brex connected')).toBeTruthy();
+    expect(calls.map((c) => c.url)).toEqual(['/api/v2/api-tools', '/api/v2/api-tools/tool1/keys', '/api/v2/finance/connections']);
+    expect(calls[1]!.body).toMatchObject({ value: 'made-up-token', access_level: 'read' });
+    expect(calls[2]!.body).toMatchObject({ provider: 'brex', credential_id: 'k1', name: 'Brex' });
+    expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => q.state.data))).not.toContain('made-up-token');
+  });
+
+  it('QuickBooks is signed in to on its own page; no address back says it did not answer @s451', async () => {
+    const posted: { url: string; body: Record<string, unknown> }[] = [];
+    serve((url, method, body) => {
+      if (method === 'POST') {
+        posted.push({ url, body });
+        return ok({});
+      }
+      if (url.endsWith('/finance/access')) return ok(access);
+      if (url.endsWith('/finance/sources')) return ok({ groups: [] });
+      return { status: 404, body: {} };
+    });
+    show('finance', '/company/finance?tab=sources');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add source' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'QuickBooks' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Connect QuickBooks' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Continue' }));
+    expect(await within(dialog).findByText('QuickBooks did not answer')).toBeTruthy();
+    expect(posted).toEqual([{ url: expect.stringContaining('/finance/books/connect') as string, body: { provider: 'quickbooks' } }]);
+  });
+
+  it('the books are used, and a source disconnected, each after a confirm @s412 @s452', async () => {
+    const posted: Record<string, unknown>[] = [];
+    serve((url, method, body) => {
+      if (method === 'POST') {
+        posted.push(body);
+        return ok({ kind: body.kind, status: 'committed' });
+      }
+      if (url.endsWith('/finance/access')) return ok(access);
+      if (url.endsWith('/triggers')) return ok({ triggers: [] });
+      if (url.endsWith('/finance/sources'))
+        return ok({
+          groups: [
+            { group: 'banks', name: 'Banks', count: 1, rows: [{ id: 'cb', kind: 'connection', name: 'Bank feed', provider: 'mercury', sync: { status: 'active' } }] },
+            { group: 'accounting', name: 'Accounting', count: 1, rows: [{ id: 'qb', kind: 'connection', name: 'Ledger books', provider: 'quickbooks', mirror: 'native', sync: { status: 'active' } }] },
+          ],
+        });
+      return { status: 404, body: {} };
+    });
+    show('finance', '/company/finance?tab=sources');
+    const table = await screen.findByRole('table', { name: 'Sources' });
+    expect(within(table).getByText('Bank feed').closest('tr')!.textContent).toContain('Banks');
+    fireEvent.click(screen.getByRole('button', { name: 'More for Ledger books' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Use as books' }));
+    const use = await screen.findByRole('dialog', { name: 'Use QuickBooks as the books' });
+    fireEvent.click(within(use).getByRole('button', { name: 'Use as books' }));
+    await waitFor(() => expect(posted).toEqual([{ kind: 'mirror_start', payload: { connection_id: 'qb' } }]));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Use QuickBooks as the books' })).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'More for Bank feed' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Disconnect Bank feed' }));
+    const off = await screen.findByRole('dialog', { name: 'Disconnect Bank feed' });
+    fireEvent.click(within(off).getByRole('button', { name: 'Disconnect' }));
+    await waitFor(() => expect(posted[1]).toEqual({ kind: 'connection_disconnect', payload: { connection_id: 'cb' } }));
+  });
+
+  it("money, secrets, sign-ins and who sees what stay the person's own press", async () => {
+    const closed: [string, unknown][] = [
+      ['finance.transfer', { from: 'a1', to: 'a2', amount: 10 }],
+      ['finance.newCard', { holder: 'human:me', budget: 'b1', amount: 10, user: 'u1' }],
+      ['finance.connect', { provider: 'brex', token: 'made-up' }],
+      ['finance.connectBooks', { provider: 'xero' }],
+      ['finance.disconnect', { connection: 'c1' }],
+      ['finance.setDefaults', { member: 'own_expenses' }],
+      ['budget.addRow', { name: 'Ads', line: 'acc_ads', amount: 10 }],
+      ['budget.updateRow', { budget: 'b1', amount: 10 }],
+      ['budget.removeRow', { budget: 'b1' }],
+    ];
+    for (const [id, input] of closed) expect(await run(id, input, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+  });
+});
+

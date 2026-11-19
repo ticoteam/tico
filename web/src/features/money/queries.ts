@@ -309,9 +309,9 @@ export const budgetHistoryQuery = (start: string, end: string, as?: string) =>
   });
 
 /** A Finance change. Anything but committed is refused here, so `write` takes the change back: an approval is not
-    the change yet. */
-async function act(kind: string, payload: object, idempotencyKey: string): Promise<FinanceAction> {
-  const out = await api.post<FinanceAction>('/api/v2/finance/actions', { kind, payload }, { idempotencyKey });
+    the change yet. It goes through `post`, so a press again after a lost answer reuses the key and acts once. */
+async function act(kind: string, payload: object): Promise<FinanceAction> {
+  const out = await post<FinanceAction>(kind, payload);
   if (out.status === 'committed') return out;
   throw Object.assign(new Error(out.reason || out.status), { code: out.status === 'needs_approval' ? 'needs_approval' : out.code || out.status });
 }
@@ -324,7 +324,7 @@ export const setBudgetAmount = (at: string, id: string, cents: number) =>
   write({
     key: budgetsKey(at),
     optimistic: mapBudgets((l) => l.map((b) => (b.id === id ? { ...b, state: { ...b.state, amount: cents } } : b))),
-    send: (idem) => act('budget_update', { budget_id: id, amount: cents, effective_from: `${at.slice(0, 7)}-01` }, idem),
+    send: () => act('budget_update', { budget_id: id, amount: cents, effective_from: `${at.slice(0, 7)}-01` }),
   });
 
 /** Stops a budget from this month on (the route keeps its history). */
@@ -332,7 +332,7 @@ export const removeBudget = (at: string, id: string) =>
   write({
     key: budgetsKey(at),
     optimistic: mapBudgets((l) => l.filter((b) => b.id !== id)),
-    send: (idem) => act('budget_update', { budget_id: id, active: false, effective_from: `${at.slice(0, 7)}-01` }, idem),
+    send: () => act('budget_update', { budget_id: id, active: false, effective_from: `${at.slice(0, 7)}-01` }),
   });
 
 /** A monthly budget for one P&L line, shown at once under a pending id. */
@@ -343,8 +343,8 @@ export const addBudget = (at: string, row: { name: string; line: string; cents: 
       ...l,
       { id: `tmp:${row.line}`, name: row.name, account_id: row.line, parent_id: null, period: 'month', active: true, state: { amount: row.cents, actual: 0 } },
     ]),
-    send: (idem) =>
-      act('budget_create', { name: row.name, period: 'month', account_id: row.line, amount: row.cents, effective_from: `${at.slice(0, 7)}-01` }, idem),
+    send: () =>
+      act('budget_create', { name: row.name, period: 'month', account_id: row.line, amount: row.cents, effective_from: `${at.slice(0, 7)}-01` }),
   });
 
 // ---------------------------------------------------------------- decisions, sources and access (the old app's dialogs)
@@ -364,23 +364,29 @@ export const tryDecision = (kind: string, payload: object) => api.post<Decided>(
 const KEY_WINDOW_MS = 10 * 60_000;
 const unanswered = new Map<string, { key: string; at: number }>();
 
-/** A decision sent: done, or waiting for its approver (said by the caller). Anything else is refused and throws. */
-export async function decide(kind: string, payload: object): Promise<Decided> {
+/** A Finance action sent under the key of its unanswered twin, if any (see above). */
+async function post<T>(kind: string, payload: object): Promise<T> {
   const sig = JSON.stringify([kind, payload]);
   const now = Date.now();
   for (const [s, e] of unanswered) if (now - e.at > KEY_WINDOW_MS) unanswered.delete(s);
   const key = unanswered.get(sig)?.key ?? newId();
   unanswered.set(sig, { key, at: now });
-  let out: Decided;
   try {
-    out = await api.post<Decided>('/api/v2/finance/actions', { kind, payload }, { idempotencyKey: key });
+    const out = await api.post<T>('/api/v2/finance/actions', { kind, payload }, { idempotencyKey: key });
+    if (unanswered.get(sig)?.key === key) unanswered.delete(sig);
+    return out;
   } catch (err) {
-    // A gateway's 502, 503 or 504 is no answer either: the server may have acted and its reply been lost.
-    const lost = isNetworkError(err) || (err instanceof ApiError && err.status >= 502 && err.status <= 504);
-    if (!lost && unanswered.get(sig)?.key === key) unanswered.delete(sig);
+    if (!lostAnswer(err) && unanswered.get(sig)?.key === key) unanswered.delete(sig);
     throw err;
   }
-  if (unanswered.get(sig)?.key === key) unanswered.delete(sig);
+}
+
+/** No answer: the network dropped it, or a gateway's 502, 503 or 504. The server may have acted and its reply been lost. */
+const lostAnswer = (err: unknown) => isNetworkError(err) || (err instanceof ApiError && err.status >= 502 && err.status <= 504);
+
+/** A decision sent: done, or waiting for its approver (said by the caller). Anything else is refused and throws. */
+export async function decide(kind: string, payload: object): Promise<Decided> {
+  const out = await post<Decided>(kind, payload);
   void queryClient.invalidateQueries({ queryKey: ['finance'] });
   if (out.status === 'committed' || out.status === 'needs_approval') return out;
   throw Object.assign(new Error(out.reason || out.status), { code: out.code || out.status });
@@ -483,7 +489,8 @@ export async function connectSource(
     void queryClient.invalidateQueries({ queryKey: ['finance'] });
     return out;
   } catch (err) {
-    await stored.undo();
+    // A lost answer may have connected with the key: it stays on Tools rather than leave the source keyless.
+    if (!lostAnswer(err)) await stored.undo();
     throw err;
   }
 }

@@ -9,7 +9,7 @@ import { GroupRow, Table } from '@/kit/Table';
 import { List, Section, SidePanel } from '@/pagekinds';
 import { FIN, useFinanceHead } from './head';
 import { cash, colLabel, monShort, nowCol, paceOf, pnlRange, rangeLabel, statement, stepRange, valueAt, type Period, type StatementRow } from './model';
-import { ActLink, Meter, Pfig, Prow, usePhone, usePress, useViewAs } from './parts';
+import { ActLink, Meter, Pfig, Prow, readState, usePhone, usePress, useViewAs } from './parts';
 import { lineQuery, pnlQuery, type LineDetail, type Pnl } from './queries';
 import { panelOf, type FinanceSearch } from './search';
 
@@ -39,7 +39,7 @@ export function PnlPage({ search }: { search: FinanceSearch }) {
   return (
     <List
       {...head}
-      state={q.isPending ? 'loading' : q.isError ? 'fault' : 'ready'}
+      state={readState(q)}
       onRetry={() => void q.refetch()}
       after={
         <span className="range" data-target="range:pnl">

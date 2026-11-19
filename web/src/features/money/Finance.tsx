@@ -9,7 +9,7 @@ import { useBooksReturn } from './booksReturn';
 import { BudgetsPage } from './Budgets';
 import { axis, cash, connected, dayOf, monShort, monthSpan, nowCol, ymOf } from './model';
 import { FIN, plural, TAB_NAME, useFinanceHead } from './head';
-import { ActLink, usePress, useViewAs } from './parts';
+import { ActLink, readState, usePress, useViewAs } from './parts';
 import { PnlPage } from './Pnl';
 import {
   billsQuery,
@@ -68,7 +68,7 @@ function Overview() {
   const brief = useQuery(briefQuery(as));
 
   const live = connected(sources.data?.groups);
-  const state = sources.isPending ? 'loading' : sources.isError ? 'fault' : live ? 'ready' : 'empty';
+  const state = readState(sources, !live);
   const m = month.data;
   const net = m ? (m.net[nowCol(m.columns)] ?? null) : null;
   const cv = cashNow.data?.value;

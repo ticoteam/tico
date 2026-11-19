@@ -8,7 +8,7 @@ import { FoldButton } from '@/kit/SectionHead';
 import { LatePill } from '@/kit/Pill';
 import { chatAddress, fmtAge } from '@/lib';
 import { Dashboard, FiguresStrip, SidePanel, type Figure } from '@/pagekinds';
-import { Face, Go, PanelLink, usd } from './parts';
+import { Face, Go, NameOf, PanelLink, usd } from './parts';
 import { floorQuery, goalsTreeQuery, needsQuery, revenueQuery, spendQuery, stageTasksQuery, type Pipeline, type Stage } from './queries';
 import './company.css';
 
@@ -184,6 +184,8 @@ function StagePanel({ pipeline, stage, onClose }: { pipeline: Pipeline; stage: S
   const me = useQuery(meQuery).data?.id;
   const mine = (t: { turn: { state: string; who: string | null } | null }) => t.turn?.state === 'person' && t.turn.who === me;
   const list = [...(tasks.data?.tasks ?? [])].sort((a, b) => Number(mine(b)) - Number(mine(a)));
+  // The stage's owner (old company-floor.ts cfCardHead): the one holding the most tasks, and how many more there are.
+  const lead = [...stage.owners].sort((a, b) => b.count - a.count)[0];
   return (
     <SidePanel
       title={stage.name}
@@ -200,6 +202,16 @@ function StagePanel({ pipeline, stage, onClose }: { pipeline: Pipeline; stage: S
           <span>Pipeline</span>
           <span className="fact-v">{pipeline.name}</span>
         </div>
+        {lead && (
+          <div className="fact">
+            <span>Owner</span>
+            <span className="fact-v">
+              <Face id={lead.actor} size={16} />
+              <NameOf id={lead.actor} />
+              {stage.owners.length > 1 && ` +${stage.owners.length - 1}`}
+            </span>
+          </div>
+        )}
         <div className="fact">
           <span>Tasks</span>
           <span className="fact-v">{stage.count}</span>

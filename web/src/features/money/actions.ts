@@ -101,12 +101,11 @@ export const closePanel = defineAction({
   did: () => 'Closed the panel',
 });
 
-/** Connecting a bank, a card or payroll signs in to it: the person does it. */
+/** Connecting a bank, a card or payroll signs in to it, in Tools, where the person does it; opening Tools is Tico's too. */
 export const addSource = defineAction({
   id: 'finance.addSource',
   title: 'Connect a Finance source',
   kind: 'view',
-  tico: false,
   input: s.object({}),
   run: ({ router }) => router.navigate({ to: '/library/tools' }),
   did: () => 'Opened Tools',
@@ -294,6 +293,7 @@ export const postStatement = defineAction({
   id: 'finance.postStatement',
   title: 'Post the new rows of a bank or card statement',
   kind: 'change',
+  // No press takes a posted statement back (the server's undo is refused once reconciled): the person's own press.
   tico: false,
   input: s.object({
     account: id,

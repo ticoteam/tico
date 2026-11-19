@@ -1,11 +1,13 @@
 import { Link, useRouter, useSearch } from '@tanstack/react-router';
 import { type MouseEvent, type ReactNode } from 'react';
 import { refusal, registry } from '@/actions';
+import { ApiError } from '@/api/client';
 import { runIn } from '@/actions/run';
 import { useActor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { useCards } from '@/kit/Popover';
 import { toast } from '@/kit/Toast';
+import type { PageState } from '@/pagekinds';
 import { validateFinanceSearch } from './search';
 
 /* The parts Finance and Growth share, ported from pages/3-company/finance.js. */
@@ -129,3 +131,8 @@ export function Who({ id }: { id: string }) {
 
 /** The phone's cards, where a wide table becomes rows of a name, its words and one figure (finance.js rowsPhone). */
 export const usePhone = useCards;
+
+/** A read's page state. A refusal (403) is no access, without Try again, as the old app's "Not in your view." was
+    (finance.ts finFail). */
+export const readState = (q: { isPending: boolean; isError: boolean; error: unknown }, empty = false): PageState =>
+  q.isPending ? 'loading' : q.isError ? (q.error instanceof ApiError && q.error.status === 403 ? 'no-access' : 'fault') : empty ? 'empty' : 'ready';

@@ -10,14 +10,17 @@ import { EmptyRow, GroupRow, Table } from '@/kit/Table';
 import { List, Section, SidePanel } from '@/pagekinds';
 import { FIN, useFinanceHead } from './head';
 import { addMonths, budgetDay, budgetGroups, cash, centsOf, monShort, monthName, monthSpan, paceOf, type BudgetLine } from './model';
-import { ActLink, Meter, Pfig, Prow, usePhone, usePress, useViewAs } from './parts';
+import { ActLink, Meter, Pfig, Prow, readState, usePhone, usePress, useViewAs } from './parts';
 import { budgetHistoryQuery, budgetsQuery, pnlQuery, type PnlRow } from './queries';
 import { panelOf, type FinanceSearch } from './search';
+import { useMay } from './dialogs';
 
 /** Budgets: each line's month so far against its budget, by section, with where today is in the month. */
 export function BudgetsPage({ search }: { search: FinanceSearch }) {
   const press = usePress();
   const phone = usePhone();
+  // Budgets are made and changed with finance.budgets (finance-budgets.ts:74); reading as a teammate is read only.
+  const edits = useMay()('finance.budgets');
   const at = budgetDay();
   const ym = at.slice(0, 7);
   const head = useFinanceHead();
@@ -36,9 +39,9 @@ export function BudgetsPage({ search }: { search: FinanceSearch }) {
   return (
     <List
       {...head}
-      state={list.isPending ? 'loading' : list.isError ? 'fault' : 'ready'}
+      state={readState(list)}
       onRetry={() => void list.refetch()}
-      actions={!search.as && <IconButton icon="plus" label="New budget" onClick={() => void press('budget.newRow', {})} />}
+      actions={edits && <IconButton icon="plus" label="New budget" onClick={() => void press('budget.newRow', {})} />}
       sections={
         phone ? (
           <div className="frs">
@@ -162,7 +165,7 @@ export function BudgetsPage({ search }: { search: FinanceSearch }) {
         </div>
         )
       }
-      panel={id === 'new' && !search.as ? <NewBudget lines={lines} /> : row ? <BudgetPanel line={row} kids={all.filter((r) => r.budget.parent_id === row.budget.id)} /> : undefined}
+      panel={id === 'new' && edits ? <NewBudget lines={lines} /> : row ? <BudgetPanel line={row} kids={all.filter((r) => r.budget.parent_id === row.budget.id)} /> : undefined}
     />
   );
 }
@@ -183,8 +186,9 @@ function BudgetPanel({ line, kids }: { line: BudgetLine; kids: BudgetLine[] }) {
   const ym = at.slice(0, 7);
   const pace = paceOf();
   const first = addMonths(ym, -5);
-  // Reading as a teammate is read only: no amount to change, no Remove.
+  // Without finance.budgets, or reading as a teammate, it is read only: no amount to change, no Remove.
   const as = useViewAs();
+  const edits = useMay()('finance.budgets');
   const history = useQuery(budgetHistoryQuery(`${first}-01`, monthSpan(ym).end, as));
   const months = history.data?.budgets.find((h) => h.id === b.id);
   const save = (text: string) => {
@@ -203,7 +207,7 @@ function BudgetPanel({ line, kids }: { line: BudgetLine; kids: BudgetLine[] }) {
       target={`budget:${b.id}`}
       onClose={() => void press('finance.closePanel', {})}
       foot={
-        !as && (
+        edits && (
           <Button variant="quiet" onClick={() => void press('budget.removeRow', { budget: b.id })}>
             Remove
           </Button>
@@ -224,7 +228,7 @@ function BudgetPanel({ line, kids }: { line: BudgetLine; kids: BudgetLine[] }) {
                 name="amount"
                 defaultValue={amount != null ? cash(amount).replace('$', '') : ''}
                 wide={false}
-                disabled={!!as}
+                disabled={!edits}
               />
             </form>
           </LabelValue>

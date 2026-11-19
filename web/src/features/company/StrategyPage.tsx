@@ -31,8 +31,8 @@ import {
 import './company.css';
 
 /* Strategy and its tabs, in the mock's order (pages/3-company/company.js strategyPage). Each tab is its own address
-   under /company/strategy, so Back and a shared link restore it. Budget belongs to Finance: its tab opens Finance's
-   Budgets. Strategy and Brand keep versions: `?v=` reads a past one, `?compare` marks what changed from the one
+   under /company/strategy, so Back and a shared link restore it. Budget is the agents' spend limits (company.js
+   budgetBody, old #/strategy/budget): its tab opens Usage's Limits, where a limit is changed. Strategy and Brand keep versions: `?v=` reads a past one, `?compare` marks what changed from the one
    before (files.js docPage: the version pick and the changes count in the head). */
 
 export const STRATEGY_TABS = ['strategy', 'market', 'org', 'goals', 'brand'] as const;
@@ -45,7 +45,7 @@ export const strategyTabs: readonly PageTab[] = [
   tab('market', 'Market'),
   tab('org', 'Org'),
   tab('goals', 'Goals'),
-  { label: 'Budget', to: '/company/finance', search: { tab: 'budgets' }, target: 'tab:budget' },
+  { label: 'Budget', to: '/company/usage', search: { view: 'limits' }, target: 'tab:budget' },
   tab('brand', 'Brand'),
 ];
 const head = (t: StrategyTab) => ({ title: 'Strategy', path: t === 'strategy' ? BASE : `${BASE}/${t}`, tabs: strategyTabs, className: 'co' });
