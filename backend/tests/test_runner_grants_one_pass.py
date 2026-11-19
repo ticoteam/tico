@@ -1,10 +1,14 @@
-"""GET /api/v2/runner-credential-grants reads a computer's bots in one snapshot (the company-wide tool, key and grant reads
-once, not once per bot) and answers exactly what each bot read on its own answered, names in the same order; and the
-batch `tool_settings.names_each` and the snapshot's `held_tools` answer what `names` and `held_tools` answer alone."""
+"""GET /api/v2/runner-credential-grants reads a computer's bots in one snapshot (the company-wide tool, key, grant and
+settings reads once, not once per bot) and answers byte for byte what each bot read on its own answered, names in the
+same order; and the batch `tool_settings.names_each` answers what `names` answers for each subject alone."""
 
+import collections
+import contextlib
 import random
 
-from backend import tool_settings
+from fastapi.responses import JSONResponse
+
+from backend import default_read, tool_settings
 from backend.auth import Identity
 from backend.credentials import granted
 from backend.tests.helpers.api import headers
@@ -13,12 +17,33 @@ from backend.tests.helpers.runner_grants import reference, seed
 BOTS = ["tools-owner"] + [f"bot{n:02d}" for n in range(47)]
 
 
+@contextlib.contextmanager
+def statements(store):
+    """Every statement the store's read connections run meanwhile."""
+    seen, opened = [], store.read
+
+    @contextlib.contextmanager
+    def traced():
+        with opened() as c:
+            c.set_trace_callback(seen.append)
+            try:
+                yield c
+            finally:
+                c.set_trace_callback(None)
+
+    store.read = traced
+    try:
+        yield seen
+    finally:
+        store.read = opened
+
+
 def answer(api, runner_id):
     token = "runner-" + runner_id
     api.app.state.store.settings.test_identities[token] = Identity("runner:" + runner_id, "runner", runner_id=runner_id)
     r = api.get("/api/v2/runner-credential-grants", headers=headers(token))
     assert r.status_code == 200, r.text
-    return r.json()
+    return r
 
 
 def test_one_pass_answers_byte_for_byte_what_each_bot_read_alone_answered(api):
@@ -30,38 +55,31 @@ def test_one_pass_answers_byte_for_byte_what_each_bot_read_alone_answered(api):
             c.execute("DELETE FROM tool_settings")
             c.execute("DELETE FROM credentials")
             c.execute("DELETE FROM tools")
-            seed(c, BOTS, rng, tools=40, runners=4)
+            unsealed, held_by_someone, logins = seed(c, BOTS, rng, tools=40, runners=4)
+        assert unsealed and held_by_someone and logins  # the fixture has the keys a bot never gets
         held_any = settings_any = 0
         for runner_id in ("r0", "r1", "r2", "r3"):
-            body = answer(api, runner_id)
             expected = reference(store, runner_id)
-            assert body == expected and list(body["bots"]) == list(expected["bots"])
-            for bot, names in body["bots"].items():
-                assert names == expected["bots"][bot], bot  # the same names in the same order
-            held_any += sum(bool(n) for n in body["bots"].values())
-            settings_any += sum(any(n.endswith(("_HOST", "_REGION", "_ID")) for n in v) for v in body["bots"].values())
+            with statements(store) as seen:
+                r = answer(api, runner_id)
+            assert r.content == JSONResponse(expected).body  # the same bytes: bots and names in the same order
+            held_any += sum(bool(n) for n in expected["bots"].values())
+            settings_any += sum(
+                any(n.endswith(("_HOST", "_REGION", "_ID")) for n in v) for v in expected["bots"].values()
+            )
+            # Once a request, whatever the number of bots: the company-wide reads and the bots' grants.
+            counts = collections.Counter(seen)
+            assert len(expected["bots"]) == 12
+            assert counts[default_read.CANDIDATES_SQL] == 1
+            assert counts[tool_settings.KEY_TOOLS_SQL] == 1
+            assert sum(k for s, k in counts.items() if "FROM credential_grants g" in s) == 1
+            assert sum(k for s, k in counts.items() if "FROM tool_settings s" in s) <= 1
         assert held_any > 20 and settings_any > 5  # the fixture exercises keys and settings, not empty answers
 
-        # The batch and the snapshot cache answer what the per-subject helpers answer outside a snapshot.
+        # The batch answers what the per-subject helper answers, for every kind of subject and for none.
         with store.read() as c:
             subjects = ["bot:" + b for b in BOTS] + ["human:ana", "human:ben", "computers"]
             helds = [granted(c, s) for s in subjects] + [frozenset(), frozenset({"nothing"})]
             alone = [tool_settings.names(c, h) for h in helds]
-            tools_alone = [tool_settings.held_tools(c, h) for h in helds]
-        with store.read_transaction() as c:
             assert tool_settings.names_each(c, helds) == alone
-            assert [tool_settings.held_tools(c, h) for h in helds] == tools_alone
-            assert [granted(c, s) for s in subjects] == helds[: len(subjects)]
-
-
-def test_a_write_in_the_snapshot_is_seen_by_the_next_held_tools(api):
-    """The key-to-tool map kept in a snapshot is dropped when the connection writes, as every read_cache value is."""
-    store = api.app.state.store
-    with store.transaction() as c:
-        seed(c, BOTS[:6], random.Random(5), tools=6, runners=1)
-        held = frozenset(r[0] for r in c.execute("SELECT id FROM credentials WHERE tool_id='tool01'"))
-        assert tool_settings.held_tools(c, held) == ["tool01"]
-        c.execute("UPDATE credentials SET tool_id='tool02' WHERE tool_id='tool01'")
-        assert tool_settings.held_tools(c, held) == ["tool02"]
-        c.execute("UPDATE credentials SET ciphertext=NULL WHERE tool_id='tool02'")
-        assert tool_settings.held_tools(c, held) == []
+            assert tool_settings.names_each(c, [frozenset()]) == [[]] and tool_settings.names_each(c, []) == []

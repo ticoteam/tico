@@ -17,7 +17,8 @@ def seed(c, bots, rng, tools=60, runners=8):
     and grants: everyone-reads and switched-off tools, Only listed (audience) tools, website tools, tools on the proxy
     and tools whose address the proxy cannot call, multi-secret templates, one variable several tools deliver, held
     and login keys, keys with no value, grants revoked, grants passed on from a person (their parent live or revoked,
-    the person the bot's owner or not), grants to people and to the computers, archived bots."""
+    the person the bot's owner or not), grants to people and to the computers, archived bots. Returns how many keys
+    have no value and how many are held, so a test can check those cases are there."""
     now = H.now()
     for n, slug in enumerate(bots):
         X.bot(c, slug, computer=False)
@@ -67,7 +68,7 @@ def seed(c, bots, rng, tools=60, runners=8):
                 if k % 6 == 5
                 else f"TOOL{t}_KEY{k}"
             )
-            ckind = "login" if k % 7 == 6 else rng.choice(("token", "api_key"))
+            ckind = "login" if (t + k) % 7 == 6 else rng.choice(("token", "api_key"))
             c.execute(
                 "INSERT INTO credentials(id,name,kind,env,ciphertext,nonce,tool_id,access_level,holder,created_at,"
                 "updated_at,updated_by,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,'ana','ana')",
@@ -76,11 +77,11 @@ def seed(c, bots, rng, tools=60, runners=8):
                     f"Key {t}.{k}",
                     ckind,
                     env,
-                    None if k % 9 == 8 else b"sealed",
+                    None if (t + k) % 9 == 8 else b"sealed",
                     b"n",
                     tid,
                     rng.choice(("read", "read_write", "read_write")),
-                    "bot:" + bots[t % len(bots)] if k % 10 == 9 else None,
+                    "bot:" + bots[t % len(bots)] if (t + k) % 10 == 9 else None,
                     H.shift(now, minutes=k),
                     now,
                 ),
@@ -126,6 +127,9 @@ def seed(c, bots, rng, tools=60, runners=8):
         "VALUES(?,?,?,'human:ana',?,?,?)",
         [(g, cid, s, p, now, r) for g, cid, s, p, r in grants],
     )
+    return c.execute(
+        "SELECT SUM(ciphertext IS NULL), SUM(COALESCE(holder,'')!=''), SUM(kind='login') FROM credentials"
+    ).fetchone()
 
 
 def reference(store, runner_id):

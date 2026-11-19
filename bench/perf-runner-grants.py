@@ -135,7 +135,7 @@ def run(app, api):
 
 def explain(store):
     """The plans of the reads: unchanged statements, now run once a request instead of once a bot."""
-    sub = "bot:" + BOTS[1]
+    subs = ["bot:" + b for b in (BOTS * 4)[1:4]]  # three subjects, however few bots
     per_subject = (
         "SELECT g.credential_id FROM credential_grants g LEFT JOIN credential_grants p ON p.id=g.parent_id "
         "LEFT JOIN bot_config bc ON substr(g.subject,1,4)='bot:' AND bc.bot=substr(g.subject,5) "
@@ -148,8 +148,8 @@ def explain(store):
     plans = {
         "default_read.CANDIDATES_SQL (old 1/bot, new 1/request)": (default_read.CANDIDATES_SQL, ()),
         "tool_settings.KEY_TOOLS_SQL (old 1/bot, new 1/request)": (tool_settings.KEY_TOOLS_SQL, ()),
-        "explicit grants, one subject (old 1/bot)": (per_subject, (sub,)),
-        "explicit grants, prime_granted (new 1/500 bots)": (batched, (sub, "bot:" + BOTS[2], "bot:" + BOTS[3])),
+        "explicit grants, one subject (old 1/bot)": (per_subject, subs[:1]),
+        "explicit grants, prime_granted (new 1/500 bots)": (batched, subs),
         "tool settings of tools (old 1/bot, new 1/request)": (
             "SELECT s.*, t.name AS tool_name FROM tool_settings s JOIN tools t ON t.id=s.tool_id"
             " WHERE s.tool_id IN (?,?,?) ORDER BY s.tool_id, s.name, s.id",

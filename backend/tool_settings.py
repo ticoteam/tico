@@ -39,7 +39,6 @@ from pydantic import ConfigDict, Field
 from clients import access_entry as access_entry_module
 
 from . import auth as auth_mod
-from . import read_cache as read_cache_module
 from . import tool_services as tool_services_module
 from .models import Contract
 from .store import H as hub_helpers
@@ -50,7 +49,6 @@ TS: Any = tool_services_module
 H: Any = hub_helpers
 access_entry: Any = access_entry_module
 auth_module: Any = auth_mod
-read_cache: Any = read_cache_module
 
 
 def _credentials() -> Any:
@@ -261,20 +259,11 @@ def _view(row: Any) -> Any:
 KEY_TOOLS_SQL = "SELECT id, tool_id FROM credentials WHERE tool_id IS NOT NULL AND ciphertext IS NOT NULL"
 
 
-def _key_tools(c: Any) -> dict[Any, Any]:
-    """{credential id: tool id} of every stored key of a tool, read once per snapshot (backend/read_cache.py): the
-    runner's grants read it for each of a computer's bots. Outside a snapshot it is read each time, as before."""
-    return read_cache.value(
-        c, ("tool_settings.key_tools",), lambda: {r["id"]: r["tool_id"] for r in c.execute(KEY_TOOLS_SQL)}, shared=True
-    )
-
-
 def held_tools(c: Any, held: Any) -> Any:
     """The tools whose keys `held` (credential ids a subject holds an effective grant to) include a stored one."""
     if not held:
         return []
-    tools = _key_tools(c)
-    return sorted({tools[k] for k in held if k in tools})
+    return sorted({r["tool_id"] for r in c.execute(KEY_TOOLS_SQL) if r["id"] in held})
 
 
 def _settings_of(c: Any, tool_ids: Any) -> list[Any]:
@@ -316,9 +305,11 @@ def names(c: Any, held: Any) -> Any:
 
 
 def names_each(c: Any, helds: Any) -> list[Any]:
-    """`names` for each of `helds` (one set of credential ids per subject), in order, with every tool's settings read
-    in one pass rather than once per subject (runner-credential-grants: a computer's ~20 bots)."""
-    tools = [held_tools(c, held) for held in helds]
+    """`names` for each of `helds` (one set of credential ids per subject), in order, reading every key's tool and every
+    held tool's settings once rather than once per subject (runner-credential-grants: a computer's ~20 bots)."""
+    helds = list(helds)
+    key_tool = {r["id"]: r["tool_id"] for r in c.execute(KEY_TOOLS_SQL)} if any(helds) else {}
+    tools = [sorted({key_tool[k] for k in held if k in key_tool}) for held in helds]
     by_tool: dict[Any, set[Any]] = {}
     for row in _settings_of(c, sorted({t for ids in tools for t in ids})):
         by_tool.setdefault(row["tool_id"], set()).add(row["name"])
