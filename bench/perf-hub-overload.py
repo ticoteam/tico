@@ -6,7 +6,9 @@ tasks, a few hundred threads with posts, and a message history.
     nice -n 10 .venv/bin/python bench/perf-hub-overload.py
 
 Env: OPEN (default 1500), CLOSED (16500), THREADS (400), MESSAGES (40000), FOLLOWS (30000), FOLLOW_PLAN (each
-person's followed task rooms, "human:ana=6500,..."), CONCURRENT (n: also n identical reads at once, shared and not),
+person's followed task rooms, "human:ana=6500,..."), CONCURRENT (n: also n identical reads at once, shared and not), SHARE_RATE (n: the share of
+BURSTS bursts of n identical reads arriving over STAGGER s, under CHANGES_PER_S logged changes and COMMITS_PER_S other
+commits a second, keyed by the change number and by every commit),
 RUNS (5), PROFILE=<path> (cProfile one route),
 STATEMENTS=<path,...> (the statement shapes one call of each runs), DB=<file> (keep the seeded database there and reuse it),
 PATHS=<path,...> (the routes measured), ANSWERS=<file> (each route's answer as JSON, to compare two checkouts' on one DB),
@@ -27,6 +29,7 @@ import shutil
 import sqlite3
 import statistics
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -53,6 +56,12 @@ TOKENS = tuple(os.environ.get("TOKENS", "ana-test,ben-test,cara-test").split(","
 MESSAGES = int(os.environ.get("MESSAGES", 40000))
 FOLLOWS = int(os.environ.get("FOLLOWS", 30000))
 FOLLOW_PLAN = os.environ.get("FOLLOW_PLAN", "human:ana=6500,human:ben=2800,human:cara=2300")
+SHARE_RATE = int(os.environ.get("SHARE_RATE", 0))  # n: bursts of n identical reads under TIDY's commit traffic
+BURSTS = int(os.environ.get("BURSTS", 5))
+SHARED_FRESH = 3.0  # backend/shared_reads.py FRESH_SECONDS, which main() turns off for the single-read timings
+STAGGER = float(os.environ.get("STAGGER", 1.5))  # seconds a burst's reads arrive over
+CHANGES_PER_S = float(os.environ.get("CHANGES_PER_S", 2.4))
+COMMITS_PER_S = float(os.environ.get("COMMITS_PER_S", 5))
 CONCURRENT = int(os.environ.get("CONCURRENT", 0))  # also time this many identical reads at once, shared and not
 
 
@@ -96,9 +105,8 @@ def seed(api):
                 c.execute(f"INSERT INTO tasks({','.join(cols)}) SELECT {sel} FROM tasks WHERE id=?", (new, tid))
                 c.execute("INSERT OR REPLACE INTO task_move_guards (id, open, task_id) VALUES (1, 1, ?)", (new,))
                 c.execute(
-                    "UPDATE tasks SET status='done', pipeline_id=s.pipeline_id, stage_id=s.stage_id, "
-                    "stage_entered_at=s.stage_entered_at FROM (SELECT pipeline_id, stage_id, stage_entered_at FROM tasks "
-                    "WHERE id=?) s WHERE tasks.id=?",
+                    "UPDATE tasks SET status='done', pipeline_id=s.pipeline_id, stage_id=s.stage_id "
+                    "FROM (SELECT pipeline_id, stage_id FROM tasks WHERE id=?) s WHERE tasks.id=?",
                     (tid, new),
                 )
                 c.execute("UPDATE task_move_guards SET open=0, task_id=NULL WHERE id=1")
@@ -257,8 +265,82 @@ def together(api, path, n, token="ana-test"):
     return len(seen), took, shared.computed - before
 
 
+class DataVersion:
+    """The other key the shared reads could have: SQLite's data_version, which moves on every commit."""
+
+    def __init__(self, store):
+        self.c = sqlite3.connect(
+            store.settings.db_path.resolve().as_uri() + "?mode=ro", uri=True, check_same_thread=False
+        )
+        self.lock = threading.Lock()
+
+    def __call__(self):
+        with self.lock:
+            return 1, self.c.execute("PRAGMA data_version").fetchone()[0]
+
+
+def traffic(store, stop):
+    """TIDY's Nov 19 commit traffic while a burst is read: CHANGES_PER_S logged changes a second (its changes log took
+    2.4) and COMMITS_PER_S other commits (heartbeats, run steps' bookkeeping)."""
+    total = CHANGES_PER_S + COMMITS_PER_S
+    logged, k = 0.0, 0
+    while not stop.wait(1.0 / total):
+        logged += CHANGES_PER_S / total
+        with store.transaction() as c:
+            if logged >= 1:
+                logged -= 1
+                c.execute("INSERT INTO changes(topic,kind,created_at) VALUES('runs','bench',?)", (H.now(),))
+            else:
+                c.execute("INSERT OR REPLACE INTO registry_metadata(key,value) VALUES('bench-beat',?)", (str(k),))
+        k += 1
+
+
+def burst_share(api, path, n, token="ana-test"):
+    """{key: (requests, computations)}: BURSTS bursts of `n` identical reads by one person arriving over STAGGER seconds
+    (ten open apps answering one live event), under `traffic`, keyed by the change number and by every commit."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from backend import shared_reads
+
+    store = api.app.state.store
+    shared = shared_reads.of(store)
+    keys = {"change number": shared_reads.changes(store), "every commit": DataVersion(store)}
+    out = {}
+    fresh, shared_reads.FRESH_SECONDS = shared_reads.FRESH_SECONDS, SHARED_FRESH  # as served, kept answers too
+    stop = threading.Event()
+    writer = threading.Thread(target=traffic, args=(store, stop), daemon=True)
+    writer.start()
+    try:
+        for name, key in keys.items():
+            store.shared_reads_changes = key
+            before = shared.computed
+            for _ in range(BURSTS):
+
+                def one(k):
+                    stop.wait(STAGGER * k / max(1, n - 1))  # arrives k/n of the way through the burst
+                    return api.get(path, headers=headers(token)).status_code
+
+                with ThreadPoolExecutor(n) as pool:
+                    codes = list(pool.map(one, range(n)))
+                assert codes == [200] * n, codes
+            out[name] = (BURSTS * n, shared.computed - before)
+    finally:
+        stop.set()
+        writer.join()
+        store.shared_reads_changes = keys["change number"]
+        shared_reads.FRESH_SECONDS = fresh
+    return out
+
+
 def report(api):
     answers = {}
+    if SHARE_RATE:
+        for path in PATHS:
+            for name, (asked, computed) in burst_share(api, path, SHARE_RATE).items():
+                print(
+                    f"share rate {path:28s} keyed by {name:13s}: {asked} reads, {computed} computed, "
+                    f"{100 * (1 - computed / asked):.0f}% shared"
+                )
     if CONCURRENT:
         from backend import shared_reads
 

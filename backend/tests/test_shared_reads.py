@@ -117,8 +117,8 @@ def test_ten_identical_reads_build_the_rail_once_and_callers_never_share(api, mo
         return real(c, v, **kwargs)
 
     monkeypatch.setattr(thread_rail, "rail", counted)
-    # Held still, so no background commit (a sign-in's census mark) splits the burst; Commits has its own test.
-    monkeypatch.setattr(SR.Commits, "__call__", lambda self: (1, 1))
+    # Held still, so no background change splits the burst; Changes has its own test.
+    monkeypatch.setattr(SR.Changes, "__call__", lambda self: (1, 1))
     shared = SR.of(api.app.state.store)
     arrived = threading.Event()
     real_join = SR.SharedReads._join
@@ -155,18 +155,17 @@ def test_a_read_after_a_write_is_never_answered_from_before_it(api):
     assert task["id"] in {row["id"] for row in after.json()["tasks"]}
 
 
-def test_any_commit_moves_the_count_and_nothing_else_does(company):
-    count = SR.commits(company)
-    first = count()
-    assert first is not None and count() == first
+def test_a_logged_change_moves_the_number_and_a_read_does_not(company):
+    number = SR.changes(company)
+    first = number()
+    assert first is not None and number() == first
     with company.read() as c:
         c.execute("SELECT count(*) FROM tasks").fetchone()
-    assert count() == first
-    # A write that logs no change (an access setting, a heartbeat) still moves it.
+    assert number() == first
     with company.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO registry_metadata(key,value) VALUES('shared-reads-sample','1')")
-    second = count()
-    assert second is not None and second != first and count() == second
+        c.execute("INSERT INTO changes(topic,kind,created_at) VALUES('setup','sample','2026-11-19T00:00:00Z')")
+    second = number()
+    assert second is not None and second > first and number() == second
 
 
 def test_a_queued_computation_every_waiter_left_never_runs():
