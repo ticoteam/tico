@@ -520,4 +520,6 @@ def test_bot_list_reads_each_open_task_and_bot_row_once(api, monkeypatch):
     assert response.status_code == 200, response.text
     whole = [sql for sql in seen if sql.startswith("SELECT * FROM tasks")]
     assert len(whole) == 1 and "owner_id IN" in whole[0], whole
+    # Nothing in the list shows or checks a task's tags (TIDY, Nov 19: 0.4 s a list under load to read them).
+    assert not [sql for sql in seen if "task_tags" in sql], seen
     assert not [sql for sql in seen if sql.startswith("SELECT * FROM bots WHERE id=")], seen
