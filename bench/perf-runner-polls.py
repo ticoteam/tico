@@ -54,6 +54,11 @@ def seed(api):
             X.bot(c, slug, computer=False)
             rid = computers[n % RUNNERS]["runner_id"]
             c.execute("INSERT OR REPLACE INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, rid, H.now()))
+            if n % 20 == 0:  # a few bots told their plan was unavailable on another computer (kept, never cleared here)
+                c.execute(
+                    "INSERT INTO registry_metadata VALUES(?,?)",
+                    (f"subscription-unavailable:{slug}", json.dumps({"runner_id": "elsewhere", "profile": "default"})),
+                )
     links = collections.defaultdict(list)
     with store.transaction() as c:
         for k in range(WORKTREES):
@@ -76,8 +81,19 @@ def seed(api):
             c.execute(
                 "INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at,repo,branch,computer_id,path,"
                 "detail,updated_at) VALUES(?,?,'worktree','',?,?,?,?,?,?,?,?,?)",
-                (lid, task["id"], "present", "bot:" + slug, now, "acme/product", branch, rid, f"wt/{k}",
-                 json.dumps(detail), now),
+                (
+                    lid,
+                    task["id"],
+                    "present",
+                    "bot:" + slug,
+                    now,
+                    "acme/product",
+                    branch,
+                    rid,
+                    f"wt/{k}",
+                    json.dumps(detail),
+                    now,
+                ),
             )
             links[rid].append((lid, branch))
     return computers, links
@@ -92,8 +108,7 @@ def heartbeat_body(api, computer, links):
         "worktree_waits": True,
         "runtimes": {"claude": {"installed": True, "authenticated": "ready", "version": "2.1.0"}},
         "bots": {
-            bot: {"ready": True, "runtime": "claude", "model": "opus", "configuration_valid": True}
-            for bot in hosted
+            bot: {"ready": True, "runtime": "claude", "model": "opus", "configuration_valid": True} for bot in hosted
         },
     }
     worktrees = [
@@ -120,6 +135,7 @@ def heartbeat_body(api, computer, links):
         "readiness": readiness,
         "worktrees": worktrees,
         "repositories": [{"full_name": "acme/product", "state": "cloned", "size_mb": 120}],
+        "profiles": [{"name": "default", "runtimes": {"claude": {"signed_in": True}}}],
         "release": "0.6.115",
     }
 
@@ -205,7 +221,35 @@ def measure(api, meter, name, send):
     )
     if os.environ.get("SHAPES"):
         for (inside, shape), k in sorted(shapes.items(), key=lambda kv: -shape_ms[kv[0]])[:40]:
-            print(f"   {'LOCK' if inside else 'read'} {k / RUNS:5.1f}x {shape_ms[(inside, shape)] / RUNS:7.2f} ms  {shape[:170]}")
+            print(
+                f"   {'LOCK' if inside else 'read'} {k / RUNS:5.1f}x {shape_ms[(inside, shape)] / RUNS:7.2f} ms  {shape[:170]}"
+            )
+
+
+def explain(store, computers):
+    """The plans of the reads this change folds together: per hosted bot, and all of a computer's bots at once."""
+    with store.read() as c:
+        hosted = [
+            r[0] for r in c.execute("SELECT bot FROM assignments WHERE runner_id=?", (computers[0]["runner_id"],))
+        ]
+        keys = ["subscription-unavailable:" + bot for bot in hosted]
+        for label, sql, args in (
+            ("old, once per bot", "SELECT value FROM registry_metadata WHERE key=?", keys[:1]),
+            (
+                "new, once a beat",
+                f"SELECT key,value FROM registry_metadata WHERE key IN ({','.join('?' * len(keys))})",
+                keys,
+            ),
+        ):
+            plan = " | ".join(r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql, args))
+            t = time.perf_counter()
+            for _ in range(200):
+                if label.startswith("old"):
+                    for key in keys:
+                        c.execute(sql, (key,)).fetchall()
+                else:
+                    c.execute(sql, keys).fetchall()
+            print(f"{label:18s} {plan} | {(time.perf_counter() - t) * 1000 / 200:.3f} ms for {len(keys)} bots")
 
 
 def main():
@@ -227,7 +271,9 @@ def main():
                     company(c)
                 t = time.perf_counter()
                 computers, links = seed(api)
-                print(f"seeded in {time.perf_counter() - t:.1f}s: {RUNNERS} computers, {len(BOTS)} bots, {WORKTREES} worktrees")
+                print(
+                    f"seeded in {time.perf_counter() - t:.1f}s: {RUNNERS} computers, {len(BOTS)} bots, {WORKTREES} worktrees"
+                )
                 meter = Meter(app.state.store.recorder)
                 bodies = [heartbeat_body(api, r, links[r["runner_id"]]) for r in computers]
 
@@ -251,6 +297,7 @@ def main():
 
                 for n in range(len(computers)):  # each computer's first beat stores its report; later ones repeat it
                     beat(n), perf(n)
+                explain(app.state.store, computers)
                 measure(api, meter, "heartbeat", beat)
                 measure(api, meter, "performance", lambda n: perf(n + len(computers)))
                 if os.environ.get("PROFILE"):
