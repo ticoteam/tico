@@ -16,12 +16,12 @@ import { Link } from '@/kit/Link';
 import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
+import { VirtualList } from '@/kit/VirtualList';
 import { Document, List, PageMore, Section } from '@/pagekinds';
 import { Markdown } from '@/kit/Markdown';
 import { Menu, MenuItem, MenuSub } from '@/kit/Menu';
-import { Foot, useGo } from './AddTool';
 import { forgetHelperCode, heldHelperCode } from './helperCode';
-import { Face, Find, OwnerButton, press, when, Who } from './parts';
+import { Face, Find, Foot, OwnerButton, press, useGo, when, Who } from './parts';
 import {
   accessRoleQuery,
   installTargetsQuery,
@@ -50,6 +50,18 @@ import './library.css';
    Send back at the foot for an admin (anyone else reads it only). */
 
 const CRUMB = [{ label: 'Skills', to: '/library/skills' }];
+const SKILL_COLUMNS = (
+  <div className="skill-cols" aria-hidden="true">
+    <span />
+    <span>Skill</span>
+    <span />
+    <span>Has it</span>
+    <span>This week</span>
+    <span>Last run</span>
+  </div>
+);
+
+type SkillItem = { kind: 'columns' } | { kind: 'proposal'; proposal: Proposal } | { kind: 'skill'; skill: SkillRow };
 
 /** A skill's install or use as a directory id: agents are `bot:<id>`, people `human:<id>`. */
 export const actorOf = (a: { type: string; id: string }) => `${a.type === 'Bot' ? 'bot' : 'human'}:${a.id}`;
@@ -99,6 +111,12 @@ function SkillsList({ search }: { search: SkillsSearch }) {
   const pending = (asks.data ?? []).filter(match);
   const rows = search.waiting ? [] : skills.filter(match);
   const [making, setMaking] = useState(false);
+  const proposalLine = (p: Proposal) => <AskLine key={p.id} p={p} skill={byName.get(p.name)} use={used.get(p.name)} />;
+  const skillLine = (s: SkillRow) => <SkillLine key={s.name} s={s} use={used.get(s.name)} />;
+  const items: SkillItem[] =
+    pending.length + rows.length > 50
+      ? [{ kind: 'columns' }, ...pending.map((proposal) => ({ kind: 'proposal' as const, proposal })), ...rows.map((skill) => ({ kind: 'skill' as const, skill }))]
+      : [];
 
   return (
     <List
@@ -127,23 +145,22 @@ function SkillsList({ search }: { search: SkillsSearch }) {
       state={!skills.length && !asks.data?.length ? 'empty' : 'ready'}
       empty={{ title: 'No skills yet' }}
       sections={
-        pending.length || rows.length ? (
+        items.length ? (
+          <VirtualList
+            className="lib-vl"
+            label="Skills"
+            items={items}
+            getKey={(item) => (item.kind === 'columns' ? 'columns' : item.kind === 'proposal' ? `proposal:${item.proposal.id}` : `skill:${item.skill.name}`)}
+            estimateSize={52}
+            measure
+            renderItem={(item) => (item.kind === 'columns' ? SKILL_COLUMNS : item.kind === 'proposal' ? proposalLine(item.proposal) : skillLine(item.skill))}
+          />
+        ) : pending.length || rows.length ? (
           <>
-            <div className="skill-cols" aria-hidden="true">
-              <span />
-              <span>Skill</span>
-              <span />
-              <span>Has it</span>
-              <span>This week</span>
-              <span>Last run</span>
-            </div>
+            {SKILL_COLUMNS}
             <section className="sec">
-              {pending.map((p) => (
-                <AskLine key={p.id} p={p} skill={byName.get(p.name)} use={used.get(p.name)} />
-              ))}
-              {rows.map((s) => (
-                <SkillLine key={s.name} s={s} use={used.get(s.name)} />
-              ))}
+              {pending.map(proposalLine)}
+              {rows.map(skillLine)}
             </section>
           </>
         ) : (

@@ -12,8 +12,7 @@ import { Menu, MenuItem } from '@/kit/Menu';
 import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
 import { List, PageMore, Section, SidePanel, type PageState, type PageTab } from '@/pagekinds';
-import { Foot, trimmed, useGo } from './AddTool';
-import { Face, Find, KindGlyph, OwnerButton, press, Who } from './parts';
+import { Face, Find, Foot, KindGlyph, OwnerButton, press, trimmed, useGo, Who } from './parts';
 import { archivedDocsQuery, docRows, docsListQuery, docsSearchQuery, IMPORT_MAX, IMPORT_TYPES, sourceDocsQuery, sourcesQuery, type DocHit, type DocRow } from './queries';
 import type { DocSource } from '@/api/schema';
 import type { DocsSearch } from './search';
@@ -179,7 +178,7 @@ function MoreDocs({
       ([entry]) => {
         if (entry?.isIntersecting) void fetchNext({ cancelRefetch: false });
       },
-      { root: el.closest('.pk-body'), rootMargin: '200px' },
+      { root: el.closest('.pk-body, .rail-body'), rootMargin: '200px' },
     );
     observer.observe(el);
     return () => observer.disconnect();
@@ -299,11 +298,12 @@ function SourcesPage({ panel }: { panel?: string }) {
 
 /** One outside source beside the list: its documents, each opening as an outside doc. */
 function SourcePanel({ id }: { id: string }) {
-  const src = useQuery(sourceDocsQuery(id));
+  const src = useInfiniteQuery(sourceDocsQuery(id));
   const sources = useQuery(sourcesQuery);
   const [editing, setEditing] = useState(false);
   const close = () => void press('docs.list', { tab: 'sources' });
-  const s = src.data?.source;
+  const s = src.data?.pages[0]?.source;
+  const docs = src.data?.pages.flatMap((page) => page.documents);
   const row = sources.data?.sources.find((x) => x.id === id);
   return (
     <SidePanel
@@ -325,9 +325,9 @@ function SourcePanel({ id }: { id: string }) {
         </>
       }
     >
-      {src.isError && <Empty title="This source did not load" icon="alert" />}
-      {src.data && !src.data.documents.length && <Empty title="No documents yet" />}
-      {src.data?.documents.map((d) => (
+      {src.isLoadingError && <Empty title="This source did not load" icon="alert" />}
+      {docs?.length === 0 && !src.hasNextPage && <Empty title="No documents yet" />}
+      {docs?.map((d) => (
         <Link key={d.id} className="row lrow frow" to="/library/$doc" params={{ doc: `ext:${d.id}` }} search={d.commit ? { revision: d.commit } : {}} title={d.title}>
           <span className="lead">
             <Icon name="file" />
@@ -338,6 +338,7 @@ function SourcePanel({ id }: { id: string }) {
           <span />
         </Link>
       ))}
+      {src.hasNextPage && <MoreDocs loading={src.isFetching} failed={src.isFetchNextPageError} fetchNext={src.fetchNextPage} />}
     </SidePanel>
   );
 }

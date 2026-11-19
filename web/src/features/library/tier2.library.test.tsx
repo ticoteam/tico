@@ -1,9 +1,10 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '@/actions';
+import type { DocSource } from '@/api/schema';
 // eslint-disable-next-line no-restricted-imports -- the test lends its router to dispatch, as the shell's ActionsRoot does
 import { bind } from '@/actions/bind';
 import { queryClient } from '@/data';
@@ -75,17 +76,23 @@ function at(path: string, node: ReactNode = null) {
 
 /* ---------------------------------------------------------------- docs: outside sources */
 
-const source = {
+const source: DocSource = {
   id: 'src1',
   title: 'Fern handbook',
   kind: 'github',
+  provider: 'github',
   status: 'ready',
   doc_count: 12,
   added_by: 'human:me',
   last_checked_at: '2026-11-18T00:00:00Z',
   url: 'https://github.com/example/handbook',
   description: '',
-  reference_override: null,
+  reference_override: '',
+  repo: 'example/handbook',
+  reference: 'main',
+  path: '',
+  skipped: 0,
+  error_code: '',
 };
 
 describe('External sources', () => {
@@ -109,13 +116,48 @@ describe('External sources', () => {
 
   it('one source lists its documents, each opening as an outside doc, and reads it again @s777', async () => {
     const sent = serve();
-    queryClient.setQueryData(sourceDocsQuery('src1').queryKey, { source, documents: [{ id: 'x1', title: 'Watering', path: 'care/watering.md' }] } as never);
+    queryClient.setQueryData(sourceDocsQuery('src1').queryKey, {
+      pages: [{ source, documents: [{ id: 'x1', title: 'Watering', path: 'care/watering.md', commit: '' }], next_cursor: null }],
+      pageParams: [''],
+    });
     at('/library/docs?tab=sources&panel=src1', <DocsPage search={{ tab: 'sources', panel: 'src1' }} />);
     const doc = (await screen.findByText('Watering')).closest('a') as HTMLElement;
     expect(doc.getAttribute('href')).toMatch(/^\/library\/ext(:|%3A)x1$/);
     expect(screen.getByRole('link', { name: 'Open the source' }).getAttribute('href')).toBe(source.url);
     fireEvent.click(screen.getByRole('button', { name: 'Read again' }));
     await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/doc-sources/src1/refresh', method: 'POST', body: {} }]));
+  });
+
+  it('loads later documents when the reader reaches the end of the source panel', async () => {
+    const sent = serve((url) =>
+      url === '/api/v2/doc-sources/src1/documents?limit=200&cursor=next'
+        ? { source, documents: [{ id: 'x2', title: 'Pruning', path: 'care/pruning.md', commit: '' }], next_cursor: null }
+        : {},
+    );
+    let reachEnd = () => {};
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(callback: (entries: { isIntersecting: boolean }[]) => void, options: { root: Element }) {
+          expect(options.root?.classList.contains('rail-body')).toBe(true);
+          reachEnd = () => callback([{ isIntersecting: true }]);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    queryClient.setQueryData(sourceDocsQuery('src1').queryKey, {
+      pages: [{ source, documents: [{ id: 'x1', title: 'Watering', path: 'care/watering.md', commit: '' }], next_cursor: 'next' }],
+      pageParams: [''],
+    });
+    at('/library/docs?tab=sources&panel=src1', <DocsPage search={{ tab: 'sources', panel: 'src1' }} />);
+    expect((await screen.findByText('Watering')).closest('a')?.getAttribute('href')).toMatch(/^\/library\/ext(:|%3A)x1$/);
+    act(() => reachEnd());
+    expect((await screen.findByText('Pruning')).closest('a')?.getAttribute('href')).toMatch(/^\/library\/ext(:|%3A)x2$/);
+    expect(screen.getByText('Watering')).toBeTruthy();
+    expect(sent.filter(({ url }) => url.includes('/documents'))).toEqual([
+      expect.objectContaining({ url: '/api/v2/doc-sources/src1/documents?limit=200&cursor=next' }),
+    ]);
   });
 
   it('links a new source and lands on it; Edit takes one off the list @s817', async () => {
@@ -134,7 +176,7 @@ describe('External sources', () => {
 
     const edits = serve((url) => (url.startsWith('/api/v2/doc-sources?') ? { sources: [source], next_cursor: null } : undefined));
     queryClient.setQueryData(sourcesQuery.queryKey, { sources: [source], next_cursor: null } as never);
-    queryClient.setQueryData(sourceDocsQuery('src1').queryKey, { source, documents: [] } as never);
+    queryClient.setQueryData(sourceDocsQuery('src1').queryKey, { pages: [{ source, documents: [], next_cursor: null }], pageParams: [''] });
     at('/library/docs?tab=sources&panel=src1', <DocsPage search={{ tab: 'sources', panel: 'src1' }} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     const edit = await screen.findByRole('dialog', { name: 'Edit source' });
