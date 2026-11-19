@@ -1,0 +1,174 @@
+import { QueryClientProvider } from '@tanstack/react-query';
+import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { keys, queryClient } from '@/data';
+import { useFollow } from '@/live/follow';
+import type { TaskData } from './queries';
+import { TaskPage } from './TaskPage';
+
+vi.mock('@/live/follow', () => ({ useFollow: vi.fn() }));
+vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
+
+type Reply = { status: number; body: unknown };
+const calls: string[] = [];
+function serve(reply: (url: string, method: string) => Reply | Promise<Reply>) {
+  vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET';
+    calls.push(`${method} ${String(url)}`);
+    const r = await reply(String(url), method);
+    return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
+  });
+}
+
+function show(node: ReactNode, at = '/tasks/p1/12') {
+  const root = createRootRoute({ component: () => node });
+  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [at] }) });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+}
+
+/* Made-up rows only. */
+const task = (more: Partial<TaskData> = {}): TaskData =>
+  ({
+    id: 't1',
+    number: 12,
+    title: 'Fix the sign-in page',
+    status: 'open',
+    lane: 'open',
+    pipeline_id: 'p1',
+    pipeline: { id: 'p1', name: 'Product' },
+    stage_id: 's2',
+    stage: { id: 's2', name: 'Review' },
+    owner_id: 'bot:a1',
+    requester_id: 'human:me',
+    labels: [],
+    created_at: '2026-11-01T10:00:00Z',
+    due_at: null,
+    late: null,
+    documents: [
+      { file_id: 'f1', name: 'Spec', version: 2, approved_version: 2 },
+      { file_id: 'f2', name: 'QA report', version: 1 },
+    ],
+    to_leave: [
+      { requirement_id: 'r1', line: 'QA report approved', met: false, may: ['ok', 'no'], approval: { document: 'QA report', file_id: 'f2' } },
+      { requirement_id: 'r0', line: 'Spec approved', met: true, may: [] },
+    ],
+    runs: [],
+    children: [],
+    parent: null,
+    can_comment: true,
+    mover: true,
+    ...more,
+  }) as unknown as TaskData;
+
+const detail = (t: TaskData) => ({ task: t, runs: [], children: [], comments: [], events: [], messages: [], has_more: false, can_comment: true, mover: true });
+
+const ok: Reply = { status: 200, body: {} };
+function base(url: string): Reply {
+  if (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1')) return { status: 200, body: detail(task()) };
+  if (url.includes('/files')) return { status: 200, body: { files: [] } };
+  if (url.includes('/api/v2/pages/')) return { status: 200, body: { page: { src: 'about:blank' } } };
+  if (url.includes('/api/v2/pipelines')) return { status: 200, body: { pipelines: [] } };
+  if (url.includes('/needs-you')) return { status: 200, body: { items: [] } };
+  return ok;
+}
+
+beforeAll(() => {
+  queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } });
+});
+beforeEach(() => {
+  calls.length = 0;
+  queryClient.clear();
+  queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
+  queryClient.setQueryData(['directory'], { actors: [], byId: {} });
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.mocked(useFollow).mockClear();
+});
+
+describe('one open task', () => {
+  it('opens on the page that waits on the person, with every tab a link, and follows the task', async () => {
+    serve(base);
+    show(<TaskPage task="12" pipeline="p1" />);
+    expect(await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' })).toBeTruthy();
+    const tabs = screen.getByRole('navigation', { name: 'Fix the sign-in page pages' });
+    expect(within(tabs).getByRole('link', { name: /QA report/ }).getAttribute('aria-current')).toBe('page');
+    expect(within(tabs).getByRole('link', { name: /Spec/ }).getAttribute('href')).toBe('/tasks/p1/12/spec');
+    expect(within(tabs).getByRole('link', { name: 'Details' }).getAttribute('href')).toBe('/tasks/p1/12/details');
+    expect(await screen.findByTitle('QA report')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Product' }).getAttribute('href')).toBe('/tasks/p1');
+    expect(vi.mocked(useFollow)).toHaveBeenCalledWith({ task: 't1' });
+  });
+
+  it('draws Details: what it needs to leave its stage, with what is met folded', async () => {
+    serve(base);
+    show(<TaskPage task="12" pipeline="p1" tab="details" />, '/tasks/p1/12/details');
+    expect(await screen.findByRole('heading', { name: /To leave Review/ })).toBeTruthy();
+    expect(screen.getByText('QA report approved')).toBeTruthy();
+    expect(screen.queryByText('Spec approved')).toBeNull();
+  });
+
+  it('inside Flow, keeps the tab in the search', async () => {
+    serve(base);
+    show(<TaskPage task="12" tab="spec" flow />, '/flow/12?tab=spec');
+    const tabs = await screen.findByRole('navigation', { name: 'Fix the sign-in page pages' });
+    expect(within(tabs).getByRole('link', { name: 'Details' }).getAttribute('href')).toBe('/flow/12?tab=details');
+    expect(screen.getByRole('link', { name: 'Flow' }).getAttribute('href')).toBe('/flow');
+  });
+
+  it('shows an approval at once and takes it back with the server’s reason when refused', async () => {
+    let refuse!: () => void;
+    serve((url, method) => {
+      if (url.includes('/api/v2/oks/')) return { status: 404, body: { error: { code: 'not_found', detail: 'none' } } };
+      if (method === 'POST' && url.includes('/asks/r1/answer'))
+        return new Promise<Reply>(
+          (r) => (refuse = () => r({ status: 409, body: { error: { code: 'task_stage_rule', detail: 'The QA report has no checks yet', missing: [] } } })),
+        );
+      return base(url);
+    });
+    show(<TaskPage task="12" pipeline="p1" />);
+    const card = await screen.findByRole('region', { name: 'Answer' });
+    fireEvent.click(within(card).getByRole('button', { name: 'Approve' }));
+    await waitFor(() => {
+      const held = queryClient.getQueryData<TaskData>(keys.tasks.detail('t1'));
+      expect(held?.to_leave?.find((r) => r.requirement_id === 'r1')?.met).toBe(true);
+    });
+    await waitFor(() => expect(calls.some((c) => c.includes('/asks/r1/answer'))).toBe(true));
+    const tabs = screen.getByRole('navigation', { name: 'Fix the sign-in page pages' });
+    expect(within(tabs).getByRole('link', { name: /QA report/ }).getAttribute('aria-current')).toBe('page');
+    await act(async () => refuse());
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'The QA report has no checks yet');
+    await waitFor(() => {
+      const back = queryClient.getQueryData<TaskData>(keys.tasks.detail('t1'));
+      expect(back?.to_leave?.find((r) => r.requirement_id === 'r1')?.met).toBe(false);
+    });
+    expect(within(screen.getByRole('region', { name: 'Answer' })).getByRole('button', { name: 'Approve' })).toBeTruthy();
+  });
+
+  it('says when there is no such task', async () => {
+    serve(() => ({ status: 404, body: { error: { code: 'not_found', detail: 'No such task' } } }));
+    show(<TaskPage task="99" pipeline="p1" />, '/tasks/p1/99');
+    expect(await screen.findByRole('heading', { name: 'No such task' })).toBeTruthy();
+  });
+
+  it('shows nothing of a task the person may not see', async () => {
+    serve(() => ({ status: 403, body: { error: { code: 'forbidden', detail: 'no' } } }));
+    show(<TaskPage task="12" pipeline="p1" />);
+    expect(await screen.findByRole('heading', { name: "You don't have access to this page" })).toBeTruthy();
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+  });
+
+  it('offers Try again when the read fails', async () => {
+    serve(() => ({ status: 500, body: { error: { code: 'oops', detail: 'down' } } }));
+    show(<TaskPage task="12" pipeline="p1" />);
+    // The read is tried once more (after a second) before the fault shows.
+    expect(await screen.findByRole('heading', { name: 'Task did not load' }, { timeout: 4000 })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+  });
+});
