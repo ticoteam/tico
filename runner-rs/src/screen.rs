@@ -19,7 +19,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
@@ -69,8 +69,12 @@ fn window_manager() -> Option<&'static str> {
         .find(|w| crate::env::which(w, &path).is_some())
 }
 const LOCK_EVERY: Duration = Duration::from_secs(5);
-/// The hub fails a session no computer answered within 30 s; the stream's word is the fast path.
+/// The hub fails a session no computer answered within 30 s; the stream's word is the fast path. Without the stream
+/// (down, or a server that has none) the sessions are read this often.
 const POLL_EVERY: Duration = Duration::from_secs(10);
+/// With the stream up, `screen_open` is how a session arrives: the hub writes it as a change row, which a resumed
+/// stream sends again. The read is then only a backstop, and once more whenever the stream comes back.
+const BACKUP_EVERY: Duration = Duration::from_secs(300);
 /// The hub ends a session at 60 minutes; this is the runner's own backstop.
 const SESSION_CAP: Duration = Duration::from_secs(61 * 60);
 /// How often a computer with its screen on asks whether the hub takes screens (a hub update can add it).
@@ -521,9 +525,9 @@ static STARTED: AtomicBool = AtomicBool::new(false);
 
 /// Follow the local lock for as long as the runner runs: start and restart the display while on (Linux), stop
 /// it and every bridge when turned off, and open the hub's sessions.
-pub fn start(config_path: PathBuf, client: Client) {
+pub fn start(config_path: PathBuf, client: Client, events: Arc<crate::events::Events>) {
     STARTED.store(true, Ordering::SeqCst);
-    tokio::spawn(sessions(client.clone()));
+    tokio::spawn(sessions(client.clone(), events));
     tokio::spawn(async move {
         let s = shared();
         let mut procs = children();
@@ -715,18 +719,35 @@ pub async fn shutdown() {
 
 // ------------------------------------------------------------------------------------------ sessions
 
-/// While the display is up: the hub's pending sessions, every POLL_EVERY and at once on `screen_open`.
-async fn sessions(client: Client) {
+/// Whether the sessions loop reads the hub's pending sessions now: on `screen_open` (`hinted`), on the stream coming
+/// back (`back`), every POLL_EVERY while the stream is not up, and every BACKUP_EVERY while it is.
+fn read_due(hinted: bool, live: bool, back: bool, read_at: Option<Instant>, now: Instant) -> bool {
+    hinted
+        || back
+        || !live
+        || read_at.is_none_or(|at| now.saturating_duration_since(at) >= BACKUP_EVERY)
+}
+
+/// While the display is up: the hub's pending sessions, at once on `screen_open`, and on the clock `read_due` keeps.
+async fn sessions(client: Client, events: Arc<crate::events::Events>) {
     let s = shared();
     let mut said: Option<String> = None;
+    let (mut read_at, mut was_live) = (None, false);
     loop {
-        tokio::select! {
-            _ = tokio::time::sleep(POLL_EVERY) => {}
-            _ = s.wake.notified() => {}
-        }
+        let hinted = tokio::select! {
+            _ = tokio::time::sleep(POLL_EVERY) => false,
+            _ = s.wake.notified() => true,
+        };
+        let live = events.live();
+        let back = live && !was_live;
+        was_live = live;
         if !s.up.load(Ordering::SeqCst) || !s.hub.load(Ordering::SeqCst) {
             continue;
         }
+        if !read_due(hinted, live, back, read_at, Instant::now()) {
+            continue;
+        }
+        read_at = Some(Instant::now());
         let rows = match client.get("runners/me/screen/sessions").await {
             Ok(v) => {
                 said = None;
@@ -867,6 +888,20 @@ async fn bridge(client: &Client, session_id: &str, endpoint: Endpoint) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn with_the_stream_up_sessions_come_by_push_and_the_read_is_a_backstop() {
+        let now = Instant::now();
+        let just = Some(now - Duration::from_secs(10));
+        // Stream down, or a hub without one: every POLL_EVERY, as before.
+        assert!(read_due(false, false, false, just, now));
+        // Stream up: no read until BACKUP_EVERY, except on `screen_open` or when the stream comes back.
+        assert!(!read_due(false, true, false, just, now));
+        assert!(read_due(true, true, false, just, now));
+        assert!(read_due(false, true, true, just, now));
+        assert!(read_due(false, true, false, Some(now - BACKUP_EVERY), now));
+        assert!(read_due(false, true, false, None, now));
+    }
 
     #[test]
     fn the_lock_is_off_unless_turned_on_and_the_environment_wins() {
