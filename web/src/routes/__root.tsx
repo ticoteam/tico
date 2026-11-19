@@ -11,6 +11,7 @@ import { Toasts } from '@/kit/Toast';
 import { startLive, useLiveStatus } from '@/live';
 import { useMotionRoot } from '@/motion';
 import { PanelHost, usePagePanelOpen } from '@/pagekinds';
+import { useTheme } from '@/prefs';
 import { openSearch } from '@/search';
 import { Frame, Menu, Sheet, SheetHead, foldSheet, type MenuMate, type MenuTeam } from '@/shell';
 import { TicoSheet } from '@/tico';
@@ -37,6 +38,7 @@ const closeChat = () => void run('shell.closeChat', {}, { via: 'click' });
 
 function Root() {
   useMotionRoot();
+  useTheme();
   const router = useRouter();
   const me = useQuery(meQuery);
   const signedIn = me.isSuccess;

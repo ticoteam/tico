@@ -22,6 +22,9 @@ export interface Result {
   ok: boolean;
   did?: string;
   error?: string;
+  /** What the action returned (a token shown once, a sign-in), for the person's own press only: never from Tico, never
+      posted to the server. */
+  out?: unknown;
 }
 
 /* Methods (not function properties) on purpose: their inputs are checked bivariantly, so any Action<I> can sit in the

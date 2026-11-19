@@ -3,9 +3,13 @@ import { directoryQuery } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
 import { Empty } from '@/kit/Empty';
+import { Link as To } from '@/kit/Link';
+import { Select } from '@/kit/Select';
+import { run } from '@/actions/run';
 import { FiguresStrip, Section } from '@/pagekinds';
+import { fixHref } from './fixes';
 import { Foot, Word, micros } from './parts';
-import { billingQuery, changelogQuery, healthQuery, historyQuery } from './queries';
+import { billingQuery, changelogQuery, healthQuery, historyFilter, historyFor, type HealthFix } from './queries';
 
 /* The sections that are mostly read: Billing, History, Health, Changelog. */
 
@@ -77,13 +81,30 @@ const KIND: Record<string, string> = {
   decision: 'Decision',
 };
 
-export function History() {
-  const history = useQuery(historyQuery);
+const EVERYONE = '';
+
+/** `who` (the address's `?who=`): one person's or agent's changes. */
+export function History({ who }: { who?: string }) {
+  const history = useQuery(historyFor(who));
   const dir = useQuery(directoryQuery);
   const h = history.data;
   if (!h) return null;
+  const options = [
+    { value: EVERYONE, label: 'Everyone' },
+    ...(dir.data?.actors ?? []).map((a) => ({ value: a.id, label: a.name, meta: a.kind === 'agent' ? 'Agent' : undefined })),
+  ];
+  const pick = (
+    <Select
+      label="Who"
+      labelHidden
+      look="quiet"
+      value={who ?? EVERYONE}
+      options={options}
+      onValueChange={(v) => void run('page.filter', { search: { who: v || null } }, { via: 'click' })}
+    />
+  );
   return (
-    <Section name="History" count={h.items.length} target="setting:history">
+    <Section name="History" count={h.items.length} actions={pick} target="setting:history">
       {h.items.length === 0 ? (
         <Empty title="Nothing yet" />
       ) : (
@@ -104,7 +125,7 @@ export function History() {
         })
       )}
       <Foot>
-        <a className="verb" href="/api/v2/history.csv" download>
+        <a className="verb" href={`/api/v2/history.csv${historyFilter(who)}`} download>
           Download CSV
         </a>
       </Foot>
@@ -113,6 +134,21 @@ export function History() {
 }
 
 const SAY: Record<string, string> = { ok: 'Fine', info: 'Note', warn: 'Look', bad: 'Broken' };
+
+/** A check's first fix: a link where the new app has the page, else its words. */
+function Fix({ f }: { f: HealthFix }) {
+  const to = fixHref(f);
+  if (!to) return <span className="row-cell">{f.label}</span>;
+  return to.startsWith('/') ? (
+    <To className="verb" href={to}>
+      {f.label}
+    </To>
+  ) : (
+    <a className="verb" href={to} target="_blank" rel="noreferrer">
+      {f.label}
+    </a>
+  );
+}
 
 export function Health() {
   const health = useQuery(healthQuery);
@@ -129,7 +165,7 @@ export function Health() {
             <div key={c.id} className={fine ? 'row g-hl' : 'row g-hl is-bad'} title={c.label} data-target={`check:${c.id}`}>
               <span className="row-title">{c.label}</span>
               <span className="row-sub">{c.summary}</span>
-              <span className="hl-act" />
+              <span className="hl-act">{c.fixes?.[0] && <Fix f={c.fixes[0]} />}</span>
               <span className="row-state">
                 <Word fine={fine}>{SAY[c.status] ?? c.status}</Word>
               </span>

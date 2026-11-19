@@ -2,19 +2,22 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { run } from '@/actions/run';
-import { directoryQuery } from '@/data';
+import { configQuery, directoryQuery } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Field } from '@/kit/Field';
+import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
+import { Link as To } from '@/kit/Link';
 import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
+import { Segmented } from '@/kit/Segmented';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
-import { take } from './handover';
-import { Foot, Line, Meter, SwitchLine, Verb, Word, act, usd } from './parts';
+import { installCommands, type Command, type ComputerKind, type RunnerConfig } from './install';
+import { Foot, Line, Meter, SwitchLine, Verb, Word, act, usd, useVisible } from './parts';
 import {
   LIVE_SIGN_IN,
   computersQuery,
@@ -29,6 +32,9 @@ import {
 
 /* Agents (what pays for them, then the agents), Computers and Models. */
 
+const RETRY_MS = 3000;
+const GIVE_UP_MS = 5 * 60_000;
+
 // ---------------------------------------------------------------- a sign-in to Claude or Codex, one tap
 
 function SignInDialog({ kind, onClose }: { kind: 'claude_login' | 'codex_login'; onClose: () => void }) {
@@ -37,29 +43,38 @@ function SignInDialog({ kind, onClose }: { kind: 'claude_login' | 'codex_login';
   const [error, setError] = useState<string | null>(null);
   const [code, setCode] = useState('');
   const [tries, setTries] = useState(0);
-  // Start, and while its computer wakes (no id yet), ask again every 3 s.
+  // Both timers here (connect again every 3 s while the computer wakes, then the 2 s follow) stop when the dialog
+  // closes (unmounted), wait while the tab is hidden, and end after 5 minutes.
+  const visible = useVisible();
+  const [late, setLate] = useState(false);
   useEffect(() => {
+    const t = setTimeout(() => setLate(true), GIVE_UP_MS);
+    return () => clearTimeout(t);
+  }, []);
+  useEffect(() => {
+    if (late || !visible || login || error) return;
     let gone = false;
     const timer = setTimeout(
       () => {
         void run('settings.connect', { kind }, { via: 'click' }).then((r) => {
           if (gone) return;
           if (!r.ok) return setError(r.error ?? "Couldn't start");
-          const got = take<SignIn | null>('sign-in') ?? null;
+          const got = (r.out as SignIn | null | undefined) ?? null;
           if (!got) return setError('No computer can sign in yet');
           if (got.id) setLogin(got);
           else if (got.waking) setTries((n) => n + 1);
           else setError(got.message ?? 'No computer can sign in yet');
         });
       },
-      tries === 0 ? 0 : 3000,
+      tries === 0 ? 0 : RETRY_MS,
     );
     return () => {
       gone = true;
       clearTimeout(timer);
     };
-  }, [kind, tries]);
-  const follow = useQuery({ ...signInQuery(login?.runner_id ?? '', login?.id ?? ''), enabled: !!login?.id });
+  }, [kind, tries, late, visible, login, error]);
+  // A hidden tab pauses the follow too: Query does not poll in the background.
+  const follow = useQuery({ ...signInQuery(login?.runner_id ?? '', login?.id ?? ''), enabled: !!login?.id && !late });
   const now = { ...login, ...follow.data } as SignIn;
   const state = now.state ?? (login ? 'starting' : 'requested');
   const finished = useRef(false);
@@ -74,7 +89,13 @@ function SignInDialog({ kind, onClose }: { kind: 'claude_login' | 'codex_login';
     if (login?.id && login.runner_id && LIVE_SIGN_IN.includes(state)) void run('settings.cancelSignIn', { computer: login.runner_id, login: login.id }, { via: 'click' });
     onClose();
   };
-  const ended = error ?? (state === 'failed' ? (now.message ?? 'The sign-in did not finish') : state === 'expired' ? 'The sign-in ran out of time' : null);
+  const ended =
+    error ??
+    (state === 'failed'
+      ? (now.message ?? 'The sign-in did not finish')
+      : state === 'expired' || (late && state !== 'done')
+        ? 'The sign-in ran out of time'
+        : null);
   const send = () => {
     if (!login?.id || !login.runner_id) return;
     void act('settings.signInCode', { computer: login.runner_id, login: login.id, code: code.trim() });
@@ -313,13 +334,19 @@ export function Agents({ open }: { open?: string }) {
             {agents.map((a) => {
               const l = a.slug ? limits.data?.bots[a.slug] : undefined;
               return (
-                <div key={a.id} className={l?.blocked ? 'row g-bot is-bad' : 'row g-bot'} title={a.name} data-target={`agent:${a.slug ?? a.id}`}>
+                <To
+                  key={a.id}
+                  href={`/team/${encodeURIComponent(a.slug ?? a.id)}?tab=model`}
+                  className={l?.blocked ? 'row g-bot is-bad' : 'row g-bot'}
+                  title={a.name}
+                  data-target={`agent:${a.slug ?? a.id}`}
+                >
                   <Avatar kind="agent" name={a.name} hue={a.hue} decorative />
                   <span className="row-title">{a.name}</span>
                   <span className="row-cell">{a.team ?? ''}</span>
                   <span className="row-cell">{l ? <Meter pct={l.percent} over={!!l.blocked} /> : null}</span>
                   <span className="row-fig">{l?.monthly_usd != null ? usd(l.monthly_usd) : 'None'}</span>
-                </div>
+                </To>
               );
             })}
           </>
@@ -405,39 +432,97 @@ function ComputerOpen({ c }: { c: Computer }) {
   );
 }
 
+const KINDS = [
+  { value: 'server', label: 'Server' },
+  { value: 'mac', label: 'Mac' },
+  { value: 'windows', label: 'Windows' },
+] as const;
+
+function CommandLine({ c }: { c: Command }) {
+  return (
+    <div className="set-cmd">
+      <span className="set-cmd-note">{c.note}</span>
+      <div className="set-cmd-row">
+        <code className="fs-code">{c.line}</code>
+        <IconButton
+          icon="copy"
+          label="Copy"
+          size="sm"
+          quiet
+          onClick={() => void navigator.clipboard?.writeText(c.line).then(() => toast({ text: 'Copied', kind: 'done' }))}
+        />
+      </div>
+    </div>
+  );
+}
+
 function AddComputer() {
+  const config = useQuery(configQuery);
+  const [open, setOpen] = useState(false);
+  const [kind, setKind] = useState<ComputerKind>('server');
+  const [label, setLabel] = useState('');
   const [code, setCode] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const close = () => {
+    setOpen(false);
+    setCode(null);
+    setLabel('');
+  };
   const start = async () => {
     setBusy(true);
-    const ok = await act('settings.addComputer', {});
+    const r = await run('settings.addComputer', {}, { via: 'click' });
     setBusy(false);
-    if (ok) setCode(take<string>('enroll') ?? null);
+    if (!r.ok) return toast({ text: "Couldn't make a code", kind: 'failed' });
+    setCode((r.out as { code?: string } | undefined)?.code ?? null);
   };
+  const [main, ...more] = code
+    ? installCommands((config.data ?? {}) as RunnerConfig, location.origin, kind, code, label.trim())
+    : [];
   return (
     <>
-      <Button icon="plus" busy={busy} onClick={() => void start()}>
+      <Button icon="plus" onClick={() => setOpen(true)}>
         Add computer
       </Button>
       <Dialog
-        open={code != null}
-        onOpenChange={(o) => !o && setCode(null)}
+        open={open}
+        onOpenChange={(o) => !o && close()}
         title="Add a computer"
-        description="Run the Tico installer on the computer and give it this code. It works once, and is not shown again."
+        description={code ? 'The code works once, for 15 minutes, and is not shown again.' : undefined}
         actions={
-          <Button
-            variant="primary"
-            icon="copy"
-            onClick={() => {
-              if (code) void navigator.clipboard?.writeText(code);
-              setCode(null);
-            }}
-          >
-            Copy
-          </Button>
+          code ? (
+            <Button variant="primary" onClick={close}>
+              Done
+            </Button>
+          ) : (
+            <>
+              <Button variant="quiet" onClick={close}>
+                Cancel
+              </Button>
+              <Button variant="primary" busy={busy} disabled={!label.trim()} onClick={() => void start()}>
+                Get code
+              </Button>
+            </>
+          )
         }
       >
-        <code className="fs-code">{code}</code>
+        {main ? (
+          <div className="set-add">
+            <CommandLine c={main} />
+            {more.length > 0 && (
+              <details className="set-more">
+                <summary>Other ways</summary>
+                {more.map((c) => (
+                  <CommandLine key={c.line} c={c} />
+                ))}
+              </details>
+            )}
+          </div>
+        ) : (
+          <div className="set-add">
+            <Segmented label="Kind" options={KINDS} value={kind} onValueChange={setKind} />
+            <Field label="Name" value={label} onValueChange={setLabel} autoComplete="off" />
+          </div>
+        )}
       </Dialog>
     </>
   );

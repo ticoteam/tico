@@ -1,7 +1,7 @@
 import { defineAction, s } from '@/actions';
 import { meQuery } from '@/data';
 import { setMotionChoice } from '@/motion';
-import { removePref, writePref } from '@/prefs';
+import { setThemeChoice, type Theme } from '@/prefs';
 import {
   addPerson,
   addSubscription,
@@ -23,6 +23,11 @@ import {
   sendInvite,
   setMyNotice,
   setPageOwner,
+  setRoadmap,
+  addContactField,
+  contactTypeQuery,
+  contactTypesQuery,
+  FIELD_KINDS,
   setRole,
   setRule,
   setScreening,
@@ -30,7 +35,6 @@ import {
   subscriptionsQuery,
   tokensQuery,
 } from './queries';
-import { handOver } from './handover';
 import { SECTION_IDS } from './sections';
 
 /* Every change on Settings and Usage. Appearance is this device's own (prefs); the rest goes to the server. Anything
@@ -53,24 +57,12 @@ export const openSection = defineAction({
 
 // ---------------------------------------------------------------- appearance (this device)
 
-export type Theme = 'system' | 'light' | 'dark';
-export const THEME_KEY = 'theme.v1';
-
-/** The theme boot.js sets before paint, set again now: system follows the device's light or dark. */
-export function applyTheme(theme: Theme): void {
-  const light = theme === 'light' || (theme === 'system' && matchMedia('(prefers-color-scheme: light)').matches);
-  document.documentElement.setAttribute('data-theme', light ? 'light' : 'dark');
-}
-
 export const setTheme = defineAction({
   id: 'settings.setTheme',
   title: 'Change the theme',
   kind: 'change',
   input: s.object({ theme: s.oneOf(['system', 'light', 'dark'] as const) }),
-  run: (_ctx, { theme }) => {
-    writePref(THEME_KEY, theme);
-    applyTheme(theme);
-  },
+  run: (_ctx, { theme }: { theme: Theme }) => setThemeChoice(theme),
   did: ({ theme }) => `Theme set to ${theme}`,
   target: () => setting('theme'),
 });
@@ -83,17 +75,6 @@ export const setMotion = defineAction({
   run: (_ctx, { motion }) => setMotionChoice(motion),
   did: ({ motion }) => `Motion set to ${motion}`,
   target: () => setting('motion'),
-});
-
-export const resetSizes = defineAction({
-  id: 'settings.resetSizes',
-  title: 'Reset sheet sizes',
-  kind: 'change',
-  input: s.object({}),
-  // shell/memory.ts resetSheetSizes, which features may not import: the same key, forgotten.
-  run: () => removePref('sheets.v1'),
-  did: () => 'Sheet sizes reset',
-  target: () => setting('sizes'),
 });
 
 // ---------------------------------------------------------------- you
@@ -131,9 +112,9 @@ export const makeToken = defineAction({
   tico: false,
   run: async (ctx, { label }) => {
     const made = await createToken(label);
-    handOver('token', made.token);
     void ctx.queryClient.invalidateQueries({ queryKey: tokensQuery.queryKey });
-    return { id: made.id };
+    // Shown once, on this screen: the result carries it to the press (never to Tico, which cannot run this).
+    return { id: made.id, token: made.token };
   },
   did: () => 'Token made',
   target: () => setting('tokens'),
@@ -270,9 +251,7 @@ export const connect = defineAction({
   // The sign-in opens the provider's page in the person's own browser, signed in as them.
   tico: false,
   run: async (_ctx, { kind }) => {
-    const login = await startSignIn(kind);
-    handOver('sign-in', login);
-    return login?.id ? { id: login.id } : null;
+    return (await startSignIn(kind)) ?? null;
   },
   did: ({ kind }) => (kind === 'codex_login' ? 'Codex sign-in started' : 'Claude sign-in started'),
   target: () => setting('subscriptions'),
@@ -377,10 +356,55 @@ export const addComputer = defineAction({
   tico: false,
   run: async (ctx) => {
     const { code } = await enrollComputer(myId(ctx));
-    handOver('enroll', code);
+    return { code };
   },
   did: () => 'Code made',
   target: () => setting('computers'),
+});
+
+// ---------------------------------------------------------------- tasks and contacts
+
+export const roadmapLabels = defineAction({
+  id: 'settings.roadmapLabels',
+  title: 'Change the labels on the public roadmap',
+  kind: 'change',
+  input: s.object({ labels: s.array(s.string({ min: 1, max: 200 }), { max: 50 }) }),
+  // What the public sees.
+  tico: false,
+  run: (_ctx, { labels }) => setRoadmap({ labels }),
+  did: () => 'Roadmap changed',
+  target: () => setting('roadmap'),
+});
+
+export const roadmapApproval = defineAction({
+  id: 'settings.roadmapApproval',
+  title: "Ask a person before an agent's words go public",
+  kind: 'change',
+  input: s.object({ on: s.boolean() }),
+  tico: false,
+  run: (_ctx, { on }) => setRoadmap({ bot_public_approval: on }),
+  did: ({ on }) => (on ? 'Turned on' : 'Turned off'),
+  target: () => setting('roadmap-approval'),
+});
+
+export const addField = defineAction({
+  id: 'settings.addField',
+  title: 'Add a contact field',
+  kind: 'change',
+  input: s.object({
+    type: id('a contact type'),
+    name: s.string({ min: 1, max: 80 }),
+    kind: s.oneOf(FIELD_KINDS),
+    description: s.string({ min: 1, max: 500, what: 'what the field holds' }),
+  }),
+  run: async (ctx, { type, name, kind, description }) => {
+    const made = await addContactField(type, name, kind, description);
+    void ctx.queryClient.invalidateQueries({ queryKey: contactTypeQuery(type).queryKey });
+    void ctx.queryClient.invalidateQueries({ queryKey: contactTypesQuery.queryKey });
+    return made;
+  },
+  did: ({ name }) => `Added ${name}`,
+  target: ({ type }) => ({ kind: 'contact-type', id: type }),
 });
 
 // ---- usage (anchor: the Usage builder adds its actions below) ----

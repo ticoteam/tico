@@ -14,9 +14,7 @@ import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import type { MotionChoice } from '@/motion';
 import { Section } from '@/pagekinds';
-import { usePref } from '@/prefs';
-import { THEME_KEY, type Theme } from './actions';
-import { take } from './handover';
+import { THEME_KEY, usePref, type Theme } from '@/prefs';
 import { Foot, Line, SwitchLine, Verb, act } from './parts';
 import {
   accessQuery,
@@ -277,7 +275,7 @@ function Tokens() {
     setMaking(false);
     setLabel('');
     // The secret is shown once, here, and never read back.
-    setShown(take<string>('token') ?? null);
+    setShown((r.out as { token?: string } | undefined)?.token ?? null);
   };
   return (
     <Section
@@ -395,7 +393,7 @@ export function Account() {
             <Segmented label="Motion" options={MOTIONS} value={motion} onValueChange={(m) => void act('settings.setMotion', { motion: m })} />
           </Line>
           <Line label="Sheet sizes" target="setting:sizes">
-            <Verb onClick={() => void act('settings.resetSizes', {}).then((ok) => ok && toast({ text: 'Sheet sizes reset', kind: 'done' }))}>Reset</Verb>
+            <Verb onClick={() => void act('shell.resetSizes', {}).then((ok) => ok && toast({ text: 'Sheet sizes reset', kind: 'done' }))}>Reset</Verb>
           </Line>
         </Facts>
       </Section>

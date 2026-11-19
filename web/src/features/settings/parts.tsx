@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useSyncExternalStore, type ReactNode } from 'react';
 import { run } from '@/actions/run';
 import { Icon, type IconName } from '@/kit/Icon';
 import { Switch } from '@/kit/Switch';
@@ -12,6 +12,16 @@ export async function act(id: string, input: unknown): Promise<boolean> {
   const r = await run(id, input, { via: 'click' });
   if (!r.ok) toast({ text: "Couldn't save", kind: 'failed' });
   return r.ok;
+}
+
+const onVisibility = (fn: () => void) => {
+  document.addEventListener('visibilitychange', fn);
+  return () => document.removeEventListener('visibilitychange', fn);
+};
+
+/** Whether this tab is on screen: a timer waits while it is not. */
+export function useVisible(): boolean {
+  return useSyncExternalStore(onVisibility, () => document.visibilityState !== 'hidden', () => true);
 }
 
 /** The server said this read is for owners and admins. */

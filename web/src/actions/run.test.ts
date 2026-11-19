@@ -100,6 +100,16 @@ describe('run', () => {
     expect(await runIn(only, 'task.confirm', input, 'click', router)).toEqual({ ok: true, did: 'Gave #412 away' });
   });
 
+  it("gives the action's output to the person's own press, never to Tico", async () => {
+    did.mockReturnValue({ secret: 'shown-once' });
+    const input = { task: 412, owner: 'agent:qa' };
+    expect(await runIn(actions, 'task.setOwner', input, 'click', router)).toEqual({ ok: true, did: 'Gave #412 away', out: { secret: 'shown-once' } });
+    const fromTico = await runIn(actions, 'task.setOwner', input, 'tico', router);
+    expect(fromTico).toEqual({ ok: true, did: 'Gave #412 away' });
+    expect('out' in fromTico).toBe(false);
+    did.mockReset();
+  });
+
   it('refuses an unknown action', async () => {
     expect(await runIn(actions, 'task.nope', {}, 'tico', router)).toEqual({ ok: false, error: 'unknown_action: task.nope' });
   });

@@ -5,9 +5,11 @@ import {
   billingQuery,
   changelogQuery,
   computersQuery,
+  contactTypesQuery,
   healthQuery,
   historyQuery,
   modelsQuery,
+  roadmapQuery,
   screeningQuery,
   subscriptionsQuery,
 } from './queries';
@@ -30,6 +32,10 @@ export function mainQuery(section: SectionId) {
       return computersQuery;
     case 'models':
       return modelsQuery;
+    case 'tasks':
+      return roadmapQuery;
+    case 'contacts':
+      return contactTypesQuery;
     case 'security':
       return screeningQuery;
     case 'billing':

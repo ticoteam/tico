@@ -8,6 +8,8 @@ export const didCloseChat = 'Closed the chat';
 export const fold = 'Fold or open a sheet';
 export const didFold = (name: string, folded: boolean | undefined) =>
   folded === false ? `Opened ${name}` : folded ? `Folded ${name}` : `Folded or opened ${name}`;
+export const resetSizes = 'Reset sheet sizes';
+export const didResetSizes = 'Sheet sizes reset';
 export const openTask = 'Open a task';
 export const didOpenTask = (n: number) => `Opened #${n}`;
 export const filter = 'Filter the page';

@@ -255,18 +255,36 @@ export interface HistoryItem {
   result: string;
 }
 
-export const historyQuery = queryOptions({
-  queryKey: ['settings', 'history'],
-  queryFn: ({ signal }) =>
-    api.get<{ items: HistoryItem[]; names: Record<string, string>; next?: string | null }>('/api/v2/history', { signal }),
-  ...quiet,
-});
+/** `who`: an actor id from the directory ('bot:<slug>' or 'human:<id>'), as the server's `bot` or `person` filter. */
+export const historyFilter = (who?: string) => {
+  const m = who ? /^(bot|human):(.+)$/.exec(who) : null;
+  return m ? `?${m[1] === 'bot' ? 'bot' : 'person'}=${enc(m[2] ?? '')}` : '';
+};
+
+export const historyFor = (who?: string) =>
+  queryOptions({
+    queryKey: ['settings', 'history', who ?? ''],
+    queryFn: ({ signal }) =>
+      api.get<{ items: HistoryItem[]; names: Record<string, string>; next?: string | null }>(`/api/v2/history${historyFilter(who)}`, { signal }),
+    ...quiet,
+  });
+
+export const historyQuery = historyFor();
 
 export interface HealthCheck {
   id: string;
   label: string;
   status: 'ok' | 'info' | 'warn' | 'bad' | string;
   summary: string;
+  /** What to do about it: the old app's address (`#/settings` + `tab`), an outside page, or only a label. */
+  fixes?: HealthFix[];
+}
+
+export interface HealthFix {
+  label: string;
+  href?: string;
+  tab?: string;
+  click?: string;
 }
 
 export const healthQuery = queryOptions({
@@ -495,3 +513,103 @@ export const setDefaultLimit = (monthly: number | null) =>
     optimistic: (v: UsageLimits | undefined) => v && { ...v, default: { ...v.default, monthly_usd: monthly } },
     send: (idempotencyKey) => api.put('/api/v2/usage/limits', { monthly_usd: monthly }, { idempotencyKey }),
   });
+
+// ---------------------------------------------------------------- tasks: the public roadmap (GET /api/v2/roadmaps/settings)
+
+export interface RoadmapView {
+  /** The labels (tag keys) whose tasks show on a public page at /public/roadmaps/<label>. */
+  labels: string[];
+  cors_origins: string[];
+  action_limit: number;
+  suggestion_limit: number;
+  /** An agent's public words wait for a person's OK. */
+  bot_public_approval: boolean;
+  suggestions_bot: string | null;
+  suggestions_receiver?: { bot: string | null; name: string | null; source: string };
+}
+
+export const roadmapQuery = queryOptions({
+  queryKey: ['settings', 'roadmap'],
+  queryFn: ({ signal }) => api.get<RoadmapView>('/api/v2/roadmaps/settings', { signal }),
+  ...quiet,
+});
+
+export const setRoadmap = (change: Partial<Pick<RoadmapView, 'labels' | 'bot_public_approval'>>) =>
+  write({
+    key: roadmapQuery.queryKey,
+    optimistic: (v: RoadmapView | undefined) => v && { ...v, ...change },
+    send: (idempotencyKey) => api.post<RoadmapView>('/api/v2/roadmaps/settings', change, { idempotencyKey }),
+  });
+
+export interface TagRow {
+  id: string;
+  key: string;
+  label: string;
+  is_template: boolean;
+}
+
+export const labelsQuery = queryOptions({
+  queryKey: ['settings', 'labels'],
+  queryFn: async ({ signal }) =>
+    (await api.get<{ tags: TagRow[] }>('/api/v2/tags?is_template=false', { signal })).tags.filter((t) => !t.is_template),
+  ...quiet,
+});
+
+// ---------------------------------------------------------------- contacts: types and their fields (/api/v2/entities)
+
+export interface ContactType {
+  key: string;
+  name: string;
+  plural_name?: string | null;
+  description?: string | null;
+  built_in: boolean | number;
+}
+
+export interface ContactField {
+  key: string;
+  name: string;
+  description?: string | null;
+  value_type: string;
+  /** 'tico', or 'connection:<id>' for a field a connection fills. */
+  owner: string;
+  required: boolean;
+}
+
+export const contactTypesQuery = queryOptions({
+  queryKey: ['settings', 'contact-types'],
+  queryFn: async ({ signal }) => {
+    const [t, n] = await Promise.all([
+      api.get<{ types: ContactType[] }>('/api/v2/entities/types', { signal }),
+      api.get<{ counts: { type: string; count: number; approximate: boolean }[] }>('/api/v2/entities/counts', { signal }),
+    ]);
+    const count = new Map(n.counts.map((c) => [c.type, c]));
+    return t.types.map((type) => ({ ...type, count: count.get(type.key)?.count ?? 0, approximate: !!count.get(type.key)?.approximate }));
+  },
+  ...quiet,
+});
+
+export const contactTypeQuery = (type: string) =>
+  queryOptions({
+    queryKey: ['settings', 'contact-types', type],
+    queryFn: ({ signal }) => api.get<{ attributes: ContactField[] }>(`/api/v2/entities/types/${enc(type)}`, { signal }),
+    ...quiet,
+  });
+
+/** The kinds a field can be without a list of options. */
+export const FIELD_KINDS = ['text', 'number', 'currency', 'date', 'checkbox', 'email', 'phone', 'url', 'rating'] as const;
+export type FieldKind = (typeof FIELD_KINDS)[number];
+
+export const addContactField = (type: string, name: string, kind: FieldKind, description: string) =>
+  api.post<{ key: string; type: string }>(
+    `/api/v2/entities/types/${enc(type)}/attributes`,
+    {
+      key: name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 60),
+      name,
+      value_type: kind,
+      description,
+    },
+  );

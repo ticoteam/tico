@@ -44,7 +44,10 @@ export async function runIn(
   }
   // Reads never get here (they are not actions), and only Tico's hand flies the Dot.
   if (via === 'tico') await land(a.target?.(input, out) ?? null, a.kind === 'view', a.did?.(input, out) ?? a.title);
-  return { ok: true, did: a.did?.(input, out) ?? a.title };
+  const result: Result = { ok: true, did: a.did?.(input, out) ?? a.title };
+  // The output stays on this screen: Tico's runs never carry it (a token or code must not reach the conversation).
+  if (via !== 'tico' && out !== undefined) result.out = out;
+  return result;
 }
 
 /** Tico already made the change (`done`): go where it shows, fly, and do not write again. */

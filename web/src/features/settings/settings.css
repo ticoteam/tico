@@ -58,6 +58,11 @@ div.row{cursor:default}
 .g-mod{--g:minmax(0,1fr) 136px 44px 44px 76px 52px}
 .g-lim{--g:var(--av-sm) minmax(0,1fr) 150px 60px 60px 48px}
 .g-utask{--g:minmax(0,1fr) 40px 56px 44px 56px 44px}
+.g-road{--g:minmax(0,1fr) minmax(0,1.6fr) 28px}
+.g-ctype{--g:minmax(0,1fr) 96px}
+.g-cfield{--g:minmax(0,1fr) 120px 150px}
+.row.g-ctype[aria-current="true"]{background:var(--selected)}
+.g-cfield .row-cell .icon{margin-left:var(--s-1)}
 
 /* an opened row: it stays where it is, on a grey wash; its lines, then its verbs */
 .open{--surface:var(--selected);margin:var(--s-0) 0 var(--s-2);padding-bottom:var(--s-1);border-radius:var(--r-row);background:var(--selected)}
@@ -90,6 +95,13 @@ div.row{cursor:default}
 .fs-use.is-out{color:var(--ink);font-weight:var(--w-strong)}
 .g-fsub .ib{justify-self:end}
 .fs-code{display:block;font-family:var(--font-code);font-size:var(--t-sm);line-height:var(--lh-code);color:var(--ink);overflow-wrap:anywhere;user-select:all}
+/* Add computer: a command, its note above, its copy button at the right */
+.set-cmd{display:grid;gap:var(--s-1)}
+.set-cmd-note{font-size:var(--t-sm);color:var(--ink-2)}
+.set-cmd-row{display:flex;align-items:flex-start;gap:var(--s-2)}
+.set-cmd-row .fs-code{flex:1;min-width:0}
+.set-more{display:grid;gap:var(--s-3)}
+.set-more summary{cursor:pointer;font-size:var(--t-sm);color:var(--ink-2)}
 
 /* Usage (more.css): the range, the sum of an opened row, its token bar and key */
 .chart-sec{padding:var(--s-0) var(--s-2) var(--s-2h)}

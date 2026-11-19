@@ -1,5 +1,6 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import { openSearch } from '@/search';
+import { resetSheetSizes } from '@/shell';
 import { bound } from './bind';
 import * as copy from './copy';
 import { s } from './schema';
@@ -71,6 +72,17 @@ export const fold = defineAction({
   did: ({ sheet, folded }) => copy.didFold(copy.sheetName[sheet] ?? sheet, folded),
   target: ({ sheet }) => ({ kind: 'sheet', id: sheet }),
   keys: { '[': { sheet: 'menu' }, ']': { sheet: 'widgets' }, 'mod+j': { sheet: 'tico' } },
+});
+
+/** Forgets this device's sheet widths and folds; every open window follows. */
+export const resetSizes = defineAction({
+  id: 'shell.resetSizes',
+  title: copy.resetSizes,
+  kind: 'change',
+  input: s.object({}),
+  run: () => resetSheetSizes(),
+  did: () => copy.didResetSizes,
+  target: () => ({ kind: 'setting', id: 'sizes' }),
 });
 
 export const openTask = defineAction({

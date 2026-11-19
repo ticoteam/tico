@@ -7,24 +7,27 @@ import { Settings } from '@/pagekinds';
 import { Agents, Computers, Models } from './Agents';
 import { Billing, Changelog, Health, History } from './Records';
 import { Account, General, People, Security } from './Basics';
+import { Contacts, Tasks } from './Catalog';
 import { mainQuery } from './main';
 import { isForbidden } from './parts';
 import { NAV, type SectionId } from './sections';
 import './settings.css';
 
 /* Settings (kind: Settings). The section list on the left, the open section on the right; every control saves as it
-   changes. The address holds the section and an opened row (?open=). */
+   changes. The address holds the section, an opened row (?open=) and History's filter (?who=). */
 
-const BODY: Record<SectionId, (p: { open?: string }) => ReactNode> = {
+const BODY: Record<SectionId, (p: { open?: string; who?: string }) => ReactNode> = {
   general: () => <General />,
   people: ({ open }) => <People open={open} />,
   agents: ({ open }) => <Agents open={open} />,
   computers: ({ open }) => <Computers open={open} />,
   models: () => <Models />,
+  tasks: () => <Tasks />,
+  contacts: ({ open }) => <Contacts open={open} />,
   account: () => <Account />,
   security: () => <Security />,
   billing: () => <Billing />,
-  history: () => <History />,
+  history: ({ who }) => <History who={who} />,
   health: () => <Health />,
   changelog: () => <Changelog />,
 };
@@ -52,7 +55,7 @@ function Nav({ current }: { current: SectionId }) {
 }
 
 /** `list`: the plain /settings address. A phone shows the section list there; a wide screen shows the first section. */
-export function SettingsPage({ section, open, list = false }: { section: SectionId; open?: string; list?: boolean }) {
+export function SettingsPage({ section, open, who, list = false }: { section: SectionId; open?: string; who?: string; list?: boolean }) {
   const me = useQuery(meQuery);
   // The union of each section's options: one read, typed loosely here because only its state is used.
   const main = useQuery(mainQuery(section) as UseQueryOptions<unknown, Error, unknown, readonly unknown[]>);
@@ -68,7 +71,7 @@ export function SettingsPage({ section, open, list = false }: { section: Section
       nav={<Nav current={section} />}
       state={state}
       onRetry={() => void main.refetch()}
-      body={forbidden ? <Empty icon="lock" title="Owners and admins only" /> : <Body open={open} />}
+      body={forbidden ? <Empty icon="lock" title="Owners and admins only" /> : <Body open={open} who={who} />}
     />
   );
 }
