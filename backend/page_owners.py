@@ -49,6 +49,7 @@ PAGES: dict[str, dict[str, str]] = {
         "name": "Strategy",
         "default": "strategy-owner",
     },  # Strategy's other tabs: Market, Org, Budget, Lenses, Brand
+    "products": {"name": "Products", "default": "product-lead"},  # Company › Products; else the General Manager
     "goals": {"name": "Goals", "default": "strategy-owner"},
     "finance": {"name": "Finance", "default": "finance-owner"},  # with Bills (Payables)
     "growth": {"name": "Growth", "default": "growth-manager"},

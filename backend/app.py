@@ -2453,6 +2453,9 @@ def _install_features(
     from .entities import routes as entity_routes
 
     entity_routes.install(app, store, auth, mutate)  # Contacts: `tico contacts` (backend/entities/routes.py)
+    from . import products
+
+    products.install(app, store, auth, mutate)  # Company › Products: `tico products` (backend/products.py)
     from . import finance_ads_routes
 
     finance_ads_routes.install(app, store, auth, mutate)  # Finance: ad spend import settings on ad tools' pages
