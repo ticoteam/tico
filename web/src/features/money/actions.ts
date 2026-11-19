@@ -17,6 +17,7 @@ import {
   disconnectBooks,
   findGrowthManager,
   askGrowthManager,
+  growthReadQuery,
   segmentsQuery,
   KEY_SOURCES,
   removeBudget,
@@ -524,7 +525,8 @@ function growthScopeWords(router: AnyRouter, qc: typeof queryClient) {
   if (loc.pathname !== GROWTH) return '';
   const search = loc.search as { segment?: string; month?: string };
   const seg = search.segment && qc.getQueryData(segmentsQuery.queryKey)?.segments.find((x) => x.slug === search.segment);
-  return `${seg ? seg.name : 'All'}, ${monthName(search.month ?? lastFullMonth())}`;
+  const read = qc.getQueryData(growthReadQuery(search.segment, search.month).queryKey);
+  return `${seg ? seg.name : 'All'}, ${monthName(read?.period ?? search.month ?? lastFullMonth())}`;
 }
 
 /** Growth changes (channels, customers, sources) are asked of the Growth Manager: its chat opens beside the page. With

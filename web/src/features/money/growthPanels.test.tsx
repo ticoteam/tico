@@ -17,7 +17,7 @@ const missing: Reply = { status: 404, body: {} };
 const broken: Reply = { status: 500, body: {} };
 
 /** Growth's reads, each replaceable; anything else is not found. */
-function serve(over: Record<string, Reply> = {}) {
+function serve(over: Record<string, Reply> = {}, urls: URL[] = []) {
   const base: Record<string, Reply> = {
     '/growth/segments': ok({ segments: [] }),
     '/growth/read': ok(READ),
@@ -26,6 +26,7 @@ function serve(over: Record<string, Reply> = {}) {
   };
   vi.stubGlobal('fetch', async (url: string) => {
     const u = new URL(String(url), 'http://x');
+    urls.push(u);
     const path = u.pathname.replace('/api/v2', '');
     const scope = u.searchParams.get('scope');
     const r = (scope && base[`${path}?scope=${scope}`]) || base[path] || missing;
@@ -100,6 +101,20 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Growth panels @s480', () => {
+  it('uses the month returned by the board for the picker and channel read', async () => {
+    const urls: URL[] = [];
+    const month = { period: '2025-01', as_of: '2025-02-01' };
+    serve({
+      '/growth/read': ok({ ...READ, ...month }),
+      '/growth/read?scope=channel:search': ok({ ...CHANNEL, ...month }),
+    }, urls);
+    show('/company/growth');
+    expect((await screen.findByRole('combobox', { name: 'Month' })).textContent).toContain('January 2025');
+    fireEvent.click(screen.getByRole('link', { name: 'Search ads' }));
+    expect(await screen.findByText('for a new customer, January 2025')).toBeTruthy();
+    expect(urls.find((u) => u.searchParams.get('scope') === 'channel:search')?.searchParams.get('period')).toBe('2025-01');
+  });
+
   it('a channel opens beside: its budget and spend, its months newest first, its campaigns by name', async () => {
     serve({ '/growth/read?scope=channel:search': ok(CHANNEL) });
     const router = show('/company/growth?month=2026-10');

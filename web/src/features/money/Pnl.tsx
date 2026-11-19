@@ -217,7 +217,7 @@ function LinePanel({ pnl, account }: { pnl: Pnl; account: string }) {
   const col = cols[i];
   const prev = i > 0 ? cols[i - 1] : undefined;
   const as = useViewAs();
-  const now = useQuery(lineQuery(account, col, as));
+  const now = useQuery(lineQuery(account, col?.state === 'future' ? undefined : col, as));
   const was = useQuery(lineQuery(account, prev, as));
   // A budget is added here rarely: the line's own when it has none, else a vendor's under it (finance-pnl.ts:780).
   // finance.budgets, as useMay reads it (owner, the right, or finance.admin); reading as a teammate is read only.
@@ -254,7 +254,7 @@ function LinePanel({ pnl, account }: { pnl: Pnl; account: string }) {
       }
     >
       <div className="money">
-        <Pfig big={cash(v)} sub={budget ? `of ${cash(budget)} ${span}` : colLabel(col, pnl.period)}>
+        <Pfig big={cash(v)} sub={budget && col.state !== 'future' ? `of ${cash(budget)} ${span}` : colLabel(col, pnl.period)}>
           {budget ? <Meter pct={((v ?? 0) / budget) * 100} pace={pnl.period === 'month' && col.state === 'current' ? paceOf().pace : undefined} /> : null}
         </Pfig>
         <Section name="By month">
