@@ -42,7 +42,9 @@ const tico: TicoDesktop = {
     close: (ending) => ipcRenderer.invoke('call:close', ending) as Promise<void>,
     setOnTop: (on) => ipcRenderer.invoke('call:on-top', on) as Promise<void>,
     onState: listen<CallWindowState>('call:state'),
+    current: () => ipcRenderer.invoke('call:current') as Promise<string | null>,
   },
+  signingOut: () => ipcRenderer.invoke('session:signing-out') as Promise<void>,
   app: {
     updateState: () => ipcRenderer.invoke('app:update-state') as Promise<UpdateState>,
     restartToUpdate: () => ipcRenderer.invoke('app:restart') as Promise<void>,

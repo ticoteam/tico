@@ -59,6 +59,8 @@ export function registerIpc(shell: Shell, updater: Updater, version: string): vo
   handle('call:close', BOTH, (c, ending) => {
     if (shell.call.belongsTo(c.company.id)) shell.call.close(ending === 'return' ? 'return' : 'closed');
   });
+  handle('call:current', MAIN, (c) => (shell.call.belongsTo(c.company.id) ? shell.call.currentId : null));
+  handle('session:signing-out', MAIN, (c) => shell.signingOut(c.company.id));
   handle('call:on-top', BOTH, (c, on) => {
     const flag = V.boolArg(on);
     if (shell.call.belongsTo(c.company.id)) shell.call.setOnTop(flag);

@@ -377,6 +377,9 @@ button.act-text{padding:0;border:0;background:none;color:inherit;font-family:inh
   .cv-scroll{padding-bottom:calc(var(--cards-h) + var(--s-5))}
   .cv.is-day .cv-ad{grid-template-columns:repeat(2,minmax(0,1fr));padding-bottom:var(--s-1)}
   .cv-allday .mi,.cv-allday .mi-more{height:28px;line-height:28px}
+  /* the head keeps its title whole: the range words give way (the agenda names each day), the steps stay */
+  .cal-page .pk-title{flex-shrink:0}
+  .cal-page .cv-range{display:none}
 
   .cw-head,.is-full .cw-head{padding:var(--s-2h) var(--s-2) var(--s-0) var(--s-1h);gap:var(--s-0)}
   .is-full .cw-t h1{font-family:var(--font-text);font-size:var(--t-md);line-height:var(--lh-tight);letter-spacing:0}

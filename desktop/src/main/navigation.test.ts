@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseDeepLink } from './deeplink';
-import { decideNavigation, decideNewWindow, signInOver, type NavContext } from './navigation';
+import { decideNavigation, decideNewWindow, keepOnCall, signInOver, type NavContext } from './navigation';
 import { permissionAllowed } from './permissions';
 
 const ctx: NavContext = {
@@ -48,6 +48,33 @@ describe('navigation in a company view', () => {
     expect(decideNewWindow('https://beta.tico.team/next/', ctx).kind).toBe('switch');
     expect(decideNewWindow('about:blank', ctx)).toEqual({ kind: 'block' });
     expect(decideNewWindow('data:text/html,hi', ctx)).toEqual({ kind: 'block' });
+  });
+});
+
+describe('the small call window', () => {
+  const call = { ...ctx, companyId: 'cacme', callPath: '/next/call/r1' };
+  const nav = (url: string, c = call) => keepOnCall(url, decideNavigation(url, c), c);
+  const pop = (url: string) => keepOnCall(url, decideNewWindow(url, call), call);
+
+  it('stays on its call, and opens the company’s other pages in the main window', () => {
+    expect(nav('https://acme.tico.team/next/call/r1?window=1')).toEqual({ kind: 'stay' });
+    expect(nav('https://acme.tico.team/next/task/412')).toEqual({ kind: 'switch', companyId: 'cacme', url: 'https://acme.tico.team/next/task/412' });
+    expect(pop('https://acme.tico.team/next/docs/plan')).toEqual({ kind: 'switch', companyId: 'cacme', url: 'https://acme.tico.team/next/docs/plan' });
+  });
+
+  it('sends outside https pages and files to the browser, and follows nothing else', () => {
+    expect(pop('https://example.com/a')).toEqual({ kind: 'external', url: 'https://example.com/a' });
+    expect(nav('https://acme.tico.team/api/files/9')).toEqual({ kind: 'external', url: 'https://acme.tico.team/api/files/9' });
+    expect(pop('http://example.com/a').kind).toBe('block');
+    expect(nav('javascript:alert(1)').kind).toBe('block');
+  });
+
+  it('leaves a sign-in chain and other companies to the usual rules', () => {
+    expect(nav('https://acme.tico.team/auth/login?next=/next/')).toEqual({ kind: 'sign-in' });
+    expect(nav('https://acme.tico.team/auth/callback')).toEqual({ kind: 'stay' });
+    expect(nav('https://acme.tico.team/next/', { ...call, signingIn: true })).toEqual({ kind: 'stay' });
+    expect(nav('https://beta.tico.team/next/flow').kind).toBe('switch');
+    expect(nav('https://beta.tico.team/next/flow')).toMatchObject({ companyId: 'cother' });
   });
 });
 

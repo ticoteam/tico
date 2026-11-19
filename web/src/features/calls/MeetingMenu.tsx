@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { GranolaDevice, GranolaStatus, MeetingImporter, MeetingImporterComputer, MeetingSource } from '@/api/schema';
 import { run } from '@/actions';
 import { directoryQuery, meQuery } from '@/data';
@@ -19,8 +19,9 @@ import { granolaQuery, importersQuery, meetingSettingsQuery, pollGranola, source
 
 type Open = 'log' | 'sources' | 'granola' | 'settings' | null;
 
-/** List's ⋯ (cal-merge.js moreMenu): Log a meeting, Meeting sources, Connect Granola, Calendar settings. */
-export function MeetingMenu() {
+/** List's ⋯ (cal-merge.js moreMenu): Log a meeting, Meeting sources, Connect Granola, Calendar settings. `children`
+    come first (a phone's head controls). */
+export function MeetingMenu({ children }: { children?: ReactNode }) {
   const [open, setOpen] = useState<Open>(null);
   const granola = useQuery(granolaQuery).data;
   const sources = useQuery(sourcesQuery).data?.sources ?? [];
@@ -30,6 +31,7 @@ export function MeetingMenu() {
   return (
     <>
       <PageMore>
+        {children}
         <MenuItem label="Log a meeting" icon="edit" onSelect={() => setOpen('log')} />
         <MenuItem label="Meeting sources" icon="list" meta={connected ? String(connected) : undefined} onSelect={() => setOpen('sources')} />
         {granola && !granola.connected && <MenuItem label="Connect Granola" icon="link" onSelect={() => setOpen('granola')} />}

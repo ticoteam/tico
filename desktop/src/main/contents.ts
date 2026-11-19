@@ -88,12 +88,19 @@ export type GuardHooks = {
   context(): Omit<NavContext, 'signingIn'>;
   switchTo(companyId: string, url: string): void;
   committed?(url: string): void;
+  /** A window's own rule on top of the company view's (the small call window's `keepOnCall`). */
+  rule?(raw: string, base: NavDecision, ctx: NavContext): NavDecision;
 };
 
 /** Applies the navigation rules to one page. Returns whether a sign-in chain is under way (for tests and logs). */
 export function guardNavigation(wc: WebContents, hooks: GuardHooks): { signingIn(): boolean } {
   let signingIn = false;
   const ctx = (): NavContext => ({ ...hooks.context(), signingIn });
+  const decide = (raw: string, base: (raw: string, c: NavContext) => NavDecision): NavDecision => {
+    const c = ctx();
+    const d = base(raw, c);
+    return hooks.rule ? hooks.rule(raw, d, c) : d;
+  };
 
   const act = (d: NavDecision, prevent: () => void): void => {
     switch (d.kind) {
@@ -117,16 +124,16 @@ export function guardNavigation(wc: WebContents, hooks: GuardHooks): { signingIn
   };
 
   wc.setWindowOpenHandler(({ url }) => {
-    const d = decideNewWindow(url, ctx());
+    const d = decide(url, decideNewWindow);
     if (d.kind === 'switch') hooks.switchTo(d.companyId, d.url);
     else if (d.kind === 'external') openExternal(d.url);
     return { action: 'deny' };
   });
   wc.on('will-navigate', (e) => {
-    if (e.isMainFrame) act(decideNavigation(e.url, ctx()), () => e.preventDefault());
+    if (e.isMainFrame) act(decide(e.url, decideNavigation), () => e.preventDefault());
   });
   wc.on('will-redirect', (e) => {
-    if (e.isMainFrame) act(decideNavigation(e.url, ctx()), () => e.preventDefault());
+    if (e.isMainFrame) act(decide(e.url, decideNavigation), () => e.preventDefault());
   });
   wc.on('did-navigate', (_e, url) => {
     if (signInOver(url, hooks.context().origin)) signingIn = false;

@@ -1,13 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type MouseEvent } from 'react';
 import { Conversation } from '@/conversation';
 import { directoryQuery } from '@/data';
+import { followFromSmallWindow, smallWindowLink } from '@/desktop';
 import { Avatar } from '@/kit/Avatar';
 import { Count } from '@/kit/Count';
 import { Empty } from '@/kit/Empty';
 import { Tabs } from '@/kit/Tabs';
 import { running } from './model';
-import { Face, useNameOf } from './parts';
+import { Face, useNameOf, useSmallWindow } from './parts';
 import { callQuery, followTranscript, transcriptQuery } from './queries';
 import { useCall } from './session';
 import './calls.css';
@@ -25,8 +26,9 @@ export function CallSide({ room }: CallSideProps) {
   const s = useCall();
   const live = s.callId === room && (s.phase === 'live' || s.phase === 'reconnecting');
   const inCall = call?.participants.filter((p) => p.in_call) ?? [];
+  const small = useSmallWindow();
   return (
-    <aside className="pane win-side" aria-label="Call chat">
+    <aside className="pane win-side" aria-label="Call chat" onClickCapture={small ? keepOnCall : undefined}>
       <div className="cw-tabs">
         <Tabs
           label="Call"
@@ -53,6 +55,18 @@ export function CallSide({ room }: CallSideProps) {
       )}
     </aside>
   );
+}
+
+/** In the desktop app's small window a link never moves the window off its call (desktop smallWindowLink). */
+function keepOnCall(e: MouseEvent<HTMLElement>) {
+  const a = e.target instanceof Element ? e.target.closest('a[href]') : null;
+  if (!a || !e.currentTarget.contains(a)) return;
+  const link = smallWindowLink(a.getAttribute('href') ?? '', location.origin);
+  // a file chip opens as it does anywhere (a picture in the viewer, anything else in a new window the app hands on)
+  if (link.kind === 'file' && a.getAttribute('target') === '_blank') return;
+  e.preventDefault();
+  e.stopPropagation();
+  void followFromSmallWindow(link);
 }
 
 function Person({ actor, inCall }: { actor: string; inCall: boolean }) {

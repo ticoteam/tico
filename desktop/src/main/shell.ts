@@ -373,6 +373,17 @@ export class Shell {
     this.changed();
   }
 
+  /** The page is signing out: its count goes, the small call window closes, and the company shows signed out. */
+  signingOut(id: string): void {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    if (this.call.belongsTo(id)) this.call.close('closed');
+    entry.needs = 0;
+    entry.signedOut = true;
+    log('info', `signing out of ${entry.company.url}`);
+    this.changed();
+  }
+
   setNeeds(id: string, needs: number): void {
     const entry = this.entries.get(id);
     if (!entry || entry.needs === needs) return;

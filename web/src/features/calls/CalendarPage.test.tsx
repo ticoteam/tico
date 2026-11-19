@@ -193,3 +193,38 @@ describe('Calendar', () => {
     expect(await screen.findByText("Couldn't save")).toBeTruthy();
   });
 });
+
+describe('Calendar on a phone', () => {
+  beforeEach(() => {
+    document.documentElement.dataset.layout = 'cards';
+  });
+  afterEach(() => {
+    delete document.documentElement.dataset.layout;
+  });
+
+  it('keeps New event and the ⋯ in the head; the view switch, Filter and Start call are in the ⋯', async () => {
+    seed('week', [occ({})]);
+    seed('month', [occ({})]);
+    const router = show(`/calendar?view=week&date=${DAY}`);
+    const head = (await screen.findByRole('heading', { name: 'Calendar' })).closest('header') as HTMLElement;
+    const newEvent = within(head).getByRole('button', { name: 'New event' });
+    expect(newEvent.hasAttribute('data-phone')).toBe(true);
+    expect(within(head).queryByRole('button', { name: 'Start call' })).toBeNull();
+    fireEvent.click(within(head).getByRole('button', { name: 'More' }));
+    expect(await screen.findByRole('menuitem', { name: /Meeting sources/ })).toBeTruthy();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'View' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Month' }));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ view: 'month' }));
+    fireEvent.click(within(head).getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Start call' }));
+    expect(await screen.findByRole('dialog', { name: 'Start call' })).toBeTruthy();
+  });
+
+  it('puts List’s filter under the ⋯', async () => {
+    show('/calendar?view=list');
+    const head = (await screen.findByRole('heading', { name: 'Calendar' })).closest('header') as HTMLElement;
+    fireEvent.click(within(head).getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Filter' }));
+    expect(await screen.findByRole('menuitem', { name: 'Shared with me' })).toBeTruthy();
+  });
+});

@@ -7,6 +7,7 @@ import { APP_PATH } from './address';
 import type { Company } from './companies';
 import { guardNavigation, hardenSession, pageWebPreferences } from './contents';
 import { log } from './log';
+import { keepOnCall } from './navigation';
 
 export type CallHooks = {
   preloadArgs(): string[];
@@ -32,6 +33,11 @@ export class CallWindow {
   /** The company whose call window this page is, if it is the call window. */
   ownerOf(contentsId: number): Company | null {
     return this.win && !this.win.isDestroyed() && this.win.webContents.id === contentsId ? this.owner : null;
+  }
+
+  /** The call shown in the window, while it is open. */
+  get currentId(): string | null {
+    return this.win ? this.callId : null;
   }
 
   belongsTo(companyId: string): boolean {
@@ -69,9 +75,13 @@ export class CallWindow {
     });
     win.setAlwaysOnTop(true, 'floating');
     hardenSession(win.webContents.session, company.url, this.hooks.userAgent);
+    const url = new URL(`${APP_PATH}call/${encodeURIComponent(callId)}`, company.url);
+    url.searchParams.set('window', '1');
     guardNavigation(win.webContents, {
       context: () => ({ origin: company.url, others: this.hooks.others(company.id), filesOrigin: null }),
-      switchTo: (id, url) => this.hooks.switchTo(id, url),
+      switchTo: (id, to) => this.hooks.switchTo(id, to),
+      // the window stays on its call: the company's other pages open in the main window
+      rule: (raw, base, ctx) => keepOnCall(raw, base, { ...ctx, companyId: company.id, callPath: url.pathname }),
     });
     win.once('ready-to-show', () => win.show());
     win.on('close', (e) => {
@@ -104,8 +114,6 @@ export class CallWindow {
     this.win = win;
     this.owner = company;
     this.callId = callId;
-    const url = new URL(`${APP_PATH}call/${encodeURIComponent(callId)}`, company.url);
-    url.searchParams.set('window', '1');
     win.loadURL(url.href).catch(() => log('warn', `call window could not load for ${company.url}`));
     this.hooks.notify(company.id, 'open');
   }

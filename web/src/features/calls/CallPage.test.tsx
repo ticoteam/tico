@@ -341,6 +341,15 @@ describe('The desktop app’s small call window', () => {
     delete (window as { tico?: TicoDesktop }).tico;
   });
 
+  it('the small window’s address in a browser tab waits for Join and offers one way back', async () => {
+    show(`/call/${ROOM}?window=1`);
+    const back = await screen.findByRole('link', { name: 'Back to the app' });
+    expect(back.getAttribute('href')).toBe(`/call/${ROOM}`);
+    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
+    expect(await screen.findByRole('button', { name: 'Join' })).toBeTruthy();
+    expect(posted.some((u) => u.endsWith(`/calls/${ROOM}/join`))).toBe(false);
+  });
+
   it('in a browser, nothing offers the small window', async () => {
     show();
     await joinNow();

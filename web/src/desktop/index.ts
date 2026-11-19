@@ -28,7 +28,10 @@ export interface TicoDesktop {
     close(ending?: 'closed' | 'return'): Promise<void>;
     setOnTop(on: boolean): Promise<void>;
     onState(cb: (s: CallWindowState) => void): () => void;
+    /** Optional: an older app has no such call (the page comes from the server, the shell updates on its own). */
+    current?(): Promise<string | null>;
   };
+  signingOut?(): Promise<void>;
   app: {
     updateState(): Promise<UpdateState>;
     restartToUpdate(): Promise<void>;
@@ -165,6 +168,13 @@ export function watchCallWindow(onReturn: (id: string) => void): () => void {
     setCallWin({ id: null, open: false });
     if (st === 'return' && id) returnTo?.(id);
   });
+  // A page that loaded again (a link from the small window, a deep link) learns which call is out there.
+  void t.callWindow.current?.().then(
+    (id) => {
+      if (id && !callWin.open) setCallWin({ id, open: true });
+    },
+    () => undefined,
+  );
   return () => {
     offState?.();
     offState = null;
@@ -195,6 +205,46 @@ export function useCallWindow(): CallWindowNow {
     },
     () => callWin,
   );
+}
+
+/** Where a link pressed in the small window goes. It never moves that window off its call: the app's own pages open in
+    the main window, outside https pages and the app's files in the person's browser (as from the main window), and
+    anything else (mail, other schemes, in-page anchors) is not followed. */
+export type SmallWindowLink = { kind: 'app' | 'outside' | 'file'; url: string } | { kind: 'none' };
+
+export function smallWindowLink(href: string, origin: string): SmallWindowLink {
+  if (!href || href.startsWith('#')) return { kind: 'none' };
+  let url: URL;
+  try {
+    url = new URL(href, origin);
+  } catch {
+    return { kind: 'none' };
+  }
+  if (url.origin === origin) return { kind: url.pathname.startsWith('/api/') ? 'file' : 'app', url: url.href };
+  return url.protocol === 'https:' ? { kind: 'outside', url: url.href } : { kind: 'none' };
+}
+
+/** Follows a link pressed in the small window. The app's own page: the main window loads it and comes forward. The
+    rest: a new window, which the desktop app hands to the browser (https only) and never opens itself. */
+export async function followFromSmallWindow(link: SmallWindowLink): Promise<void> {
+  if (link.kind === 'none') return;
+  if (link.kind !== 'app') {
+    window.open(link.url, '_blank', 'noopener,noreferrer');
+    return;
+  }
+  const t = desktop();
+  const me = t && (await t.companies.list()).find((c) => c.self);
+  if (t && me) await t.companies.switchTo(me.id, link.url);
+}
+
+/* ---------------------------------------------------------------- sign-out */
+
+/** Tells the desktop app this page is signing out, so it drops what it holds for the person (the count, the small
+    call window) before the page leaves. Nothing in a browser or an older app; never holds sign-out up for long. */
+export async function tellDesktopSigningOut(): Promise<void> {
+  const t = desktop();
+  if (!t?.signingOut) return;
+  await Promise.race([t.signingOut().catch(() => undefined), new Promise((done) => setTimeout(done, 1000))]);
 }
 
 /* ---------------------------------------------------------------- the window buttons' corner */

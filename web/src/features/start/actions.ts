@@ -1,6 +1,7 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import { defineAction, run, s } from '@/actions';
 import { meQuery, queryClient } from '@/data';
+import { tellDesktopSigningOut } from '@/desktop';
 import { forgetSetup, goToGithub, handOff, pendingSetup, refused } from './handoff';
 import {
   cancelConnect,
@@ -51,7 +52,11 @@ export const signOut = defineAction({
   kind: 'change',
   tico: false,
   input: s.object({}),
-  run: () => location.assign('/api/v2/logout'),
+  // the desktop app hears first (its count and small call window go before the page leaves)
+  run: async () => {
+    await tellDesktopSigningOut();
+    location.assign('/api/v2/logout');
+  },
 });
 
 export const openSetup = defineAction({

@@ -1,7 +1,7 @@
 import { defineAction, s } from '@/actions';
 import { run } from '@/actions/run';
 import { meQuery } from '@/data';
-import { desktopApp } from '@/desktop';
+import { desktopApp, tellDesktopSigningOut } from '@/desktop';
 import { agentsQuery } from '@/features/team/exports';
 import { setMotionChoice } from '@/motion';
 import { setThemeChoice, type Theme } from '@/prefs';
@@ -126,7 +126,11 @@ export const signOut = defineAction({
   kind: 'change',
   input: s.object({}),
   tico: false,
-  run: () => window.location.assign('/api/v2/logout'),
+  // the desktop app hears first, so it drops the person's count and small call window before the page leaves
+  run: async () => {
+    await tellDesktopSigningOut();
+    location.assign('/api/v2/logout');
+  },
 });
 
 export const makeToken = defineAction({

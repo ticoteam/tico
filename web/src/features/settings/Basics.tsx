@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { run } from '@/actions/run';
 import { configQuery, directoryQuery, meQuery, useActor } from '@/data';
+import { tellDesktopSigningOut } from '@/desktop';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Checkbox } from '@/kit/Checkbox';
@@ -196,8 +197,10 @@ function EmailDialog({ p, onClose }: { p: AccessPerson; onClose: () => void }) {
     setBusy(false);
     if (!r.ok) return toast({ text: "Couldn't change the email", kind: 'failed' });
     // This browser signed in with the old address: a proxy session signs in again as the new one.
-    if ((me.data as { proxy_session?: boolean } | undefined)?.proxy_session) window.location.assign('/api/v2/logout');
-    else window.location.assign('/');
+    if ((me.data as { proxy_session?: boolean } | undefined)?.proxy_session) {
+      await tellDesktopSigningOut();
+      window.location.assign('/api/v2/logout');
+    } else window.location.assign('/');
   };
   return (
     <Dialog

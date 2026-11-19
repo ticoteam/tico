@@ -6,7 +6,8 @@ import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
+import { Dialog } from '@/kit/Dialog';
+import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { Popover } from '@/kit/Popover';
 import { FoldButton } from '@/kit/SectionHead';
 import { Segmented } from '@/kit/Segmented';
@@ -48,7 +49,7 @@ import {
   type Placed,
 } from './model';
 import { PeoplePick } from './PeoplePick';
-import { joinNow, LiveMark, press, refsOf, useNow, Who } from './parts';
+import { joinNow, LiveMark, press, refsOf, useCards, useNow, Who } from './parts';
 import { eventsQuery, findEventsQuery, liveCallsQuery, meetingsQuery, type Meeting, type Review } from './queries';
 import './calls.css';
 
@@ -75,6 +76,8 @@ export function CalendarPage() {
   const range = rangeOf(view, view === 'list' ? today : day);
   const events = useQuery(eventsQuery(range.from, range.to));
   const [adding, setAdding] = useState(false);
+  const [calling, setCalling] = useState(false);
+  const cards = useCards();
   const at: At = (patch, drop) => {
     const next = { ...search, ...patch };
     if (drop) delete next[drop];
@@ -146,10 +149,32 @@ export function CalendarPage() {
               value={view}
               onValueChange={(v) => void navigate({ to: '/calendar', search: at({ view: v }) })}
             />
-            <IconButton icon="plus" label="New event" onClick={() => setAdding(true)} />
-            <StartCall />
-            {view === 'list' && <MeetingMenu />}
+            <IconButton icon="plus" label="New event" onClick={() => setAdding(true)} data-phone />
+            {!cards && <StartCall />}
           </>
+        }
+        // A phone's head keeps New event and the ⋯; the view switch, Filter and Start call move into the ⋯.
+        more={
+          view === 'list' || cards ? (
+            <MeetingMenu>
+              {cards && (
+                <>
+                  <MenuSub label="View" icon="calendar">
+                    {VIEW_WORDS.map((o) => (
+                      <MenuItem key={o.value} label={o.label} on={o.value === view} onSelect={() => void navigate({ to: '/calendar', search: at({ view: o.value }) })} />
+                    ))}
+                  </MenuSub>
+                  {view === 'list' && (
+                    <MenuSub label="Filter" icon="filter">
+                      <FilterItems search={search} at={at} />
+                    </MenuSub>
+                  )}
+                  <MenuItem label="Start call" icon="call" onSelect={() => setCalling(true)} />
+                  <MenuRule />
+                </>
+              )}
+            </MeetingMenu>
+          ) : undefined
         }
         state={view !== 'list' && events.isError ? 'fault' : undefined}
         onRetry={() => void events.refetch()}
@@ -158,6 +183,7 @@ export function CalendarPage() {
         panel={panel}
       />
       <EventDialog open={adding} onOpenChange={setAdding} />
+      {cards && <StartCallDialog open={calling} onOpenChange={setCalling} />}
     </>
   );
 }
@@ -201,14 +227,23 @@ const ALSO_WORDS: Record<(typeof ALSO)[number], string> = { due: 'Due dates', ru
 
 /** The old Meetings tabs, what a meeting kept, and more kinds than meetings: one filter (cal-merge.js filterMenu). */
 function ListFilter({ search, at }: { search: CalendarSearch; at: At }) {
+  const set = !!search.review || hasOf(search.has).length > 0 || alsoOf(search.also).length > 0;
+  return (
+    <Menu trigger={<IconButton icon="filter" label="Filter" on={set || undefined} />}>
+      <FilterItems search={search} at={at} />
+    </Menu>
+  );
+}
+
+/** The filter's rows: in the head's Filter menu, and on a phone under the ⋯. */
+function FilterItems({ search, at }: { search: CalendarSearch; at: At }) {
   const navigate = useNavigate();
   const pending = useQuery(meetingsQuery('pending')).data?.count;
   const go = (patch: CalendarSearch) => void navigate({ to: '/calendar', search: at(patch) });
   const has = hasOf(search.has);
   const also = alsoOf(search.also);
-  const set = !!search.review || has.length > 0 || also.length > 0;
   return (
-    <Menu trigger={<IconButton icon="filter" label="Filter" on={set || undefined} />}>
+    <>
       <MenuItem label="All meetings" on={!search.review} onSelect={() => go({ review: undefined })} />
       <MenuItem label="Pending" meta={pending ? String(pending) : undefined} on={search.review === 'pending'} onSelect={() => go({ review: 'pending' })} />
       <MenuItem label="Shared with me" on={search.review === 'shared'} onSelect={() => go({ review: 'shared' })} />
@@ -221,7 +256,7 @@ function ListFilter({ search, at }: { search: CalendarSearch; at: At }) {
       {ALSO.map((k) => (
         <MenuItem key={k} label={ALSO_WORDS[k]} on={also.includes(k)} onSelect={() => go({ also: toggled(ALSO, search.also, k) })} />
       ))}
-    </Menu>
+    </>
   );
 }
 
@@ -258,6 +293,35 @@ function StartCall() {
         {who.length ? 'Start call' : 'Call Tico'}
       </Button>
     </Popover>
+  );
+}
+
+/** Start call on a phone: the head has no room for the button, so the ⋯ opens the same pick as a dialog. */
+function StartCallDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const [who, setWho] = useState<string[]>([]);
+  const close = () => {
+    onOpenChange(false);
+    setWho([]);
+  };
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(o) => (o ? onOpenChange(true) : close())}
+      title="Start call"
+      actions={
+        <Button
+          variant="primary"
+          onClick={() => {
+            close();
+            void press('calls.start', { with: who });
+          }}
+        >
+          {who.length ? 'Start call' : 'Call Tico'}
+        </Button>
+      }
+    >
+      {open && <PeoplePick value={who} onChange={setWho} tico autoFocus />}
+    </Dialog>
   );
 }
 

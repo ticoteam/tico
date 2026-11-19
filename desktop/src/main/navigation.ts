@@ -74,6 +74,21 @@ export function decideNewWindow(raw: string, ctx: NavContext): NavDecision {
   return externalOrBlock(url);
 }
 
+/**
+ * The small call window stays on its call (platforms.md 4.6). On top of the company view's decision: another page of
+ * the company opens in the main window (a switch to the same company), a file goes where the main window sends one
+ * (the browser, https only), and the call's own page, a sign-in chain and everything off the company are unchanged.
+ */
+export function keepOnCall(raw: string, base: NavDecision, ctx: NavContext & { companyId: string; callPath: string }): NavDecision {
+  if (ctx.signingIn || (base.kind !== 'stay' && base.kind !== 'external')) return base;
+  const url = parse(raw);
+  if (!url || url.origin !== ctx.origin) return base;
+  const path = url.pathname.replace(/\/+$/, '');
+  if (path === ctx.callPath.replace(/\/+$/, '') || path.startsWith('/auth/')) return base;
+  if (path.startsWith('/api/')) return externalOrBlock(url);
+  return { kind: 'switch', companyId: ctx.companyId, url: url.href };
+}
+
 /** A top-level page committed: back on the company origin, a sign-in chain is over. */
 export function signInOver(committedUrl: string, origin: string): boolean {
   return parse(committedUrl)?.origin === origin;

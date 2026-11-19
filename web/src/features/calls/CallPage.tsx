@@ -93,7 +93,14 @@ export function CallPage({ room }: CallPageProps) {
   const lead = cards ? <IconButton icon="chevdown" label="Back to the app" onClick={back} /> : null;
   const head = small ? (
     <Head c={c} live={on} lead={null}>
-      <SmallWindowControls />
+      {desktop() ? (
+        <SmallWindowControls />
+      ) : (
+        // the small window's address opened in a plain browser tab: one quiet way to the call's own page
+        <Link className="ib" to="/call/$room" params={{ room }} aria-label="Back to the app" title="Back to the app">
+          <Icon name="expand" />
+        </Link>
+      )}
     </Head>
   ) : (
     <Head c={c} live={on && !out} lead={lead}>
@@ -126,7 +133,8 @@ export function CallPage({ room }: CallPageProps) {
 /** The small window opens to move a call there: it joins at once, as the main window does when the call comes back. */
 function useJoinInSmallWindow(small: boolean, room: string, c: Call | undefined, phase: Phase) {
   const tried = useRef(false);
-  const go = small && phase === 'idle' && c?.state === 'live' && c.provider !== 'google_meet';
+  // only the desktop app moves a call into the small window; its address in a browser tab waits for Join
+  const go = small && !!desktop() && phase === 'idle' && c?.state === 'live' && c.provider !== 'google_meet';
   useEffect(() => {
     if (!go || tried.current) return;
     tried.current = true;

@@ -42,7 +42,12 @@ export interface TicoDesktop {
     close(ending?: 'closed' | 'return'): Promise<void>;
     setOnTop(on: boolean): Promise<void>;
     onState(cb: (s: CallWindowState) => void): () => void;
+    /** The call out in the small window for this company, if any: a page that loaded again learns it is out. */
+    current(): Promise<string | null>;
   };
+  /** This page is about to sign out: the app drops what it holds for the person (the count, the small call window).
+      Carries nothing; the page redirects once it resolves. */
+  signingOut(): Promise<void>;
   app: {
     updateState(): Promise<UpdateState>;
     /** Refused while a call is live. */
