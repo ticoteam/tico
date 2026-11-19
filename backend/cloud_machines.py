@@ -2399,7 +2399,8 @@ class Manager:
         fails = live["enroll_fails"]
         # Its id stays, as deleted: HQ keeps a machine live until boat confirms the delete, and a create meanwhile
         # answers with that one (act), which is not the new machine.
-        deleted(c, live, H.TICO_ACTOR, details={"reason": "never_enrolled", "tries": fails})
+        # Part of the replacement it was made for: the next attempt still takes the old computer's place.
+        deleted(c, live, H.TICO_ACTOR, details={"reason": "never_enrolled", "tries": fails}, replacing=True)
 
     def refused(self, current, action, refused, at, *, restarting=False):
         key = current["bot"]
@@ -3045,9 +3046,10 @@ def present(current):
 
 def deleted(c, current, actor, changed_by=None, details=None, replacing=False):
     """Finish a deletion under the write lock, revoking the old computer and its codes while keeping fresh attempts.
-    `replacing`: the next machine takes this one's place (a Replace, the shared machine, or one HQ lost), so its
-    computer is kept for the next to carry its plans over (`left`). Any other deletion forgets the computers kept: a
-    machine deleted for good gives a later one no plan, a person's included, without a new grant."""
+    `replacing`: the next machine takes this one's place (a Replace, the shared machine, one HQ lost, or an attempt
+    that never enrolled), so its computer is kept for the next to carry its plans over (`left`). Any other deletion
+    forgets the computers kept: a machine deleted for good gives a later one no plan, a person's included, without a
+    new grant."""
     key = current["bot"]
     fails = row(c, key)["enroll_fails"]
     fresh_runner = replacement_runner(c, key, current["machine_id"]) if current["machine_id"] else None

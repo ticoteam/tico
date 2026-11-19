@@ -4179,3 +4179,117 @@ def test_a_machine_deleted_for_good_gives_a_later_machine_none_of_its_plans(clou
     assert "claude" not in people(cloud, new["runner_id"])
     assert not [e for e in events(cloud, "subscription.carried_over") if old["runner_id"] in e["detail"]]
     assert given(cloud, new["runner_id"]).get("codex") in (csid, None)
+
+
+def person_on_own(cloud, with_codex=False):
+    from backend.tests.helpers.api import put
+
+    setup(cloud.api)
+    company(cloud.api)
+    on(cloud.api, "ops", "codex", "gpt-6.2-sol")
+    sid = add(cloud.api)["id"]
+    csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"] if with_codex else None
+    old = own_computer(cloud)
+    put(cloud.api, "computer-subscriptions", {"runner_id": old["runner_id"], "runtime": "claude", "person": "ana"})
+    return old, sid, csid
+
+
+def test_replace_then_first_new_machine_never_enrolls_still_keeps_person_plan(cloud):
+    # QA of #2178: the never-enrolled cleanup is part of the same replacement, so it keeps the old computer.
+    old, _, _ = person_on_own(cloud)
+    assert cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers()).status_code == 200
+    with cloud.store.transaction() as c:
+        c.execute("DELETE FROM assignments WHERE bot='ops'")
+    assert cloud.tick()[-1] == "create"
+    first_new = cloud.row()["machine_id"]
+    cloud.tick(CM.ENROLL_MINUTES * 60 + CM.ENROLL_GRACE)  # the first new machine never enrolls
+    cloud.hq.machines[first_new]["state"] = "deleted"
+    cloud.manager.synced = None
+    for _ in range(6):
+        if cloud.row()["machine_id"] != first_new and cloud.hq.calls[-1][0] == "create":
+            break
+        cloud.tick(CM.BACKOFF)
+    assert cloud.hq.calls[-1][0] == "create" and cloud.row()["machine_id"] != first_new
+    new = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    assert new["runner_id"] != old["runner_id"]
+    assert people(cloud, new["runner_id"]).get("claude") == "human:ana"
+
+
+def test_made_again_after_hq_failed_an_enrolled_machine_keeps_person_plan(cloud):
+    # adopt() itself revokes the row's enrolled computer (HQ lists the machine failed, a new one is created)
+    old, _, _ = person_on_own(cloud)
+    first = cloud.row()["machine_id"]
+    cloud.tick(400)
+    work(cloud, text="More")
+    cloud.hq.machines[first]["state"] = "failed"
+    cloud.manager.synced = None
+    for _ in range(6):
+        cloud.tick(20)
+        if cloud.row()["machine_id"] != first:
+            break
+    assert cloud.row()["machine_id"] != first and cloud.hq.calls[-1][0] == "create"
+    with cloud.store.transaction() as c:
+        c.execute("DELETE FROM assignments WHERE bot='ops'")
+    new = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    assert people(cloud, new["runner_id"]).get("claude") == "human:ana"
+
+
+def test_plan_removed_from_the_replacement_does_not_return_at_the_next_replace(cloud):
+    person_on_own(cloud)
+    assert cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers()).status_code == 200
+    with cloud.store.transaction() as c:
+        c.execute("DELETE FROM assignments WHERE bot='ops'")
+    second = enroll_made(cloud, "ops")
+    assert people(cloud, second["runner_id"]).get("claude") == "human:ana"
+    with cloud.store.transaction() as c:  # a person takes the Claude set off the new computer
+        c.execute("DELETE FROM computer_subscriptions WHERE runner_id=? AND runtime='claude'", (second["runner_id"],))
+    cloud.tick(400)
+    assert cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers()).status_code == 200
+    with cloud.store.transaction() as c:
+        c.execute("DELETE FROM assignments WHERE bot='ops'")
+    third = enroll_made(cloud, "ops")
+    assert "claude" not in people(cloud, third["runner_id"])
+
+
+def test_removed_company_plan_not_carried_through_the_kept_record(cloud):
+    from backend.tests.helpers.api import put
+
+    old, _, csid = person_on_own(cloud, with_codex=True)
+    put(cloud.api, "computer-subscriptions", {"runner_id": old["runner_id"], "runtime": "codex", "subscription": csid})
+    assert cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers()).status_code == 200
+    with cloud.store.transaction() as c:
+        c.execute("DELETE FROM assignments WHERE bot='ops'")
+        c.execute("DELETE FROM model_subscriptions WHERE id=?", (csid,))
+    new = enroll_made(cloud, "ops")
+    assert people(cloud, new["runner_id"]).get("claude") == "human:ana"
+    assert given(cloud, new["runner_id"]).get("codex") != csid
+
+
+def test_replace_then_deleted_for_good_before_enrolling_gives_a_later_machine_no_plan(cloud):
+    old, _, _ = person_on_own(cloud)
+    laptop = runner(cloud.api, label="Office Mac")
+    assert cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers()).status_code == 200
+    assert cloud.tick()[-1] == "create"  # the replacement is made but has not enrolled yet
+    with cloud.store.read() as c:
+        assert CM.were(c, "ops") == [old["runner_id"]]
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
+        moved = c.execute("SELECT generation FROM assignments WHERE bot='ops'").fetchone()["generation"]
+    assign(cloud.api, laptop, "ops", moved)
+    gone = cloud.api.delete("/api/v2/bots/ops/cloud-machine", headers=headers())
+    assert gone.status_code == 200
+    with cloud.store.read() as c:
+        assert not CM.were(c, "ops")
+    for mid in list(cloud.hq.machines):
+        cloud.hq.machines[mid]["state"] = "deleted"
+    change_as(cloud, "ops", mode="cloud", placement="own")
+    work(cloud, "ops")
+    cloud.manager.synced = None
+    before = len([x for x in cloud.hq.calls if x[0] == "create"])
+    for _ in range(6):
+        cloud.tick(CM.BACKOFF)
+        if len([x for x in cloud.hq.calls if x[0] == "create"]) > before:
+            break
+    code = [x for x in cloud.hq.calls if x[0] == "create"][-1][3]
+    new = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})
+    assert "claude" not in people(cloud, new["runner_id"])
