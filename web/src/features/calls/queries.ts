@@ -42,6 +42,7 @@ const enc = encodeURIComponent;
 export const calKeys = {
   all: ['calendar'] as const,
   events: ['calendar', 'events'] as const,
+  search: ['calendar', 'search'] as const,
   range: (from: string, to: string) => ['calendar', 'events', from, to] as const,
 };
 export const meetKeys = {
@@ -76,12 +77,18 @@ export const eventsQuery = (from: Date, to: Date) =>
       api.get<CalendarEvents>(`/api/v2/calendar/events?from=${enc(from.toISOString())}&to=${enc(to.toISOString())}&kinds=event,run,due,away`, { signal }),
   });
 
-/** Every range on screen or in the cache, so a change shows wherever the event is drawn. */
-const shownRanges = (): QueryKey[] => {
+/** Every cached list where an event can be open. A new event only goes into date ranges. */
+const shownRanges = (includeSearch = false): QueryKey[] => {
   const keys = queryClient.getQueriesData({ queryKey: calKeys.events }).map(([k]) => k);
+  if (includeSearch) {
+    for (const [key, data] of queryClient.getQueriesData({ queryKey: calKeys.search })) {
+      if (data !== undefined) keys.push(key);
+    }
+  }
   return keys.length ? keys : [calKeys.events];
 };
-const mapEvents = (d: CalendarEvents | undefined, f: (list: CalendarOccurrence[]) => CalendarOccurrence[]) => d && { ...d, occurrences: f(d.occurrences) };
+const mapEvents = <T extends CalendarEvents | CalendarFound>(d: T | undefined, f: (list: CalendarOccurrence[]) => CalendarOccurrence[]) =>
+  d && { ...d, occurrences: f(d.occurrences) };
 
 /** What the event dialog sends: the fields a person sets. */
 export interface EventFields {
@@ -140,8 +147,8 @@ export async function createEvent(f: EventFields): Promise<CalendarOccurrence> {
 export async function changeEvent(id: string, f: EventFields): Promise<CalendarOccurrence> {
   const change: EventChange = { ...body(f), scope: 'this' };
   const made = await write({
-    key: shownRanges(),
-    optimistic: (d: CalendarEvents | undefined) =>
+    key: shownRanges(true),
+    optimistic: (d: CalendarEvents | CalendarFound | undefined) =>
       mapEvents(d, (l) => l.map((x) => (x.occurrence_id === id ? { ...x, title: f.title, start: change.start as string, end: change.end as string } : x))),
     send: (idempotencyKey) => api.patch<CalendarOccurrence>(`/api/v2/calendar/events/${enc(id)}`, change, { idempotencyKey }),
   });
@@ -151,8 +158,8 @@ export async function changeEvent(id: string, f: EventFields): Promise<CalendarO
 
 export async function removeEvent(id: string): Promise<void> {
   await write({
-    key: shownRanges(),
-    optimistic: (d: CalendarEvents | undefined) => mapEvents(d, (l) => l.filter((x) => x.occurrence_id !== id)),
+    key: shownRanges(true),
+    optimistic: (d: CalendarEvents | CalendarFound | undefined) => mapEvents(d, (l) => l.filter((x) => x.occurrence_id !== id)),
     send: (idempotencyKey) => api.delete<void>(`/api/v2/calendar/events/${enc(id)}?scope=this`, { idempotencyKey }),
   });
   fresh();
@@ -245,7 +252,7 @@ export const meetingsQuery = (review: Review = 'live', q = '') =>
 /** Calendar events whose title or people match (List's search). */
 export const findEventsQuery = (q: string) =>
   queryOptions({
-    queryKey: [...calKeys.all, 'search', q],
+    queryKey: [...calKeys.search, q],
     queryFn: ({ signal }) => api.get<CalendarFound>(`/api/v2/calendar/search?q=${enc(q)}`, { signal }),
     placeholderData: keepPreviousData,
   });

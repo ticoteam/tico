@@ -332,6 +332,18 @@ export function toggled<T extends string>(all: readonly T[], raw: string | undef
 export const hasOf = (raw: string | undefined): Has[] => listOf(HAS, raw);
 export const alsoOf = (raw: string | undefined): Also[] => listOf(ALSO, raw);
 
+export function calendarFeeds(search: CalendarSearch) {
+  const list = search.view === 'list';
+  const showUpcoming = list && !search.review && !hasOf(search.has).length;
+  const found = showUpcoming && !!search.q;
+  return {
+    list,
+    range: !list || (!found && (showUpcoming || panelOf(search.panel)?.kind === 'event')),
+    found,
+    live: showUpcoming,
+  };
+}
+
 export function calendarSearch(raw: Record<string, unknown>): CalendarSearch {
   const out: CalendarSearch = {};
   if (typeof raw.view === 'string' && (VIEWS as readonly string[]).includes(raw.view)) out.view = raw.view as CalView;
