@@ -224,11 +224,28 @@ def _fields(ctx: Ctx, who: str, kind: str, p: V.Payload, base: Mapping[str, obje
     return _checked(p, base)
 
 
+def _apply_from(p: V.Payload, kind: str) -> str | None:
+    """A posting rule's apply_from: the day from which past rows waiting for a category post by the rules too."""
+    since = V.opt_day(p, "apply_from")
+    if since is not None and kind != "posting":
+        raise FinanceError("invalid", "apply_from is for posting rules")
+    return since
+
+
+def _applied(ctx: Ctx, rule_id: str, since: str | None) -> dict[str, object]:
+    if since is None:
+        return {}
+    from .posting_rules import apply_from
+
+    return apply_from(ctx, rule_id, since)
+
+
 def rule_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """A gate rule (before an action commits) or a posting rule (on a new feed row or bill line)."""
-    V.only(p, ("kind", "name", "words", "when", "outcome", "examples", "priority", "external_rule_id"))
+    V.only(p, ("kind", "name", "words", "when", "outcome", "examples", "priority", "external_rule_id", "apply_from"))
     kind = V.choice(p, "kind", RULE_KINDS, "gate")
     f = _fields(ctx, who, kind, p)
+    since = _apply_from(p, kind)
 
     def apply(aid: str) -> Result:
         rid = SK.insert(
@@ -249,7 +266,7 @@ def rule_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 **({"priority": f["priority"]} if kind == "posting" else {}),
             },
         )
-        return {"rule_id": rid, "kind": kind}
+        return {"rule_id": rid, "kind": kind, **_applied(ctx, rid, since)}
 
     return Plan(
         _gate(ctx, who, "rule_create"),
@@ -260,11 +277,12 @@ def rule_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 def rule_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-    V.only(p, ("rule_id", "name", "words", "when", "outcome", "examples", "priority", "external_rule_id"))
+    V.only(p, ("rule_id", "name", "words", "when", "outcome", "examples", "priority", "external_rule_id", "apply_from"))
     row = _row(ctx, p)
     _fixed(row)
     kind = str(row["kind"])
     f = _fields(ctx, who, kind, p, _as_fields(row))
+    since = _apply_from(p, kind)
 
     def apply(aid: str) -> Result:
         SK.update(
@@ -282,7 +300,7 @@ def rule_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 **({"priority": f["priority"]} if kind == "posting" else {}),
             },
         )
-        return {"rule_id": str(row["id"])}
+        return {"rule_id": str(row["id"]), **_applied(ctx, str(row["id"]), since)}
 
     return Plan(_gate(ctx, who, "rule_update"), f"Change the finance rule \"{f['name']}\": {f['words']}"[:300], apply)
 
