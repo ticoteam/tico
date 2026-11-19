@@ -62,7 +62,10 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
   let state: PageState = 'ready';
   if (list.isError) state = (list.error as { status?: number } | null)?.status === 403 ? 'no-access' : 'fault';
   else if (!list.data) state = 'loading';
-  else if (!rows.length && !search.q && !(counts.data ?? []).some((c) => c.count > 0)) state = 'empty';
+  else if (!rows.length && !search.q) state = 'empty';
+  // An empty tab beside full ones names its own kind; with none at all, the page says so.
+  const none = !(counts.data ?? []).some((c) => c.count > 0);
+  const emptyTitle = none || !kind ? 'No contacts yet' : `No ${kind.plural_name.toLowerCase()} yet`;
 
   // People, organizations, places: one tab each (records.js contactsPage). People is the page with no `type`.
   const tabs: PageTab[] = kinds.map((k) => ({
@@ -86,7 +89,7 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
         </>
       }
       state={state}
-      empty={{ title: 'No contacts yet' }}
+      empty={{ title: emptyTitle }}
       onRetry={() => void list.refetch()}
       sections={
         rows.length ? (

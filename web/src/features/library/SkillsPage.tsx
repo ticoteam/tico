@@ -110,7 +110,7 @@ function SkillsList({ search }: { search: SkillsSearch }) {
                 <AskLine key={p.id} p={p} skill={byName.get(p.name)} use={used.get(p.name)} />
               ))}
               {rows.map((s) => (
-                <SkillLine key={s.id} s={s} use={used.get(s.name)} />
+                <SkillLine key={s.name} s={s} use={used.get(s.name)} />
               ))}
             </section>
           </>
@@ -143,6 +143,9 @@ function Uses({ use, has }: { use: SkillUse | undefined; has: boolean }) {
   );
 }
 
+/** How many a skill is on: its installs, or for one Tico ships the agents made from its roles. */
+const onCount = (s: SkillRow | undefined) => (s ? (s.on_count ?? s.installs_count) : 0);
+
 function SkillLine({ s, use }: { s: SkillRow; use: SkillUse | undefined }) {
   return (
     <Row className="lrow skillrow" title={s.name} href={`/library/skills?skill=${encodeURIComponent(s.name)}`} target={`skill:${s.name}`}>
@@ -152,8 +155,8 @@ function SkillLine({ s, use }: { s: SkillRow; use: SkillUse | undefined }) {
         <span className="skill-does">{s.description}</span>
       </span>
       <span className="row-ctx" />
-      <Stack on={s.on} total={s.installs_count} />
-      <Uses use={use} has={s.installs_count > 0} />
+      <Stack on={s.on} total={onCount(s)} />
+      <Uses use={use} has={onCount(s) > 0} />
     </Row>
   );
 }
@@ -173,8 +176,8 @@ function AskLine({ p, skill, use }: { p: Proposal; skill: SkillRow | undefined; 
         <span className="skill-does">{p.description}</span>
       </span>
       <span className="row-ctx">{from ? `${what} from ${from.name}` : what}</span>
-      <Stack on={skill?.on ?? []} total={skill?.installs_count ?? 0} />
-      <Uses use={use} has={!!skill?.installs_count} />
+      <Stack on={skill?.on ?? []} total={onCount(skill)} />
+      <Uses use={use} has={onCount(skill) > 0} />
     </Row>
   );
 }

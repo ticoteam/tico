@@ -304,12 +304,16 @@ export interface SkillVersion {
   approved_at: string | null;
   approved_by_id?: string | null;
 }
+/** One row per name (backend/skills.py skills_list). A skill only Tico ships has no id (`source: 'tico'`) and is on
+   the agents made from its roles: `on_count` counts them, `installs_count` stays 0. */
 export interface SkillRow {
-  id: string;
+  id: string | null;
   name: string;
   description: string;
+  source?: 'directory' | 'tico';
   latest: SkillVersion | null;
   installs_count: number;
+  on_count?: number;
   on: SkillActor[];
 }
 export interface Proposal {

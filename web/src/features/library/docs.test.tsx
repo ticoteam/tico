@@ -111,6 +111,28 @@ describe('archived docs', () => {
   });
 });
 
+describe('docs list', () => {
+  it('names a section as a person reads it, and puts the head’s ⋯ after New doc', async () => {
+    serve();
+    queryClient.setQueryData(docsListQuery.queryKey, {
+      docs: [
+        { ...doc('d1', 'Fern index'), path: '_greenhouse/index.md' },
+        { ...doc('d2', 'Watering how-to'), path: 'plant-care/watering.md' },
+        { ...doc('d3', 'Readme'), path: 'README.md' },
+      ],
+      next_cursor: null,
+    });
+    at('/library/docs', <DocsPage search={{}} />);
+    expect(await screen.findByText('Greenhouse')).toBeTruthy();
+    expect(screen.getByText('Plant care')).toBeTruthy();
+    expect(screen.queryByText('_greenhouse')).toBeNull();
+    expect(screen.queryByText('README.md')).toBeNull();
+    const add = screen.getByRole('button', { name: 'New doc' });
+    const more = screen.getByRole('button', { name: 'More' });
+    expect(add.compareDocumentPosition(more) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
 describe('import a file', () => {
   it('sends the file to the import and opens the new doc', async () => {
     const sent = serve((url) => (url.includes('/docs/import') ? { doc: { ...doc('d9', 'Handbook'), body: '', archived: false } } : {}));

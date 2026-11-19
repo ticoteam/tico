@@ -147,6 +147,23 @@ describe('Contacts', () => {
     expect(await screen.findByText('No contacts yet')).toBeTruthy();
   });
 
+  it('shows the plain empty state for an empty tab, and Nothing matches only for a search', async () => {
+    serve(nothing);
+    queryClient.setQueryData(typesQuery.queryKey, [
+      { key: 'person', name: 'Person', plural_name: 'People' },
+      { key: 'organization', name: 'Organization', plural_name: 'Organizations' },
+    ]);
+    queryClient.setQueryData(countsQuery.queryKey, [{ type: 'organization', count: 2 }]);
+    queryClient.setQueryData(contactsQuery('person', '').queryKey, { pages: [{ rows: [], next: null }], pageParams: [''] });
+    show(<ContactsPage search={{}} />, '/library/contacts');
+    expect(await screen.findByText('No people yet')).toBeTruthy();
+    expect(screen.queryByText('Nothing matches')).toBeNull();
+    cleanup();
+    queryClient.setQueryData(contactsQuery('person', 'zz').queryKey, { pages: [{ rows: [], next: null }], pageParams: [''] });
+    show(<ContactsPage search={{ q: 'zz' }} />, '/library/contacts?q=zz');
+    expect(await screen.findByText('Nothing matches')).toBeTruthy();
+  });
+
   it('shows the fault with Try again when the list fails', async () => {
     serve((url) => (url.includes('/entities/find') ? { status: 500, body: { detail: 'boom' } } : nothing()));
     show(<ContactsPage search={{}} />, '/library/contacts');
@@ -178,6 +195,24 @@ describe('Skills', () => {
     const links = (await screen.findAllByText('triage')).map(href);
     expect(links).toEqual(['/library/skills?proposal=p1', '/library/skills?skill=triage']);
     expect(screen.queryByRole('tab')).toBeNull();
+  });
+
+  it('draws skills Tico ships (no id) once each, with no duplicate keys', async () => {
+    serve(nothing);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const shipped = (name: string) => ({ id: null, name, description: '', source: 'tico' as const, latest: null, installs_count: 0, on_count: 2, on: [] });
+    queryClient.setQueryData(skillsQuery.queryKey, [
+      shipped('plan-a-trip'),
+      shipped('water-the-ferns'),
+      { id: 's1', name: 'triage', description: '', latest: null, installs_count: 1, on: [] },
+    ]);
+    queryClient.setQueryData(proposalsQuery.queryKey, []);
+    queryClient.setQueryData(skillUsageQuery.queryKey, []);
+    show(<SkillsPage search={{}} />, '/library/skills');
+    expect(await screen.findByText('water-the-ferns')).toBeTruthy();
+    expect(screen.getAllByText('plan-a-trip')).toHaveLength(1);
+    expect(errors.mock.calls.some((c) => String(c[0]).includes('same key'))).toBe(false);
+    errors.mockRestore();
   });
 });
 

@@ -32,11 +32,14 @@ function tabs(docs: number | undefined, sources: number | undefined): PageTab[] 
   ];
 }
 
-/** A doc's folder: its first part names the section, the rest is what it is filed under. */
+/** A folder as a person reads it (docs-page.ts docsFolderWords): "_librarian" is "Librarian", "how-to" "How to". */
+const folderWords = (part: string) => part.replace(/^_+/, '').replace(/[-_]+/g, ' ').trim().replace(/^./, (c) => c.toUpperCase()) || part;
+
+/** A doc's folder: its first part names the section, the rest is what it is filed under. A doc at the top has none. */
 function folder(path: string): [string, string] {
   const parts = path.split('/').filter(Boolean);
-  if (!parts.length) return ['Docs', ''];
-  return [parts[0] ?? 'Docs', parts.slice(1).join(' / ')];
+  if (parts.length < 2) return ['Docs', ''];
+  return [folderWords(parts[0] ?? ''), parts.slice(1).join(' / ')];
 }
 
 const newDoc = () => void press('docs.new', {});
@@ -104,12 +107,12 @@ function OwnDocs({ search }: { search: DocsSearch }) {
         <>
           <Find label="Search docs" value={search.q} onFind={(q) => void press('docs.list', { q, archived: archived || undefined })} />
           <OwnerButton page="docs" />
-          <DocsMore archived={archived} />
           <Button variant="primary" icon="plus" onClick={newDoc} data-target="docs:new">
             New doc
           </Button>
         </>
       }
+      more={<DocsMore archived={archived} />}
       state={state}
       empty={{ title: archived ? 'Nothing archived' : 'No docs yet' }}
       onRetry={() => void docs.refetch()}
