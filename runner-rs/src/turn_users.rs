@@ -108,10 +108,18 @@ pub async fn share_workspace(paths: Vec<PathBuf>) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
-pub(crate) fn share_workspace_blocking(paths: &[PathBuf]) -> Result<(), String> {
-    // A chat's checkout is both its main and its execution path: each tree is walked once.
+/// Each root once, by its exact spelling: a chat's checkout is both its main and its execution path. Spellings that
+/// only compare equal as paths (`checkout` and `checkout/.`) are both kept: through a symlink the walk takes only one.
+fn distinct_roots(paths: &[PathBuf]) -> Vec<&PathBuf> {
     let mut seen = std::collections::HashSet::new();
-    let roots: Vec<&PathBuf> = paths.iter().filter(|p| seen.insert(*p)).collect();
+    paths
+        .iter()
+        .filter(|p| seen.insert(p.as_os_str()))
+        .collect()
+}
+
+pub(crate) fn share_workspace_blocking(paths: &[PathBuf]) -> Result<(), String> {
+    let roots = distinct_roots(paths);
     let status = crate::isolation::std_command(crate::env::python()).args(["-c", r#"import errno,os,stat,sys
 def wanted(m): return stat.S_IMODE(m)|0o060|(0o010 if m&0o111 else 0)
 def share(name,dir_fd=None):
@@ -605,6 +613,14 @@ mod tests {
             (before.ctime(), before.ctime_nsec()),
             "an already shared file was written again"
         );
+    }
+
+    #[test]
+    fn each_root_is_walked_once_by_its_exact_spelling() {
+        let (a, b) = (PathBuf::from("/w/acme"), PathBuf::from("/w/acme-exec"));
+        let dot = PathBuf::from("/w/acme/.");
+        let paths = [a.clone(), a.clone(), b.clone(), dot.clone()];
+        assert_eq!(distinct_roots(&paths), vec![&a, &b, &dot]);
     }
 
     /// Bench, not run by CI: sharing a 20,000-file checkout named as both main and execution path, first while its
