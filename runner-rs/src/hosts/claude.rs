@@ -25,6 +25,9 @@ use super::{
 };
 use crate::util::{iso, log, py_dumps, text_of};
 
+mod process;
+pub(crate) use process::{ends_turn, ClaudeProcess, TurnUsage};
+
 pub const STREAM_ARGS: &[&str] = &[
     "--input-format",
     "stream-json",
@@ -175,85 +178,6 @@ pub fn interrupt_line(request_id: &str) -> String {
     py_dumps(&json!({"type": "control_request", "request_id": request_id,
                      "request": {"subtype": "interrupt", "cancel_queued": true}}))
         + "\n"
-}
-
-pub(crate) struct VoiceSession {
-    stdin: tokio::process::ChildStdin,
-    stdout: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
-    stopper: super::Stopper,
-    exited: tokio::sync::oneshot::Receiver<std::io::Result<std::process::ExitStatus>>,
-    usage: Usage,
-}
-
-impl VoiceSession {
-    pub(crate) async fn send(&mut self, text: &str) -> Result<(), HostError> {
-        self.write(&user_line(&uuid::Uuid::new_v4().to_string(), text, None))
-            .await
-    }
-
-    pub(crate) async fn cancel(&mut self) -> Result<(), HostError> {
-        self.write(&interrupt_line(&uuid::Uuid::new_v4().to_string()))
-            .await
-    }
-
-    async fn write(&mut self, line: &str) -> Result<(), HostError> {
-        self.stdin
-            .write_all(line.as_bytes())
-            .await
-            .map_err(|e| failed(e.to_string()))
-    }
-
-    pub(crate) async fn frame(&mut self) -> Result<Value, HostError> {
-        while let Some(line) = self
-            .stdout
-            .next_line()
-            .await
-            .map_err(|e| failed(e.to_string()))?
-        {
-            if let Ok(value) = serde_json::from_str::<Value>(&line) {
-                if let Some((id, tokens)) = request_usage(&value) {
-                    self.usage.record_request(&value, id, tokens);
-                }
-                if value["type"] == "result" && value["parent_tool_use_id"].is_null() {
-                    self.usage.add_result_counts(&value);
-                }
-                return Ok(value);
-            }
-        }
-        Err(failed("Claude closed the voice session"))
-    }
-
-    pub(crate) fn take_usage(&mut self) -> (i64, Value) {
-        let mut u = std::mem::take(&mut self.usage);
-        if u.input == 0 && u.output == 0 {
-            // When a process is stopped before its result, the requests it reported still cost tokens. Their writes'
-            // TTL is not reported, so the turn's split is unknown.
-            for (_, r, _) in &u.requests {
-                u.input += r[0] + r[1];
-                u.cached += r[1];
-                u.cache_write += r[3];
-                u.cache_write_unsplit |= r[3] > 0;
-                u.output += r[2];
-            }
-        }
-        (u.context_tokens(), u.token_event())
-    }
-
-    pub(crate) async fn stop_for_restart(&mut self, grace: Duration) -> Result<(), HostError> {
-        self.stopper.terminate(grace);
-        tokio::time::timeout(Duration::from_secs(2), &mut self.exited)
-            .await
-            .map_err(|_| failed("Claude did not stop for the voice session restart"))?
-            .map_err(|e| failed(e.to_string()))?
-            .map_err(|e| failed(e.to_string()))?;
-        Ok(())
-    }
-}
-
-impl Drop for VoiceSession {
-    fn drop(&mut self) {
-        self.stopper.terminate(STOP_TIMEOUT);
-    }
 }
 
 pub(crate) fn voice_delta(frame: &Value) -> Option<&str> {
@@ -1270,58 +1194,6 @@ impl ClaudeHost {
             &turn_env(&t.settings),
         );
         Ok((child, stderr, reaping))
-    }
-
-    pub(crate) fn start_voice(
-        &self,
-        thread_id: &str,
-        effort: Option<&str>,
-        aid: &str,
-    ) -> Result<VoiceSession, HostError> {
-        self.open_voice(thread_id, thread_id, effort, aid)
-    }
-
-    pub(crate) fn restart_voice(
-        &self,
-        thread_id: &str,
-        effort: Option<&str>,
-        aid: &str,
-    ) -> Result<VoiceSession, HostError> {
-        self.open_voice(thread_id, &uuid::Uuid::new_v4().to_string(), effort, aid)
-    }
-
-    fn open_voice(
-        &self,
-        thread_id: &str,
-        session_id: &str,
-        effort: Option<&str>,
-        aid: &str,
-    ) -> Result<VoiceSession, HostError> {
-        let mut thread = self
-            .inner()
-            .threads
-            .get(thread_id)
-            .cloned()
-            .ok_or_else(|| failed("Unknown Claude voice session"))?;
-        thread.settings.background_wait = None;
-        if session_id != thread_id {
-            thread.started = false;
-            thread.fork_from = None;
-            thread.session_id = None;
-        }
-        let (mut child, _stderr, _) = self
-            .launch(session_id, &thread, effort, aid)
-            .map_err(|e| failed(format!("Could not open Claude voice session: {e}")))?;
-        let stdin = child.stdin.take().expect("Claude stdin is piped");
-        let stdout = BufReader::new(child.stdout.take().expect("Claude stdout is piped")).lines();
-        let (stopper, exited) = super::own(child);
-        Ok(VoiceSession {
-            stdin,
-            stdout,
-            stopper,
-            exited,
-            usage: Usage::default(),
-        })
     }
 
     pub fn start_turn(
@@ -3731,15 +3603,19 @@ case "$line" in *Second*) printf '%s\n' '{"type":"result","result":"Again."}';; 
             output_style: Some("Concise".into()),
             ..Default::default()
         });
-        let mut resident = host.start_voice(&thread, None, "voice-attempt").unwrap();
+        let mut resident =
+            ClaudeProcess::spawn(&host, &thread, None, "voice-attempt", "voice session").unwrap();
         tokio::time::timeout(Duration::from_secs(10), async {
-            resident.send("Reply with READY").await.unwrap();
-            assert_eq!(resident.frame().await.unwrap()["result"], "READY");
-            resident.send("First utterance").await.unwrap();
-            assert_eq!(voice_delta(&resident.frame().await.unwrap()), Some("Here."));
-            assert_eq!(resident.frame().await.unwrap()["result"], "Here.");
-            resident.send("Second utterance").await.unwrap();
-            assert_eq!(resident.frame().await.unwrap()["result"], "Again.");
+            resident.send_turn("Reply with READY").await.unwrap();
+            assert_eq!(resident.next_event().await.unwrap()["result"], "READY");
+            resident.send_turn("First utterance").await.unwrap();
+            assert_eq!(
+                voice_delta(&resident.next_event().await.unwrap()),
+                Some("Here.")
+            );
+            assert_eq!(resident.next_event().await.unwrap()["result"], "Here.");
+            resident.send_turn("Second utterance").await.unwrap();
+            assert_eq!(resident.next_event().await.unwrap()["result"], "Again.");
         })
         .await
         .expect("the resident Claude process did not answer each input");
