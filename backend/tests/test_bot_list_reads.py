@@ -485,3 +485,39 @@ def test_fields_keeps_the_named_fields_and_reads_no_activity_it_leaves_out(api, 
             if "status" not in wanted:
                 assert read < everything, (token, fields, read, everything)
     assert T.get(api, "bots?fields=", token="ana-test") == T.get(api, "bots", token="ana-test")
+
+
+def test_bot_list_reads_each_open_task_and_bot_row_once(api, monkeypatch):
+    """The bots' open tasks are read whole once, by owner, and that read stands for every one-task read of them after it
+    (H.task, task_engine.task, the waits' waiting_on.prime); every bot is read once, for each bot() after it. On TIDY
+    (Nov 19, 607 open bot tasks) the two extra reads of the tasks were 0.5-0.8 s a list under load."""
+    import contextlib
+
+    from backend.tests.helpers.statement_scope import measuring, recorder
+
+    slugs = ["w1", "w2", "w3"]
+    add_bots(api, {slug: {} for slug in slugs})
+    open_work(api, slugs)
+    store, seen = api.app.state.store, []
+    with monkeypatch.context() as patched:
+        for name in ("read", "read_transaction"):
+
+            def traced(opened=getattr(store, name)):
+                @contextlib.contextmanager
+                def borrowed():
+                    with opened() as c:
+                        c.set_trace_callback(recorder(seen))
+                        try:
+                            yield c
+                        finally:
+                            c.set_trace_callback(None)
+
+                return borrowed()
+
+            patched.setattr(store, name, traced)
+        with measuring(seen):
+            response = api.get("/api/v2/bots", headers=T.headers("ana-test"))
+    assert response.status_code == 200, response.text
+    whole = [sql for sql in seen if sql.startswith("SELECT * FROM tasks")]
+    assert len(whole) == 1 and "owner_id IN" in whole[0], whole
+    assert not [sql for sql in seen if sql.startswith("SELECT * FROM bots WHERE id=")], seen

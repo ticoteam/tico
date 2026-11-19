@@ -25,6 +25,7 @@ from . import (
     model_login,
     models_preset,
     providers,
+    read_cache,
     releases,
     replication,
     runner_versions,
@@ -196,16 +197,20 @@ def _plural(n, one, many=None):
     return f"{n} {one if n == 1 else many or one + 's'}"
 
 
+# Each active, placed bot's computer and configuration: the login and gateway checks both read it, once a snapshot.
+ACTIVE_CONFIGS_SQL = (
+    f"SELECT a.runner_id,a.bot,{BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
+    f"AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN}"
+)
+
+
 def _login_dependencies(c, settings):
     """Active bots' primary and fallback tools that actually use a computer login."""
     from .harnesses import harness_caps, normalize_fallback, resolve_harness
     from .shared_bots import follow
 
     record, found = providers.load(c, settings), {}
-    for row in c.execute(
-        f"SELECT a.runner_id,a.bot,{BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
-        f"AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN}"
-    ):
+    for row in read_cache.rows(c, ACTIVE_CONFIGS_SQL):
         config = providers.fill(record, follow(c, row['bot'], H._json(row['config'], {}) or {}))
         fallback = normalize_fallback(config.get('fallback')) or {}
         for choice in (config, fallback):
@@ -228,10 +233,7 @@ def _gateway_covered(c, settings, documents):
     from .shared_bots import follow
 
     record, covered = providers.load(c, settings), {}
-    for row in c.execute(
-        f"SELECT a.runner_id,a.bot,{BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
-        f"AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN}"
-    ):
+    for row in read_cache.rows(c, ACTIVE_CONFIGS_SQL):
         config = providers.fill(record, follow(c, row['bot'], H._json(row['config'], {}) or {}))
         if models_preset.gateway_line(c, row['bot'], documents.get(row['runner_id'], {}), settings, config=config):
             covered.setdefault(row['runner_id'], set()).add(config.get('runtime'))
@@ -474,23 +476,33 @@ def _history_check(c, withheld):
     return _check("bot_history", "Bot history", "info", ". ".join(said) + ".", claim)
 
 
+def _hosted_warnings(c):
+    """(bot, warning) for each readiness warning a computer reports for a bot it hosts, read once a snapshot: Health
+    asks for four kinds of them, and each ask read both tables and parsed every computer's readiness again."""
+
+    def build():
+        hosting = {
+            (a["bot"], a["runner_id"])
+            for a in c.execute(
+                "SELECT a.bot,a.runner_id FROM assignments a JOIN bots b ON b.id=a.bot WHERE b.state<>'archived'"
+            )
+        }
+        found = []
+        for r in c.execute("SELECT id,readiness FROM runners_with_state WHERE revoked_at IS NULL"):
+            for bot, row in ((readiness_document(r["readiness"]).get("bots")) or {}).items():
+                if (bot, r["id"]) not in hosting:
+                    continue  # a computer that no longer hosts the bot has nothing to publish for it
+                found += [(bot, str(warning)) for warning in (row or {}).get("warnings") or []]
+        return tuple(found)
+
+    return read_cache.value(c, ("health_hosted_warnings",), build, shared=True)
+
+
 def _reported(c, prefix, limit=200):
     """(bot, the rest of the line) for each readiness warning starting with `prefix` from the computer hosting the bot."""
-    out = []
-    hosting = {
-        (a["bot"], a["runner_id"])
-        for a in c.execute(
-            "SELECT a.bot,a.runner_id FROM assignments a JOIN bots b ON b.id=a.bot WHERE b.state<>'archived'"
-        )
-    }
-    for r in c.execute("SELECT id,readiness FROM runners_with_state WHERE revoked_at IS NULL"):
-        for bot, row in ((readiness_document(r["readiness"]).get("bots")) or {}).items():
-            if (bot, r["id"]) not in hosting:
-                continue  # a computer that no longer hosts the bot has nothing to publish for it
-            for warning in (row or {}).get("warnings") or []:
-                if str(warning).startswith(prefix):
-                    out.append((bot, str(warning)[len(prefix) :][:limit]))
-    return sorted(set(out))
+    return sorted(
+        {(bot, warning[len(prefix) :][:limit]) for bot, warning in _hosted_warnings(c) if warning.startswith(prefix)}
+    )
 
 
 def harness_denies(c, settings):
@@ -2698,7 +2710,10 @@ def _plate_people(c, auth):
     """Everyone on the roster as the identity they sign in with. A person who has left, or whose sign-in is off, has no
     plate that anyone reads here."""
     found = []
-    for row in H.humans(c):
+    # Each person's row as identity_for_actor reads it (H.human), from the one read of the roster: not a read a person.
+    people = c.execute("SELECT * FROM humans ORDER BY id").fetchall()
+    read_cache.prime(c, "SELECT * FROM humans WHERE id=?", {(row["id"],): row for row in people})
+    for row in people:
         try:
             found.append(auth.identity_for_actor(c, "human:" + row["id"]))
         except Problem:
@@ -2721,11 +2736,18 @@ def _plate_check(c, who, auth, full):
     over = []
     visible_sql = auth.task_sql(c, who) if full else None
     plates = waiting_on.needs_by_person(c)  # one pass over the open tasks for every person's plate
-    for person in _plate_people(c, auth) if full else [who]:
+    people = _plate_people(c, auth) if full else [who]
+    # Another person's plate counts only what the reader may read: a private task is not theirs to count. One read for
+    # every other person's plate.
+    others = [plates.get(person.actor, []) for person in people if visible_sql and person.actor != who.actor]
+    readable = (
+        _readable(c, visible_sql, sorted({tid for items in others for item in items for tid in _plate_tasks(item)}))
+        if others
+        else set()
+    )
+    for person in people:
         items = plates.get(person.actor, [])
         if visible_sql and person.actor != who.actor:
-            # Another person's plate counts only what the reader may read: a private task is not theirs to count.
-            readable = _readable(c, visible_sql, sorted({tid for item in items for tid in _plate_tasks(item)}))
             items = [item for item in items if any(tid in readable for tid in _plate_tasks(item))]
         if len(items) > NEEDS_PLATE_WARN:
             bots = {}
@@ -2863,8 +2885,17 @@ def _never_stuck_check(c, visible_sql=None):
         # is stuck after it closed. A task that got stuck since then waits for the next reading.
         listed, breaks = named["tasks"], named["broken_tasks"]
         ids = {tid for found in listed.values() for tid in found} | {tid for found in breaks for tid in found}
-        readable = _readable(c, visible_sql or "1", sorted(ids))
-        still_open = _readable(c, f"status='open' AND ({visible_sql or '1'})", sorted(ids))
+        # One read gives both: the tasks the reader may read, and which of them are still open.
+        readable, still_open = set(), set()
+        if ids:
+            for tid, is_open in c.execute(
+                "SELECT id, status='open' FROM tasks WHERE id IN (SELECT value FROM json_each(?)) "
+                f"AND ({visible_sql or '1'})",
+                (json.dumps(sorted(ids)),),
+            ):
+                readable.add(tid)
+                if is_open:
+                    still_open.add(tid)
         counts = {key: sum(1 for tid in listed.get(key, []) if tid in still_open) for key in NEVER_STUCK_COUNTS}
         counts["no_one"] = len({tid for tid in listed.get("no_one", []) if tid in still_open})
         # A break can be about a done task (a wake queued after it closed), so it counts until the next reading. It

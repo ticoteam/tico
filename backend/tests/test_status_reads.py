@@ -293,6 +293,34 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
         assert privacy.readable_messages(c, ben, asks) == [] and len(checks) == len(asks)
 
 
+def test_status_pages_read_no_statement_per_bot_whose_status_names_a_task_off_its_list(api, monkeypatch):
+    # TIDY, Nov 19: a bot's status still named a task that had finished, was gone or was not the bot's (114 of 120
+    # statuses), so each status line read that task alone: 33 of /api/status's 119 statements. They are read for all
+    # bots at once now, and each line says what it said before.
+    machine = setup(api, monkeypatch, tasks=4)
+    store = api.app.state.store
+
+    def off_list(first, count):
+        with store.transaction() as c:
+            other = H.task_create(c, "human:ana", f"Ben's own {first}", "Not a bot's.", "human:ben")["id"]
+            for n in range(first, first + count):
+                c.execute("UPDATE bot_status SET task_id=? WHERE bot=?", (other if n % 2 else f"gone-{n}", f"busy-{n}"))
+
+    busy(api, machine, 0, 6)
+    off_list(0, 6)
+    small = {path: page(api, monkeypatch, path)[1] for path in PAGES}
+    busy(api, machine, 6, 6)
+    off_list(6, 6)
+    big = {path: page(api, monkeypatch, path) for path in PAGES}
+    assert {path: count for path, (_, count) in big.items()} == small
+    with monkeypatch.context() as patched:
+        patched.setattr(privacy, "_prime_focus", lambda *args: None)
+        plain = {path: page(api, monkeypatch, path) for path in PAGES}
+    assert {path: body for path, (body, _) in plain.items()} == {path: body for path, (body, _) in big.items()}
+    # Control: without the read for all bots, each one's status reads its task again.
+    assert all(plain[path][1] >= big[path][1] + 4 for path in PAGES), ({p: plain[p][1] for p in PAGES}, small)
+
+
 def test_stopped_runs_of_each_uncertain_bot_cost_a_bounded_number_of_statements(api, monkeypatch):
     # A bot with a stopped run costs its own queries on the status page (held runs, Tico's leftovers, the
     # queued work behind them). Its runs are read for all bots together, so each further bot adds fewer statements

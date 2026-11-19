@@ -204,17 +204,18 @@ class BotRows:
             # Work that will run, not work fenced behind a run nobody reviewed.
             self.queued = {slug: q["queued"] for slug, q in job_queues(c, who, read).items()}
             self.notes = H.notes_waiting_counts(c, read, limit=500)
-            tasks = {}
+            stored = []
             for part in H.chunks(read):
-                for task in H._rows(
-                    c.execute(
-                        "SELECT * FROM tasks WHERE owner_id IN (" + ",".join("?" * len(part)) + ") AND status='open'",
-                        ["bot:" + slug for slug in part],
-                    )
-                ):
-                    tasks.setdefault(H.actor_id(task["owner_id"]), []).append(task)
+                stored += c.execute(
+                    "SELECT * FROM tasks WHERE owner_id IN (" + ",".join("?" * len(part)) + ") AND status='open'",
+                    ["bot:" + slug for slug in part],
+                ).fetchall()
+            tasks = {}
+            for task in map(dict, stored):
+                tasks.setdefault(H.actor_id(task["owner_id"]), []).append(task)
             # Every task the rows below look at is read once, with its tags, so each privacy check and lookup of it
-            # reads none.
+            # reads none: the rows just read stand for every one-task read of them (the waits' too).
+            H.prime_task_rows(c, stored)
             H.prime_tasks(c, [t["id"] for ts in tasks.values() for t in ts] + list(self.scopes.values()))
             self.task_flow = task_flow(c, {slug: tasks.get(slug, []) for slug in read}, who)
         self.goals = {}

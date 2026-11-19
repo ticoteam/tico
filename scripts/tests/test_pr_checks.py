@@ -3230,6 +3230,17 @@ def test_a_cli_command_change_runs_the_frozen_command_lines_even_in_a_light_plan
 
 
 @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+def test_a_growth_module_change_runs_the_growth_page_fixtures_even_in_a_light_plan(event, repo_map):
+    # Nov 19: #4489 added `sources` to the Growth read in backend/growth_core.py; its plan never ran
+    # test_growth_page_fixtures.py, which reaches the read through the API, and release validation for v0.6.110 went red.
+    changed = ["backend/growth_core.py", "backend/tests/test_growth_core.py"]
+    light = light_plan(changed, event, repo_map, added=[])
+    assert checks.GROWTH_FIXTURES in light["python"] and light["narrow"]["tier"][checks.GROWTH_FIXTURES] == 0
+    assert checks.GROWTH_FIXTURES in light["guards"] and (ROOT / checks.GROWTH_FIXTURES).is_file()
+    assert checks.GROWTH_FIXTURES not in light_plan(["backend/performance.py"], event, repo_map, added=[])["guards"]
+
+
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
 @pytest.mark.parametrize(
     "path",
     [

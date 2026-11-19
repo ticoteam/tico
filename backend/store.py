@@ -9,7 +9,7 @@ import sqlite3
 import threading
 import time
 import weakref
-from collections import deque
+from collections import OrderedDict, deque
 from contextlib import ExitStack, contextmanager
 from typing import cast
 
@@ -564,15 +564,38 @@ def reclaim_free_pages(store, step=VACUUM_STEP_PAGES, floor=VACUUM_FLOOR_PAGES, 
     return returned
 
 
-def readiness_document(value):
-    """Return the canonical runner-readiness shape, including legacy heartbeats."""
-    if hasattr(value, "model_dump"):
-        value = value.model_dump()
-    if isinstance(value, (str, bytes)):
-        try:
-            value = orjson.loads(value)
-        except (TypeError, ValueError):
-            value = {}
+# Parsed runner-readiness documents by their exact stored text (str or bytes): a runner's text changes only on its
+# heartbeat, while every claim, page and check reads it again, and parsing a computer of many bots costs more than
+# the rest of most of those reads. Bounded by count and by the texts' size (a parsed document holds about three times
+# its text); least recently used goes first, and a text larger than the whole budget is parsed but not kept.
+_READINESS_PARSED: "OrderedDict[str | bytes, dict]" = OrderedDict()
+_READINESS_LOCK = threading.Lock()
+_READINESS_MOST = 128
+_READINESS_MOST_CHARS = 16 * 1024 * 1024
+_readiness_chars = 0
+
+
+def _readiness_copy(document):
+    """The caller's own copy of a memoized document: its top level, each section (`bots`, `runtimes`, `harnesses`,
+    ...) and each row of a section. Callers set, pop and delete at those levels (execution.forget_report and
+    mark_rejected, views.computer_details, subscriptions.without_accounts); nothing changes a row's own lists or
+    nested values in place, so those stay shared."""
+    out = {}
+    for key, section in document.items():
+        if isinstance(section, dict):
+            section = {
+                name: dict(row) if isinstance(row, dict) else list(row) if isinstance(row, list) else row
+                for name, row in section.items()
+            }
+        elif isinstance(section, list):
+            section = [
+                dict(row) if isinstance(row, dict) else list(row) if isinstance(row, list) else row for row in section
+            ]
+        out[key] = section
+    return out
+
+
+def _readiness_shape(value):
     value = value if isinstance(value, dict) else {}
     if value.get("schema_version") in (0, 1) and isinstance(value.get("bots"), dict):
         return value
@@ -593,6 +616,35 @@ def readiness_document(value):
             if isinstance(ready, bool)
         },
     }
+
+
+def readiness_document(value):
+    """Return the canonical runner-readiness shape, including legacy heartbeats. Stored text is parsed once per
+    distinct text (_READINESS_PARSED); each call still gets a document it may change (_readiness_copy)."""
+    global _readiness_chars
+    if hasattr(value, "model_dump"):
+        value = value.model_dump()
+    if not isinstance(value, (str, bytes)):
+        return _readiness_shape(value)
+    with _READINESS_LOCK:
+        document = _READINESS_PARSED.get(value)
+        if document is not None:
+            _READINESS_PARSED.move_to_end(value)
+    if document is None:
+        try:
+            parsed = orjson.loads(value)
+        except (TypeError, ValueError):
+            parsed = {}
+        document = _readiness_shape(parsed)
+        with _READINESS_LOCK:
+            if len(value) <= _READINESS_MOST_CHARS and value not in _READINESS_PARSED:
+                _READINESS_PARSED[value] = document
+                _readiness_chars += len(value)
+                while _READINESS_PARSED and (
+                    len(_READINESS_PARSED) > _READINESS_MOST or _readiness_chars > _READINESS_MOST_CHARS
+                ):
+                    _readiness_chars -= len(_READINESS_PARSED.popitem(last=False)[0])
+    return _readiness_copy(document)
 
 
 def bot_readiness(value, bot):

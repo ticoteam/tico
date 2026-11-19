@@ -493,14 +493,18 @@ def prime_rows(c, bots):
     read_cache.prime(c, DELETING_SQL, {(m,): (1,) if m in gone else None for m in machines})
 
 
+ROWS_SQL = (
+    "SELECT m.*,d.machine_id IS NOT NULL AS deleting FROM cloud_machines m "
+    "LEFT JOIN cloud_machine_deletions d ON d.machine_id=m.machine_id"
+)
+
+
 def rows(c):
-    return {
-        r["bot"]: {**dict(r), "deleting": bool(r["deleting"])}
-        for r in c.execute(
-            "SELECT m.*,d.machine_id IS NOT NULL AS deleting FROM cloud_machines m "
-            "LEFT JOIN cloud_machine_deletions d ON d.machine_id=m.machine_id"
-        )
-    }
+    """Every bot's machine row, {bot: row}. Read once in a snapshot (read_cache: a write starts it again): Health's
+    page asks for them four times. Each call gets its own dicts."""
+    from . import read_cache
+
+    return {r["bot"]: {**dict(r), "deleting": bool(r["deleting"])} for r in read_cache.rows(c, ROWS_SQL)}
 
 
 def deleting(c, machine_id):

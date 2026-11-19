@@ -697,6 +697,26 @@ def operation_issues(c, who, auth):
     status_inputs = privacy.status_inputs(c, shown)
     # Each bot's computer, status and queue read together, not a few queries per bot.
     prime_machines(c, shown)
+    from .agents import ROW_SQL as AGENT_ROW_SQL, external_harness
+
+    # The cloud machine each active bot with no computer may wait for (cloud_machines.coming, below), read together:
+    # TIDY had 18 such bots, each read alone on every status poll (Nov 19).
+    unplaced = (
+        [
+            b["id"]
+            for b in bots
+            if b["id"] in status_inputs
+            and b["state"] == "active"
+            and not read_cache.one(c, ASSIGNED_SQL, (b["id"],))
+            # An external agent never asks after a cloud machine (machine() answers its presence first).
+            and not read_cache.one(c, AGENT_ROW_SQL, (b["id"],))
+            and not external_harness(c, b["id"])
+        ]
+        if read_cache.cache(c) is not None
+        else []
+    )
+    if len(unplaced) > 1:
+        cloud_machines.prime_rows(c, unplaced)
     queues = bot_rows.job_queues(
         c, who, [b["id"] for b in bots if b["id"] in status_inputs and b["state"] != "archived"]
     )
@@ -1889,7 +1909,8 @@ def _mentions(c, who):
     privacy.prime_messages(c, list(stored.values()))
     from . import threads
 
-    threads.prime_members(c, who, [row["conversation_id"] for row in rows])
+    # Each row names its room's root already (open_mentions), so the rooms are not read again for it.
+    threads.prime_members(c, who, [row["conversation_id"] for row in rows], roots={row["root_id"] for row in rows})
     seen, out = set(), []
     for row in rows:
         if row["id"] in seen:

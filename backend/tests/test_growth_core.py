@@ -147,6 +147,7 @@ def test_a_company_with_no_segments_and_no_paid_spend_reads_no_spend_with_effort
         "with_effort": 210.0,
     }
     assert out["channels"][-1] == {"slug": "unknown", "signups": 0, "new_customers": 2, "new_share": 0.17}
+    assert [s["source"] for s in out["health"].pop("sources")] == ["hq"]
     assert out["health"] == {
         "basis": "customers",
         "unknown_share": 0.17,
@@ -198,6 +199,8 @@ def test_tidy_facts_fold_into_rows_that_read_as_the_segment_show_does(api):
     assert top["ltv"] == {"value": 50.0, "window": "d90", "n": 40, "cohort": "2026-06", "status": "ok"}
     assert top["ltv"]["value"] == june_shown["ltv_observed_d90"]
     assert top["ltv_cac"] == {"value": 1.7} and top["payback_months"] == {"value": 1.8, "status": "estimate"}
+    loaded = out["health"]["sources"]
+    assert [(s["source"], s["name"]) for s in loaded] == [("upload", "Upload in Growth")] and loaded[0]["pushed_at"]
     # The rows were folded on read, never stored.
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM growth_cohort_rows").fetchone()[0] == 0
@@ -394,6 +397,30 @@ def test_typed_months_count_their_customers_where_no_rows_do_and_cost_shares_wit
     assert out["headline"]["new_customers"]["value"] == 15
     assert by["quiet"]["status"] == "no_customers" and by["quiet"]["cost_share"] == 0.2
     assert out["health"]["stale_sources"] == []
+
+
+def test_health_says_when_each_source_last_pushed_by_name_and_which_are_stale(api):
+    post(api, "growth/channels", {"slug": "meta", "name": "Meta"})
+    stripe = post(api, "growth/sources", {"truth_for": "Revenue", "system": "Stripe", "reach_kind": "mcp"})["id"]
+    put(api, "growth/cohorts", {"channel": "meta", "month": "2026-10", "new_customers": 3})  # typed: no source
+    pushed = push(
+        api,
+        "rows",
+        f"source:{stripe}",
+        lines("anchor,period,channel,as_of,entered", "signup,2026-10,meta,2026-11-12,9"),
+    )["pushed_at"]
+    push(api, "rows", "old-db", lines("anchor,period,channel,as_of,entered", "signup,2026-08,meta,2026-09-01,4"))
+    health = read(api, "period=2026-10")["health"]
+    assert health["stale_sources"] == ["old-db"]
+    old, fresh = health["sources"]
+    assert fresh == {
+        "source": f"source:{stripe}",
+        "name": "Stripe",
+        "as_of": "2026-11-12",
+        "pushed_at": pushed,
+        "stale": False,
+    }
+    assert (old["source"], old["name"], old["as_of"], old["stale"]) == ("old-db", "old-db", "2026-09-01", True)
 
 
 def test_the_read_records_growth_first_opened(api):

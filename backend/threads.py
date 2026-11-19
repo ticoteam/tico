@@ -5391,12 +5391,15 @@ def _one_dm_pairs(c, v):
     """{root id: other actor} for the one-teammate DMs: lists batch their summaries with the roots they show."""
     if not v.is_person:
         return {}
+    # The audience `audience_of` gives each row, in SQL: a task's room has none stored, and a person who follows
+    # thousands of tasks read every one of their rooms here only to drop it below (6,401 of 6,453 on TIDY, Nov 19).
     ids = [
         r[0]
         for r in c.execute(
             "SELECT cv.id FROM thread_followers f JOIN conversations cv ON cv.id=f.thread_id WHERE f.actor=? "
             "AND f.following=1 AND f.notify<>'muted' AND cv.parent_id IS NULL AND cv.closed_at IS NULL "
-            "AND cv.archived_at IS NULL AND COALESCE(cv.audience,'') IN ('personal','participants','')",
+            f"AND cv.archived_at IS NULL AND (CASE WHEN COALESCE(cv.audience,'')='' THEN {_derived_audience('cv')} "
+            "ELSE cv.audience END) IN ('personal','participants')",
             (v.actor,),
         )
     ]
@@ -5519,9 +5522,10 @@ def read_threads(c, who, ids):
     seeded by prime_members, so the readable checks take no statement either. Only reads: each check still decides."""
     ids = list(dict.fromkeys(i for i in ids if i))
     rows, members = {}, {i: [] for i in ids}
-    for part in H.chunks(ids):
-        for r in c.execute("SELECT * FROM conversations WHERE id IN (%s)" % ",".join("?" * len(part)), part):
-            rows[r["id"]] = thread_row(c, dict(r))
+    # The snapshot's conversation rows (H.conversation_rows): Home's Needs you, its unread card and the rail ask for
+    # the same rooms, so each is read once a request, not once a caller.
+    for cid, r in H.conversation_rows(c, ids).items():
+        rows[cid] = thread_row(c, dict(r))
     members.update(_member_rows(c, who, list(rows)))
     prime_members(c, who, list(rows), roots={r.get("root_id") or r["id"] for r in rows.values()})
     return rows, members
