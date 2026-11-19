@@ -103,6 +103,19 @@ describe('Menu', () => {
     expect(within(nav).queryByRole('link', { name: 'Finance' })).toBeNull();
   });
 
+  it.each([
+    ['Company', '/company/finance', 'Finance'],
+    ['Library', '/library/docs', 'Docs'],
+  ])('folds and reopens %s without losing the current page', async (name, path, child) => {
+    const nav = within(await show({}, path));
+    const section = nav.getByRole('button', { name, expanded: true });
+    fireEvent.click(section);
+    expect(nav.getByRole('button', { name, expanded: false })).toBe(section);
+    expect(nav.queryByRole('link', { name: child })).toBeNull();
+    fireEvent.click(section);
+    expect(nav.getByRole('link', { name: child }).getAttribute('aria-current')).toBe('page');
+  });
+
   it('the team tree: you, then each team; a shut team shows faces, opening it lists its teammates @s1200', async () => {
     const nav = await show({}, '/calendar');
     expect(nav.querySelector('.tree .tree-row')?.getAttribute('href')).toBe('/team/me'); // you, first
