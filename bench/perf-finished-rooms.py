@@ -78,9 +78,11 @@ def seed(api):
     store, rnd = api.app.state.store, random.Random(19)
     with store.transaction() as c:
         # The finished tasks: most Closed, as TIDY's history is; their finish an hour ago, before any post below.
-        c.execute(
-            "UPDATE tasks SET status=CASE WHEN abs(random()) % 5 THEN 'closed' ELSE 'done' END WHERE status='done'"
-        )
+        for (tid,) in c.execute("SELECT id FROM tasks WHERE status='done'").fetchall():
+            if rnd.random() < 0.8:
+                c.execute("INSERT OR REPLACE INTO task_move_guards (id, open, task_id) VALUES (1, 1, ?)", (tid,))
+                c.execute("UPDATE tasks SET status='closed' WHERE id=?", (tid,))
+                c.execute("UPDATE task_move_guards SET open=0, task_id=NULL WHERE id=1")
         ago = H.shift(H.now(), hours=-1)
         c.execute("UPDATE tasks SET closed_at=?, done_at=?, updated_at=? WHERE status IN ('done','closed')", (ago,) * 3)
         finished = [
