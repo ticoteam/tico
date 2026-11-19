@@ -181,6 +181,8 @@
 }
 
 :where(html[data-layout="cards"]){
+  .money col.t-sees{width:34%}
+  .money col.t-approves{width:var(--s-18)}
   .money .chart-sec{padding:0 var(--s-2) var(--s-3)}
   .money .ctl-row{padding:var(--s-3) var(--s-2) var(--s-2h)}
   .money .two-col{grid-template-columns:minmax(0,1fr)}

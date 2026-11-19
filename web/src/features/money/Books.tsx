@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { useActor } from '@/data';
@@ -27,14 +27,11 @@ import { ActLink, Meter, PhoneRows, readState, usePhone, usePress, useViewAs, Wh
 import {
   draftsQuery,
   journalChartQuery,
-  filtered,
-  txFilteredQuery,
   type DocKind,
   balanceQuery,
   billsQuery,
   cardsQuery,
   invoicesQuery,
-  loadMoreTransactions,
   payFromQuery,
   rulesQuery,
   taxQuery,
@@ -174,11 +171,7 @@ function Transactions() {
   const press = usePress();
   const at = useBookSearch();
   const f = { src: at.src, status: at.status, line: at.line };
-  const narrow = filtered(f);
-  // A filter is read by the server: its first 200 rows, with no more pages.
-  const plain = useQuery({ ...transactionsQuery(as), enabled: !narrow });
-  const kept = useQuery({ ...txFilteredQuery(f, as), enabled: narrow });
-  const q = narrow ? kept : plain;
+  const q = useInfiniteQuery(transactionsQuery(as, f));
   const book = may('finance.book');
   const open = usePanel('tx');
   const chart = useQuery({ ...journalChartQuery, enabled: book && !!open });
@@ -187,14 +180,23 @@ function Transactions() {
   const [moving, setMoving] = useState(false);
   const [entering, setEntering] = useState(false);
   const words = find.trim().toLowerCase();
-  const all = q.data?.rows ?? [];
+  const byId = new Map<string, Tx>();
+  for (const page of q.data?.pages ?? []) {
+    for (const row of page.rows) {
+      if (!byId.has(row.id)) byId.set(row.id, row);
+    }
+  }
+  const all = [...byId.values()];
   const rows = words ? all.filter((t) => `${describe(t)} ${t.account ?? ''} ${sourceOf(t)}`.toLowerCase().includes(words)) : all;
   // The server holds more than was read: the next page comes as the last row is drawn (a search reads only what is here).
-  const more = q.data?.next && !words && !narrow ? () => void loadMoreTransactions(as) : undefined;
+  const hasMore = q.hasNextPage && !words;
+  const next = () => void q.fetchNextPage({ cancelRefetch: false });
+  const more = hasMore && !q.isFetching && !q.isFetchNextPageError ? next : undefined;
   const share = may('finance.attribute') ? setLine : undefined;
   // The lines to filter by: those the rows read so far are on.
   const named = new Map<string, string>();
-  for (const t of [...(plain.data?.rows ?? []), ...(kept.data?.rows ?? [])]) if (t.account_id && t.account) named.set(t.account_id, t.account);
+  const plain = qc.getQueryData(transactionsQuery(as).queryKey);
+  for (const t of [...(plain?.pages.flatMap((p) => p.rows) ?? []), ...all]) if (t.account_id && t.account) named.set(t.account_id, t.account);
   const lines = [...named].sort((a, b) => a[1].localeCompare(b[1]));
   const pick = (change: TxFilterIn) => void press('finance.filterTransactions', change);
   const chips: { label: string; onClear: () => void }[] = [];
@@ -219,7 +221,7 @@ function Transactions() {
   };
   return (
     <Page
-      q={q}
+      q={{ ...q, isError: q.isError && !q.isFetchNextPageError }}
       tools={<TxFilterMenu on={f} lines={lines} onPick={pick} />}
       actions={
         book && (
@@ -247,7 +249,7 @@ function Transactions() {
       <div className="ctl-row">
         <Search label="Search transactions" value={find} onValueChange={setFind} placeholder="Search" />
         <span className="grow" />
-        <span className="count">{`${plural(rows.length, 'entry', 'entries')}${more ? '+' : ''}`}</span>
+        <span className="count">{`${plural(rows.length, 'entry', 'entries')}${hasMore ? '+' : ''}`}</span>
       </div>
       {phone ? (
         <TxPhone rows={rows} onMore={more} edit={editing} />
@@ -275,6 +277,11 @@ function Transactions() {
             <TxBody rows={rows} onEnd={more} onShare={share} edit={editing} />
           </Table>
         </div>
+      )}
+      {hasMore && q.isFetchNextPageError && (
+        <button type="button" className="row fold" onClick={next}>
+          Try again
+        </button>
       )}
     </Page>
   );

@@ -193,10 +193,12 @@ export function statement(p: Pnl): StatementRow[] {
   return out;
 }
 
-/** The column for today, or the last one with figures. */
+/** The column for today, the last past one, or the first plan in an entirely future range. */
 export const nowCol = (cols: readonly PnlCol[]) => {
   const i = cols.findIndex((c) => c.state === 'current');
-  return i >= 0 ? i : cols.filter((c) => c.state !== 'future').length - 1;
+  if (i >= 0) return i;
+  const past = cols.findLastIndex((c) => c.state === 'past');
+  return past < 0 && cols.length ? 0 : past;
 };
 
 /** Connected means a feed from outside: Tico's own usage and what is entered by hand do not count. */

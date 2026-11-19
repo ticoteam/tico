@@ -108,8 +108,8 @@ export function AccessPage({ search }: { search: FinanceSearch }) {
           <Table label="Access" stick>
             <colgroup>
               <col />
-              <col className="t-line" />
-              <col className="t-line" />
+              <col className="t-line t-sees" />
+              <col className="t-line t-approves" />
             </colgroup>
             <thead>
               <tr>
@@ -127,7 +127,7 @@ export function AccessPage({ search }: { search: FinanceSearch }) {
                     </ActLink>
                   </td>
                   <td className="t-words">{SEES[t.default] ?? ''}</td>
-                  <td className="t-words">{t.rights?.includes('approve') ? 'Yes' : ''}</td>
+                  <td className="t-words">{t.default === 'everything' || t.teammate === acc?.finance_approver ? 'Yes' : ''}</td>
                 </tr>
               ))}
             </tbody>
