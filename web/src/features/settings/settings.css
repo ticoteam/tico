@@ -1,6 +1,10 @@
 /* Settings and Usage: the page CSS from pages/8-settings/settings.css and more.css, class names unchanged, sizes on the
    token scale. The split, the section list and .facts come from pagekinds.css and kit/LabelValue. Greys only. */
 
+/* a section's name on the rows' edge (settings.css .sec-head, padding 0 8px): parts.css .stage-head keeps 32px for the
+   task lists' hanging marks, which settings rows do not have */
+.set-body .stage-head{padding-left:var(--s-2)}
+
 /* the thin line between groups of sections */
 .set-gap{height:1px;margin:calc(var(--s-2) - 1px) var(--s-2);background:var(--line)}
 
@@ -52,7 +56,7 @@ div.row{cursor:default}
 .g-cred{--g:minmax(0,1fr) 96px 96px 96px}
 .g-comp{--g:minmax(0,1fr) 120px 96px 118px}
 .g-model{--g:minmax(0,1fr) 120px 96px}
-.g-bots{--g:16px var(--av-sm) minmax(0,1fr) 176px 124px 44px 140px 48px}
+.g-bots{--g:16px var(--av-sm) minmax(96px,1fr) 176px 124px 44px 140px 48px}
 .g-ret{--g:minmax(0,1fr) auto}
 .g-host{--g:minmax(0,1fr) 118px 72px}
 .g-fsub{--g:minmax(0,1fr) 128px 74px 172px 28px}
@@ -167,12 +171,28 @@ div.row{cursor:default}
 .fs-chip b{font-weight:var(--w-text);color:var(--faint);font-variant-numeric:tabular-nums}
 .fs-chip .ico{width:12px;height:12px;stroke-width:2.2}
 .tbl-head.g-fsub{column-gap:var(--s-3);box-shadow:none;height:24px}
-.pk-sec+.list-tools{border-top:1px solid var(--line)}
-/* a narrow page: the model for tasks and the owner give way */
-@container page (max-width:740px){
-  .g-bots.g-fleet{--g:16px var(--av-sm) minmax(0,1fr) 176px 72px 34px}
+.pk-sec+.list-tools,.pk-sec+.fl{border-top:1px solid var(--line)}
+/* the table measures its own width (the page's includes the section list): narrow, the model for tasks and the owner give way */
+.fl{container:fleet / inline-size}
+@container fleet (max-width:840px){
+  .g-bots.g-fleet{--g:16px var(--av-sm) minmax(96px,1fr) 176px 72px 34px}
   .g-fleet .c-tasks,.g-fleet .c-own{display:none}
 }
+/* a row's ⋯: only on a phone, where the model, tasks and limit cells give way */
+.g-fleet>.fl-more{display:none}
+html[data-layout="cards"] .g-fleet>.fl-more{display:inline-flex;justify-self:end}
+/* Grouped by computer: the group's state opens its panel; a row drags onto another group. */
+.fl-sum{flex:none;height:var(--ctl-sm);display:inline-flex;align-items:center;gap:var(--s-2);padding:0 var(--s-1) 0 var(--s-2);border-radius:var(--r-chip);color:var(--muted);font-size:var(--t-sm);white-space:nowrap;text-decoration:none}
+.fl-sum:hover,.fl-sum.is-on{background:var(--well-2);color:var(--ink)}
+.fl-sum .word{margin:0}
+.fl-sum>.ico{width:14px;height:14px;color:var(--faint)}
+.fl .pk-sec[data-drop]{background:var(--well);border-radius:var(--r-row)}
+.g-fleet.is-drag{position:relative;z-index:var(--z-stick);background:var(--surface-card);box-shadow:var(--lift-card);cursor:grabbing}
+/* The computer panel. */
+.cp-n{margin-left:var(--s-1h);color:var(--muted);font-weight:var(--w-text)}
+.cp .rail-sec h3{justify-content:flex-start}
+.cp-agent{display:grid;grid-template-columns:var(--av-sm) minmax(0,1fr) auto;align-items:center;gap:var(--s-2);text-decoration:none;color:var(--ink)}
+.cp-agent .row-cell{color:var(--muted);font-size:var(--t-sm)}
 
 /* ---- usage (anchor) ---- */
 

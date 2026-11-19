@@ -14,6 +14,7 @@ export {
   FilterRow,
   Section,
   SidePanel,
+  PanelSlot,
   FiguresStrip,
   PageMore,
   PageBody,

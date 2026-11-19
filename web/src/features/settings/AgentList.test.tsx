@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
@@ -8,7 +8,8 @@ import { run } from '@/actions/run';
 import { queryClient } from '@/data';
 import { agentsQuery, computersQuery as teamComputers } from '@/features/team/exports';
 import { Toasts } from '@/kit/Toast';
-import { botsQuery, limitsQuery, modelsQuery, providersQuery, subscriptionsQuery } from './queries';
+import { providerName } from './Agents';
+import { botsQuery, computersQuery, limitsQuery, modelsQuery, providersQuery, subscriptionsQuery } from './queries';
 import { SettingsPage, hitHref } from './SettingsPage';
 
 vi.mock('@/search', () => ({ SearchDialog: () => null }));
@@ -41,6 +42,7 @@ function show(node: ReactNode, at: string) {
       <Toasts />
     </QueryClientProvider>,
   );
+  return router;
 }
 
 const ACTORS = [
@@ -206,6 +208,155 @@ describe('Settings › Agents', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Retired/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Restore' }));
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/bots/c3/restore', method: 'POST' }));
+  });
+});
+
+const MACHINES = [
+  { id: 'r1', label: 'Shared One', online: true, platform: 'linux', version: '0.0.9', screen_available: true, screen: 'view', bots: ['a1'] },
+  { id: 'r2', label: 'Spare Two', online: false },
+];
+/** A small server: the computers and agents read back as written (a write re-reads its list). */
+const byComputer = () => {
+  const machines = MACHINES.map((m) => ({ ...m }));
+  const agents = [{ ...ROWS[0], machine: { runner_id: 'r1', label: 'Shared One', generation: 7 } }, ROWS[1]];
+  queryClient.setQueryData(teamComputers.queryKey, machines);
+  queryClient.setQueryData(computersQuery.queryKey, [{ id: 'r1', label: 'Shared One', online: true, gateway_fallback: false }]);
+  queryClient.setQueryData(agentsQuery.queryKey, agents as never);
+  serve((url, method) => {
+    const label = /^\/api\/v2\/computers\/r1\/label$/.test(url) && method === 'POST';
+    if (label) machines[0]!.label = (sent.at(-1)?.body as { label: string }).label;
+    if (url === '/api/v2/operations') return { status: 200, body: { computers: machines, machines } };
+    if (url === '/api/employees') return { status: 200, body: agents };
+    return { status: 200, body: {} };
+  });
+};
+
+describe('Settings › Agents › a computer', () => {
+  it("a computer's group head opens its panel", async () => {
+    byComputer();
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    fireEvent.click(await screen.findByRole('button', { name: 'Computer' }));
+    const open = await screen.findByRole('link', { name: 'Open Shared One' });
+    expect(open.getAttribute('href')).toBe('/settings/agents?open=computer%3Ar1');
+    expect(open.textContent).toBe('Online');
+    // "No computer" is not a computer: nothing to open.
+    expect(screen.queryByRole('link', { name: /Open No computer/ })).toBeNull();
+  });
+
+  it('the panel shows its facts and agents; Restart asks, then restarts; the screen setting saves', async () => {
+    byComputer();
+    const router = show(<SettingsPage section="agents" open="computer:r1" />, '/settings/agents?open=computer%3Ar1');
+    const panel = await screen.findByRole('complementary', { name: 'Shared One' });
+    expect(within(panel).getByText('Online')).toBeTruthy();
+    expect(within(panel).getByText('linux')).toBeTruthy();
+    expect(within(panel).getByRole('link', { name: /Alpha Agent/ }).getAttribute('href')).toBe('/team/alpha');
+    expect(within(panel).queryByText('Beta Agent')).toBeNull();
+    // Opened from a link, the list is grouped by computer.
+    expect(screen.getByRole('link', { name: 'Open Spare Two' })).toBeTruthy();
+
+    fireEvent.click(within(panel).getByRole('button', { name: 'Control' }));
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/computers/r1/screen', body: { mode: 'control' } }));
+
+    fireEvent.click(within(panel).getByRole('button', { name: 'Restart' }));
+    const ask = await screen.findByRole('dialog', { name: 'Restart Shared One?' });
+    fireEvent.click(within(ask).getByRole('button', { name: 'Restart' }));
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/computers/r1/restart', method: 'POST' }));
+
+    fireEvent.click(within(panel).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({}));
+  });
+
+  it('rename and remove change both lists at once', async () => {
+    byComputer();
+    show(<SettingsPage section="agents" open="computer:r1" />, '/settings/agents?open=computer%3Ar1');
+    const panel = await screen.findByRole('complementary', { name: 'Shared One' });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Rename' }));
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), { target: { value: 'Shared Three' } });
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Rename computer' })).getByRole('button', { name: 'Rename' }));
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/computers/r1/label', body: { label: 'Shared Three' } }));
+    for (const key of [teamComputers.queryKey, computersQuery.queryKey])
+      await waitFor(() => expect(queryClient.getQueryData<{ id: string; label: string }[]>(key)?.[0]?.label).toBe('Shared Three'));
+
+    fireEvent.click(within(await screen.findByRole('complementary', { name: 'Shared Three' })).getByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/computers/r1/revoke', method: 'POST' }));
+  });
+
+  it('Settings › Computers opens the same panel', async () => {
+    byComputer();
+    show(<SettingsPage section="computers" open="r1" />, '/settings/computers?open=r1');
+    const panel = await screen.findByRole('complementary', { name: 'Shared One' });
+    expect(within(panel).getByRole('switch', { name: 'Fall back to Tico Gateway' })).toBeTruthy();
+  });
+});
+
+describe('Settings › Agents › drag', () => {
+  const at = (el: Element | null) => {
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => el });
+  };
+  afterEach(() => {
+    delete (document as { elementFromPoint?: unknown }).elementFromPoint;
+  });
+  const drag = (row: Element) => {
+    fireEvent.pointerDown(row, { button: 0, pointerType: 'mouse', clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(row, { pointerType: 'mouse', clientX: 30, clientY: 40 });
+    fireEvent.pointerUp(row, { pointerType: 'mouse', clientX: 30, clientY: 40 });
+  };
+
+  it("a row dropped on another computer's group moves there; checked rows go with it", async () => {
+    byComputer();
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    fireEvent.click(await screen.findByRole('button', { name: 'Computer' }));
+    await screen.findByRole('link', { name: 'Open Spare Two' });
+    const spare = document.querySelector('section[data-target="group:computer:r2"]');
+    const beta = document.querySelector('[data-target="agent:beta"]') as Element;
+    at(spare?.querySelector('.stage-head') ?? null);
+    drag(beta);
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ url: '/api/v2/bots/beta/transitions', body: { kind: 'machine', runner_id: 'r2' } });
+
+    sent = [];
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Check Alpha Agent' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Check Beta Agent' }));
+    drag(document.querySelector('[data-target="agent:alpha"]') as Element);
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent.map((x) => x.url).sort()).toEqual(['/api/v2/bots/alpha/transitions', '/api/v2/bots/beta/transitions']);
+  });
+
+  it('a drop on "No computer", on its own group or a short press moves nothing', async () => {
+    byComputer();
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    fireEvent.click(await screen.findByRole('button', { name: 'Computer' }));
+    await screen.findByRole('link', { name: 'Open Spare Two' });
+    const alpha = document.querySelector('[data-target="agent:alpha"]') as Element;
+    at(document.querySelector('section[data-target="group:computer:"]'));
+    drag(alpha);
+    at(document.querySelector('section[data-target="group:computer:r1"]'));
+    drag(alpha);
+    at(document.querySelector('section[data-target="group:computer:r2"]'));
+    fireEvent.pointerDown(alpha, { button: 0, pointerType: 'mouse', clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(alpha, { pointerType: 'mouse', clientX: 12, clientY: 12 });
+    fireEvent.pointerUp(alpha);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sent).toEqual([]);
+  });
+});
+
+describe('Settings › Agents on a phone', () => {
+  it("a row's ⋯ reaches its model, tasks and limit", async () => {
+    serve(() => ({ status: 200, body: {} }));
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    fireEvent.click(await screen.findByRole('button', { name: 'More for Alpha Agent' }));
+    expect(await screen.findByRole('menuitem', { name: /Model/ })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: /Tasks/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole('menuitem', { name: /Limit/ }));
+    expect(await screen.findByRole('spinbutton', { name: 'Dollars a month' })).toBeTruthy();
+  });
+
+  it('providers read in their own spelling', () => {
+    expect(providerName('openai')).toBe('OpenAI');
+    expect(providerName('xai')).toBe('xAI');
+    expect(providerName('newco')).toBe('Newco');
   });
 });
 

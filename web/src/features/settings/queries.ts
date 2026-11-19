@@ -273,7 +273,8 @@ export interface NoticePerson {
 
 export const humansQuery = queryOptions({
   queryKey: ['settings', 'humans'],
-  queryFn: async ({ signal }) => (await api.get<{ people?: NoticePerson[] }>('/api/v2/humans', { signal })).people ?? [],
+  // The list has no v2 address: GET /api/humans (backend/views.py people), each row people.profile with its switches.
+  queryFn: async ({ signal }) => (await api.get<{ people?: NoticePerson[] }>('/api/humans', { signal })).people ?? [],
   ...quiet,
 });
 
@@ -517,26 +518,29 @@ export const computersQuery = queryOptions({
   ...quiet,
 });
 
-const patchComputer = (rid: string, change: Partial<Computer>) => (v: Computer[] | undefined) =>
+const patchComputer = (rid: string, change: Partial<Computer>) => <C extends { id: string }>(v: C[] | undefined) =>
   v?.map((c) => (c.id === rid ? { ...c, ...change } : c));
+/** Settings and the team pages read the computers apart: a change shows in both at once. The team key is written out:
+    importing the team's queries here would load the action registry before this file is done. */
+const computerKeys = [computersQuery.queryKey, ['team', 'computers']];
 
 export const labelComputer = (rid: string, label: string) =>
   write({
-    key: computersQuery.queryKey,
+    key: computerKeys,
     optimistic: patchComputer(rid, { label }),
     send: (idempotencyKey) => api.post(`/api/v2/computers/${enc(rid)}/label`, { label }, { idempotencyKey }),
   });
 
 export const removeComputer = (rid: string) =>
   write({
-    key: computersQuery.queryKey,
+    key: computerKeys,
     optimistic: patchComputer(rid, { revoked_at: new Date().toISOString() }),
     send: (idempotencyKey) => api.post(`/api/v2/computers/${enc(rid)}/revoke`, {}, { idempotencyKey }),
   });
 
 export const setGatewayFallback = (rid: string, on: boolean) =>
   write({
-    key: computersQuery.queryKey,
+    key: computerKeys,
     optimistic: patchComputer(rid, { gateway_fallback: on }),
     send: (idempotencyKey) => api.post(`/api/v2/computers/${enc(rid)}/gateway-fallback`, { on }, { idempotencyKey }),
   });

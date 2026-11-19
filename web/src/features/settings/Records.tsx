@@ -9,6 +9,7 @@ import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Field } from '@/kit/Field';
+import { IconButton } from '@/kit/IconButton';
 import { Link as To } from '@/kit/Link';
 import { Markdown } from '@/kit/Markdown';
 import { Select } from '@/kit/Select';
@@ -206,9 +207,7 @@ function AddUpdate() {
   };
   return (
     <>
-      <Foot>
-        <Verb onClick={() => setOpen(true)}>Add update</Verb>
-      </Foot>
+      <IconButton icon="plus" label="Add update" size="sm" quiet onClick={() => setOpen(true)} />
       <Dialog
         open={open}
         onOpenChange={setOpen}
@@ -279,42 +278,37 @@ export function Changelog({ open }: { open?: string }) {
   const log = useQuery(changelogQuery);
   const entries = log.data?.entries ?? [];
   if (!log.data) return null;
-  const add = log.data.can_add ? <AddUpdate /> : null;
-  const more = (
-    <>
-      <Activity />
-      {open && <Outcome task={open} />}
-    </>
-  );
-  if (entries.length === 0)
-    return (
-      <>
-        <Empty title="No changes yet" />
-        {more}
-        {add}
-      </>
-    );
+  const add = log.data.can_add ? <AddUpdate /> : undefined;
   const versions = new Map<string, typeof entries>();
   for (const e of entries) {
     const v = e.version ?? 'Earlier';
     versions.set(v, [...(versions.get(v) ?? []), e]);
   }
+  // Add update sits in the head of the first section: Changelog while there is nothing yet, else the newest version.
   return (
     <>
-      {[...versions].map(([version, list]) => (
-        <Section key={version} name={version} count={list.length} target={`version:${version}`}>
-          <ul className="cl-list">
-            {list.map((e) => (
-              <li key={e.id}>
-                <span className="cl-kind">{/fix/i.test(e.area) ? 'Fixed' : ''}</span>
-                <span>{e.title}</span>
-              </li>
-            ))}
-          </ul>
+      {entries.length === 0 ? (
+        <Section name="Changelog" actions={add} target="setting:changelog">
+          <div className="row is-off">
+            <span className="row-title">No changes yet</span>
+          </div>
         </Section>
-      ))}
-      {more}
-      {add}
+      ) : (
+        [...versions].map(([version, list], i) => (
+          <Section key={version} name={version} count={list.length} actions={i === 0 ? add : undefined} target={`version:${version}`}>
+            <ul className="cl-list">
+              {list.map((e) => (
+                <li key={e.id}>
+                  <span className="cl-kind">{/fix/i.test(e.area) ? 'Fixed' : ''}</span>
+                  <span>{e.title}</span>
+                </li>
+              ))}
+            </ul>
+          </Section>
+        ))
+      )}
+      <Activity />
+      {open && <Outcome task={open} />}
     </>
   );
 }

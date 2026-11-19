@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
-import { useState } from 'react';
+import { Link, useNavigate } from '@tanstack/react-router';
+import { useState, type HTMLAttributes } from 'react';
 import { run } from '@/actions/run';
 import { directoryQuery, meQuery, type Actor } from '@/data';
 import { ModelPicker, agentsQuery, computersQuery, type AgentRow } from '@/features/team/exports';
@@ -10,6 +10,8 @@ import { Checkbox } from '@/kit/Checkbox';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Field, Search } from '@/kit/Field';
+import { Icon } from '@/kit/Icon';
+import { IconButton } from '@/kit/IconButton';
 import { Facts } from '@/kit/LabelValue';
 import { Link as To } from '@/kit/Link';
 import { Menu, MenuItem } from '@/kit/Menu';
@@ -18,7 +20,9 @@ import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { ValueButton } from '@/kit/ValueButton';
 import { Section } from '@/pagekinds';
-import { Foot, Line, SwitchLine, Verb, act, usd } from './parts';
+import { ComputerPanel } from './ComputerPanel';
+import { useRowDrag } from './drag';
+import { Foot, Line, SwitchLine, Verb, Word, act, usd } from './parts';
 import {
   SAFE_RETRY,
   accessQuery,
@@ -558,9 +562,11 @@ interface LineProps {
   limit?: { monthly_usd?: number | null; blocked?: string | null; may_edit?: boolean };
   onPick: (on: boolean) => void;
   onEdit: (e: Change) => void;
+  /** Grouped by computer: the row drags onto another computer's group. */
+  drag?: HTMLAttributes<HTMLDivElement>;
 }
 
-function FleetLine({ a, slug, r, by, picked, open, owner, machines, next, limit, onPick, onEdit }: LineProps) {
+function FleetLine({ a, slug, r, by, picked, open, owner, machines, next, limit, onPick, onEdit, drag }: LineProps) {
   const models = useQuery(modelsQuery);
   const manage = r?.can_manage !== false;
   const tm = r?.task_model;
@@ -573,6 +579,7 @@ function FleetLine({ a, slug, r, by, picked, open, owner, machines, next, limit,
       className={['row g-bots g-fleet', picked && 'is-selected', limit?.blocked && 'is-bad'].filter(Boolean).join(' ')}
       title={a.name}
       data-target={`agent:${slug}`}
+      {...drag}
     >
       <Checkbox label={<span className="set-hide">{`Check ${a.name}`}</span>} checked={picked} disabled={!manage} onCheckedChange={onPick} />
       <Avatar kind="agent" name={a.name} hue={a.hue} decorative />
@@ -617,6 +624,11 @@ function FleetLine({ a, slug, r, by, picked, open, owner, machines, next, limit,
       <button type="button" className="fl-lim" title="Limit a month" aria-label={`${a.name}'s limit`} disabled={limit?.may_edit === false} onClick={edit('limit')}>
         {limit?.monthly_usd != null ? usd(limit.monthly_usd) : 'None'}
       </button>
+      <Menu trigger={<IconButton icon="more" label={`More for ${a.name}`} size="sm" quiet className="fl-more" />}>
+        <MenuItem label="Model" meta={modelWords(r) || 'None'} disabled={!manage} onSelect={edit('model')} />
+        <MenuItem label="Tasks" meta={tasks || 'Same'} disabled={!manage} onSelect={edit('tasks')} />
+        <MenuItem label="Limit" meta={limit?.monthly_usd != null ? usd(limit.monthly_usd) : 'None'} disabled={limit?.may_edit === false} onSelect={edit('limit')} />
+      </Menu>
     </div>
   );
 }
@@ -628,13 +640,14 @@ interface Group {
 }
 
 export function AgentList({ open }: { open?: string }) {
+  const navigate = useNavigate();
   const dir = useQuery(directoryQuery);
   const subs = useQuery(subscriptionsQuery);
   const limits = useQuery(limitsQuery);
   const bots = useQuery({ ...botsQuery, retry: false });
   const mayRestore = useMayRestore();
   const [q, setQ] = useState('');
-  const [by, setBy] = useState<By>('team');
+  const [by, setBy] = useState<By>(open?.startsWith('computer:') ? 'computer' : 'team');
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const [changing, setChanging] = useState(false);
   const [editing, setEditing] = useState<Change | null>(null);
@@ -685,11 +698,22 @@ export function AgentList({ open }: { open?: string }) {
     }
   }
 
-  const move = async (m: Machine) => {
-    const r = await run('settings.moveAgents', { agents: checked, computer: m.id }, { via: 'click' });
+  const moveTo = async (agents: string[], computer: string) => {
+    const r = await run('settings.moveAgents', { agents, computer }, { via: 'click' });
     toast(r.ok ? { text: r.did ?? 'Moved', kind: 'done' } : { text: "Couldn't move them", kind: 'failed' });
     if (r.ok) setPicked(new Set());
   };
+  const move = (m: Machine) => moveTo(checked, m.id);
+  // A checked row carries the other checked rows with it; agents already there stay put.
+  const drag = useRowDrag((slug, computer) => {
+    const agents = (picked.has(slug) ? checked : [slug]).filter((s) => {
+      const r = rowOf(s);
+      return r?.can_manage !== false && r?.machine?.runner_id !== computer;
+    });
+    if (agents.length) void moveTo(agents, computer);
+  });
+  const opened = open?.startsWith('computer:') ? open.slice('computer:'.length) : '';
+  const machineOf = (key: string) => (key.startsWith('computer:') ? live.find((m) => `computer:${m.id}` === key) : undefined);
 
   const line = (a: Actor) => {
     const slug = slugOf(a);
@@ -711,6 +735,7 @@ export function AgentList({ open }: { open?: string }) {
         limit={limits.data?.bots[slug]}
         onPick={(on) => setPicked((s) => toggled(s, slug, on))}
         onEdit={setEditing}
+        drag={by === 'computer' && r?.can_manage !== false ? drag(slug) : undefined}
       />
     );
     return isOpen ? (
@@ -729,7 +754,7 @@ export function AgentList({ open }: { open?: string }) {
       {all.length === 0 ? (
         <Empty title="No agents yet" />
       ) : (
-        <>
+        <div className="fl">
           <div className="list-tools fl-tools" data-target="setting:agents">
             {checked.length > 0 ? (
               <span className="bulk">
@@ -761,8 +786,30 @@ export function AgentList({ open }: { open?: string }) {
             <span>{THIRD[by]}</span>
             <span className="is-num">Limit</span>
           </div>
-          {groups.map((g) => (
-            <Section key={g.key} name={g.name} count={g.slugs.length} target={`group:${g.key}`}>
+          {groups.map((g) => {
+            const m = machineOf(g.key);
+            return (
+            <Section
+              key={g.key}
+              name={g.name}
+              count={g.slugs.length}
+              target={`group:${g.key}`}
+              summary={
+                m && (
+                  <Link
+                    to="/settings/$section"
+                    params={{ section: 'agents' }}
+                    search={opened === m.id ? {} : { open: `computer:${m.id}` }}
+                    className={opened === m.id ? 'fl-sum is-on' : 'fl-sum'}
+                    aria-label={`Open ${m.label || m.id}`}
+                    aria-expanded={opened === m.id}
+                  >
+                    <Word fine={m.online}>{m.restarting ? 'Restarting' : m.online ? 'Online' : 'Offline'}</Word>
+                    <Icon name="panel" />
+                  </Link>
+                )
+              }
+            >
               {g.slugs.length === 0 ? (
                 <div className="fl-none">
                   <span>No agents yet</span>
@@ -774,9 +821,11 @@ export function AgentList({ open }: { open?: string }) {
                 })
               )}
             </Section>
-          ))}
-        </>
+            );
+          })}
+        </div>
       )}
+      {opened && <ComputerPanel id={opened} onClose={() => void navigate({ to: '/settings/$section', params: { section: 'agents' }, search: {} })} />}
       {retired.length > 0 && (
         <Section name="Retired" count={retired.length} defaultOpen={false} target="setting:retired">
           {retired.map((b) => {

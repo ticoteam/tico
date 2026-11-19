@@ -6,7 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
-import { accessQuery, activityQuery, changelogQuery, directorySyncQuery, type AccessView } from './queries';
+import { accessQuery, activityQuery, changelogQuery, directorySyncQuery, humansQuery, type AccessView } from './queries';
 import { SettingsPage } from './SettingsPage';
 
 vi.mock('@/search', () => ({ SearchDialog: () => null }));
@@ -91,6 +91,33 @@ describe('Settings › Changelog', () => {
     expect(await screen.findByText('Reported task outcome')).toBeTruthy();
     expect(await screen.findByText('Sample task')).toBeTruthy();
     expect((await screen.findByText('shipped')).tagName).toBe('B');
+  });
+});
+
+describe('Settings › Changelog, empty', () => {
+  it('is one quiet line in the Changelog section, with Add update in its head and agent activity after', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    queryClient.setQueryData(changelogQuery.queryKey, { ...LIST, can_add: true, entries: [] });
+    queryClient.setQueryData(activityQuery.queryKey, { ...LIST, entries: [{ ...ENTRY, id: 'e1', title: 'Shipped a sample' }] });
+    show(<SettingsPage section="changelog" />, '/settings/changelog');
+    const log = await screen.findByRole('region', { name: 'Changelog' });
+    expect(log.querySelector('.stage-head')?.querySelector('[aria-label="Add update"]')).toBeTruthy();
+    expect(log.textContent).toContain('No changes yet');
+    const activity = screen.getByRole('region', { name: /Agent activity/ });
+    expect(log.compareDocumentPosition(activity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(document.querySelector('.empty')).toBeNull();
+  });
+});
+
+describe('Settings › Account', () => {
+  it('reads the people list where the server keeps it', async () => {
+    const asked: string[] = [];
+    vi.stubGlobal('fetch', async (url: string) => {
+      asked.push(String(url));
+      return new Response(JSON.stringify({ people: [{ id: 'p1', email_digest: true }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    expect(await queryClient.fetchQuery(humansQuery)).toEqual([{ id: 'p1', email_digest: true }]);
+    expect(asked).toEqual(['/api/humans']);
   });
 });
 

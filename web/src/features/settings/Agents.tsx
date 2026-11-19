@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { run } from '@/actions/run';
 import { configQuery, meQuery } from '@/data';
@@ -17,6 +17,7 @@ import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
 import { AgentList } from './AgentList';
+import { ComputerPanel } from './ComputerPanel';
 import { Gateway } from './Gateway';
 import { installCommands, type Command, type ComputerKind, type RunnerConfig } from './install';
 import { Foot, Line, Meter, SwitchLine, Verb, Word, act, usd, useVisible } from './parts';
@@ -30,7 +31,6 @@ import {
   sleepQuery,
   signInQuery,
   subscriptionsQuery,
-  type Computer,
   type SignIn,
   type Subscription,
 } from './queries';
@@ -435,78 +435,6 @@ export function Agents({ open }: { open?: string }) {
 
 // ---------------------------------------------------------------- Computers
 
-function ComputerOpen({ c }: { c: Computer }) {
-  const [renaming, setRenaming] = useState(false);
-  const [name, setName] = useState(c.label ?? '');
-  const [confirm, setConfirm] = useState(false);
-  const bots = Object.keys(c.readiness?.bots ?? {});
-  return (
-    <>
-      <Facts label={c.label || c.id}>
-        <LabelValue label="State">{c.online ? 'Online' : 'Offline'}</LabelValue>
-        <LabelValue label="Kind">{c.cloud_machine ? (c.cloud_machine.shared ? 'Shared, in the cloud' : 'In the cloud') : 'Your own'}</LabelValue>
-        <LabelValue label="Agents">{bots.length}</LabelValue>
-        <SwitchLine
-          label="Fall back to Tico Gateway"
-          checked={c.gateway_fallback === true}
-          onChange={(on) => void act('settings.gatewayFallback', { computer: c.id, on })}
-        />
-      </Facts>
-      <Foot open>
-        <Verb onClick={() => setRenaming(true)}>Rename</Verb>
-        <Verb onClick={() => setConfirm(true)}>Remove</Verb>
-      </Foot>
-      <Dialog
-        open={renaming}
-        onOpenChange={setRenaming}
-        title="Rename computer"
-        actions={
-          <>
-            <Button variant="quiet" onClick={() => setRenaming(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              disabled={!name.trim()}
-              onClick={() => {
-                setRenaming(false);
-                void act('settings.nameComputer', { computer: c.id, name: name.trim() });
-              }}
-            >
-              Rename
-            </Button>
-          </>
-        }
-      >
-        <Field label="Name" value={name} onValueChange={setName} autoFocus />
-      </Dialog>
-      <Dialog
-        open={confirm}
-        onOpenChange={setConfirm}
-        alert
-        title={`Remove ${c.label || 'this computer'}?`}
-        description="It stops taking work at once. Its agents wait until they have another computer."
-        actions={
-          <>
-            <Button variant="quiet" onClick={() => setConfirm(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => {
-                setConfirm(false);
-                void act('settings.removeComputer', { computer: c.id });
-              }}
-            >
-              Remove
-            </Button>
-          </>
-        }
-      />
-    </>
-  );
-}
-
 const KINDS = [
   { value: 'server', label: 'Server' },
   { value: 'mac', label: 'Mac' },
@@ -691,6 +619,7 @@ function Sleep() {
 }
 
 export function Computers({ open }: { open?: string }) {
+  const navigate = useNavigate();
   const computers = useQuery(computersQuery);
   const list = (computers.data ?? []).filter((c) => !c.revoked_at);
   if (!computers.data) return null;
@@ -708,7 +637,7 @@ export function Computers({ open }: { open?: string }) {
               <span>State</span>
             </div>
             {list.map((c) => {
-              const row = (
+              return (
                 <Link
                   key={c.id}
                   to="/settings/$section"
@@ -727,18 +656,13 @@ export function Computers({ open }: { open?: string }) {
                   </span>
                 </Link>
               );
-              return open === c.id ? (
-                <div key={c.id} className="open">
-                  {row}
-                  <ComputerOpen c={c} />
-                </div>
-              ) : (
-                row
-              );
             })}
           </>
         )}
       </Section>
+      {open && list.some((c) => c.id === open) && (
+        <ComputerPanel id={open} onClose={() => void navigate({ to: '/settings/$section', params: { section: 'computers' }, search: {} })} />
+      )}
       {/* Owner, Nov 19: agents made and run outside Tico are not in the first build; one dimmed line. */}
       <Section name="External agents" target="setting:external">
         <div className="row is-off" aria-disabled="true" title="Agents made and run outside Tico">
@@ -755,6 +679,22 @@ export function Computers({ open }: { open?: string }) {
 }
 
 // ---------------------------------------------------------------- Models
+
+/** A provider's own spelling; an id not listed is capitalized. */
+const PROVIDERS: Record<string, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  google: 'Google',
+  xai: 'xAI',
+  deepseek: 'DeepSeek',
+  meta: 'Meta',
+  mistral: 'Mistral',
+  moonshot: 'Moonshot',
+  openrouter: 'OpenRouter',
+  cursor: 'Cursor',
+  tico: 'Tico',
+};
+export const providerName = (id: string) => PROVIDERS[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
 
 function Defaults({ names }: { names: { value: string; label: string }[] }) {
   const providers = useQuery({ ...providersQuery, retry: false });
@@ -818,7 +758,7 @@ export function Models() {
       {providers.map((p) => {
         const rows = shown.filter((m) => m.provider === p);
         return (
-          <Section key={p} name={p.charAt(0).toUpperCase() + p.slice(1)} count={rows.length}>
+          <Section key={p} name={providerName(p)} count={rows.length}>
             {rows.map((m) => (
               <div key={m.id} className="row g-model" title={m.label}>
                 <span className="row-title">{m.label}</span>
