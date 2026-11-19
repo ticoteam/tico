@@ -401,7 +401,11 @@ export async function startCall(withWho: readonly string[]): Promise<Call> {
 export const threadCallsQuery = (thread: string) =>
   queryOptions({
     queryKey: callKeys.inThread(thread),
-    queryFn: ({ signal }) => api.get<CallList>(`/api/v2/threads/${enc(thread)}/calls?limit=1`, { signal }),
+    queryFn: async ({ signal }): Promise<CallList> => {
+      const d = await api.get<Partial<CallList>>(`/api/v2/threads/${enc(thread)}/calls?limit=1`, { signal });
+      // A reply can leave out its lists: read as none.
+      return { available: !!d.available, calls: d.calls ?? [], next_before: d.next_before ?? null, next_scheduled: d.next_scheduled ?? null, providers: d.providers ?? [] };
+    },
   });
 
 /** A call in this thread: a voice call (Tico Meet) with these agents, or a Google Meet (people only). */

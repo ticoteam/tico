@@ -395,3 +395,10 @@ button.act-text{padding:0;border:0;background:none;color:inherit;font-family:inh
   .cb-t b{font-weight:var(--w-strong);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
   .cb-hang{color:var(--ink)}
 }
+
+/* ---------- the desktop app's small call window (platforms.md 4.6): one column, the controls always in reach ---------- */
+.cw.cw-small>.cw-faces,.cw.cw-small>.say{flex-shrink:1;min-height:0;overflow:hidden}
+.cw.cw-small>.win-side{flex:1;min-height:0}
+@media (max-height:420px){
+  .cw.cw-small>.win-side{display:none}
+}

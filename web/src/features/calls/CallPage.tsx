@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useRouter } from '@tanstack/react-router';
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { ApiError } from '@/api/client';
 import type { Call } from '@/api/schema';
 import { ticoRoomQuery } from '@/conversation';
+import { desktop } from '@/desktop';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
@@ -14,7 +15,7 @@ import { toast } from '@/kit/Toast';
 import { CallBars, Dot, dot } from '@/tico/dot';
 import { CallSide } from './CallSide';
 import { running } from './model';
-import { Face, inCall, press, useCards, useMe, useNameOf, useNow, type InCall } from './parts';
+import { Face, inCall, press, SMALL_WINDOW, useCards, useMe, useNameOf, useNow, useOut, useSmallWindow, type InCall } from './parts';
 import { PeoplePick } from './PeoplePick';
 import { callQuery, notesQuery } from './queries';
 import { callState, forget, isActive, levelOf, useCall, type CallState, type Phase } from './session';
@@ -58,18 +59,23 @@ export function CallPage({ room }: CallPageProps) {
   const on = phase === 'live' || phase === 'reconnecting';
   const call = useQuery(callQuery(room));
   const ticoRoom = useQuery(ticoRoomQuery).data;
-  const cards = useCards();
+  // the desktop app's small window (?window=1): one column, its own head; the main window, while the call is out there
+  const small = useSmallWindow();
+  const out = useOut(room) && !small;
+  const cards = useCards() && !small;
   const back = useBack();
   useLetGoOnLeave(room);
+  useJoinInSmallWindow(small, room, call.data, phase);
   const c = call.data;
   const ended = phase === 'ended' || (phase === 'idle' && c?.state === 'ended');
   const isTico = !!c && !!ticoRoom && ticoRoom === c.thread_id;
+  const kind = small ? 'pane cw cw-small' : cards ? 'pane pc cw' : 'pane cw is-full';
 
   if (call.isError && !c) {
     // No call behind the address (or not this person's): said plainly, with nothing to try again.
     const status = call.error instanceof ApiError ? call.error.status : 0;
     return (
-      <main className={cards ? 'pane pc cw' : 'pane cw is-full'}>
+      <main className={kind}>
         {status === 404 ? (
           <Empty title="No such call" icon="call" />
         ) : status === 403 ? (
@@ -84,17 +90,58 @@ export function CallPage({ room }: CallPageProps) {
   }
 
   const lead = cards ? <IconButton icon="chevdown" label="Back to the app" onClick={back} /> : null;
+  const head = small ? (
+    <Head c={c} live={on} lead={null}>
+      <SmallWindowControls />
+    </Head>
+  ) : (
+    <Head c={c} live={on && !out} lead={lead}>
+      {/* the desktop app moves a call it is in to its own small window */}
+      {on && !out && c?.provider !== 'google_meet' && desktop() && (
+        <IconButton icon="shrink" label={SMALL_WINDOW} onClick={() => void press('shell.openCallWindow', { id: room })} />
+      )}
+      <IconButton icon="link" label="Copy link" onClick={copyLink} />
+    </Head>
+  );
+  if (out)
+    return (
+      <main className={kind} aria-label={c?.title || 'Call'} data-target={`page:/call/${room}`}>
+        {head}
+        <div className="win-stage">
+          <Empty title="In the small window" icon="popout" />
+        </div>
+      </main>
+    );
   return (
-    <main className={cards ? 'pane pc cw' : 'pane cw is-full'} aria-label={c?.title || 'Call'} data-target={`page:/call/${room}`}>
-      <Head c={c} live={on} lead={lead} />
-      {ended ? <Ended room={room} /> : <Stage room={room} c={c} s={s} phase={phase} isTico={isTico} row={cards && !isTico} />}
-      {cards && c && !ended && <CallSide room={room} />}
-      {!ended && <Controls room={room} s={s} phase={phase} onBack={cards ? undefined : back} />}
+    <main className={kind} aria-label={c?.title || 'Call'} data-target={`page:/call/${room}`}>
+      {head}
+      {ended ? <Ended room={room} small={small} /> : <Stage room={room} c={c} s={s} phase={phase} isTico={isTico} row={(cards || small) && !isTico} small={small} />}
+      {(cards || small) && c && !ended && <CallSide room={room} />}
+      {!ended && <Controls room={room} s={s} phase={phase} onBack={cards || small ? undefined : back} />}
     </main>
   );
 }
 
-function Head({ c, live, lead }: { c: Call | undefined; live: boolean; lead: ReactNode }) {
+/** The small window opens to move a call there: it joins at once, as the main window does when the call comes back. */
+function useJoinInSmallWindow(small: boolean, room: string, c: Call | undefined, phase: Phase) {
+  const tried = useRef(false);
+  const go = small && phase === 'idle' && c?.state === 'live' && c.provider !== 'google_meet';
+  useEffect(() => {
+    if (!go || tried.current) return;
+    tried.current = true;
+    void press('calls.join', { id: room });
+  }, [go, room]);
+}
+
+/** The address without `?window=1` and the like: the call's own page, for anyone it is sent to. */
+function copyLink() {
+  void navigator.clipboard?.writeText(location.origin + location.pathname).then(
+    () => toast({ text: 'Link copied' }),
+    () => toast({ text: "Couldn't copy", kind: 'failed' }),
+  );
+}
+
+function Head({ c, live, lead, children }: { c: Call | undefined; live: boolean; lead: ReactNode; children: ReactNode }) {
   const now = useNow(1000);
   const since = c ? (now.getTime() - new Date(c.started_at).getTime()) / 1000 : 0;
   return (
@@ -111,17 +158,27 @@ function Head({ c, live, lead }: { c: Call | undefined; live: boolean; lead: Rea
         )}
       </div>
       <span className="grow" />
-      <IconButton
-        icon="link"
-        label="Copy link"
-        onClick={() =>
-          void navigator.clipboard?.writeText(location.href).then(
-            () => toast({ text: 'Link copied' }),
-            () => toast({ text: "Couldn't copy", kind: 'failed' }),
-          )
-        }
-      />
+      {children}
     </header>
+  );
+}
+
+/** The small window's own: keep it above other windows (it opens on top), copy the link, and back to the app. */
+function SmallWindowControls() {
+  const [onTop, setOnTop] = useState(true);
+  const flip = () => {
+    const next = !onTop;
+    setOnTop(next);
+    void press('calls.keepOnTop', { on: next }).then((ok) => ok || setOnTop(!next));
+  };
+  return (
+    <>
+      <Menu trigger={<IconButton icon="more" label="More" />}>
+        <MenuItem label="Keep on top" on={onTop} onSelect={flip} />
+        <MenuItem label="Copy link" onSelect={copyLink} />
+      </Menu>
+      <IconButton icon="expand" label="Back to the app" onClick={() => void press('calls.backToApp', {})} />
+    </>
   );
 }
 
@@ -133,7 +190,7 @@ const TROUBLE: Partial<Record<Phase, { title: string; text?: string; icon: 'mico
   lost: { title: 'Call disconnected', icon: 'offline', act: 'Join again' },
 };
 
-function Stage({ room, c, s, phase, isTico, row }: { room: string; c: Call | undefined; s: CallState; phase: Phase; isTico: boolean; row: boolean }) {
+function Stage({ room, c, s, phase, isTico, row, small }: { room: string; c: Call | undefined; s: CallState; phase: Phase; isTico: boolean; row: boolean; small: boolean }) {
   const live = phase === 'live';
   const nameOf = useNameOf();
   const me = useMe();
@@ -180,8 +237,9 @@ function Stage({ room, c, s, phase, isTico, row }: { room: string; c: Call | und
       <>
         <div className="win-stage is-tico">
           <div className="tc-big">
-            <span className="tc-orb is-big">
-              <Dot size={148} />
+            {/* the small window takes the mock's smaller orb (calls.js tc-stage) */}
+            <span className={small ? 'tc-orb' : 'tc-orb is-big'}>
+              <Dot size={small ? 84 : 148} />
             </span>
             <span className="spk-lvl">
               <CallBars signal={ticoTalks && s.voice ? levelOf(s.voice) : null} gone={meTalks} />
@@ -352,7 +410,8 @@ function Controls({ room, s, phase, onBack }: { room: string; s: CallState; phas
 const NOTES_EVERY = 4000;
 const NOTES_FOR = 3 * 60_000;
 
-function Ended({ room }: { room: string }) {
+/** In the small window nothing here leaves the call's page: a link would draw the whole app in it. */
+function Ended({ room, small }: { room: string; small: boolean }) {
   const [since] = useState(() => Date.now());
   const notes = useQuery({ ...notesQuery(room), refetchInterval: (q) => (q.state.data?.pending && Date.now() - since < NOTES_FOR ? NOTES_EVERY : false) });
   const nameOf = useNameOf();
@@ -396,17 +455,26 @@ function Ended({ room }: { room: string }) {
               <div className="mv-sec-head">
                 <h2 className="sec-name">Tasks made</h2>
               </div>
-              {n.follow_ups.map((f) => (
-                <Link key={f.task_id} to="/task/$task" params={{ task: f.task_id }} className="rail-row call-rail">
-                  <Icon name="tasks" />
-                  <span>{f.title}</span>
-                </Link>
-              ))}
+              {n.follow_ups.map((f) =>
+                small ? (
+                  <span key={f.task_id} className="rail-row call-rail">
+                    <Icon name="tasks" />
+                    <span>{f.title}</span>
+                  </span>
+                ) : (
+                  <Link key={f.task_id} to="/task/$task" params={{ task: f.task_id }} className="rail-row call-rail">
+                    <Icon name="tasks" />
+                    <span>{f.title}</span>
+                  </Link>
+                ),
+              )}
             </section>
           )}
-          <Link to="/calendar" search={{ view: 'list' }} className="btn">
-            Calendar
-          </Link>
+          {!small && (
+            <Link to="/calendar" search={{ view: 'list' }} className="btn">
+              Calendar
+            </Link>
+          )}
         </div>
       </div>
     </div>

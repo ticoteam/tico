@@ -25,7 +25,7 @@ export interface TicoDesktop {
   setBadge(needs: number): void;
   callWindow: {
     open(callId: string): Promise<void>;
-    close(): Promise<void>;
+    close(ending?: 'closed' | 'return'): Promise<void>;
     setOnTop(on: boolean): Promise<void>;
     onState(cb: (s: CallWindowState) => void): () => void;
   };
@@ -183,7 +183,7 @@ export async function openCallWindow(id: string): Promise<void> {
 /** The small window's own controls: keep it above other windows, or close it. */
 export const callWindowControls = () => {
   const t = desktop();
-  return t ? { setOnTop: (on: boolean) => t.callWindow.setOnTop(on), close: () => t.callWindow.close() } : null;
+  return t ? { setOnTop: (on: boolean) => t.callWindow.setOnTop(on), close: (ending?: 'closed' | 'return') => t.callWindow.close(ending) } : null;
 };
 
 /** Whether a call is out in the small window, and which (for the main window's call bar: "In the small window"). */

@@ -55,8 +55,9 @@ export function registerIpc(shell: Shell, updater: Updater, version: string): vo
   listen('files:origin', (c, origin) => shell.setFilesOrigin(c.company.id, V.filesOriginArg(origin, c.company.url)));
 
   handle('call:open', MAIN, (c, callId) => shell.openCall(c.company.id, V.callIdArg(callId)));
-  handle('call:close', BOTH, (c) => {
-    if (shell.call.belongsTo(c.company.id)) shell.call.close('closed');
+  // 'return': the person chose to go back to the call in the main window; anything else leaves the call
+  handle('call:close', BOTH, (c, ending) => {
+    if (shell.call.belongsTo(c.company.id)) shell.call.close(ending === 'return' ? 'return' : 'closed');
   });
   handle('call:on-top', BOTH, (c, on) => {
     const flag = V.boolArg(on);

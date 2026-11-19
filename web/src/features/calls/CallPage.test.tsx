@@ -6,6 +6,7 @@ import type { Call } from '@/api/schema';
 import { ActionsRoot } from '@/actions';
 import { ticoRoomQuery } from '@/conversation';
 import { queryClient } from '@/data';
+import { openCallWindow, watchCallWindow, type CallWindowState, type TicoDesktop } from '@/desktop';
 import { dot } from '@/tico/dot';
 import { CallBar } from './CallBar';
 import { CallPage } from './CallPage';
@@ -307,5 +308,84 @@ describe('Call window', () => {
     fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Decline' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(posted).toEqual([]);
+  });
+});
+
+/* The desktop app, faked as root.test.tsx does: `window.tico` with the small call window's bridge. */
+function fakeDesktop() {
+  const said: { state?: (s: CallWindowState) => void } = {};
+  const t = {
+    version: '1.0.0',
+    platform: 'mac',
+    companies: { list: vi.fn(async () => []), switchTo: vi.fn(), add: vi.fn(), remove: vi.fn(), reportSelf: vi.fn(), onChange: vi.fn(() => () => {}) },
+    setBadge: vi.fn(),
+    callWindow: {
+      open: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+      setOnTop: vi.fn(async () => {}),
+      onState: vi.fn((cb: (s: CallWindowState) => void) => {
+        said.state = cb;
+        return () => {};
+      }),
+    },
+    app: { updateState: vi.fn(), restartToUpdate: vi.fn(), checkForUpdates: vi.fn(), showLog: vi.fn(), logTail: vi.fn(), openAtLogin: vi.fn() },
+  } satisfies TicoDesktop;
+  (window as { tico?: TicoDesktop }).tico = t;
+  return { t, said };
+}
+
+describe('The desktop app’s small call window', () => {
+  let stop: () => void = () => {};
+  afterEach(() => {
+    stop();
+    delete (window as { tico?: TicoDesktop }).tico;
+  });
+
+  it('in a browser, nothing offers the small window', async () => {
+    show();
+    await joinNow();
+    await screen.findByRole('button', { name: 'Leave' });
+    expect(screen.queryByRole('button', { name: 'Open in a small window' })).toBeNull();
+  });
+
+  it('the main window moves the call out through the shell’s action', async () => {
+    const { t } = fakeDesktop();
+    show();
+    await joinNow();
+    fireEvent.click(await screen.findByRole('button', { name: 'Open in a small window' }));
+    await waitFor(() => expect(t.callWindow.open).toHaveBeenCalledWith(ROOM));
+    await waitFor(() => expect(posted.some((u) => u.endsWith(`/calls/${ROOM}/leave`))).toBe(true));
+  });
+
+  it('while the call is out, the bar and the call page say so and draw no controls', async () => {
+    const { said } = fakeDesktop();
+    stop = watchCallWindow(() => {});
+    await openCallWindow(ROOM);
+    act(() => said.state?.('open'));
+    const router = show('/tasks');
+    const bar = await screen.findByRole('banner', { name: 'Call' });
+    expect(within(bar).getByText('In the small window')).toBeTruthy();
+    expect(within(bar).queryByRole('button')).toBeNull();
+    await act(() => router.navigate({ to: '/call/$room', params: { room: ROOM } }));
+    expect(await screen.findByText('In the small window')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Join' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Leave' })).toBeNull();
+    act(() => said.state?.('closed'));
+    expect(await screen.findByRole('button', { name: 'Join' })).toBeTruthy();
+  });
+
+  it('the small window joins at once, keeps on top, and goes back to the app', async () => {
+    const { t } = fakeDesktop();
+    show(`/call/${ROOM}?window=1`);
+    await waitFor(() => expect(posted.some((u) => u.endsWith(`/calls/${ROOM}/join`))).toBe(true));
+    expect(await screen.findByRole('button', { name: 'Leave' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Minimize' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open in a small window' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Keep on top' }));
+    await waitFor(() => expect(t.callWindow.setOnTop).toHaveBeenCalledWith(false));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to the app' }));
+    await waitFor(() => expect(t.callWindow.close).toHaveBeenCalledWith('return'));
+    expect(posted.some((u) => u.endsWith(`/calls/${ROOM}/leave`))).toBe(true);
   });
 });

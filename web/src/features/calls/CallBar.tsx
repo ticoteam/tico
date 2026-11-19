@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useRouterState } from '@tanstack/react-router';
+import { desktop, useCallWindow } from '@/desktop';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { CallBars } from '@/tico/dot';
 import { running } from './model';
-import { Face, inCall, press, useCards, useMe, useNameOf, useNow } from './parts';
+import { Face, inCall, press, SMALL_WINDOW, useCards, useMe, useNameOf, useNow } from './parts';
 import { callQuery } from './queries';
 import { isActive, useCall, type CallState } from './session';
 import './calls.css';
@@ -15,9 +16,26 @@ import './calls.css';
  */
 export function CallBar() {
   const s = useCall();
+  const out = useCallWindow();
   const path = useRouterState({ select: (r) => r.location.pathname });
-  if (!s.callId || !isActive(s) || path === `/call/${s.callId}`) return null;
-  return <Bar room={s.callId} s={s} />;
+  if (s.callId && isActive(s)) return path === `/call/${s.callId}` ? null : <Bar room={s.callId} s={s} />;
+  // the desktop app's small window holds the call: it is drawn there, and here only says so
+  if (out.open && out.id && path !== `/call/${out.id}`) return <OutBar room={out.id} />;
+  return null;
+}
+
+function OutBar({ room }: { room: string }) {
+  const c = useQuery(callQuery(room)).data;
+  return (
+    <header className="cb" aria-label="Call">
+      <Link to="/call/$room" params={{ room }} className="cb-what" title="Open call">
+        <Icon name="call" />
+        <b>{c?.title || 'Call'}</b>
+      </Link>
+      <p className="cb-cap">In the small window</p>
+      <span />
+    </header>
+  );
 }
 
 function Bar({ room, s }: { room: string; s: CallState }) {
@@ -85,6 +103,7 @@ function Bar({ room, s }: { room: string; s: CallState }) {
         <Link to="/call/$room" params={{ room }} className="ib" aria-label="Open call" title="Open call">
           <Icon name="popout" />
         </Link>
+        {desktop() && <IconButton icon="shrink" label={SMALL_WINDOW} onClick={() => void press('shell.openCallWindow', { id: room })} />}
         <button type="button" className="btn btn-sm cb-leave" onClick={() => void press('calls.leave', {})}>
           <Icon name="leave" />
           Leave

@@ -12,10 +12,9 @@ import { Menu, MenuItem } from '@/kit/Menu';
 import { Popover } from '@/kit/Popover';
 import { Segmented } from '@/kit/Segmented';
 import { callCount, callFaces, callLength, callWhen, running } from './model';
-import { LiveMark, press, useMe, useNow, Who } from './parts';
+import { LiveMark, press, useInCall, useMe, useNow, Who } from './parts';
 import { PickRow } from './PeoplePick';
 import { callQuery, threadCallsQuery } from './queries';
-import { isActive, useCall } from './session';
 import './calls.css';
 
 /** A thread with more people than this rings nobody (backend/call_ring.py RING_MAX). */
@@ -37,7 +36,8 @@ export function ThreadCallHead({ thread, members, canPost }: ThreadCallHeadProps
   const { data } = useQuery(threadCallsQuery(thread));
   const now = useNow(30_000);
   if (!data) return null;
-  const live = data.calls.find((c) => c.state === 'live');
+  // a list seeded or patched from elsewhere may still lack its calls
+  const live = (data.calls ?? []).find((c) => c.state === 'live');
   if (live) return <JoinHere id={live.id} />;
   const next = data.next_scheduled;
   if (next?.state === 'scheduled')
@@ -53,8 +53,8 @@ export function ThreadCallHead({ thread, members, canPost }: ThreadCallHeadProps
 /** A call that is on here: Join (with how many are in it), or "In call" when this window is. */
 function JoinHere({ id }: { id: string }) {
   const { data: c } = useQuery(callQuery(id));
-  const s = useCall();
-  if (s.callId === id && isActive(s))
+  const here = useInCall(id);
+  if (here)
     return (
       <Button className="btn-sm" icon="call" onClick={() => void press('calls.open', { id })}>
         In call
@@ -152,7 +152,7 @@ export function callCard(m: { refs?: Record<string, unknown> | null }): ReactNod
  */
 export function CallCard({ id }: { id: string }) {
   const { data: c } = useQuery(callQuery(id));
-  const s = useCall();
+  const inIt = useInCall(id);
   const me = useMe();
   const live = c?.state === 'live';
   const missed = !!c && c.state === 'ended' && c.provider === 'google_meet' && c.duration_s == null && !!c.status_source;
@@ -168,7 +168,7 @@ export function CallCard({ id }: { id: string }) {
     <div className={['call-card', live && 'is-live', missed && 'is-missed'].filter(Boolean).join(' ')} data-target={`call:${id}`}>
       <span className="call-card-ic">{live ? <LiveMark /> : <Icon name="call" />}</span>
       {title}
-      {c && <CardBody c={c} me={me} inIt={s.callId === id && isActive(s)} missed={missed} />}
+      {c && <CardBody c={c} me={me} inIt={inIt} missed={missed} />}
     </div>
   );
 }

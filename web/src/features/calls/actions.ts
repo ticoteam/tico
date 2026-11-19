@@ -1,6 +1,7 @@
 // What a person (or Tico) can do on the Calendar, in a meeting's panel and on a call.
 import type { Call } from '@/api/schema';
 import { defineAction, s, type Ctx } from '@/actions';
+import { callWindowControls, desktop, isCallWindow } from '@/desktop';
 import { VIEWS } from './model';
 import {
   addItem,
@@ -39,7 +40,10 @@ const section = s.oneOf(['doc', 'task', 'feature'] as const);
 
 type Search = Record<string, unknown>;
 const toCalendar = ({ router }: Ctx, search: (prev: Search) => Search) => router.navigate({ to: '/calendar', search });
-const openCall = ({ router }: Ctx, room: string) => router.navigate({ to: '/call/$room', params: { room } });
+/** This window is the desktop app's small call window. */
+const smallWindow = ({ router }: Ctx) => isCallWindow(router.state.location.pathname, router.state.location.searchStr);
+// The small window is its call's page already: a navigation there would drop ?window=1 and draw the whole app in it.
+const openCall = (ctx: Ctx, room: string) => (smallWindow(ctx) ? undefined : ctx.router.navigate({ to: '/call/$room', params: { room } }));
 const PAGE = { kind: 'page', id: '/calendar' } as const;
 
 /* ---------------------------------------------------------------- the calendar */
@@ -401,6 +405,45 @@ export const leaveAction = defineAction({
   input: s.object({}),
   run: () => leave(),
   did: () => 'Left the call',
+});
+
+/* ---------------------------------------------------------------- the desktop app's small call window (platforms.md 4.6)
+   Moving the call into it is the shell's `shell.openCallWindow`. These two live in the small window itself. */
+
+const NO_WINDOW = 'not_here: only the desktop app’s small call window';
+
+export const keepOnTop = defineAction({
+  id: 'calls.keepOnTop',
+  title: 'Keep the call window on top',
+  kind: 'view',
+  tico: false,
+  input: s.object({ on: s.boolean() }),
+  can: (ctx) => !!callWindowControls() && smallWindow(ctx),
+  run: async (_ctx, { on }) => {
+    const w = callWindowControls();
+    if (!w) throw new Error(NO_WINDOW);
+    await w.setOnTop(on);
+  },
+  did: ({ on }) => (on ? 'Kept the call on top' : 'Let the call go behind'),
+});
+
+/** The small window closes and the main window takes the call again: the room moves, so this one leaves it first and
+    the main window joins on hearing 'return'. */
+export const backToApp = defineAction({
+  id: 'calls.backToApp',
+  title: 'Move the call back to the app',
+  kind: 'view',
+  tico: false,
+  input: s.object({}),
+  can: (ctx) => !!desktop() && smallWindow(ctx),
+  run: async () => {
+    const t = desktop();
+    if (!t) throw new Error(NO_WINDOW);
+    await leave();
+    // 'return': the main window takes the call; a plain close() would end as 'closed' (left)
+    await t.callWindow.close('return');
+  },
+  did: () => 'Moved the call back to the app',
 });
 
 /* ---------------------------------------------------------------- meetings brought in: logged, Granola, settings */

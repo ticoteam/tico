@@ -38,7 +38,8 @@ export interface TicoDesktop {
   setBadge(needs: number): void;
   callWindow: {
     open(callId: string): Promise<void>;
-    close(): Promise<void>;
+    /** 'return' sends the call back to the main window; without it the call is left. */
+    close(ending?: 'closed' | 'return'): Promise<void>;
     setOnTop(on: boolean): Promise<void>;
     onState(cb: (s: CallWindowState) => void): () => void;
   };

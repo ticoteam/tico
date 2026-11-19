@@ -1,13 +1,34 @@
 import { useQuery } from '@tanstack/react-query';
+import { useLocation } from '@tanstack/react-router';
 import { useEffect, useState, useSyncExternalStore, type CSSProperties, type MouseEvent } from 'react';
 import type { CalendarOccurrence, Call } from '@/api/schema';
 import { run } from '@/actions';
 import { directoryQuery, meQuery, useActor } from '@/data';
+import { isCallWindow, useCallWindow } from '@/desktop';
 import { Avatar, Faces, type AvatarSize } from '@/kit/Avatar';
 import { Icon } from '@/kit/Icon';
 import { toast } from '@/kit/Toast';
 import { joinOf } from './model';
-import { levelOf, type CallState } from './session';
+import { isActive, levelOf, useCall, type CallState } from './session';
+
+/** The desktop app's control that moves the call out (the shell's `shell.openCallWindow`). */
+export const SMALL_WINDOW = 'Open in a small window';
+
+/** This page is the desktop app's small call window (`/call/<id>?window=1`). */
+export const useSmallWindow = (): boolean => useLocation({ select: (l) => isCallWindow(l.pathname, l.searchStr) });
+
+/** The desktop app's small window holds this call now: the main window shows "In the small window" (platforms.md 4.6). */
+export function useOut(id: string): boolean {
+  const w = useCallWindow();
+  return w.open && w.id === id;
+}
+
+/** In this call here, or out in the small window: either way there is nothing to join. */
+export function useInCall(id: string): boolean {
+  const s = useCall();
+  const out = useOut(id);
+  return out || (s.callId === id && isActive(s));
+}
 
 /** Press an action as the person's click; say so when the server refuses it. */
 export async function press(id: string, input: unknown): Promise<boolean> {

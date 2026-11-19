@@ -39,7 +39,7 @@ const tico: TicoDesktop = {
   setBadge: (needs) => ipcRenderer.send('badge:set', needs),
   callWindow: {
     open: (callId) => ipcRenderer.invoke('call:open', callId) as Promise<void>,
-    close: () => ipcRenderer.invoke('call:close') as Promise<void>,
+    close: (ending) => ipcRenderer.invoke('call:close', ending) as Promise<void>,
     setOnTop: (on) => ipcRenderer.invoke('call:on-top', on) as Promise<void>,
     onState: listen<CallWindowState>('call:state'),
   },

@@ -162,6 +162,12 @@ describe('A thread’s call control', () => {
     expect(screen.queryByRole('button', { name: 'Call' })).toBeNull();
   });
 
+  it('a reply without its lists reads as no calls, not a crash', async () => {
+    answer = () => ({ available: true, providers: ['tico'] });
+    show(<ThreadCallHead thread="th1" members={['human:ana']} canPost />);
+    expect(await screen.findByRole('button', { name: 'Call' })).toBeTruthy();
+  });
+
   it('shows nothing to start where the person cannot post', async () => {
     queryClient.setQueryData(threadCallsQuery('th1').queryKey, list());
     show(
