@@ -14,9 +14,13 @@ type Who = 'owner' | 'waiting' | 'asked';
  * Filter: Owner ›, Waiting on ›, Asked by ›, Tag ›, Due ›, then Late (list.js filterMenu). Each choice is `tasks.filter`,
  * so it lands in the address.
  */
-export function FilterMenu(props: FilterProps) {
+export function FilterMenu({ phone, ...props }: FilterProps & { phone?: boolean }) {
   return (
-    <Menu trigger={<IconButton icon="filter" label="Filter" on={isFiltered({ ...props.filters, q: undefined })} data-target="tasks:filter" />}>
+    <Menu
+      trigger={
+        <IconButton icon="filter" label="Filter" on={isFiltered({ ...props.filters, q: undefined })} data-target="tasks:filter" data-phone={phone || undefined} />
+      }
+    >
       <FilterItems {...props} />
     </Menu>
   );
