@@ -89,7 +89,7 @@ def test_a_retention_segment_reads_kept_and_cost_per_retained_never_an_ltv(api):
     assert top["value"]["kept_d30"]["value"] == 0.4
     assert top["value"]["cost_per_retained"] == {"value": 37.5, "cohort": "2026-09", "n": 40}
     assert not {"ltv", "ltv_cac", "payback_months"} & set(top)
-    assert [(c["slug"], c["new"], c.get("cost"), c.get("status")) for c in out["channels"]] == [
+    assert [(c["slug"], c["new_customers"], c.get("cost"), c.get("status")) for c in out["channels"]] == [
         ("organic", 90, None, "no_spend"),
         ("promotions", 80, 1600.0, None),
     ]
@@ -134,7 +134,7 @@ def test_a_company_with_no_segments_and_no_paid_spend_reads_no_spend_with_effort
     outbound = next(c for c in out["channels"] if c["slug"] == "outbound")
     assert outbound == {
         "slug": "outbound",
-        "new": 4,
+        "new_customers": 4,
         "name": "Outbound",
         "new_share": 0.33,
         "owner": None,
@@ -145,7 +145,7 @@ def test_a_company_with_no_segments_and_no_paid_spend_reads_no_spend_with_effort
         "status": "no_spend",
         "with_effort": 210.0,
     }
-    assert out["channels"][-1] == {"slug": "unknown", "new": 2, "new_share": 0.17}
+    assert out["channels"][-1] == {"slug": "unknown", "new_customers": 2, "new_share": 0.17}
     assert out["health"] == {"unknown_share": 0.17, "reconciled": "not_reconciled", "stale_sources": []}
     assert out["more"] == ["campaigns", "retention", "series"]
     assert len(json.dumps(out)) < 6000  # about 1.5k tokens without detail
@@ -294,7 +294,7 @@ def test_each_channel_carries_its_owner_and_budget_and_mine_is_the_callers_chann
     assert mine["headline"]["new_customers"]["value"] == 8 and mine["headline"]["cost"] == {"value": 650.0}
     assert mine["channels"][1] == {
         "slug": "events",
-        "new": 0,
+        "new_customers": 0,
         "name": "Events",
         "new_share": 0.0,
         "owner": "bot:5e0b0a7a",
@@ -380,8 +380,10 @@ def test_typed_months_count_their_customers_where_no_rows_do_and_cost_shares_wit
     push(api, "rows", "hq", lines("anchor,period,channel,as_of,entered", "customer,2026-10,rows,2026-11-01,5"))
     out = read(api, "period=2026-10")
     by = {c["slug"]: c for c in out["channels"]}
-    assert by["typed"]["new"] == 10 and by["typed"]["cac"] == 10.0  # typed counts where no row covers the month
-    assert by["rows"]["new"] == 5  # rows win: the typed 99 is not added
+    assert (
+        by["typed"]["new_customers"] == 10 and by["typed"]["cac"] == 10.0
+    )  # typed counts where no row covers the month
+    assert by["rows"]["new_customers"] == 5  # rows win: the typed 99 is not added
     assert out["headline"]["new_customers"]["value"] == 15
     assert by["quiet"]["status"] == "no_customers" and by["quiet"]["cost_share"] == 0.2
     assert out["health"]["stale_sources"] == []
@@ -394,3 +396,21 @@ def test_the_read_records_growth_first_opened(api):
     with api.app.state.store.read() as c:
         first = GS.recorded(c)
     assert first["first_opened_at"] and first["first_opened_by"] == "human:ana"
+
+
+def test_pushed_costs_win_over_typed_spend_and_a_blank_count_with_none_eligible_is_not_supplied(api):
+    post(api, "growth/channels", {"slug": "cards", "name": "Cards"})
+    put(api, "growth/cohorts", {"channel": "cards", "month": "2026-10", "spend": 300, "bot_cost": 40})
+    retention = lines("period,channel,kind,purpose,amount", "2026-10,cards,money,retention,50")
+    push(api, "costs", "ads", retention)
+    assert read(api, "period=2026-10")["channels"][0]["cost"] == 300.0  # a retention cost leaves typed spend alone
+    header = "anchor,period,channel,as_of,entered,activated,activated_eligible,net_d90_sum,net_d90_eligible"
+    push(api, "rows", "hq", lines(header, "customer,2026-10,cards,2026-11-01,4,,0,,0"))
+    push(api, "costs", "ads", lines("period,channel,kind,amount", "2026-10,cards,money,120"))
+    cards = read(api, "period=2026-10")["channels"][0]
+    assert cards["new_customers"] == 4 and cards["cost"] == 120.0  # the typed 300 is not added
+    assert cards["with_effort"] == 40.0  # typed bot cost stays: no pushed bot cost covers it
+    push(api, "costs", "ads", lines("period,channel,kind,amount", "2026-10,cards,money,120", "2026-10,cards,bot,20"))
+    assert read(api, "period=2026-10")["channels"][0]["with_effort"] == 35.0
+    over = push(api, "rows", "hq", lines(header, "customer,2026-10,cards,2026-11-01,4,3,2,,"), expected=422)
+    assert over["error"]["rule"] == "over"  # given values still keep x <= eligible <= entered

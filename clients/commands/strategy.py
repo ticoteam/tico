@@ -946,7 +946,7 @@ def growth_customers_load(api, args):
     "tico_growth_read",
     "The Growth read for a scope's month: signups, activation and paid rates, new customers, cost, CAC (money and "
     "promotions; with_effort adds bot cost and hours; no_spend, never 0), kept, LTV or a retention segment's value, "
-    "each channel's new, cost, CAC, owner and budget, health, and Growth's KPIs (metrics). Rates say which cohort "
+    "each channel's new_customers, cost, CAC, owner and budget, health, and Growth's KPIs (metrics). Rates say which cohort "
     "they come from.",
     {
         "scope": _s("all (default), mine (the channels you own), segment:<slug> or channel:<slug>"),
