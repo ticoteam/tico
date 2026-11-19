@@ -6653,11 +6653,14 @@ def bots(conn, state=None):
         args.append(state)
     if where:
         sql += " WHERE " + " AND ".join(where)
-    from .read_cache import prime, rows
+    from .read_cache import cache, prime, rows
 
     found = rows(conn, sql + " ORDER BY slug", args)
-    if not state:  # every bot: each bot() lookup that follows in this snapshot reads none
+    values = cache(conn)
+    if not state and values is not None and ("bots primed",) not in values:
+        # Every bot, once a snapshot: each bot() lookup that follows reads none.
         prime(conn, BOT_SQL, {(row["id"],): row for row in found})
+        values[("bots primed",)] = True
     return [dict(row) for row in found]
 
 
@@ -6969,13 +6972,11 @@ def prime_tasks(conn, ids, with_tags=True):
     if values is None:
         return
     wanted = {tid for tid in ids if tid}
-    # A row already read in this snapshot, under either one-task read, is not read again; only its missing tags are.
-    known = {
-        tid: values[("one", TASK_ROW_SQL, (tid,))]
-        for tid in wanted
-        if ("one", TASK_SQL, (tid,)) not in values and ("one", TASK_ROW_SQL, (tid,)) in values
-    }
-    prime(conn, TASK_SQL, {(tid,): row for tid, row in known.items()})
+    # A row already read in this snapshot, under either one-task read, is not read again (it stands for the other read
+    # too); only its missing tags are.
+    for have, other in ((TASK_ROW_SQL, TASK_SQL), (TASK_SQL, TASK_ROW_SQL)):
+        known = [tid for tid in wanted if ("one", have, (tid,)) in values and ("one", other, (tid,)) not in values]
+        prime(conn, other, {(tid,): values[("one", have, (tid,))] for tid in known})
     unread = sorted(tid for tid in wanted if ("one", TASK_SQL, (tid,)) not in values)
     for part in chunks(unread):
         marks = ",".join("?" * len(part))
