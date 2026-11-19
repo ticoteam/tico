@@ -355,6 +355,8 @@ HISTORY = {
     "entity_lookups": "created_at",
     # CI build time (backend/ci_runs.py): the repository's workflow runs and builder permits, priced into Finance.
     "ci_runs": "created_at",
+    # The pages each person opened (backend/page_history.py): kept 30 days anyway.
+    "page_visits": "created_at",
 }
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = (
