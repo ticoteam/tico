@@ -45,6 +45,7 @@ TASK_ROWS = (
     "task_check_models",
     "task_run_models",
     "meeting_task_links",
+    "call_follow_ups",
     "maintenance_listings",
     "maintenance_handoffs",
     "holds",
@@ -604,8 +605,9 @@ def restore_tasks(c, ids, actor=None):
     c.execute("RELEASE trash_restore_all")
     _mirror_parents(c, [e["task_id"] for e in entries])
     H.recount(c, [t for e in entries for t in (e["owner"], e["requester"])])
-    # A task restorer may not read its meetings, so skipped links must not reveal their count.
+    # A task restorer may not read its meetings or calls, so skipped links must not reveal their count.
     skipped.pop("meeting_task_links", None)
+    skipped.pop("call_follow_ups", None)
     return {"restored": [e["task_id"] for e in entries], "unlinked": unlinked, "skipped": skipped}
 
 

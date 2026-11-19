@@ -86,9 +86,11 @@ PLAYED_KEEP = 200  # reply ids remembered per call, so a reply is spoken once
 STATES = ("listening", "waiting", "thinking", "making_voice", "speaking")
 SPOKEN_PROMPT = (
     "This meeting is a live voice call: your reply is read aloud to the people in it. Answer in plain spoken "
-    "sentences, at most about 80 words. Use your usual tools and permissions. Answer from what you know and "
-    "the call notes. If work needs more time, say Let me check and file a follow-up task. "
-    "No markdown, lists, headings, links, code or emoji.\n"
+    "sentences, at most about 80 words. No markdown, lists, headings, links, code or emoji.\n"
+    "Use your usual tools and permissions. Answer from what you know and the call notes. "
+    "If you need to look something up or do work, use "
+    'tico call follow-up --call {call_id} "<what to find out or do>" and reply "Let me check." '
+    "The normal task returns its answer to this call. Use the command only when you cannot answer from what you know.\n"
 )
 
 
@@ -304,6 +306,7 @@ class CallVoice:
         self.open: dict[str, Any] | None = None
         # bot -> the question (Voice.route) it was asked while another bot answered
         self.waiting: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self.follow_ups: deque[tuple[str, str, str]] = deque()
         self.states: dict[str, tuple[str, str | None]] = {}  # bot -> (state, caption)
         self.note: tuple[str, float] | None = None  # (text, wall time)
         self.played: deque[str] = deque(maxlen=PLAYED_KEEP)
@@ -561,12 +564,15 @@ class Voice:
         with voice.lock:
             current = dict(voice.open) if voice.open else None
             waiting = bool(voice.waiting)
+            follow_ups = bool(voice.follow_ups)
             stale_note = voice.note and now - voice.note[1] >= NOTE_SECONDS
         if current is None and not waiting:
             if stale_note:
                 with voice.lock:
                     voice.note = None
                 self.touch(call_id)
+            if follow_ups:
+                self._next_follow_up(call_id, voice)
             return
         # Read first: the writer gate is taken only when there is something to write.
         with self.store.read() as c:
@@ -624,7 +630,7 @@ class Voice:
                         status, ended = "skipped", ("text_only", "not_handed_over")
                 if status == "skipped":
                     with voice.lock:
-                        if voice.open and voice.open["turn"] == current["turn"]:
+                        if voice.open and voice.open.get("turn") == current["turn"]:
                             # A delta may have opened the stream since the ticker read the turn.
                             ended_turn = voice.open
                             voice.open = None
@@ -669,8 +675,8 @@ class Voice:
             if (
                 not current
                 or current["bot"] != bot
-                or current["turn"] != turn_id
                 or current["phase"] != "thinking"
+                or current["turn"] != turn_id
                 or at >= current["asked"] + ANSWER_SECONDS
             ):
                 return
@@ -691,13 +697,52 @@ class Voice:
         reply_id: str,
         text: str | ReplyStream,
         epoch: tuple[int, int],
-        deadline: float,
+        deadline: float | None,
         timing: dict[str, Any],
     ) -> None:
         self.makers.submit(self.touch, call_id)
         future = self.players.submit(self._speak, call_id, bot, reply_id, text, epoch, deadline, timing)
         with self.lock:
             self.playing = [f for f in self.playing if not f.done()] + [future]
+
+    def follow_up(self, call_id: str, bot: str, reply_id: str, text: str) -> None:
+        """Queue an already committed task answer in the process holding the call's voice."""
+        if self.calls.media is None or not self.calls.media.running(call_id):
+            return
+        voice = self._call(call_id)
+        with voice.lock:
+            if (
+                reply_id in voice.played
+                or (voice.open and voice.open.get("reply") == reply_id)
+                or any(item[1] == reply_id for item in voice.follow_ups)
+            ):
+                return
+            voice.follow_ups.append((bot, reply_id, text))
+        self.wake.set()
+
+    def _next_follow_up(self, call_id: str, voice: CallVoice) -> None:
+        if not self.calls.media.running(call_id) or self.calls.speech_pending(call_id):
+            return
+        with voice.lock:
+            if voice.open is not None or voice.waiting or not voice.follow_ups:
+                return
+            bot, reply_id, text = voice.follow_ups.popleft()
+            if reply_id in voice.played:
+                return
+            epoch = _epoch(voice, bot)
+            voice.open = {"bot": bot, "phase": "making_voice", "reply": reply_id, "follow_up": True}
+            self._set(voice, bot, "making_voice")
+        self._play(call_id, bot, reply_id, text, epoch, None, {})
+
+    def human_speaking(self, call_id: str) -> None:
+        """Leave the room's voice track to the person if they speak over a follow-up."""
+        voice = self._found(call_id)
+        if voice is None:
+            return
+        with voice.lock:
+            if voice.open and voice.open.get("follow_up"):
+                voice.open["yielded"] = True
+                self.calls.media.hush(call_id)
 
     def reply(self, call_id: str, bot: str, reply_id: str, text: str, turn_id: str | None = None) -> None:
         """A bot's reply, stored and posted (after its commit): speak it, once, if it answers the call's open question
@@ -709,7 +754,12 @@ class Voice:
             if reply_id in voice.played:
                 return
             voice.played.append(reply_id)
-            if voice.open is None or voice.open["bot"] != bot or voice.open["turn"] != turn_id:
+            if (
+                voice.open is None
+                or voice.open["phase"] != "thinking"
+                or voice.open["bot"] != bot
+                or voice.open["turn"] != turn_id
+            ):
                 # A reply that is not the open question's (a late one, one to a typed line): it stays text.
                 return
             deadline = voice.open["asked"] + ANSWER_SECONDS
@@ -757,16 +807,19 @@ class Voice:
         reply_id: str,
         text: str | ReplyStream,
         epoch: tuple[int, int],
-        deadline: float,
+        deadline: float | None,
         timing: dict[str, Any],
     ) -> None:
         report: Any = _report()
         voice = self._found(call_id)
         if voice is None:
-            self._log_turn(None, call_id, timing, "skipped", "canceled")
+            if deadline is not None:
+                self._log_turn(None, call_id, timing, "skipped", "canceled")
             return
         media = self.calls.media
+        follow_up = deadline is None
         played = 0
+        mark = None
         why = "not_spoken"
         stream = text if isinstance(text, ReplyStream) else None
         try:
@@ -775,6 +828,8 @@ class Voice:
                 used = c.execute("SELECT voice_ms FROM calls WHERE id=?", (call_id,)).fetchone()
             budget = VOICE_CAP_MS - (int(used[0] or 0) if used else 0)
             mark = media.mark(call_id)  # a hush after standing was checked also stops this reply
+            if follow_up and mark is None:
+                return
             if not key or not self._standing(call_id, bot, voice, epoch):
                 why = "no_voice" if not key else "canceled"
                 return
@@ -853,7 +908,21 @@ class Voice:
                 if not self._standing(call_id, bot, voice, epoch):
                     why = "canceled"
                     return False
-                if index == 0 and self.clock() >= deadline:
+                if follow_up and not self._follow_up_may_play(call_id, reply_id):
+                    why = "canceled"
+                    return False
+                if follow_up:
+                    speech_pending = self.calls.speech_pending(call_id)
+                    with voice.lock:
+                        if (
+                            voice.open
+                            and voice.open.get("reply") == reply_id
+                            and (speech_pending or voice.open.get("yielded"))
+                        ):
+                            voice.open["yielded"] = True
+                            why = "yielded"
+                            return False
+                if index == 0 and deadline is not None and self.clock() >= deadline:
                     self.makers.submit(self._late, call_id, bot)
                     why = "late"
                     return False
@@ -875,10 +944,24 @@ class Voice:
             why = "voice_failed"
             report("calls_voice", call_id, exc, logger="tico.call_voice")
         finally:
+            recorder_lost = (
+                follow_up
+                and not played
+                and (
+                    mark is None or not media.running(call_id) or (why == "not_spoken" and media.mark(call_id) != mark)
+                )
+            )
+            finish_follow_up = follow_up and not recorder_lost
             with voice.lock:
                 if _epoch(voice, bot) != epoch:
                     why = "canceled"
                 if voice.open and voice.open.get("reply") == reply_id:
+                    if follow_up and isinstance(text, str):
+                        if voice.open.get("yielded") and not played and _epoch(voice, bot) == epoch:
+                            voice.follow_ups.appendleft((bot, reply_id, text))
+                            finish_follow_up = False
+                        elif finish_follow_up:
+                            voice.played.append(reply_id)
                     if stream is not None and not stream.closed:
                         voice.open["playback_done"] = True
                     else:
@@ -890,12 +973,23 @@ class Voice:
                 with self.store.transaction() as c:
                     if played:
                         c.execute("UPDATE calls SET voice_ms=voice_ms+? WHERE id=?", (played, call_id))
+                    if finish_follow_up:
+                        from . import call_follow_ups
+
+                        call_follow_ups.finish_speech(c, call_id, reply_id)
                     self.touch(call_id, c)
             except Exception as exc:  # noqa: BLE001 - the spoken time is a cap, not a record
                 report("calls_voice", call_id, exc, logger="tico.call_voice")
-            spoke = timing.get("audio") is not None
-            self._log_turn(None, call_id, timing, "spoken" if spoke else "text_only", None if spoke else why)
+            if not follow_up:
+                spoke = timing.get("audio") is not None
+                self._log_turn(None, call_id, timing, "spoken" if spoke else "text_only", None if spoke else why)
             self.wake.set()
+
+    def _follow_up_may_play(self, call_id: str, reply_id: str) -> bool:
+        from . import call_follow_ups
+
+        with self.store.read() as c:
+            return bool(call_follow_ups.can_speak(c, call_id, reply_id))
 
     def _standing(self, call_id: str, bot: str, voice: CallVoice, epoch: tuple[int, int]) -> bool:
         """Whether a reply may still be heard: nothing canceled it, the call is live and not ending, and the bot is still
@@ -938,6 +1032,7 @@ class Voice:
                     self.makers.submit(self._log_turn, None, call_id, dict(voice.open), "skipped", "canceled")
             if answering:
                 voice.open = None
+            voice.follow_ups = deque(item for item in voice.follow_ups if bot is not None and item[0] != bot)
             for one in [bot] if bot else list(voice.waiting):
                 voice.waiting.pop(one, None)
             for one in [bot] if bot else list(voice.states):

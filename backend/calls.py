@@ -162,7 +162,8 @@ def voice_call(c, rid):
 
 def spoken_prompt(c, rid):
     """A bot's turn in a voice call is told that its answer is read aloud (live_meetings.PROMPT_HOOKS)."""
-    return call_voice.SPOKEN_PROMPT if voice_call(c, rid) else ""
+    call = voice_call(c, rid)
+    return call_voice.SPOKEN_PROMPT.format(call_id=call["id"]) if call else ""
 
 
 def project_reply(c, rid, reply, who):
@@ -1489,11 +1490,20 @@ class Calls:
             segmenter.at = self.voice.clock()
             was = segmenter.speaking
             clips = segmenter.feed(pcm, start_ms)
+            if not was and (segmenter.speaking or clips):
+                self.voice.human_speaking(call_id)
             for start, clip in clips:
                 self._submit(call_id, identity, {"pcm": clip, "start_ms": start})
             if was and not segmenter.speaking and not clips:
                 self._kick(call_id)  # a cough, not speech: a clip it held back may be stored now
             return segmenter.idle_seconds()
+
+    def speech_pending(self, call_id):
+        """A person is speaking or what they said has not yet reached the question router."""
+        with self.lock:
+            return bool(self.pending.get(call_id)) or any(
+                cid == call_id and segmenter.speaking for (cid, _), segmenter in self.buffers.items()
+            )
 
     def flush(self, call_id=None, identity=None, *, idle=False):
         """Send waiting speech, or with idle=True only speech whose pause has reached its threshold."""
@@ -1975,7 +1985,10 @@ class Calls:
         """Keep calls true to their threads (the scheduler's tick). Nothing here is a request, so a call that cannot reach
         LiveKit waits for the next tick. An ended call comes back until its room is closed, its transcript is posted and
         LiveKit has dropped everyone who left. Live Google Meets are read from Google last, all together (poll_live)."""
+        from . import call_follow_ups
+
         self.flush(idle=True)
+        call_follow_ups.sweep(self)
         with self.store.read() as c:
             ids = [
                 r["id"]
@@ -2066,6 +2079,10 @@ class Calls:
         self.drop_pending(call_id)
         if exists and not self.media.running(call_id):
             self.media.start_recorder(call_id, room, self._audio_for(call_id), self._quiet_for(call_id))
+        if row["speak_replies"] and self.media.running(call_id):
+            from . import call_follow_ups
+
+            call_follow_ups.queue_speech(self, call_id)
 
     def _presence(self, c, row, present):
         """Record who LiveKit has in a Tico Meet call's room (Tico voice left out), and say whether that ends the call:
@@ -2505,6 +2522,9 @@ def install_calls(app, store, auth, write):
         app.state.call_media = call_media.LiveKitMedia(config) if config else None
     calls = app.state.calls = CALLS = Calls(app, store, auth)
     prep = app.state.call_prep = call_prep.Prep(app, store, calls)
+    from . import call_follow_ups
+
+    call_follow_ups.install(app, auth, write)
 
     @app.get(
         "/api/v2/threads/{thread_id}/calls",

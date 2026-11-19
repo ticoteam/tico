@@ -207,6 +207,7 @@ pub(super) const HUB_PATHS: &[&str] = &[
     "call bot add",
     "call bot remove",
     "call end",
+    "call follow-up",
     "call join",
     "call leave",
     "call list",

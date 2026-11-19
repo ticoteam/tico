@@ -245,8 +245,17 @@ Codex is prompted for one or two short sentences. Follow-up tasks use the bot’
 
 The bot answers in plain spoken sentences, in about 80 words or fewer. It uses what it knows and its call notes.
 The bot can use its usual tools and permissions. People read the transcript and chat through the call thread's
-access rules. When work needs more time, the bot can say “Let me check.” and file a follow-up task. At 30 seconds
-from the time it heard a question, the call skips an unanswered turn and shows `<bot> couldn't answer in time`.
+access rules. At 30 seconds from the time it heard a question, the call skips an unanswered turn and shows
+`<bot> couldn't answer in time`.
+
+**Follow-ups.** If the bot needs to look something up or do work, it can say “Let me check” and use
+`tico call follow-up --call <id> "<what to find out or do>"`. The task runs on its normal model with its normal
+tools and permissions. It keeps a link to the call and a few recent transcript lines, and the call's thread members
+can read it. Someone in the call can also file one for an attached bot with `--bot <slug>`. The answer goes back to
+the thread with a task link. If the requester marks the task done with a note, the thread credits them for the answer.
+In a voice call, an attached bot can read a short version at a pause, after any open question. The answer stays queued
+if the recorder needs to reconnect. Failed or unanswered work leaves a brief message once recovery settles. Ended
+calls show up to 100 follow-ups in their notes.
 
 **Speaking it.** The first complete sentence goes to the Gateway's text-to-speech while the model continues writing.
 Later sentences are prepared as they arrive and play in order on the Tico voice track as PCM frames stream in. The full reply is posted to
@@ -347,6 +356,7 @@ same as a call that does not exist. `call_meeting` (409) when the live meeting's
 | `GET /api/v2/calls/live` | The live Tico Meet calls in threads the caller can read (the thread's own read rule), newest first, as call views; an ending call is left out. The Meetings page lists them under Live, above Upcoming, read again on the `threads` topic's `call.*` changes |
 | `GET /api/v2/calls/upcoming` | The scheduled calls the caller is in (booked by them, or with them among the thread's people), soonest first. Each row is compact: `id`, `title`, `thread_id`, `scheduled_start`, `scheduled_end`, `people` (up to 8, the booker first), and `can_edit` |
 | `GET /api/v2/calls/{call_id}` | One call: state (`scheduled`, `live`, `ending` or `ended`), `scheduled_start` and `scheduled_end`, connector, people (each with `in_call`), bots, `speak_replies`, how it ended, `holds` (the connector only: posts the thread refused at the end), and `provider`, `meet_uri`, `join_url`, `live_count`, `status_source`, `seen_at`, `duration_s`, `ring`, `card_message_id`, `transcript_message_id`, and `voice` (see Voice; `null` without voice) |
+| `POST /api/v2/calls/{call_id}/follow-ups` | File a normal task from a live call. Body: `ask` and optional `bot` (for a person choosing an attached bot). Returns `task_id`. |
 | `POST /api/v2/calls/{call_id}/join` | Join; the first join of a scheduled call starts it. Tico Meet returns `url`, `token` and `expires_in` (300); Google Meet records the open and returns `url` (the viewer's `join_url`) |
 | `POST /api/v2/calls/{call_id}/token` | A fresh token while joined (Tico Meet only) |
 | `POST /api/v2/calls/{call_id}/leave` | Leave |
