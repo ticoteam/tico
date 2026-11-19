@@ -242,16 +242,47 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     await waitFor(() => expect(stageOf('n1')).toBe('s2'));
   });
 
-  it("past what was read, a stage's count is the Floor's; filtered, there is none", async () => {
-    serve(() => ({ status: 200, body: {} }));
-    seed(rows());
-    queryClient.setQueryData(listKey, { tasks: rows(), cursor: 'c1', next_after: 'x' });
-    queryClient.setQueryData(['company', 'floor'], {
-      factories: [{ id: null, manager_id: null, name: 'F', pipelines: [{ id: 'eng', name: 'Engineering', stages: [{ id: 's1', name: 'Inbox', count: 1200 }] }] }],
+  it("the list read asks for stage counts; a column shows the server's count, 0 when its stage is not in it", async () => {
+    const reads: string[] = [];
+    serve((url) => {
+      if (url.startsWith('/api/v2/tasks?')) {
+        reads.push(url);
+        return { status: 200, body: { tasks: rows(), cursor: 'c1', next_after: 'x', counts: { total: 1200, stage: { s1: 1200 } } } };
+      }
+      return { status: 200, body: {} };
     });
+    queryClient.setQueryData(pipelinesQuery.queryKey, [PIPE]);
+    queryClient.setQueryData(['flow'], { count: 0, items: [] });
     show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
     const inbox = await screen.findByRole('region', { name: 'Inbox' });
     await waitFor(() => expect(within(inbox).getByText('1200')).toBeTruthy());
+    expect(new URLSearchParams(reads[0]?.split('?')[1]).get('counts')).toBe('stage');
+    expect(within(screen.getByRole('region', { name: 'Doing' })).getByText('0')).toBeTruthy();
+  });
+
+  it("a move changes both stages' counts at once, and the next read sets them", async () => {
+    let answer!: (r: Reply) => void;
+    let counts = { s1: 40, s2: 7 };
+    const held = [task('a1', 7, 'Fix the export', 's1'), task('a3', 9, 'Check the copy', 's1'), task('a2', 8, 'Write the notes', 's2')];
+    serve((url, method) => {
+      if (method === 'POST' && url.endsWith('/move')) return new Promise<Reply>((r) => (answer = r));
+      if (url.startsWith('/api/v2/tasks?')) return { status: 200, body: { tasks: held, cursor: 'c1', next_after: 'x', counts: { total: 47, stage: counts } } };
+      return { status: 200, body: {} };
+    });
+    queryClient.setQueryData(pipelinesQuery.queryKey, [PIPE]);
+    queryClient.setQueryData(['flow'], { count: 0, items: [] });
+    show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
+    const inbox = await screen.findByRole('region', { name: 'Inbox' });
+    await waitFor(() => expect(within(inbox).getByText('40')).toBeTruthy());
+    const item = screen.getByTitle('Fix the export').closest('.tk-item') as HTMLElement;
+    fireEvent.click(within(item).getByRole('button', { name: 'Move to' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Doing' }));
+    await waitFor(() => expect(within(screen.getByRole('region', { name: 'Inbox' })).getByText('39')).toBeTruthy());
+    expect(within(screen.getByRole('region', { name: 'Doing' })).getByText('8')).toBeTruthy();
+    counts = { s1: 39, s2: 9 };
+    await act(async () => answer({ status: 200, body: { task: task('a1', 7, 'Fix the export', 's2', { version: 2 }) } }));
+    await act(async () => queryClient.invalidateQueries({ queryKey: listKey }));
+    await waitFor(() => expect(within(screen.getByRole('region', { name: 'Doing' })).getByText('9')).toBeTruthy());
   });
 
   it('shows Waiting on, Asked by and Due as chips', async () => {

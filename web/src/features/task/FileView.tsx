@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { run } from '@/actions';
 import type { TaskDocument } from '@/api/schema';
+import { FilePreview } from '@/features/library/exports';
 import { Ago } from '@/kit/Ago';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
@@ -91,8 +92,10 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
             </button>
           ) : v.mime.startsWith('video/') ? (
             <video src={v.url} poster={v.poster_url ?? undefined} controls />
-          ) : (
+          ) : v.mime.startsWith('text/html') ? (
             <iframe src={v.url} title={f.title || f.name} sandbox="" referrerPolicy="no-referrer" />
+          ) : (
+            <FilePreview file={f.id} version={v.n} />
           ))}
         </div>
       )}

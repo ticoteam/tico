@@ -17,7 +17,7 @@ import { ActorItems, OwnerMenu, tagsOf } from './Head';
 import { DETAILS, reasonOf, tabAddress } from './model';
 import { NewPage } from './NewPage';
 import { Face, Mark, NameOf, Go } from './parts';
-import { taskFilesQuery, taskLinksQuery, type TaskData } from './queries';
+import { taskFilesQuery, type TaskData } from './queries';
 
 /* Details (more.js detailsBody): named sections in a fixed order, from what it is judged by, to the work, to the
    record. A section with nothing in it is not drawn; what is finished folds into one line; the record starts folded.
@@ -195,6 +195,9 @@ function Tasks({ name, rows, adding, onAdd, children }: { name: string; rows: Li
   );
 }
 
+/** The waiting question as a line: a leading "❓" goes, since the line already says it waits (and the emoji draws in red). */
+const question = (line: string | null | undefined) => (line ?? '').replace(/^\s*\u2753\uFE0F?\s*/u, '');
+
 const paragraphs = (text: string) => text.split(/\n\s*\n/).filter((p) => p.trim());
 
 export interface DetailsProps {
@@ -207,7 +210,6 @@ export interface DetailsProps {
 
 export function Details({ t, flow, adding = null, onAdding = () => undefined }: DetailsProps) {
   const files = useQuery(taskFilesQuery(t.id));
-  const links = useQuery(taskLinksQuery(t.id));
   const criteria = t.acceptance_criteria ?? [];
   const leave = t.to_leave ?? [];
   const left = leave.filter((r) => !r.met);
@@ -220,7 +222,7 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
     .map((x) => ({ id: x.id, title: x.title, number: x.number, owner: x.owner_id, stage: x.stage, done: x.status !== 'open' }));
   const code = (t.inputs ?? []).filter((x) => x.kind === 'pr');
   const shown = (files.data ?? []).filter((f) => !f.archived);
-  const web = (links.data ?? []).filter((l) => l.kind !== 'pr' && l.kind !== 'session');
+  const web = (t.links ?? []).filter((l) => l.kind !== 'pr' && l.kind !== 'session');
   const details = tabAddress(t, DETAILS, flow);
   const fileSearch = (id: string) => (flow ? { tab: DETAILS, file: id } : { file: id });
   const request = t.request?.text || t.body || '';
@@ -276,7 +278,7 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
             <span>
               <NameOf id={t.turn.who} />
             </span>
-            {t.turn.line && <small>{t.turn.line}</small>}
+            {question(t.turn.line) && <small>{question(t.turn.line)}</small>}
           </Kv>
         )}
         {t.due_at && (

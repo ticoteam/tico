@@ -1,12 +1,12 @@
 import { keepPreviousData, queryOptions, type QueryKey } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type {
-  CompanyFloor,
   NeedsYou,
   PipelineSettings,
   PipelineSettingsList,
   PipelineSettingsResult,
   Task,
+  TaskList,
   TaskManyResult,
   TaskMerge,
   TaskMergeResult,
@@ -89,6 +89,25 @@ export interface TaskPage {
   tasks: TaskItem[];
   cursor: string;
   next_after?: string | null;
+  /** Open tasks per stage under the read's filters (`counts=stage`), past what was read too. */
+  counts?: NonNullable<TaskList['counts']>;
+  /** Kept here, not sent: the rows per stage when `counts` was read, so a move since (shown first or live) shows in it. */
+  counted?: Record<string, number>;
+}
+
+const perStage = (tasks: readonly TaskItem[], into: Record<string, number> = {}) => {
+  for (const t of tasks) if (t.stage_id) into[t.stage_id] = (into[t.stage_id] ?? 0) + 1;
+  return into;
+};
+
+/**
+ * A stage's open tasks: the server's count as read, moved by every row that has come or gone since (a move shown
+ * first, a live one, a new task); the next read of the list sets it again. None when the read had no counts.
+ */
+export function stageCount(page: TaskPage | undefined, stage: string): number | undefined {
+  if (!page?.counts) return undefined;
+  const now = page.tasks.reduce((n, t) => (t.stage_id === stage ? n + 1 : n), 0);
+  return Math.max(0, (page.counts.stage[stage] ?? 0) + now - (page.counted?.[stage] ?? 0));
 }
 
 export interface Filters {
@@ -117,7 +136,7 @@ const PAGE = 500;
  * so a move or a new task lands in place; a search, a tag or Late make it read the list again instead.
  */
 export function listParams(pipeline: string, f: Filters): Record<string, string | number> {
-  const p: Record<string, string | number> = { pipeline, status: 'open', limit: PAGE };
+  const p: Record<string, string | number> = { pipeline, status: 'open', limit: PAGE, counts: 'stage' };
   if (f.owner) p.owner = f.owner;
   if (f.tag) p.label = f.tag;
   if (f.late) p.late = 'true';
@@ -138,7 +157,10 @@ export const pipelineTasksQuery = (pipeline: string, f: Filters) => {
   const params = listParams(pipeline, f);
   return queryOptions({
     queryKey: keys.tasks.list(params),
-    queryFn: ({ signal }) => api.get<TaskPage>(`/api/v2/tasks?${query(params)}`, { signal }),
+    queryFn: async ({ signal }) => {
+      const page = await api.get<TaskPage>(`/api/v2/tasks?${query(params)}`, { signal });
+      return page.counts ? { ...page, counted: perStage(page.tasks) } : page;
+    },
     // A new filter keeps the rows on screen until its answer lands, instead of flashing the loading bars.
     placeholderData: keepPreviousData,
   });
@@ -171,7 +193,10 @@ export async function loadMoreOf(params: Record<string, string | number>): Promi
     queryClient.setQueryData<TaskPage>(key, (cur) => {
       if (!cur) return cur;
       const seen = new Set(cur.tasks.map((t) => t.id));
-      return { ...cur, tasks: [...cur.tasks, ...page.tasks.filter((t) => !seen.has(t.id))], next_after: page.next_after ?? null };
+      const fresh = page.tasks.filter((t) => !seen.has(t.id));
+      // the server counted these already: they are not a change
+      const counted = cur.counted && perStage(fresh, { ...cur.counted });
+      return { ...cur, tasks: [...cur.tasks, ...fresh], next_after: page.next_after ?? null, ...(counted && { counted }) };
     });
   } finally {
     loading.delete(id);
@@ -380,7 +405,8 @@ const SHELF_PAGE = 200;
 
 /** One shelf of a pipeline's archive: snoozed open tasks in queue order; done and closed, the latest first. */
 export function shelfParams(pipeline: string, shelf: Shelf, f: Filters): Record<string, string | number> {
-  const base = { ...listParams(pipeline, f), limit: SHELF_PAGE };
+  const base: Record<string, string | number> = { ...listParams(pipeline, f), limit: SHELF_PAGE };
+  delete base.counts; // a shelf shows no stage counts
   if (shelf === 'snoozed') return { ...base, snoozed: 'only' };
   return { ...base, status: shelf, sort: 'finished' };
 }
@@ -392,24 +418,6 @@ export const shelfQuery = (pipeline: string, shelf: Shelf, f: Filters) => {
     queryFn: ({ signal }) => api.get<TaskPage>(`/api/v2/tasks?${query(params)}`, { signal }),
   });
 };
-
-/* ---------------------------------------------------------------- stage counts */
-
-/**
- * Open tasks per stage, from the Floor (GET /api/v2/company/floor, backend/company_floor.py): the only per-stage count
- * the server gives. It counts every open task (snoozed ones too) and knows no filter, so a board reads it only when its
- * own list is cut short and nothing narrows it. Side stages are not in it.
- */
-export const stageCountsQuery = queryOptions({
-  queryKey: ['company', 'floor'] as const,
-  queryFn: ({ signal }) => api.get<CompanyFloor>('/api/v2/company/floor', { signal }),
-  staleTime: QUIET_STALE_MS,
-  select: (floor) => {
-    const out = new Map<string, number>();
-    for (const f of floor.factories) for (const p of f.pipelines) for (const st of p.stages) out.set(st.id, st.count);
-    return out;
-  },
-});
 
 /* ---------------------------------------------------------------- Edit pipeline: its stages */
 

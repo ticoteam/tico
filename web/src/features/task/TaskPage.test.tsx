@@ -70,6 +70,7 @@ const task = (more: Partial<TaskData> = {}): TaskData =>
       { requirement_id: 'r1', line: 'QA report approved', met: false, may: ['ok', 'no'], approval: { document: 'QA report', file_id: 'f2' } },
       { requirement_id: 'r0', line: 'Spec approved', met: true, may: [] },
     ],
+    links: [],
     runs: [],
     children: [],
     parent: null,
@@ -85,7 +86,6 @@ function base(url: string): Reply {
   if (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1')) return { status: 200, body: detail(task()) };
   if (url.includes('/files')) return { status: 200, body: { files: [] } };
   if (url.includes('/api/v2/pages/')) return { status: 200, body: { page: { src: 'about:blank' } } };
-  if (url.includes('/links')) return { status: 200, body: { links: [] } };
   if (url.includes('/api/v2/pipelines'))
     return {
       status: 200,
@@ -191,7 +191,8 @@ describe('one open task', () => {
 
   it('edits a fact in place and adds a link from Add, each saved at once', async () => {
     serve((url, method, body) => {
-      if (method === 'POST' && url.endsWith('/links')) return { status: 200, body: { links: [{ id: 'l1', kind: 'link', url: body.url, title: null, created_at: '2026-11-02T10:00:00Z' }] } };
+      if (method === 'POST' && url.endsWith('/links'))
+        return { status: 200, body: { links: [{ id: 'l1', kind: 'url', url: body.url, title: null, task_id: 't1', created_at: '2026-11-02T10:00:00Z' }] } };
       if (method === 'POST' && url.endsWith('/api/v2/tasks/t1')) return { status: 200, body: { task: task({ labels: body.labels as string[] }) } };
       return base(url);
     });
@@ -212,6 +213,63 @@ describe('one open task', () => {
     fireEvent.keyDown(link, { key: 'Enter' });
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/links', body: { url: 'https://status.example.com/today' } }));
     expect(await screen.findByText('status.example.com')).toBeTruthy();
+  });
+
+  it('a link shows on the task at once and the server’s list replaces it; removing takes it off at once', async () => {
+    let answer!: (r: Reply) => void;
+    const at = '2026-11-02T10:00:00Z';
+    serve((url, method, body) => {
+      if (method === 'POST' && url.endsWith('/links') && body.url) return new Promise<Reply>((r) => (answer = r));
+      if (method === 'POST' && url.endsWith('/links')) return { status: 200, body: { links: [] } };
+      return base(url);
+    });
+    show(<TaskPage task="12" pipeline="p1" tab="details" />, '/tasks/p1/12/details');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Link' }));
+    const link = await screen.findByRole('textbox', { name: 'Link' });
+    fireEvent.change(link, { target: { value: 'https://status.example.com/today' } });
+    fireEvent.keyDown(link, { key: 'Enter' });
+    const links = () => queryClient.getQueryData<TaskData>(keys.tasks.detail('t1'))?.links;
+    await waitFor(() => expect(links()).toEqual([expect.objectContaining({ id: 'pending:https://status.example.com/today', kind: 'url', task_id: 't1' })]));
+    expect(sent.filter((x) => x.url.endsWith('/links'))).toHaveLength(1);
+    await act(async () => answer({ status: 200, body: { links: [{ id: 'l1', kind: 'url', url: 'https://status.example.com/today', task_id: 't1', created_at: at }] } }));
+    await waitFor(() => expect(links()?.map((l) => l.id)).toEqual(['l1']));
+    expect(await screen.findByText('status.example.com')).toBeTruthy();
+  });
+
+  it('draws the waiting question without a leading question mark emoji', async () => {
+    serve((url) =>
+      url.endsWith('/api/v2/tasks/t1') || url.includes('/api/v2/tasks/%2312')
+        ? { status: 200, body: detail(task({ owner_id: 'bot:a1', turn: { who: 'human:me', line: '\u2753 Which headline goes live?' } } as Partial<TaskData>)) }
+        : base(url),
+    );
+    show(<TaskPage task="12" pipeline="p1" tab="details" />, '/tasks/p1/12/details');
+    expect(await screen.findByText('Which headline goes live?')).toBeTruthy();
+    expect(screen.queryByText(/\u2753/u)).toBeNull();
+  });
+
+  it('draws a file that is not a page or a picture with the library preview', async () => {
+    const notes = {
+      id: 'f6',
+      name: 'notes.txt',
+      title: 'Launch notes',
+      mime: 'text/plain',
+      archived: false,
+      current_version: 2,
+      links: [],
+      writers: [],
+      versions: [{ n: 2, by: 'bot:a1', created_at: '2026-11-02T10:00:00Z', mime: 'text/plain', url: '/api/v2/files/f6?v=2', answers: [], ask: null }],
+    };
+    serve((url) => {
+      if (url.endsWith('/api/v2/tasks/t1/files')) return { status: 200, body: { files: [notes] } };
+      if (url.endsWith('/api/v2/files/f6/info')) return { status: 200, body: { file: { id: 'f6', name: 'notes.txt', title: 'Launch notes', mime: 'text/plain', library_kind: 'document', version: 2 } } };
+      if (url.endsWith('/api/v2/files/f6/versions')) return { status: 200, body: { versions: [{ version: 2, current: true, mime: 'text/plain', name: 'notes.txt' }] } };
+      if (url.endsWith('/api/v2/files/f6/versions/2')) return { status: 200, body: 'Ship on Friday after the review.' };
+      return base(url);
+    });
+    show(<TaskPage task="12" pipeline="p1" tab="details" file="f6" />, '/tasks/p1/12/details?file=f6');
+    expect(await screen.findByText('Ship on Friday after the review.')).toBeTruthy();
+    expect(document.querySelector('.frame.fv iframe')).toBeNull();
   });
 
   it('says when there is no such task', async () => {

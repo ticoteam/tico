@@ -1,6 +1,6 @@
 import { queryOptions, type QueryClient, type QueryKey } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
-import type { NeedsYou, OkPreview, PagePublished, PageShown, PipelineSettingsList, PublishPageBody, Task, TaskDetail, TaskFileList, TaskResult } from '@/api/schema';
+import type { NeedsYou, OkPreview, PagePublished, PageShown, PipelineSettingsList, PublishPageBody, TaskDetail, TaskFileList, TaskLinkView, TaskResult } from '@/api/schema';
 import { keys, queryClient, QUIET_STALE_MS, quietRoot, write } from '@/data';
 
 /* One open task: its detail (GET /api/v2/tasks/{tid}, kept current by the stream under keys.tasks.detail), the files
@@ -13,16 +13,14 @@ quietRoot('pipelines');
 const enc = encodeURIComponent;
 const taskPath = (id: string) => `/api/v2/tasks/${enc(id)}` as const;
 
-/** The task as this view holds it: the task row and what its detail adds, flat, so a live patch of the row lands. */
-export type TaskData = Task & {
-  stage_since?: string | null;
+/** The task as this view holds it: the task row (with its chat and links) and what its detail adds, flat, so a live
+    patch of the row lands. */
+export type TaskData = TaskDetail['task'] & {
   runs: NonNullable<TaskDetail['runs']>;
   parent: TaskDetail['parent'];
   children: TaskChild[];
   can_comment: boolean;
   mover: boolean;
-  /** The task's chat (sent, not typed in the schema). */
-  conversation_id?: string | null;
 };
 
 export interface TaskChild {
@@ -81,22 +79,6 @@ export async function loadTask(client: QueryClient, param: string): Promise<Task
     return null;
   }
 }
-
-/** A link on the task (GET /api/v2/tasks/{tid}/links; not in the schema). Pull requests and sessions have their own sections. */
-export interface TaskLink {
-  id: string;
-  kind: string;
-  url: string;
-  title?: string | null;
-  added_by?: string | null;
-  created_at?: string | null;
-}
-
-export const taskLinksQuery = (id: string) =>
-  queryOptions({
-    queryKey: [...keys.tasks.detail(id), 'links'] as const,
-    queryFn: async ({ signal }) => (await api.get<{ links: TaskLink[] }>(`${taskPath(id)}/links`, { signal })).links,
-  });
 
 /** The task's files, pages first (GET /api/v2/tasks/{tid}/files). */
 export const taskFilesQuery = (id: string) =>
@@ -329,23 +311,27 @@ export async function newTaskPage(id: string, title: string, text: string): Prom
   return r;
 }
 
-/** Add a link; it shows at once and the server's list replaces it. */
+/** The links the server answers with after a change (POST /api/v2/tasks/{tid}/links; the answer is not in the schema). */
+type LinksAnswer = { links: TaskLinkView[] };
+const withLinks = (cur: TaskData | undefined, links: (was: TaskLinkView[]) => TaskLinkView[]) => cur && { ...cur, links: links(cur.links ?? []) };
+
+/** Add a link: it shows on the task at once, and the server's list replaces it. */
 export function linkTask(id: string, url: string, title?: string) {
-  const key = taskLinksQuery(id).queryKey;
-  const shown: TaskLink = { id: `pending:${url}`, kind: 'link', url, title: title ?? null, created_at: new Date().toISOString() };
-  return write<{ links: TaskLink[] }>({
-    key,
-    optimistic: (cur: TaskLink[] | undefined) => [...(cur ?? []), shown],
-    send: (idem) => api.post<{ links: TaskLink[] }>(`${taskPath(id)}/links`, { url, ...(title && { title }) }, { idempotencyKey: idem }),
-    settle: (_cur, answer) => answer.links,
+  const shown: TaskLinkView = { id: `pending:${url}`, kind: 'url', url, title: title ?? null, task_id: id, created_at: new Date().toISOString() };
+  return write<LinksAnswer>({
+    key: keys.tasks.detail(id),
+    optimistic: (cur: TaskData | undefined) => withLinks(cur, (was) => [...was, shown]),
+    send: (idem) => api.post<LinksAnswer>(`${taskPath(id)}/links`, { url, ...(title && { title }) }, { idempotencyKey: idem }),
+    settle: (cur: TaskData | undefined, answer) => withLinks(cur, () => answer.links),
   });
 }
 
+/** Remove a link: it leaves the task at once, and the server's list replaces the task's. */
 export function dropLink(id: string, link: string) {
-  return write<{ links: TaskLink[] }>({
-    key: taskLinksQuery(id).queryKey,
-    optimistic: (cur: TaskLink[] | undefined) => cur?.filter((l) => l.id !== link),
-    send: (idem) => api.post<{ links: TaskLink[] }>(`${taskPath(id)}/links`, { remove: link }, { idempotencyKey: idem }),
-    settle: (_cur, answer) => answer.links,
+  return write<LinksAnswer>({
+    key: keys.tasks.detail(id),
+    optimistic: (cur: TaskData | undefined) => withLinks(cur, (was) => was.filter((l) => l.id !== link)),
+    send: (idem) => api.post<LinksAnswer>(`${taskPath(id)}/links`, { remove: link }, { idempotencyKey: idem }),
+    settle: (cur: TaskData | undefined, answer) => withLinks(cur, () => answer.links),
   });
 }

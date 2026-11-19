@@ -67,9 +67,22 @@ export function BoardFit({ shape }: { shape: string }) {
     };
     fit();
     if (typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(fit);
+    // The observer only measures; the fit writes layout in the next frame (writing it in the callback is a resize loop
+    // WebKit warns about), and only when the board's width changed since the last fit.
+    let width = board.clientWidth;
+    let frame = 0;
+    const ro = new ResizeObserver(() => {
+      const w = board.clientWidth;
+      if (w === width) return;
+      width = w;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(fit);
+    });
     ro.observe(board);
-    return () => ro.disconnect();
+    return () => {
+      cancelAnimationFrame(frame);
+      ro.disconnect();
+    };
   }, [shape, start]);
 
   const arrow = (e: Edge | null, cls: string, label: string, to: number) =>

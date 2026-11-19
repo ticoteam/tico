@@ -32,7 +32,7 @@ import {
   loadMore,
   pipelinesQuery,
   pipelineTasksQuery,
-  stageCountsQuery,
+  stageCount,
   tagsQuery,
   type Filters,
   type Pipeline,
@@ -94,9 +94,8 @@ function OpenPage({ pipeline, p, pipes, search, view, head, panel }: PageProps &
   const rows = other ? undefined : tasks.data?.tasks;
   const filtered = isFiltered(filters);
   const cut = !!tasks.data?.next_after;
-  // Past what was read, a stage's count is the Floor's (it knows no filter): filtered and cut short, there is none.
-  const floor = useQuery({ ...stageCountsQuery, enabled: cut && !filtered });
-  const countOf = (stage: string, loaded: number) => (!cut ? loaded : filtered ? undefined : floor.data?.get(stage));
+  // A stage's count is the server's (under the filters, past what was read); a read without counts has only its rows.
+  const countOf = (stage: string, loaded: number) => (other ? undefined : stageCount(tasks.data, stage)) ?? (cut ? undefined : loaded);
 
   let state: PageState = 'ready';
   if (pipes.isError || tasks.isError) state = 'fault';
