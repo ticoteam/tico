@@ -14,6 +14,7 @@ fictional data, in a temporary folder removed afterwards. Never point it at a re
 """
 
 import contextlib
+import inspect
 import dataclasses
 import json
 import os
@@ -27,6 +28,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     import conftest  # noqa: F401  (the fictional registry and isolated benchmark settings)
 
+from backend import claude_login as CL
 from backend import login_holds
 from backend import subscription_refresh as SR
 from backend.store import H
@@ -279,6 +281,25 @@ def main():
                     f"max {max(holds, default=0):.1f} ms"
                 )
                 print("handed (computer: kind, plan):", json.dumps(handed, sort_keys=True))
+            # Where one steady poll's SQL time goes, by statement (the flight recorder's per-request costs).
+            from backend import flight
+
+            for n in (0, 4, 9):
+                body = CL.Poll.model_validate({"live": live[n]})
+                cost, token = flight.request_started()
+                try:  # as the route answers a poll with nothing to write: this checkout's way
+                    if "write" in inspect.signature(CL.poll).parameters:
+                        with store.read_transaction() as c:
+                            CL.poll(c, app.state.vault, computers[n]["runner_id"], body, write=False)
+                    else:
+                        with store.transaction() as c:
+                            CL.poll(c, app.state.vault, computers[n]["runner_id"], body)
+                finally:
+                    flight.request_finished(token)
+                shapes = sorted(cost[3].items(), key=lambda kv: -kv[1][1])
+                print(f"--- computer {n}: {cost[2]} statements, {cost[0]:.1f} ms SQL; costliest:")
+                for sql, (k, ms) in shapes[:8]:
+                    print(f"{ms:7.1f} ms {k:4d}x  {' '.join(sql.split())[:160]}")
 
 
 if __name__ == "__main__":
