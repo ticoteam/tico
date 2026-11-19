@@ -205,23 +205,44 @@ def install_meeting_review(app, store, auth, mutate):
 
     @app.get(
         '/api/v2/meetings',
-        **api_v2("Meetings", "listMeetings", "Meetings; review=pending reads your own queue", "MeetingReviewList"),
+        **api_v2(
+            "Meetings",
+            "listMeetings",
+            "Meetings; review=pending reads your own queue, review=shared the meetings others shared with you",
+            "MeetingReviewList",
+            parameters={
+                "review": "live (default): every shared meeting you may read; pending or dismissed: your own queue; "
+                "shared: the shared meetings someone else filed that are shared with you (the Team, its participants "
+                "or its attendees), never one you read only as the owner",
+            },
+        ),
     )
-    def listing(request: Request, review: Literal['pending', 'live', 'dismissed'] = 'live', q: str = ''):
+    def listing(request: Request, review: Literal['pending', 'live', 'dismissed', 'shared'] = 'live', q: str = ''):
         who = request.state.identity
         human_only(who)
         with store.read() as c:
             rows = []
-            for row in c.execute(
-                'SELECT id FROM meetings WHERE review_state=? '
-                'AND (?=\'live\' OR owner=? COLLATE NOCASE) ORDER BY created_at DESC',
-                (review, review, who.email),
-            ):
+            if review == 'shared':
+                found = c.execute(
+                    "SELECT id FROM meetings WHERE review_state='live' AND owner<>? COLLATE NOCASE "
+                    'ORDER BY created_at DESC',
+                    (who.email or '',),
+                )
+            else:
+                found = c.execute(
+                    'SELECT id FROM meetings WHERE review_state=? '
+                    'AND (?=\'live\' OR owner=? COLLATE NOCASE) ORDER BY created_at DESC',
+                    (review, review, who.email),
+                )
+            for row in found:
                 try:
                     item = media.view(c, who, row[0], auth=auth)
                 except Problem as exc:
                     if exc.status not in (403, 404):
                         raise
+                    continue
+                # Shared with this reader by its filer, not readable through the owner's own right to every source.
+                if review == 'shared' and not media.shared_meeting({'review_state': 'live', 'metadata': item}, who):
                     continue
                 if not q or q.casefold() in encode(item).casefold():
                     rows.append(item)

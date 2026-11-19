@@ -5,6 +5,7 @@ from backend.tests.helpers.api import as_member, get, headers, post, restrict, r
 from backend.tests.helpers.mcp import call
 from backend.tests.helpers.member_bots import botops, turn  # noqa: F401
 from backend.tests.helpers.lifecycle import debrief
+from backend.tests.helpers.media import import_meeting
 from backend.tests.helpers.new_bot_flows import create_bot
 
 
@@ -169,3 +170,24 @@ def test_a_shared_meeting_goes_to_a_uuid_bot_by_id_or_slug_as_one_task(api):
     with api.app.state.store.read() as c:
         assert c.execute('SELECT owner_id FROM tasks WHERE id=?', (task,)).fetchone()[0] == 'bot:' + bot
     assert review(api, made['id'], send_to='field-helper')['delivery']['task_id'] == task
+
+
+def test_shared_lists_what_others_shared_with_the_reader_not_what_the_owner_may_open(api):
+    # ana is the company owner and may open Ben's private meeting; nobody shared it with her.
+    team = import_meeting(api, 'ben-test', title='Standup', private=False)['id']
+    attended = import_meeting(api, 'ben-test', title='Hiring sync', private=True, participants=['cara@acme.example'])[
+        'id'
+    ]
+    private = import_meeting(api, 'ben-test', title='Comp notes', private=True)['id']
+    cara_own = import_meeting(api, 'cara-test', title='Vendor call', private=False)['id']
+    imported(api)  # Ben's, still pending: never shared
+
+    def shared(token):
+        return {m['id'] for m in queue(api, token, 'shared')['meetings']}
+
+    assert shared('cara-test') == {team, attended}
+    assert shared('ben-test') == {cara_own}
+    assert private in {m['id'] for m in queue(api, 'ana-test', 'live')['meetings']}
+    assert shared('ana-test') == {team, cara_own}
+    _, _, attempt = setup_attempt(api)
+    assert get(api, 'meetings?review=shared', attempt['token'], expected=403)['error']['code'] == 'identity'
