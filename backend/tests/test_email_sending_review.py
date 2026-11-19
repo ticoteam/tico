@@ -432,6 +432,20 @@ def test_approver_must_load_authorized_frozen_preview_and_download_exact_attachm
         assert task_asks.standing(c, queued["approval_id"]) == task_asks.OK
 
 
+def test_the_preview_names_to_cc_and_bcc_apart_and_the_ok_carries_its_answer_to_undo(inbox):
+    # The approver must see who is only copied or blind-copied, not one merged list, and the OK must be undoable.
+    queued = queue(inbox, actor="bot:ops", raw=mime(Cc="ben@acme.example", Bcc="cara@acme.example"))
+    preview = inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers("ana-test")).json()
+    assert (preview["to"], preview["cc"], preview["bcc"]) == ([CONTACT], ["ben@acme.example"], ["cara@acme.example"])
+    assert preview["send"]["recipients"] == sorted([CONTACT, "ben@acme.example", "cara@acme.example"])
+    given = approved(inbox, queued)
+    with inbox.app.state.store.read() as c:
+        stored = task_asks.grant(c, queued["approval_id"])["answer_id"]
+    assert given["answer_id"] and given["answer_id"] == stored
+    # Clicked again, the OK already given answers with the same id.
+    assert approved(inbox, queued)["answer_id"] == stored
+
+
 @pytest.mark.parametrize("state", ["canceled", "blocked", "failed", "declined"])
 def test_new_intent_can_retry_a_definite_non_send_but_same_operation_cannot(inbox, state):
     autonomous(inbox)
