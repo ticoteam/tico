@@ -247,12 +247,13 @@ def old_subtree_unread_sql(c, v, root_ids):
     )
 
 
-def test_unread_candidates_start_at_the_roots_and_answer_as_from_the_deliveries(api, monkeypatch):
-    """The bot half of the unread candidates seeks each open sub-thread's messages past the reader's mark and probes
-    the one delivery of each, instead of walking every delivery to the reader; every reader gets the same rows, and the
-    same rail and Catch up, as from the deliveries: bot replies delivered to Ben in his Home and in a sub-thread, read
-    part way, some restricted or under a legacy audience, deliveries whose own copy of the thread is missing or another
-    thread's, and delivered replies moved to another thread since (the message's thread places it)."""
+def test_unread_candidates_from_the_roots_answer_as_from_the_deliveries(api, monkeypatch):
+    """For a reader with many deliveries, the bot half of the unread candidates seeks each open thread's messages past
+    the reader's mark and probes the one delivery of each, instead of walking every delivery to them. With every reader
+    read that way, each gets the same rows, and the same rail and Catch up, as from the deliveries: bot replies
+    delivered to Ben in his Home and in a sub-thread, read part way, some restricted or under a legacy audience,
+    deliveries whose own copy of the thread is missing or another thread's, and delivered replies moved to another
+    thread since (the message's thread places it). A reader with few deliveries keeps the walk of them."""
     _seed(api)
     ops = home(api, "bot:ops")["id"]
     seed_replies(api, ops, 6, "u")
@@ -282,25 +283,34 @@ def test_unread_candidates_start_at_the_roots_and_answer_as_from_the_deliveries(
         roots = [r[0] for r in c.execute("SELECT id FROM conversations WHERE parent_id IS NULL")]
         for actor in READERS:
             v = threads.actor_viewer(c, actor)
-            new_sql, args = threads._subtree_unread_sql(c, v, roots)
-            old_sql, _ = old_subtree_unread_sql(c, v, roots)
+            old_sql, args = old_subtree_unread_sql(c, v, roots)
+            assert threads._subtree_unread_sql(c, v, roots) == (old_sql, args), actor  # a few deliveries: walked
+            v._many_deliveries = True
+            new_sql, _ = threads._subtree_unread_sql(c, v, roots)
             got = sorted(tuple(r) for r in c.execute(new_sql, args))
             assert got == sorted(tuple(r) for r in c.execute(old_sql, args)), actor
             if actor == "human:ben":
                 found = {r[3]: r[1] for r in got}
                 assert not {replies[0], replies[1]} & set(found), found  # read
                 assert {found.get(m) for m in replies[2:6]} == {ops} and found.get(replies[-1]) == ops, found
-            plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + new_sql, args)]
-            assert not any("message_deliveries_recipient" in p for p in plan), plan
+            bots = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + new_sql.split(" UNION ALL ")[1], args)]
+            assert re.fullmatch(r"SEARCH s USING INDEX \w+ \(root_id=\?\)", bots[0]), bots
             assert any(
-                re.search(r"SEARCH m USING INDEX messages_thread_seq \(conversation_id=\? AND seq>\?\)", p)
-                for p in plan
-            ), plan
-    paths = ("threads/rail", "threads/catch-up")
+                re.fullmatch(r"SEARCH m USING INDEX messages_thread_seq \(conversation_id=\? AND seq>\?\)", p)
+                for p in bots
+            ), bots
+            assert any(
+                re.fullmatch(
+                    r"SEARCH d USING (COVERING )?INDEX \w+ \((message_id=\? AND recipient=\?|recipient=\? AND message_id=\?)\)",
+                    p,
+                )
+                for p in bots
+            ), bots
+    monkeypatch.setattr(threads, "MANY_DELIVERIES", 0)
+    paths = ("threads/rail", "threads/catch-up", "threads/browse")
     new = {(p, t): _pages(api, t, p) for p in paths for t in READERS.values()}
     monkeypatch.setattr(threads, "_subtree_unread_sql", old_subtree_unread_sql)
     for (path, token), pages in new.items():
         assert _pages(api, token, path) == pages, f"{path} changed for {token}"
-    assert any(r["id"] == ops for r in new[("threads/rail", "ben-test")][0]["unread"]), new[
-        ("threads/rail", "ben-test")
-    ][0]
+    first = new[("threads/rail", "ben-test")][0]
+    assert any(r["id"] == ops for r in first["unread"]), first

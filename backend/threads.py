@@ -331,7 +331,7 @@ class Viewer:
         self.actor = str(getattr(who, "actor", "") or "")
         self.role = str(getattr(who, "role", "") or "")
         self._chain = self._hidden = self._shared = self._admin = self._tasks = self._standing = self._known = None
-        self._backfill = None
+        self._backfill = self._many_deliveries = None
         self._threads = {}
         self._legacy = {}
         # {thread id: whether a member}, while a sidebar page reads (`_prefetch_members`)
@@ -4161,12 +4161,31 @@ def _subtree_mark(c, v):
     return f"MAX(COALESCE(f.last_read_seq,0),{int(_backfill_floor(c, v))})"
 
 
+# A reader with more deliveries than this has its delivered bot posts found from the roots asked for, not by walking
+# every delivery to them (`_subtree_unread_sql`).
+MANY_DELIVERIES = 1000
+
+
+def _many_deliveries(c, v):
+    """Whether this reader has more than MANY_DELIVERIES deliveries: read once a Viewer, at most that many index rows."""
+    if v._many_deliveries is None:
+        v._many_deliveries = (
+            c.execute(
+                "SELECT COUNT(*) FROM (SELECT 1 FROM message_deliveries WHERE recipient=? LIMIT ?)",
+                (v.actor, MANY_DELIVERIES + 1),
+            ).fetchone()[0]
+            > MANY_DELIVERIES
+        )
+    return v._many_deliveries
+
+
 def _subtree_unread_sql(c, v, root_ids):
-    """(SQL, args) for unread candidates in these roots' open subtrees. Both halves start at the subtree's threads with
-    something unread past the reader's mark and seek its messages from that mark: the human half through
-    messages_thread_human, the bot half through messages_thread_seq, each message then probing the one delivery of it to
-    this reader. Starting at the reader's deliveries instead walked all of them (thousands on a busy hub) per chunk of
-    roots. The thread is the message's own, not the delivery's copy of it. A delivery is unique per (message,
+    """(SQL, args) for unread candidates in these roots' open subtrees. The human half seeks messages_thread_human from
+    each thread's mark. The bot half reaches the reader's delivered bot posts one of two ways. Most readers have a few
+    hundred deliveries at most, and it walks them all. A reader with thousands (MANY_DELIVERIES) would pay for all of
+    them on every chunk of roots, so for them it seeks each unread thread's messages past its mark (messages_thread_seq)
+    and probes each one's delivery to this reader. Either way the thread is the message's own, never the delivery's copy
+    of it, and plain bot history is not scanned to discover it is not unread. A delivery is unique per (message,
     recipient), and the halves are disjoint, so UNION ALL counts each once."""
     mark, subtree = _subtree_mark(c, v), _SUBTREE.format(me=":me")
     args = {"me": v.actor, **{f"root{i}": root for i, root in enumerate(root_ids)}}
@@ -4176,14 +4195,18 @@ def _subtree_unread_sql(c, v, root_ids):
         "(m.restricted=0 AND m.legacy_audience IS NULL) AS plain "
     )
     where = f"s.root_id IN ({marks}) AND {_SUBTREE_OPEN} AND s.last_unread_seq>{mark} AND m.seq>{mark}"
+    delivered = f"m.sender_id NOT LIKE 'human:%' AND {where} AND {unread_message_sql(me=':me', delivery='d')}"
+    bots = (
+        f"FROM {subtree}CROSS JOIN messages m INDEXED BY messages_thread_seq ON m.conversation_id=s.id "
+        f"CROSS JOIN message_deliveries d ON d.message_id=m.id AND d.recipient=:me WHERE {delivered}"
+        if _many_deliveries(c, v)
+        else "FROM message_deliveries d INDEXED BY message_deliveries_recipient CROSS JOIN messages m ON "
+        f"m.id=d.message_id CROSS JOIN {subtree}WHERE s.id=m.conversation_id AND d.recipient=:me AND {delivered}"
+    )
     return (
         columns + f"FROM {subtree}CROSS JOIN messages m INDEXED BY messages_thread_human ON "
         f"m.conversation_id=s.id WHERE {where} AND m.sender_id LIKE 'human:%' "
-        f"AND {unread_message_sql(me=':me')} UNION ALL "
-        + columns
-        + f"FROM {subtree}CROSS JOIN messages m INDEXED BY messages_thread_seq ON m.conversation_id=s.id "
-        "CROSS JOIN message_deliveries d ON d.message_id=m.id AND d.recipient=:me "
-        f"WHERE {where} AND m.sender_id NOT LIKE 'human:%' AND {unread_message_sql(me=':me', delivery='d')}",
+        f"AND {unread_message_sql(me=':me')} UNION ALL " + columns + bots,
         args,
     )
 

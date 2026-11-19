@@ -3,13 +3,19 @@ the hosted TIDY one (Nov 19: 19k conversations, 40k messages, one person with 6.
 recorder: the `WITH unread` statement 258 ms per slow rail call, 4.8 times a call). It seeds what bench/perf-hub-overload.py
 does, then Ana's DMs with bots full of bot replies delivered to her (DM_POSTS each), half of them read part way, follows
 of FOLLOWS finished-task rooms, some bot posts restricted or under a legacy audience, some deliveries with a stale or
-missing thread and some messages moved to another thread after delivery.
+missing thread, some messages moved to another thread after delivery, and one busy company thread nobody follows: a
+person's post, then BUSY bot posts (the case a reader with few deliveries must not pay for).
 
     nice -n 10 .venv/bin/python bench/perf-rail-unread.py
 
-Env: DM_POSTS (110), FOLLOWS (6500), RUNS (5), DB=<file> (keep the seeded database there and reuse it),
+Env: DM_POSTS (110), FOLLOWS (6500), BUSY (3000), RUNS (5), DB=<file> (keep the seeded database there and reuse it),
 ANSWERS=<file> (each route's answer as JSON, to compare two checkouts' on one DB), TOKENS (ana-test,ben-test,cara-test),
-PATHS (/api/v2/threads/rail,/api/v2/threads/catch-up), PLANS=1 (each `WITH unread` statement's plan).
+PATHS (/api/v2/threads/rail,/api/v2/threads/catch-up,/api/v2/threads/browse), PLANS=1 (each `WITH unread` statement's
+plan).
+
+    .venv/bin/python bench/perf-rail-unread.py compare <DB> <before.json> <after.json>
+
+compares two runs' answers, with what an app start writes (a notice to a person, after the seed) masked.
 
 Per route and reader it prints the statements one call takes, the median wall time of RUNS calls, and for the
 `WITH unread` statements their number, their time and their SQLite VM steps when rerun alone. Only fictional data, in a
@@ -36,9 +42,12 @@ _spec.loader.exec_module(overload)  # the company it seeds
 
 DM_POSTS = int(os.environ.get("DM_POSTS", 110))
 FOLLOWS = int(os.environ.get("FOLLOWS", 6500))
+BUSY = int(os.environ.get("BUSY", 3000))
 RUNS = int(os.environ.get("RUNS", 5))
 TOKENS = tuple(os.environ.get("TOKENS", "ana-test,ben-test,cara-test").split(","))
-PATHS = tuple(os.environ.get("PATHS", "/api/v2/threads/rail,/api/v2/threads/catch-up").split(","))
+PATHS = tuple(
+    os.environ.get("PATHS", "/api/v2/threads/rail,/api/v2/threads/catch-up,/api/v2/threads/browse").split(",")
+)
 
 
 def seed(api):
@@ -47,6 +56,15 @@ def seed(api):
 
     overload.seed(api)
     store = api.app.state.store
+    with store.transaction() as c:
+        # perf-hub-overload copies each finished task's room with its source's root_id and path: make each its own root.
+        c.execute("UPDATE conversations SET root_id=id, path='/'||id||'/' WHERE parent_id IS NULL AND root_id<>id")
+        busy = threads.post(c, "human:ben", None, "Busy room", start={"title": "Busy", "audience": "company"})
+        busy = busy.get("thread_id") or busy.get("conversation_id")
+    for start in range(0, BUSY, 500):
+        with store.transaction() as c:
+            for k in range(start, min(BUSY, start + 500)):
+                threads.post(c, "bot:bot001", busy, f"Status {k}")
     with store.read() as c:
         dms = [
             r[0]
@@ -83,7 +101,8 @@ def seed(api):
         rooms = [
             r[0]
             for r in c.execute(
-                "SELECT id FROM conversations WHERE parent_id IS NULL AND task_id IS NOT NULL ORDER BY rowid LIMIT ?",
+                "SELECT c.id FROM conversations c JOIN tasks t ON t.id=c.task_id AND t.status='done' "
+                "WHERE c.parent_id IS NULL ORDER BY c.rowid LIMIT ?",
                 (FOLLOWS,),
             )
         ]
@@ -162,7 +181,7 @@ def steps(db, sql):
     return statistics.median(times), count[0], n
 
 
-def report(api, path_db):
+def report(api):
     from backend.tests.helpers.api import headers
 
     store, answers = api.app.state.store, {}
@@ -177,7 +196,6 @@ def report(api, path_db):
             "follows:",
             c.execute("SELECT count(*) FROM thread_followers WHERE actor='human:ana'").fetchone()[0],
         )
-    db = sqlite3.connect(Path(path_db).as_uri() + "?mode=ro", uri=True)
     for path in PATHS:
         for token in TOKENS:
             r = api.get(path, headers=headers(token))
@@ -198,15 +216,17 @@ def report(api, path_db):
                 t = time.perf_counter()
                 api.get(path, headers=headers(token))
                 times.append((time.perf_counter() - t) * 1000)
-            alone = [steps(db, q) for _, q in unread]
+            with store.read() as c:  # the database the requests read, not the saved seed
+                alone = [steps(c, q) for _, q in unread]
+                plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + unread[0][1])] if unread else []
             print(
                 f"{path:26s} {token:9s} {len(seen) - 1:5d} statements {statistics.median(times):8.1f} ms | "
                 f"WITH unread x{len(unread)}: {sum(ms for ms, _, _ in alone):7.1f} ms alone, "
                 f"{sum(s for _, s, _ in alone):9d} VM steps, {sum(n for _, _, n in alone)} rows"
             )
-            if os.environ.get("PLANS") and unread:
-                for row in db.execute("EXPLAIN QUERY PLAN " + unread[0][1]):
-                    print("     ", row[3])
+            if os.environ.get("PLANS"):
+                for line in plan:
+                    print("     ", line)
     if os.environ.get("ANSWERS"):
         Path(os.environ["ANSWERS"]).write_text(json.dumps(answers, sort_keys=True, default=str))
 
@@ -217,7 +237,7 @@ def main():
 
     from backend.tests.helpers.api_app import api_client
 
-    keep = os.environ.get("DB")
+    keep = os.environ.get("DB") and str(Path(os.environ["DB"]).resolve())
     with tempfile.TemporaryDirectory(prefix=".tmp-rail-", dir=HERE.parent) as directory:
         folder = Path(directory)
         reuse = keep and Path(keep).exists()
@@ -228,15 +248,52 @@ def main():
                 t = time.perf_counter()
                 seed(api)
                 print(f"seeded in {time.perf_counter() - t:.1f}s")
-            saved = keep or str(folder / "seeded.sqlite")
-            if not reuse:
+            if keep and not reuse:
                 with api.app.state.store.read() as c:
-                    c.execute("VACUUM INTO ?", (saved,))
-            report(api, saved)
+                    c.execute("VACUUM INTO ?", (keep,))
+            report(api)
         finally:
             install.close()
             shutil.rmtree(folder, ignore_errors=True)
 
 
+def compare(saved, before, after):
+    """Exit 1 unless each answer in two ANSWERS files is the same, once ids and times an app start made (absent from
+    the seeded database `saved`) are masked."""
+    import re
+
+    db = sqlite3.connect(Path(saved).resolve().as_uri() + "?mode=ro", uri=True)
+    known = set()
+    for (table,) in db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
+        if "id" in [r[1] for r in db.execute(f'PRAGMA table_info("{table}")')]:
+            known |= {str(r[0]) for r in db.execute(f'SELECT id FROM "{table}"')}
+    known |= {str(r[0]).split("@")[0] for r in db.execute("SELECT origin_id FROM messages WHERE origin_id IS NOT NULL")}
+    cutoff = max(r[0] for t in ("conversations", "messages") for r in db.execute(f"SELECT MAX(created_at) FROM {t}"))
+    uuid = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+    stamp = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z$")
+
+    def steady(x):
+        if isinstance(x, dict):
+            return {k: steady(v) for k, v in x.items()}
+        if isinstance(x, list):
+            return [steady(v) for v in x]
+        if isinstance(x, str):
+            ids = uuid.findall(x.split("@")[0])
+            if (stamp.match(x) and x > cutoff) or (ids and all(u not in known for u in ids)):
+                return "<made at start>"
+        return x
+
+    a, b = (json.loads(Path(f).read_text()) for f in (before, after))
+    bad = False
+    for key in sorted(set(a) | set(b)):
+        same = steady(a.get(key)) == steady(b.get(key))
+        exact = a.get(key) == b.get(key)
+        print(f"{key:36s} {'identical' if exact else 'same, start rows masked' if same else 'DIFFERENT'}")
+        bad |= not same
+    raise SystemExit(1 if bad else 0)
+
+
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["compare"]:
+        compare(*sys.argv[2:5])
     main()
