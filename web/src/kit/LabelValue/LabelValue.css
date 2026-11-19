@@ -15,3 +15,7 @@ button.fact{width:100%;border:0;background:none;font-family:inherit;font-size:in
 .fact.is-edit:hover .fact-pick{color:var(--muted)}
 .fact.is-edit:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
 .fact-num{justify-self:end;font-variant-numeric:tabular-nums;font-feature-settings:var(--feat-text)}
+/* a line with its ⋯ beside it: the line takes the room, the button keeps its own (a picker is a button, so the ⋯
+   cannot sit inside it) */
+.fact-more{display:flex;align-items:center;gap:var(--s-1)}
+.fact-more>.fact{flex:1;min-width:0}

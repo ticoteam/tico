@@ -1,5 +1,5 @@
-import { Link, useLocation, type LinkProps } from '@tanstack/react-router';
-import { useEffect, useLayoutEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
+import { createLink, useLocation, type LinkProps } from '@tanstack/react-router';
+import { useEffect, useLayoutEffect, useRef, type AnchorHTMLAttributes, type KeyboardEvent, type ReactNode, type Ref } from 'react';
 import { Count } from '@/kit/Count';
 import type { PageTab } from '@/pagekinds/types';
 import { rowMarks, scrollFor, stepTab } from './tabFit';
@@ -24,6 +24,16 @@ function isOn(t: PageTab, path: string, search: Record<string, unknown>, rowKeys
   const pathOn = (t.exact ?? true) ? here === there : here === there || here.startsWith(`${there}/`);
   return pathOn && rowKeys.every((k) => String(search[k] ?? '') === (t.search?.[k] ?? ''));
 }
+
+/* The router marks a link current by its own test, in which a tab with no search of its own (Overview) still matches
+   while a sibling's `?at=` is open. The row decides alone: the anchor drops the router's marks and takes `on`, and no
+   `active` class is added beside `is-on`. */
+const NO_ACTIVE = {};
+type TabAnchorProps = AnchorHTMLAttributes<HTMLAnchorElement> & { on: boolean; ref?: Ref<HTMLAnchorElement>; 'data-status'?: string };
+function TabAnchor({ on, 'aria-current': _current, 'data-status': _status, ...rest }: TabAnchorProps) {
+  return <a {...rest} aria-current={on ? 'page' : undefined} />;
+}
+const TabLink = createLink(TabAnchor);
 
 const isPhone = () => document.documentElement.dataset.layout === 'cards';
 
@@ -89,10 +99,11 @@ export function PageTabs({ tabs, label, after }: PageTabsProps) {
         {tabs.map((t) => {
           const on = keyOf(t) === onKey;
           return (
-            <Link
+            <TabLink
               key={keyOf(t)}
               className={on ? 'doc-tab is-on' : 'doc-tab'}
-              aria-current={on ? 'page' : undefined}
+              on={on}
+              activeProps={NO_ACTIVE}
               to={t.to as LinkProps['to']}
               search={t.search as never}
               data-target={t.target}
@@ -100,7 +111,7 @@ export function PageTabs({ tabs, label, after }: PageTabsProps) {
               {t.mark}
               <span data-t={t.label}>{t.label}</span>
               {t.count !== undefined && <Count n={t.count} />}
-            </Link>
+            </TabLink>
           );
         })}
       </div>

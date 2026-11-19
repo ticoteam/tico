@@ -3,7 +3,7 @@
 .page-tabs .docs{scroll-behavior:auto}
 .page-tabs .doc-tab span{display:inline-grid;justify-items:center}   /* holds the bold width, so choosing a tab moves no other */
 .page-tabs .doc-tab span::after{content:attr(data-t);height:0;overflow:hidden;visibility:hidden;font-weight:var(--w-strong)}
-@media (max-width:760px){
+:where(html[data-layout="cards"]){
   .page-tabs{margin-top:0;padding:0 0 0 var(--s-4)}
   /* stylelint-disable-next-line color-no-hex -- mask */
   .page-tabs .docs{padding-right:calc(var(--s-6) + var(--s-1));-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent)}

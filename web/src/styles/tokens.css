@@ -186,8 +186,8 @@
   --lift-2:inset 0 1px 0 rgba(255,255,255,.075),inset 0 0 0 1px rgba(255,255,255,.05),0 18px 40px -12px rgba(0,0,0,.7);
   --lift-3:inset 0 1px 0 rgba(255,255,255,.1),inset 0 0 0 1px rgba(255,255,255,.075),0 30px 60px -16px rgba(0,0,0,.85);
 }
-/* a phone: every control is a 44px target */
-@media (max-width:760px){:root{--row:44px;--ctl:44px;--ctl-sm:44px;--ctl-lg:44px;--pad-pane:16px;--pad-task:16px;--t-ask:20px}}
+/* a phone (the cards: html[data-layout], set by the shell): every control is a 44px target */
+:root[data-layout="cards"]{--row:44px;--ctl:44px;--ctl-sm:44px;--ctl-lg:44px;--pad-pane:16px;--pad-task:16px;--t-ask:20px}
 
 
 /* =====================================================================================================

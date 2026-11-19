@@ -1,7 +1,7 @@
 /* The words version of .seg, written once (components.js: "add words to it once"; from pages/3-company/company.css). */
 .seg.is-words button{width:auto;padding:0 var(--s-2h);font-size:var(--t-sm);white-space:nowrap;position:relative}
 .seg.is-words .is-on{font-weight:var(--w-strong)}
-@media (max-width:760px){
+:where(html[data-layout="cards"]){
   .seg.is-words button{padding:0 var(--s-3)}
   .seg.is-words button::before{content:"";position:absolute;inset:-2px 0}
 }

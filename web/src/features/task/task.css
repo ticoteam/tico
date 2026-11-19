@@ -12,7 +12,7 @@
 /* ---------- the head on a phone (parts.css .tv-head, t-task-details-phone-dark.png): the title wraps at 20, then the
    where line under it keeps the pipeline ("Engineering › QA"), so its chevron never stands alone. The head grows to
    hold both lines, below the status bar. */
-html[data-layout="cards"] .tv .pk-head{height:auto;min-height:var(--head-h);align-items:flex-start;padding-top:calc(env(safe-area-inset-top,0px) + var(--s-3));padding-bottom:var(--s-1)}
+html[data-layout="cards"] .tv .pk-head{height:auto;min-height:var(--head-h);align-items:flex-start;padding-top:calc(var(--page-top) + var(--s-3));padding-bottom:var(--s-1)}
 html[data-layout="cards"] .tv .pk-where>.pk-crumb{display:contents}
 html[data-layout="cards"] .tv .pk-title h1{white-space:normal;font-size:var(--t-fig);line-height:var(--lh-tight);text-wrap:balance;
   display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3}

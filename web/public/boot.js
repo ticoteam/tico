@@ -21,4 +21,14 @@
   if (levels.indexOf(motion) < 0) motion = read('motion.v1');
   if (levels.indexOf(motion) < 0) motion = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'off' : 'more';
   root.setAttribute('data-motion', motion);
+  // Phone cards or sheets, as src/shell/layout.ts modeFor decides (CARDS_AT, SHEETS_AT): every phone style switches on
+  // this one attribute, so it is set before the first paint and kept on resize for screens with no frame (sign-in,
+  // the desktop's call window). The frame writes the same value from the same rule.
+  var CARDS_AT = 760, SHEETS_AT = 800;
+  function layout() {
+    var w = innerWidth, was = root.getAttribute('data-layout');
+    root.setAttribute('data-layout', w <= CARDS_AT || (was === 'cards' && w < SHEETS_AT) ? 'cards' : 'sheets');
+  }
+  layout();
+  addEventListener('resize', layout);
 })();

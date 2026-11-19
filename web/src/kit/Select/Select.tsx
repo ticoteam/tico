@@ -1,7 +1,7 @@
 import { Select as BaseSelect } from '@base-ui/react/select';
 import { Icon } from '@/kit/Icon';
 import { MenuItemBody } from '@/kit/Menu';
-import { popLayer, popMotion } from '@/kit/Popover';
+import { sheetScrim, usePlacement } from '@/kit/Popover';
 import './Select.css';
 
 export type SelectOption<V extends string = string> = {
@@ -27,7 +27,7 @@ export type SelectProps<V extends string = string> = {
   error?: boolean;
 };
 
-/** A button that shows the chosen value and opens the list. */
+/** A button that shows the chosen value and opens the list; on a phone the list is a sheet from the bottom edge. */
 export function Select<V extends string>({
   label,
   labelHidden = false,
@@ -39,6 +39,7 @@ export function Select<V extends string>({
   disabled = false,
   error = false,
 }: SelectProps<V>) {
+  const at = usePlacement();
   const chosen = options.find((o) => o.value === value);
   const shown = chosen ? <span>{chosen.label}</span> : <span className="ph">{placeholder}</span>;
   const trigger =
@@ -64,7 +65,7 @@ export function Select<V extends string>({
       }}
       items={options.map((o) => ({ value: o.value, label: o.label }))}
       disabled={disabled}
-      modal={false}
+      modal={at.sheet}
     >
       {labelHidden ? (
         trigger
@@ -75,8 +76,9 @@ export function Select<V extends string>({
         </div>
       )}
       <BaseSelect.Portal>
-        <BaseSelect.Positioner className={popLayer} alignItemWithTrigger={false} align="start" sideOffset={6}>
-          <BaseSelect.Popup className={`menu is-select ${popMotion}`}>
+        {at.sheet && <BaseSelect.Backdrop className={sheetScrim} />}
+        <BaseSelect.Positioner className={at.layer} style={at.style} alignItemWithTrigger={false} align="start" sideOffset={6}>
+          <BaseSelect.Popup className={`menu is-select ${at.look}`}>
             {options.map((o) => (
               <BaseSelect.Item
                 key={o.value}

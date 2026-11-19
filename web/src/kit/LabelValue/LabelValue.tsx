@@ -18,10 +18,22 @@ export type LabelValueProps = {
   num?: boolean;
   /** Makes the line a picker: the value's words, then a chevron. */
   onEdit?: () => void;
+  /** At the line's end, outside it: the line's ⋯ menu (`<Menu trigger={<IconButton icon="more" … />}>`). */
+  trail?: ReactNode;
 };
 
 /** One label and its value (pages/8-settings `.fact`). */
-export function LabelValue({ label, children, num, onEdit }: LabelValueProps) {
+export function LabelValue({ trail, ...line }: LabelValueProps) {
+  if (!trail) return <Line {...line} />;
+  return (
+    <div className="fact-more">
+      <Line {...line} />
+      {trail}
+    </div>
+  );
+}
+
+function Line({ label, children, num, onEdit }: Omit<LabelValueProps, 'trail'>) {
   if (onEdit) {
     return (
       <button type="button" className="fact is-edit" onClick={onEdit}>

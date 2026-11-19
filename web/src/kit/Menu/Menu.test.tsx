@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IconButton } from '@/kit/IconButton';
 import { ContextMenu, Menu, MenuItem, MenuRule } from './Menu';
 
@@ -58,5 +58,39 @@ describe('ContextMenu', () => {
     });
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Open' }));
     expect(onSelect).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Menu on a phone', () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.layout;
+  });
+
+  it('is a sheet over a scrim on the cards, and a tap on the scrim closes it', async () => {
+    document.documentElement.dataset.layout = 'cards';
+    render(<TaskMenu />);
+    const more = screen.getByRole('button', { name: 'More' });
+    fireEvent.click(more);
+    const menu = await screen.findByRole('menu');
+    expect(menu.className).toContain('is-sheet');
+    const scrim = document.querySelector<HTMLElement>('.scrim');
+    expect(scrim).not.toBeNull();
+    // pinned to the bottom edge, not placed beside its button
+    expect(menu.parentElement?.style.bottom).toBe('0px');
+    fireEvent.pointerDown(scrim!);
+    fireEvent.mouseDown(scrim!);
+    fireEvent.click(scrim!);
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    expect(document.querySelector('.scrim')).toBeNull();
+  });
+
+  it('opens beside its button, with no scrim, on a wide window', async () => {
+    document.documentElement.dataset.layout = 'sheets';
+    render(<TaskMenu />);
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    const menu = await screen.findByRole('menu');
+    expect(menu.className).not.toContain('is-sheet');
+    expect(menu.className).toContain('kit-pop');
+    expect(document.querySelector('.scrim')).toBeNull();
   });
 });

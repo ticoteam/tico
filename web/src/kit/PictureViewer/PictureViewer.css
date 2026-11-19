@@ -8,7 +8,7 @@
 .pv-name{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .pv-n{flex:none;font-variant-numeric:tabular-nums}
 .pv-bar .ib{color:var(--on-scrim)}
-@media (max-width:760px){
+:where(html[data-layout="cards"]){
   .pv-viewport{padding:var(--s-4);place-items:center}
   .pv-img{max-height:calc(100dvh - var(--s-4) * 2 - var(--s-10))}
 }

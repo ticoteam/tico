@@ -6,3 +6,15 @@
 .kit-pop[data-starting-style]{opacity:0;transform:scale(var(--pop))}
 .kit-pop[data-ending-style]{opacity:0;transition:opacity var(--dur-fast) var(--ease-in)}
 .kit-pop:focus-visible{outline:0}
+
+/* On the phone's cards a menu or a select's list is a sheet (parts.css .menu.is-sheet): pinned to the bottom edge above
+   a scrim, rising translateY(100%) -> 0 on the card spring and leaving the same way (motion.md G10, F1). With Motion off
+   it fades instead. */
+.kit-sheet{z-index:var(--z-dialog)}
+.kit-dim{z-index:var(--z-scrim);transition:opacity var(--dur) var(--ease)}
+.kit-dim[data-starting-style],.kit-dim[data-ending-style]{opacity:0}
+.kit-rise{transition:transform var(--card-dur) var(--card-ease),opacity var(--dur-fast) var(--ease)}
+.kit-rise[data-starting-style],.kit-rise[data-ending-style]{transform:translateY(calc(100% + var(--sheet-gap)))}
+.kit-rise[data-ending-style]{transition:transform var(--dur-leave) var(--ease-in)}
+[data-motion="off"] .kit-rise[data-starting-style],[data-motion="off"] .kit-rise[data-ending-style]{transform:none;opacity:0}
+.kit-rise:focus-visible{outline:0}

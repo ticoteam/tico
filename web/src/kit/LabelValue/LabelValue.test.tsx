@@ -30,4 +30,16 @@ describe('LabelValue', () => {
     fireEvent.click(pick);
     expect(onEdit).toHaveBeenCalledOnce();
   });
+
+  it('keeps a trailing ⋯ beside the line, outside a picker', () => {
+    render(
+      <LabelValue label="Model" onEdit={() => {}} trail={<button type="button">More on Model</button>}>
+        Opus
+      </LabelValue>,
+    );
+    const more = screen.getByRole('button', { name: 'More on Model' });
+    const pick = screen.getByRole('button', { name: /Model\s*Opus/ });
+    expect(pick.contains(more)).toBe(false);
+    expect(more.parentElement?.className).toBe('fact-more');
+  });
 });

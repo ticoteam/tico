@@ -356,7 +356,7 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
 
 /* ---------- phone: one sheet, 44px targets, the five-slot bar, the task dock ---------- */
 .bar{display:none}
-@media (max-width:760px){
+:where(html[data-layout="cards"]){
   .not-phone{display:none!important}
   .only-phone,.ib.only-phone{display:inline-grid}
   body{background:var(--sheet)}
@@ -639,7 +639,7 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
 .sk-title{width:96px;height:18px;border-radius:6px}
 
 /* ---------- phone ---------- */
-@media (max-width:760px){
+:where(html[data-layout="cards"]){
   /* nothing you press is under 44px, even when it is drawn smaller */
   .send,.composer .ib,.an-pill,.scope button,.search .ib{position:relative}
   .send::before,.composer .ib::before{content:"";position:absolute;inset:-4px}
@@ -651,8 +651,9 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
   .slot-dot.is-active{background:var(--well-2)}
   /* a menu is a sheet that comes up from the bottom edge, where the bar was */
   .scrim{place-items:end stretch}
-  .menu.is-sheet,.modal{position:relative;width:auto;max-width:none;margin:0 10px 10px;border-radius:24px}
-  .menu.is-sheet{padding:var(--s-5) var(--s-2) var(--s-2)}
+  /* the bottom gap clears the home indicator (tokens-app.css --sheet-gap; 10px where there is none, as drawn) */
+  .menu.is-sheet,.modal{position:relative;width:auto;max-width:none;margin:0 10px var(--sheet-gap);border-radius:24px}
+  .menu.is-sheet{padding:var(--s-5) var(--s-2) var(--s-2);max-height:calc(100dvh - var(--s-10) - var(--sheet-gap));overflow-y:auto;overscroll-behavior:contain}
   .menu.is-sheet::before,.modal::before{content:"";position:absolute;left:50%;top:var(--s-2);width:36px;height:4px;margin-left:-18px;border-radius:2px;background:var(--line-strong)}
   .menu.is-sheet a{border-radius:14px;padding:0 var(--s-3);gap:var(--s-3)}
   .menu.is-sheet hr{margin:6px var(--s-3)}
