@@ -666,3 +666,30 @@ def test_a_bots_reply_in_its_home_is_unread_until_read_and_its_unprompted_posts_
     rail = listed(api, "rail", "ben-test")
     assert rail["catch_up_ids"] == [] and rail["unread"] == [] and rail["catch_up"] == 0
     assert listed(api, "catch-up", "ben-test")["items"] == []
+
+
+def test_one_person_dms_never_read_the_rooms_of_the_tasks_one_follows(api):
+    dm = api.get("/api/v2/threads/dm", params={"with": "human:ben"}, headers=headers("ana-test")).json()
+    say(api, dm["id"], "Lunch?")
+    task = api.post(
+        "/api/v2/tasks", json={"owner": "ops", "title": "Review the sample budget"}, headers=headers("ben-test")
+    ).json()["task"]
+    with api.app.state.store.transaction() as c:
+        room = c.execute(
+            "SELECT id FROM conversations WHERE task_id=? AND parent_id IS NULL", (task["id"],)
+        ).fetchone()[0]
+        c.execute(
+            "INSERT OR REPLACE INTO thread_followers(id,thread_id,actor,following,notify,reason,created_at,updated_at) "
+            "VALUES(?,?,'human:ben',1,'live','manual',?,?)",
+            (H.new_id(), room, H.now(), H.now()),
+        )
+    seen = []
+    with api.app.state.store.read_transaction() as c:
+        v = threads.viewer(api.app.state.auth, who(api, "ben-test"))
+        c.set_trace_callback(seen.append)
+        try:
+            pairs = threads._one_dm_pairs(c, v)
+        finally:
+            c.set_trace_callback(None)
+    assert pairs == {dm["id"]: "human:ana"}
+    assert not [q for q in seen if room in q], [q for q in seen if room in q]

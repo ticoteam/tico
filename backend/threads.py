@@ -5391,12 +5391,15 @@ def _one_dm_pairs(c, v):
     """{root id: other actor} for the one-teammate DMs: lists batch their summaries with the roots they show."""
     if not v.is_person:
         return {}
+    # The audience `audience_of` gives each row, in SQL: a task's room has none stored, and a person who follows
+    # thousands of tasks read every one of their rooms here only to drop it below (6,401 of 6,453 on TIDY, Nov 19).
     ids = [
         r[0]
         for r in c.execute(
             "SELECT cv.id FROM thread_followers f JOIN conversations cv ON cv.id=f.thread_id WHERE f.actor=? "
             "AND f.following=1 AND f.notify<>'muted' AND cv.parent_id IS NULL AND cv.closed_at IS NULL "
-            "AND cv.archived_at IS NULL AND COALESCE(cv.audience,'') IN ('personal','participants','')",
+            f"AND cv.archived_at IS NULL AND (CASE WHEN COALESCE(cv.audience,'')='' THEN {_derived_audience('cv')} "
+            "ELSE cv.audience END) IN ('personal','participants')",
             (v.actor,),
         )
     ]
