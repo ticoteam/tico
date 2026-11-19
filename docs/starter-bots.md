@@ -387,6 +387,37 @@ base, then its shared files, then the template's own folder, a later file replac
 (`clients/catalog.py` `files`). A skill shared this way lives in `.claude/skills/`, where Claude Code loads it without
 AGENTS.md listing it.
 
+## The skill library
+
+Business work a bot does end to end (answer a customer, close the month, review a contract, run a release, write the
+spec) is one library skill in `templates/catalog/_shared/.claude/skills/<skill>/`: a `SKILL.md` with the steps, the
+gates, what the bot does alone and what needs a person, plus `references/` for the long parts. There are 41, in eleven
+functions: customers, engineering, finance, growth, hardware, legal, marketing, operations, people, product and sales. Each
+`SKILL.md` names the roles that use it in `metadata.roles`, and each of those cards lists the skill in
+`shared_files`. A role's own `skills/` keep the narrow steps a library skill calls (a figure check, a deadline count);
+a narrow skill that a library skill fully covers is deleted and its references point at the library skill.
+
+Every `SKILL.md` in the catalog carries `metadata.function`, one of `tico`, `legal`, `marketing`, `growth`, `sales`,
+`customers`, `finance`, `product`, `engineering`, `people`, `operations`, `hardware`, `data` or `security`:
+
+```yaml
+---
+name: count-a-notice-deadline
+description: "..."
+metadata:
+  function: legal
+---
+```
+
+A role's skills take its card's `group` (engineering, finance, legal, marketing, operations, product and sales as
+named; `hr` is people; `leadership` is operations; `corporate` is legal; `success` and `support` are customers), with a
+few roles set by hand: the security roles are security, the Product Analyst is data, the Growth Manager and Pricing
+Analyst are growth, the Partnerships Owner is sales. Skills about running Tico itself (BotOps, the Assistant, the
+Librarian, the Tools, Rules, Automations, Updates and Inbox helpers, and shared helpers such as `build-the-page`) are
+`tico`. Keep `metadata` after `name` and `description`: the frontmatter readers (`clients/skills.py`,
+`runner-rs/src/goals.rs`) read top-level `key: value` lines and skip the indented ones. A skill folder stays under 100
+files and 90,000 characters, and its description under 1,024 characters (`clients/skills.py` `bundle_problem`).
+
 Same layout as every template, plus what makes a starter reviewable:
 
 - `AGENTS.md`, under 150 lines (most are 80 to 100): mandate, what it owns, its setup conversation, `## Sending` (matching the bot's sending policy in Tico), how it starts and ends a run, how it uses `tico`, quality
