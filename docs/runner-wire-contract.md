@@ -97,3 +97,4 @@ when the server accepts output. The optional `voice=busy` query parameter checks
 claiming another. `voice=restart` returns a fresh primer and notes stamp with a bounded transcript recap.
 After a call closes, the runner can acknowledge discarded output and settle the stopped lease with usage counts.
 Older hubs negotiate the capability away through the heartbeat 422 fallback.
+With `voice_inputs_v1`, the runner stream's `voice_inputs` hint carries only `attempt_id` and `call_id`, and goes only to the computer still holding that attempt. It is sent for a new turn and when the active turn is skipped (its deadline passed). The runner fetches inputs on hints and reconnects, with a 3-second backup poll; while the server refuses the capability, or the stream is down or quiet past 25 seconds, it keeps the 400 ms poll.

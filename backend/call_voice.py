@@ -42,6 +42,7 @@ from typing import Any
 
 from . import call_media as _call_media
 from . import call_sessions as _call_sessions
+from . import events as _events
 from . import gateway_connection as _gateway_connection
 from . import live_meetings as _live_meetings
 from .store import H as _H
@@ -50,6 +51,7 @@ from .store import Problem
 # Untyped modules, used through Any here (this module is strict; they are not yet).
 call_media: Any = _call_media
 call_sessions: Any = _call_sessions
+events: Any = _events
 gateway_connection: Any = _gateway_connection
 live_meetings: Any = _live_meetings
 H: Any = _H
@@ -523,6 +525,8 @@ class Voice:
         if not selected:
             self._set(voice, bot, "listening")
             return False
+        if warm:
+            events.queue_voice_inputs(c, self.store, row["id"], bot)
         voice.open = {
             "bot": bot,
             "turn": selected[0]["id"],
@@ -610,6 +614,9 @@ class Voice:
                     status, reason = "skipped", "voice_deadline"
                 if reason == "voice_deadline":
                     self._note(voice, f"{_name(c, current['bot'])} couldn't answer in time")
+                if status == "skipped":
+                    # A resident still answering a skipped turn stops at once, not at its next backup read.
+                    events.queue_voice_inputs(c, self.store, call_id, current["bot"])
                 if status == "replied":
                     with voice.lock:
                         replied_at = voice.open.get("replied_at") if voice.open else None

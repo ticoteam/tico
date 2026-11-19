@@ -48,6 +48,7 @@ unsigned.
 
 import asyncio
 import contextvars
+import json
 import sqlite3
 import threading
 import time
@@ -873,7 +874,7 @@ TRIGGERS = [
 # A runner used to ask a dozen endpoints on timers whether anything was new for it, and almost
 # every answer was no. The same log now carries `runner` rows: one per computer a write concerns,
 # its id as the subject, naming which of the computer's reads to repeat. A row carries a kind and
-# at most a bot id (or, for `screen_open`, the session's id), never a value (`GET /api/v2/runners/me/events`,
+# only IDs, never a value (`GET /api/v2/runners/me/events`,
 # runner-rs/src/events.rs).
 RUNNER_KINDS = (
     "work",
@@ -888,6 +889,7 @@ RUNNER_KINDS = (
     "credential_imports",
     "subscription_refresh",
     "screen_open",
+    "voice_inputs",
     "browser_exit",
     "pushed",  # only to a computer that takes it (backend/github.py tell_pushed)
 )
@@ -919,6 +921,43 @@ def _tell(kind, runners, bot="NULL"):
 
 def _bot_runner(kind, bot):
     return _tell(kind, _BOT_RUNNER.format(bot=bot), bot)
+
+
+# A call's resident attempt while it still holds the bot's voice job: attached to the call, leased, and on the bot's
+# current assignment. Checked when a hint is written and again when it is sent, so a computer the bot has since moved
+# away from is not told about the call.
+_VOICE_HOLDER = (
+    "FROM calls v JOIN live_meeting_bots b ON b.meeting_id=v.live_meeting_id "
+    "JOIN jobs j ON j.id=b.voice_job JOIN attempts a ON a.id=j.attempt_id "
+    "JOIN assignments s ON s.bot=b.bot AND s.runner_id=a.runner_id AND s.generation=a.generation "
+)
+_VOICE_HELD = (
+    "v.state='live' AND v.ending_at IS NULL AND a.state IN ('leased','running') "
+    f"AND a.stop_requested_at IS NULL AND a.lease_until>{_NOW}"
+)
+# Only a computer that said it takes the hint (voice_inputs_v1) gets one; any other keeps its own 400 ms poll.
+_QUEUE_VOICE_INPUTS = (
+    "INSERT INTO changes(topic,kind,subject_id,ref,created_at) "
+    f"SELECT 'runner','voice_inputs',a.runner_id,json_object('attempt_id',a.id,'call_id',v.id),{_NOW} "
+    + _VOICE_HOLDER
+    + "JOIN runners r ON r.id=a.runner_id AND r.revoked_at IS NULL JOIN runner_states p ON p.runner_id=r.id "
+    + f"WHERE v.id=? AND b.bot=? AND {_VOICE_HELD} "
+    + "AND 'voice_inputs_v1' IN (SELECT value FROM json_each(p.capabilities))"
+)
+_VOICE_STILL_HELD = (
+    f"EXISTS(SELECT 1 {_VOICE_HOLDER}WHERE a.id=json_extract(ch.ref,'$.attempt_id') "
+    f"AND v.id=json_extract(ch.ref,'$.call_id') AND a.runner_id=ch.subject_id AND {_VOICE_HELD})"
+)
+
+
+def queue_voice_inputs(c, store, call_id, bot):
+    """Wake the computer running this bot's resident voice session to read its inputs (a new turn, or its turn
+    ended): written in the caller's transaction."""
+    inserted = c.execute(_QUEUE_VOICE_INPUTS, (call_id, bot))
+    if inserted.rowcount:
+        seq = inserted.lastrowid
+        # Transcription and the voice ticker write outside a request's change-log wrapper.
+        c.after_commit.append(lambda: runner_bell(store).observe(seq))
 
 
 RUNNER_TRIGGERS = [
@@ -3695,9 +3734,9 @@ RUNNER_GATHER_SECONDS = 0.25  # one write often tells a computer two things (an 
 
 def runner_read(c, runner_id, actor, after, limit=BATCH):
     """What a computer is told after change `after`: (events, cursor, reset, more), each event
-    (seq, {"seq", "kind", "bots"}), one per kind however many rows said it. Its own writes (a report,
-    a heartbeat) tell it nothing it does not know, except work: a lease its heartbeat expired requeues
-    a job. One indexed read, no per-row lookups."""
+    (seq, data), one per kind (per attempt for voice inputs). Its own writes (a report,
+    a heartbeat) only tell it about queued work or voice inputs it still needs to fetch. One indexed read,
+    no per-row lookups."""
     c.execute("BEGIN")  # one snapshot: the bounds and the rows agree
     try:
         # A runner's token is its row: revoking the row is revoking the token, checked on every wake.
@@ -3708,15 +3747,26 @@ def runner_read(c, runner_id, actor, after, limit=BATCH):
         floor = (first - 1) if first is not None else newest
         if after > newest or after < floor:
             return [], newest, True, False
+        # A voice hint goes only while this computer still holds the call's resident attempt: one written before the
+        # bot moved away is skipped, and the cursor passes it like any other row.
         rows = c.execute(
-            "SELECT seq,kind,bot,ref FROM changes WHERE topic='runner' AND seq>? AND subject_id=? "
-            "AND (actor IS NOT ? OR kind='work') ORDER BY seq LIMIT ?",
+            "SELECT seq,kind,bot,ref FROM changes ch WHERE topic='runner' AND seq>? AND subject_id=? "
+            "AND (actor IS NOT ? OR kind IN ('work','voice_inputs')) "
+            f"AND (kind!='voice_inputs' OR {_VOICE_STILL_HELD}) ORDER BY seq LIMIT ?",
             (after, runner_id, actor, limit),
         ).fetchall()
         more = len(rows) >= limit
         cursor = rows[-1]["seq"] if more else newest
         kinds = {}
         for row in rows:
+            if row["kind"] == "voice_inputs":
+                kinds[("voice_inputs", row["ref"])] = {
+                    "seq": row["seq"],
+                    "kind": "voice_inputs",
+                    "bots": [],
+                    **json.loads(row["ref"]),
+                }
+                continue
             entry = kinds.setdefault(row["kind"], {"seq": row["seq"], "kind": row["kind"], "bots": []})
             entry["seq"] = row["seq"]
             if row["bot"] and row["bot"] not in entry["bots"]:
@@ -3737,7 +3787,7 @@ def install_runner(app, store, execution):
     @app.get("/api/v2/runners/me/events")
     async def runner_events(request: Request, after: int | None = None):
         """Server-sent events for a computer: what changed for it, as hints to re-read one of its
-        endpoints (`event: runner`, `data: {seq, kind, bots}`), never a value. `ready` names this
+        endpoints (`event: runner`, data with a sequence, kind and any relevant IDs). `ready` names this
         server's release; `reset` means re-read everything. Ends with `expired` once the computer is
         revoked, and on its own after RUNNER_LIFETIME_SECONDS; the runner reconnects with `after`."""
         who = request.state.identity

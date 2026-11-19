@@ -88,6 +88,8 @@ pub struct RunnerFrame {
     /// running turn of that bot to ask for its inputs and goal (drive.rs).
     #[serde(default)]
     pub bots: Vec<String>,
+    pub attempt_id: Option<String>,
+    pub call_id: Option<String>,
 }
 
 #[cfg(test)]
