@@ -709,6 +709,14 @@ mod tests {
     async fn hub_answering(
         answer: impl Fn(&str, &Value) -> (&'static str, Value) + Send + Sync + 'static,
     ) -> (String, Arc<Mutex<Vec<String>>>) {
+        hub_answering_after(Duration::ZERO, answer).await
+    }
+
+    /// `hub_answering`, each answer sent `delay` after its request is read (a hub busy with its write lock).
+    async fn hub_answering_after(
+        delay: Duration,
+        answer: impl Fn(&str, &Value) -> (&'static str, Value) + Send + Sync + 'static,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let answer = Arc::new(answer);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -758,6 +766,7 @@ mod tests {
                         serde_json::from_slice(&request[head + 4..]).unwrap_or(Value::Null);
                     kept.lock().unwrap().push(format!("{path} {body}"));
                     let (status, answer) = answer(&path, &body);
+                    tokio::time::sleep(delay).await;
                     let answer = answer.to_string();
                     let response = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}", answer.len());
                     let _ = socket.write_all(response.as_bytes()).await;
@@ -1903,5 +1912,162 @@ mod tests {
         commits.sort_unstable();
         eprintln!("3,000 queued deltas through drive: wall time median {:.1} ms (min {:.1}, max {:.1}); event-write transactions median {} (min {}, max {})",
             micros[25] / 1e3, micros[0] / 1e3, micros[49] / 1e3, commits[25], commits[0], commits[49]);
+    }
+
+    /// A chat turn on a hub whose every answer takes `delay`, with the outbox uploader running as in a real attempt:
+    /// a status line goes up as the harness starts, the model's first text comes `first` later, and the turn ends
+    /// `end` after that. Returns how long after the first text the hub was sent it, and how long after the turn's end
+    /// the drive returned.
+    async fn slow_hub_turn(
+        delay: Duration,
+        first: Duration,
+        end: Duration,
+    ) -> (Duration, Duration) {
+        let sent_at: Arc<Mutex<Vec<(Instant, String)>>> = Arc::new(Mutex::new(vec![]));
+        let log = sent_at.clone();
+        let (url, _seen) = hub_answering_after(delay, move |path, body| {
+            log.lock()
+                .unwrap()
+                .push((Instant::now(), format!("{path} {body}")));
+            if path.ends_with("/inputs") {
+                ("200 OK", json!({"attempt_id": "acme-slow", "messages": []}))
+            } else {
+                events_taken(body)
+            }
+        })
+        .await;
+        let (runner, dir) = runner_at(&url);
+        let runner = Arc::new(runner);
+        runner
+            .events
+            .dispatch("ready", None, &json!({"seq": 1, "release": "v1"}), false);
+        runner.state.record(&json!({"id": "acme-slow"})).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let claude = ClaudeHost::new("acme", vec![], tx.clone());
+        claude.pretend_up(true);
+        let host = Host::Claude(claude);
+        let f = Arc::new(flags(false));
+        let wake = Arc::new(Notify::new());
+        let streamer = tokio::spawn(runner.clone().stream_loop(
+            "acme-slow".into(),
+            wake.clone(),
+            f.clone(),
+        ));
+        let started = Instant::now();
+        let feed = tokio::spawn(async move {
+            tx.send(json!({"kind": "status", "thread_id": "th-slow", "turn_id": "turn-1", "text": "Starting"}))
+                .unwrap();
+            tokio::time::sleep(first).await;
+            let token = Instant::now();
+            tx.send(json!({"kind": "delta", "thread_id": "th-slow", "turn_id": "turn-1", "text": "Acme's"}))
+                .unwrap();
+            tokio::time::sleep(end).await;
+            let ended = Instant::now();
+            for ev in answer_events("th-slow", "turn-1") {
+                tx.send(ev).unwrap();
+            }
+            (token, ended)
+        });
+        let d = Drive {
+            limit_name: "max_run_minutes (60 minutes)",
+            aid: "acme-slow",
+            host: &host,
+            thread: "th-slow",
+            effort: None,
+            limit: started + Duration::from_secs(60),
+            flags: &f,
+            wake: &wake,
+            redactor: None,
+            runtime: "claude",
+            bot: "acme",
+            session: "th-slow",
+            fresh: None,
+        };
+        let mut segment = Segment {
+            meter: Meter::default(),
+            config: json!({}),
+            profile: None,
+            billing: "api",
+            subscription: None,
+        };
+        let mut goal = GoalRun {
+            chat_goal: None,
+            controlled: false,
+            failure: None,
+            paused: None,
+            tries_key: ("acme".into(), "th-slow".into()),
+        };
+        let drove = runner
+            .drive(
+                &d,
+                &mut rx,
+                "turn-1".into(),
+                &mut segment,
+                &mut BTreeMap::new(),
+                &mut None,
+                &mut goal,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("refused: {}", e.text));
+        let returned = Instant::now();
+        assert_eq!(drove.outcome, "completed");
+        let (token, ended) = feed.await.unwrap();
+        // Everything still in the outbox goes up, as the attempt's final flush sends it.
+        runner.flush("acme-slow").await.unwrap();
+        f.done.store(true, Ordering::SeqCst);
+        wake.notify_one();
+        streamer.await.unwrap();
+        let first_sent = sent_at
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, r)| r.contains("/events") && r.contains("\"delta\""))
+            .map(|(at, _)| *at)
+            .expect("the first text went up");
+        std::fs::remove_dir_all(dir).ok();
+        (
+            first_sent.saturating_duration_since(token),
+            returned.saturating_duration_since(ended),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_slow_hub_does_not_hold_the_first_text_behind_the_drive_step() {
+        // Every hub answer takes 2 s. The status upload and the first step's inputs read both start as the turn does;
+        // the first text, 300 ms in, goes up as soon as the status upload is answered, not after the step as well.
+        let delay = Duration::from_secs(2);
+        let (first, _) = slow_hub_turn(
+            delay,
+            Duration::from_millis(300),
+            Duration::from_millis(500),
+        )
+        .await;
+        assert!(
+            first < Duration::from_millis(2800),
+            "first text sent {first:?} after the model said it"
+        );
+    }
+
+    /// Bench, not run by CI: model-first-text to the hub, and turn end to the drive's return, on a hub answering in
+    /// 0, 0.5, 1 and 2 s. `cargo test --release bench_slow_hub -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn bench_slow_hub_first_text_and_turn_end() {
+        for ms in [0u64, 500, 1000, 2000] {
+            let delay = Duration::from_millis(ms);
+            let (first, end) = slow_hub_turn(
+                delay,
+                Duration::from_millis(300),
+                Duration::from_millis(1700),
+            )
+            .await;
+            // first_delta_posted is marked when the hub answers that upload: `delay` after it was sent.
+            println!(
+                "hub answers in {ms} ms: first text sent +{} ms, first_delta_posted +{} ms, turn end seen +{} ms",
+                first.as_millis(),
+                (first + delay).as_millis(),
+                end.as_millis()
+            );
+        }
     }
 }
