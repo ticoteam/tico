@@ -2,6 +2,7 @@
 
 import argparse
 from dataclasses import replace
+import logging
 import os
 import queue
 import secrets
@@ -9,6 +10,29 @@ import signal
 import socket
 import subprocess
 import threading
+
+
+def _logging_config(log_level):
+    from uvicorn.config import LOG_LEVELS, LOGGING_CONFIG
+    from .diagnostics import RING
+
+    level = LOG_LEVELS[log_level.lower()]
+    # One stdout path per call log. The warning ring still receives warnings at any console level.
+    call_logger = {"handlers": ["calls", "call_diagnostics"], "level": min(level, logging.WARNING), "propagate": False}
+    return {
+        **LOGGING_CONFIG,
+        "handlers": {
+            **LOGGING_CONFIG["handlers"],
+            "calls": {
+                "class": "logging.StreamHandler",
+                "formatter": "default",
+                "stream": "ext://sys.stdout",
+                "level": level,
+            },
+            "call_diagnostics": {"()": lambda: RING},
+        },
+        "loggers": {**LOGGING_CONFIG["loggers"], "tico.calls": call_logger, "tico.call_media": call_logger},
+    }
 
 
 def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
@@ -102,6 +126,7 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
         server = Server(
             uvicorn.Config(
                 create_app(settings),
+                log_config=_logging_config(log_level),
                 log_level=log_level,
                 access_log=False,
                 proxy_headers=False,
