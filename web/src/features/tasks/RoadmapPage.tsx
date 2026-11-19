@@ -19,7 +19,7 @@ import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
 import { FilterItems, FilterMenu } from './FilterMenu';
 import { NewTask } from './NewTask';
 import { Face, isPending, OwnerButton, taskHref, waitsOnMe } from './parts';
-import { isFiltered, loadMore, pipelinesQuery, pipelineTasksQuery, shelfQuery, shelfTotal, tagsQuery, type Filters, type Pipeline, type TaskItem } from './queries';
+import { isFiltered, loadMore, loadMoreOf, pipelinesQuery, pipelineTasksQuery, shelfParams, shelfQuery, shelfTotal, tagsQuery, type Filters, type Pipeline, type TaskItem } from './queries';
 import { RequestersDialog } from './Requesters';
 import { byHorizon, HORIZONS, roadmapPipeline, stageName, trackOf, type Horizon } from './roadmap';
 import { filtersOf, type RoadmapSearch } from './search';
@@ -153,6 +153,7 @@ function Horizons({ p, rows, done, me, folds, fold, cut, shippedCut, shippedCoun
   const cards = useCards();
   const groups = { ...byHorizon(p, rows), shipped: [...done] };
   const more = cut ? () => void loadMore(p.id, filters) : undefined;
+  const moreShipped = shippedCut ? () => void loadMoreOf(shelfParams(p.id, 'done', filters)) : undefined;
   return (
     <>
       {HORIZONS.map(([h, name]) => {
@@ -178,7 +179,7 @@ function Horizons({ p, rows, done, me, folds, fold, cut, shippedCut, shippedCoun
               cap={LIST_CAP}
               show={LIST_SHOW}
               height={ROW_H}
-              more={h === 'shipped' ? undefined : more}
+              more={h === 'shipped' ? moreShipped : more}
               draw={(t) => <RoadmapRow key={t.id} t={t} p={p} me={me} />}
               moreRow={(n, open) => <RowMore key="more" n={n} cut={h === 'shipped' ? shippedCut : cut} onClick={open} />}
             />

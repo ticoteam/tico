@@ -86,6 +86,25 @@ afterEach(() => {
 });
 
 describe('Roadmap @s2', () => {
+  it('can load the next page of shipped features', async () => {
+    serve((url) =>
+      url.includes('after=next')
+        ? { status: 200, body: { tasks: [task('t2', 2, 'Export receipts', 'done', { status: 'done' })], cursor: 'c2' } }
+        : { status: 200, body: {} },
+    );
+    seed([task('t3', 3, 'Review invoices', 'build')]);
+    queryClient.setQueryData(keys.tasks.list(shelfParams('feat', 'done', {})), {
+      tasks: [task('t1', 1, 'Import receipts', 'done', { status: 'done' })],
+      cursor: 'c1',
+      next_after: 'next',
+    });
+    show(<RoadmapPage search={{}} />, '/roadmap');
+    const shipped = await screen.findByRole('region', { name: 'Shipped' });
+    fireEvent.click(within(shipped).getByRole('button', { name: 'Shipped' }));
+    fireEvent.click(within(shipped).getByRole('button', { name: 'More tasks' }));
+    expect(await within(shipped).findByRole('link', { name: /Export receipts/ })).toBeTruthy();
+  });
+
   it('shows the Features pipeline as Now, Next and Later, with Shipped drawn shut', async () => {
     serve(() => ({ status: 200, body: {} }));
     seed(
