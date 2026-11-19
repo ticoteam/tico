@@ -247,7 +247,10 @@ def request_status(value: object) -> str:
 STRIPE_PAYOUT = "payout"  # the balance moved to the bank: a transfer, never income
 STRIPE_PAYOUT_BACK = ("payout_failure", "payout_cancel")  # a payout that came back to the balance
 STRIPE_CHARGES = ("charge", "payment")  # sales: income, or the invoice they pay
-STRIPE_UNWINDS = ("refund", "payment_refund", "refund_failure", "adjustment")  # reverse or restore a sale (disputes)
+# Reverse or restore a sale: refunds, disputes (adjustment), and a bank-debit payment that failed after it posted
+# (payment_failure_refund). Left unmapped (suspense, asked once): payment_reversal and payment_unreconciled, money a
+# person has to place.
+STRIPE_UNWINDS = ("refund", "payment_refund", "payment_failure_refund", "refund_failure", "adjustment")
 STRIPE_COSTS = ("stripe_fee", "stripe_fx_fee", "network_cost", "tax_fee")  # Stripe's own charges: expense, no income
 # The other balance transactions a platform's Stripe balance carries, by the line each posts its gross to (stripe_post
 # makes the line on first use). Kinds that move money in pairs (an advance and its funding, a hold and its release) net

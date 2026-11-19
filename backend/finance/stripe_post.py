@@ -97,6 +97,12 @@ def batch_done(ctx: Ctx, money: Any) -> None:
     they were asked about (resettle), then the day's summary rows."""
     for row in SK.stripe_waiting(ctx.c, str(money["id"]), WAITING, WAITING_MOST):
         settle(ctx, row, money, _txn(row))
+    # A payout whose deposit does not name Stripe (the deposit side pairs only those that do), once the batch's payouts
+    # are all in, so two of the same amount are seen as two.
+    since = (dates.day(ctx.today) - timedelta(days=STALE_DAYS)).isoformat()
+    for row in SK.stripe_transit(ctx.c, ctx.book.id, start=since, end=ctx.today, amount=None, most=WAITING_MOST):
+        if str(row["money_account_id"]) == str(money["id"]):
+            _clear_plain(ctx, row)
     resettle(ctx, money)
     _summarize(ctx, money)
 
@@ -573,17 +579,35 @@ def _allocate(total: int, weights: Sequence[int]) -> list[int]:
 
 # ------------------------------------------------------------------------------------------------ payouts
 def _payout(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> None:
-    """The balance paid out, on the payout's day: the amount is in transit until a Stripe-looking deposit of it arrives
-    within MATCH_DAYS (or has already)."""
+    """The balance paid out, on the payout's day: its gross (what the bank receives) is in transit until a deposit of it
+    arrives within MATCH_DAYS (or has already), and an instant payout's fee is a fee. A deposit that looks like
+    Stripe's clears it here; one that does not is tried at the end of the batch (_clear_plain)."""
     fid = str(row["id"])
-    entry = banking.post_row(ctx, fid, t, [banking.feed_line(_transit(ctx).id, -t.amount)], _gl_of(ctx, money).id, [])
+    gross, fee = F.stripe_parts(t.raw)
+    lines = [banking.feed_line(_transit(ctx).id, -gross)] + ([banking.feed_line(_fees(ctx).id, fee)] if fee else [])
+    entry = banking.post_row(ctx, fid, t, lines, _gl_of(ctx, money).id, [])
     banking.mark_posted(ctx, [fid], entry)
     start, end = _window(t.txn_date)
-    found = SK.stripe_deposits(ctx.c, ctx.book.id, start=start, end=end, amount=-t.amount, most=WAITING_MOST)
+    found = SK.stripe_deposits(ctx.c, ctx.book.id, start=start, end=end, amount=-gross, most=WAITING_MOST)
     if len(found) > 1:
         _ask(ctx, fid, "several bank deposits could be this payout", "ambiguous")
     elif found:
         _clear(ctx, row, found[0], SK.get(ctx.c, "fin_money_accounts", str(found[0]["money_account_id"])))
+
+
+def _clear_plain(ctx: Ctx, payout: Any) -> None:
+    """A payout in transit clears the one new bank credit of exactly its gross within MATCH_DAYS that does not name
+    Stripe, when no other payout of that amount waits in the same window. Anything less sure stays as it is: the
+    credit with the posting rules, the payout asked about once it is stale."""
+    gross = F.stripe_parts(SK.loads(payout["raw"]))[0]
+    start, end = _window(str(payout["txn_date"]))
+    found = SK.stripe_deposits(ctx.c, ctx.book.id, start=start, end=end, amount=-gross, most=2, plain=True)
+    if len(found) != 1:
+        return
+    start, end = _window(str(found[0]["txn_date"]))
+    if len(SK.stripe_transit(ctx.c, ctx.book.id, start=start, end=end, amount=gross, most=2)) != 1:
+        return
+    _clear(ctx, payout, found[0], SK.get(ctx.c, "fin_money_accounts", str(found[0]["money_account_id"])))
 
 
 def _payout_back(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> None:
@@ -620,6 +644,7 @@ def _clear(ctx: Ctx, payout: Any, deposit: Any, bank: Any) -> None:
         roles={0: L.MONEY_ROLE},
     )
     banking.mark_posted(ctx, [str(deposit["id"])], str(done["entry_id"]))
+    SK.withdraw_asks(ctx.c, banking.CATEGORY_EVENT, str(deposit["id"]))  # a plain credit was asked about meanwhile
 
 
 # ------------------------------------------------------------------------------------------------ shared
