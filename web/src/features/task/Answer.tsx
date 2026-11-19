@@ -35,11 +35,11 @@ export function Decision({ t, flow, dock = false, onAsking }: DecisionProps) {
   const live = decisionOf(t);
   // The truth is back after a refusal: let go (React's "adjust state while rendering").
   if (live && held && !held.sending) setHeld(null);
-  const r = live ?? held?.r;
+  const r = held?.sending ? held.r : (live ?? held?.r);
   const asked = r ? null : changesAskedOf(t, me);
   if (!r && !asked) return null;
   const box = r ? (
-    <Answer t={t} r={r} flow={flow} onAsking={onAsking} hold={(x, sending = false) => setHeld(x && { r: x, sending })} />
+    <Answer key={`${t.id}:${r.requirement_id}`} t={t} r={r} flow={flow} onAsking={onAsking} hold={(x, sending = false) => setHeld(x && { r: x, sending })} />
   ) : (
     <Asked t={t} r={asked as TaskRequirement} />
   );

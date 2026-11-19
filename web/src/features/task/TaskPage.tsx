@@ -232,11 +232,11 @@ export function TaskChat({ task, flow = false }: TaskChatProps) {
           variant="task"
           title={name}
           actor={t.owner_id ?? undefined}
-          foot={<Decision t={t} flow={flow} onAsking={setAsking} />}
+          foot={<Decision key={t.id} t={t} flow={flow} onAsking={setAsking} />}
           canPost={!asking}
         />
       ) : (
-        <Decision t={t} flow={flow} />
+        <Decision key={t.id} t={t} flow={flow} />
       )}
     </>
   );
