@@ -1,4 +1,4 @@
-import { infiniteQueryOptions, keepPreviousData, queryOptions } from '@tanstack/react-query';
+import { infiniteQueryOptions, keepPreviousData, queryOptions, type InfiniteData } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type {
   ApiTool,
@@ -79,11 +79,25 @@ const enc = encodeURIComponent;
 
 export type DocRow = InternalDocRow;
 export type Doc = InternalDoc;
+type DocPages = InfiniteData<InternalDocList>;
 
-export const docsListQuery = queryOptions({
-  queryKey: ['docs', 'list'],
-  queryFn: () => api.get<InternalDocList>('/api/v2/docs?limit=200'),
-});
+const docsPage = (archived: boolean) =>
+  infiniteQueryOptions({
+    queryKey: ['docs', archived ? 'archived' : 'list'],
+    queryFn: ({ pageParam, signal }) =>
+      api.get<InternalDocList>(`/api/v2/docs${q({ archived: archived || undefined, limit: 200, cursor: pageParam })}`, { signal }),
+    initialPageParam: '',
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+  });
+
+export const docsListQuery = docsPage(false);
+export const archivedDocsQuery = docsPage(true);
+
+export const docRows = (data: DocPages | undefined) => data?.pages.flatMap((p) => p.docs) ?? [];
+
+function mapDocRows(cur: DocPages, change: (docs: DocRow[]) => DocRow[]): DocPages {
+  return { ...cur, pages: cur.pages.map((p) => ({ ...p, docs: change(p.docs) })) };
+}
 
 export const docQuery = (id: string) =>
   queryOptions({
@@ -127,34 +141,42 @@ export function createDoc(input: { title: string; body: string; path?: string })
   const tmp = `tmp:${Date.now()}`;
   return write<InternalDocResult>({
     key: docsListQuery.queryKey,
-    optimistic: (cur: InternalDocList | undefined) =>
+    optimistic: (cur: DocPages | undefined) =>
       cur && {
         ...cur,
-        docs: [
-          { id: tmp, locked: false, path: input.path ?? '', title: input.title, updated_at: new Date().toISOString(), updated_by_id: '', updated_by_name: '', version: 1 },
-          ...cur.docs,
-        ],
+        pages: cur.pages.map((p, i) =>
+          i === 0
+            ? {
+                ...p,
+                docs: [
+                  { id: tmp, locked: false, path: input.path ?? '', title: input.title, updated_at: new Date().toISOString(), updated_by_id: '', updated_by_name: '', version: 1 },
+                  ...p.docs,
+                ],
+              }
+            : p,
+        ),
       },
     send: (idempotencyKey) => api.post<InternalDocResult>('/api/v2/docs', { title: input.title, body: input.body, path: input.path || null }, { idempotencyKey }),
-    settle: (cur: InternalDocList | undefined, answer) =>
-      cur && { ...cur, docs: cur.docs.map((d) => (d.id === tmp ? { ...d, id: answer.doc.id, version: answer.doc.version } : d)) },
+    settle: (cur: DocPages | undefined, answer) =>
+      cur && mapDocRows(cur, (docs) => docs.map((d) => (d.id === tmp ? { ...d, id: answer.doc.id, version: answer.doc.version } : d))),
   });
 }
 
 /** Save a doc's text or title. `version` is the one the person was editing: the server refuses a stale one (409). */
 export function saveDoc(id: string, change: { version: number; body?: string; title?: string; path?: string }) {
   const at = new Date().toISOString();
-  // The open doc and its row in the list both change at once; a list holds `docs`, a doc does not.
-  const show = (cur: Doc | InternalDocList | undefined) => {
+  // The open doc and its row in the list both change at once.
+  const show = (cur: Doc | DocPages | undefined) => {
     if (!cur) return cur;
-    if ('docs' in cur) return { ...cur, docs: cur.docs.map((d) => (d.id === id ? { ...d, title: change.title ?? d.title, path: change.path ?? d.path, updated_at: at } : d)) };
+    if ('pages' in cur)
+      return mapDocRows(cur, (docs) => docs.map((d) => (d.id === id ? { ...d, title: change.title ?? d.title, path: change.path ?? d.path, updated_at: at } : d)));
     return { ...cur, ...change, version: change.version + 1, updated_at: at };
   };
   return write<InternalDocResult>({
     key: [['docs', 'detail', id], docsListQuery.queryKey],
     optimistic: show,
     send: (idempotencyKey) => api.patch<InternalDocResult>(`/api/v2/docs/${enc(id)}`, change, { idempotencyKey }),
-    settle: (cur: Doc | InternalDocList | undefined, answer) => (cur && 'docs' in cur ? cur : answer.doc),
+    settle: (cur: Doc | DocPages | undefined, answer) => (cur && !('pages' in cur) ? answer.doc : cur),
   });
 }
 
@@ -176,18 +198,12 @@ export function refreshSource(id: string) {
   });
 }
 
-/** Archived docs only: the server lists them apart (`archived=true`). */
-export const archivedDocsQuery = queryOptions({
-  queryKey: ['docs', 'archived'],
-  queryFn: () => api.get<InternalDocList>('/api/v2/docs?archived=true&limit=200'),
-});
-
 /** Archive a doc, or bring one back. `version` is the one shown: the server refuses a stale one. */
 export function archiveDoc(id: string, version: number, archived: boolean) {
   const from = archived ? docsListQuery.queryKey : archivedDocsQuery.queryKey;
   return write<InternalDocResult>({
     key: from,
-    optimistic: (cur: InternalDocList | undefined) => cur && { ...cur, docs: cur.docs.filter((d) => d.id !== id) },
+    optimistic: (cur: DocPages | undefined) => cur && mapDocRows(cur, (docs) => docs.filter((d) => d.id !== id)),
     send: (idempotencyKey) => api.patch<InternalDocResult>(`/api/v2/docs/${enc(id)}`, { version, archived }, { idempotencyKey }),
   }).then(async (r) => {
     // the list it moved to shows it on its next read
@@ -360,9 +376,10 @@ export interface SkillInstall {
   target: SkillActor;
 }
 export interface SkillDetail {
-  skill: { id: string; name: string; description: string; latest: SkillVersion | null };
+  skill: { id: string | null; name: string; description: string; latest: SkillVersion | null };
   versions: SkillVersion[];
   installs: SkillInstall[];
+  shipped?: { files?: SkillFile[]; bots: SkillActor[] };
 }
 export interface SkillFile {
   path: string;

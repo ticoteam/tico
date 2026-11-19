@@ -88,7 +88,7 @@ describe('Docs search', () => {
           }
         : {},
     );
-    queryClient.setQueryData(docsListQuery.queryKey, { docs: [row('d1', 'Plan', 'company/plan.md')], next_cursor: null });
+    queryClient.setQueryData(docsListQuery.queryKey, { pages: [{ docs: [row('d1', 'Plan', 'company/plan.md')], next_cursor: null }], pageParams: [''] });
     at('/library/docs?q=water', <DocsPage search={{ q: 'water' }} />);
     expect((await screen.findByText('Watering schedule')).closest('a')?.getAttribute('href')).toBe('/library/d9');
     expect(screen.getByText('Soil guide').closest('a')?.getAttribute('href')).toBe('/library/ext:x1');
@@ -98,11 +98,23 @@ describe('Docs search', () => {
 
   it('keeps matching titles in the archive, without the server search @s773', async () => {
     const sent = serve();
-    queryClient.setQueryData(docsListQuery.queryKey, { docs: [], next_cursor: null });
-    queryClient.setQueryData(archivedDocsQuery.queryKey, { docs: [row('d2', 'Old plan', 'company/old.md')], next_cursor: null });
+    queryClient.setQueryData(docsListQuery.queryKey, { pages: [{ docs: [], next_cursor: null }], pageParams: [''] });
+    queryClient.setQueryData(archivedDocsQuery.queryKey, { pages: [{ docs: [row('d2', 'Old plan', 'company/old.md')], next_cursor: null }], pageParams: [''] });
     at('/library/docs?q=old&archived=1', <DocsPage search={{ q: 'old', archived: 1 }} />);
     expect(await screen.findByText('Old plan')).toBeTruthy();
     expect(sent.some((x) => x.url.includes('/docs/search'))).toBe(false);
+  });
+
+  it('searches document bodies for words written without ASCII letters', async () => {
+    const sent = serve((url) =>
+      url.startsWith('/api/v2/docs/search')
+        ? { results: [{ type: 'internal', id: 'd1', title: 'The garden', path: 'garden.md', excerpt: '庭園', score: 1 }] }
+        : {},
+    );
+    queryClient.setQueryData(docsListQuery.queryKey, { pages: [{ docs: [row('d1', 'The garden', 'garden.md')], next_cursor: null }], pageParams: [''] });
+    at('/library/docs?q=庭園', <DocsPage search={{ q: '庭園' }} />);
+    expect(await screen.findByText('The garden')).toBeTruthy();
+    expect(sent.some((x) => x.url.startsWith('/api/v2/docs/search?q=' + encodeURIComponent('庭園')))).toBe(true);
   });
 });
 

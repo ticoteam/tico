@@ -90,7 +90,7 @@ const source = {
 
 describe('External sources', () => {
   beforeEach(() => {
-    queryClient.setQueryData(docsListQuery.queryKey, { docs: [], next_cursor: null });
+    queryClient.setQueryData(docsListQuery.queryKey, { pages: [{ docs: [], next_cursor: null }], pageParams: [''] });
     queryClient.setQueryData(sourcesQuery.queryKey, {
       sources: [source, { ...source, id: 'src2', title: 'Old wiki', kind: 'web', status: 'failed', doc_count: 0, url: 'https://wiki.example.com' }],
       next_cursor: null,
