@@ -35,19 +35,28 @@ def parse(spec):
 AUTO = "auto"
 
 
-def authors_of(c, settings, task_id):
+def authors_of(c, settings, task_id, reviewer=None):
     """The model makers who wrote a task's work: every maker on its runs so far (usage_records.ran_on, so a fallback
     counts as well as the bot's own model), and the provider its owner is set to run on. A run still going has no usage
-    yet and adds nothing. Empty when none is known (a person's task with no runs)."""
+    yet and adds nothing. Empty when none is known (a person's task with no runs).
+
+    `reviewer` is the bot reviewing that work (a `--role review` check). When another bot has runs on the task too, the
+    work is that bot's: the reviewer's own runs, and its own model when it owns the task in a review stage, read the
+    work rather than wrote it, so they are no authorship. Else a GPT reviewer of Claude-built work would rule out both
+    makers and skip the company's check model. A reviewer alone on the task reviews its own work: its runs count."""
     from .shared_bots import follow
     from .usage_records import ran_on
 
     task = H.task(c, task_id) if task_id else None
     if not task:
         return set()
-    turns = [row["id"] for row in c.execute("SELECT id FROM attempts WHERE task_id=?", (task_id,))]
+    rows = c.execute("SELECT id,bot_id FROM attempts WHERE task_id=?", (task_id,)).fetchall()
+    besides = H.actor_id(reviewer) if reviewer else None
+    if besides and not any(row["bot_id"] != besides for row in rows):
+        besides = None  # nobody else worked on it: the reviewer's own work
+    turns = [row["id"] for row in rows if row["bot_id"] != besides]
     makers = {s["family"] for made in ran_on(c, turns).values() for s in made["segments"] if s["family"]}
-    if H.is_bot(task["owner_id"]):
+    if H.is_bot(task["owner_id"]) and not (besides and H.actor_id(task["owner_id"]) == besides):
         row = c.execute(BS.ONE_SQL, (H.actor_id(task["owner_id"]),)).fetchone()
         config = follow(c, H.actor_id(task["owner_id"]), H._json(row["config"], {}) or {}) if row else {}
         makers.add(providers.author_provider(providers.bot_choice(c, settings, config)[1]))
@@ -61,7 +70,7 @@ def _auto(c, settings, bot, authors):
     record = providers.load(c, settings)
     order = providers.check_order(record)
     refused = []
-    for row in [r for r in order if r["provider"] not in authors] + [r for r in order if r["provider"] in authors]:
+    for row in [r for r in order if r["maker"] not in authors] + [r for r in order if r["maker"] in authors]:
         model = providers.MODEL_BY_ID[row["model"]]
         harnesses = tuple(model.get("harnesses") or (row["runtime"],))
         harness = next((h for h in harnesses if runtime_of(h) == row["runtime"]), harnesses[0])
@@ -69,7 +78,7 @@ def _auto(c, settings, bot, authors):
         if can.get("can_run") is False:
             refused.append(can.get("problem") or row["runtime"])
             continue
-        if row["provider"] not in authors:
+        if row["maker"] not in authors:
             return row["runtime"], row["model"], ""
         names = sorted(providers.PROVIDER_BY_ID[p]["label"] for p in authors if p in providers.PROVIDER_BY_ID)
         return (
@@ -99,6 +108,8 @@ def choose(c, settings, bot, spec, role, authors=()):
     note = ""
     if str(spec or "").strip() == AUTO:
         runtime, model, note = _auto(c, settings, bot, set(authors))
+        skipped = "; ".join(f"skipped {entry}: {why}" for entry, why in providers.skipped_check_models(record))
+        note = "; ".join(part for part in (skipped, note) if part)
     else:
         runtime, model = parse(spec)
     try:
@@ -246,9 +257,9 @@ def move_on(c, settings, bot, task_id, check, runner_id):
     out = {x["runtime"] for x in out_of_quota_logins(c, settings) if x["runner_id"] == runner_id}
     if not first or check["runtime"] not in out or not _default_login(c, bot, check, runner_id):
         return None
-    authors = authors_of(c, settings, parent_of(c, task_id))
+    authors = authors_of(c, settings, parent_of(c, task_id), bot if first["role"] == "review" else None)
     order = providers.check_order(providers.load(c, settings))
-    for row in [r for r in order if r["provider"] not in authors] + [r for r in order if r["provider"] in authors]:
+    for row in [r for r in order if r["maker"] not in authors] + [r for r in order if r["maker"] in authors]:
         if row["model"] == check["model"] or row["runtime"] in out:
             continue
         try:
@@ -357,7 +368,7 @@ def review_default(c, settings, owner, parent_id):
     config = follow(c, H.actor_id(owner), H._json(row["config"], {}) or {}) if row else {}
     if config.get("review_model") != "check":
         return None, None
-    authors = authors_of(c, settings, parent_id)
+    authors = authors_of(c, settings, parent_id, owner)
     if not authors:
         return None, "review_model: check, but the parent's author is unknown, so this runs on the bot's own model"
     try:

@@ -9,6 +9,7 @@ from backend import check_models
 from backend.store import H, encode
 from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.check_models import GROK, company, finish, heartbeat, parent_turn
+from backend.tests.usage_rows import segment
 
 
 def test_a_review_subtask_runs_on_grok_in_its_own_session_and_its_verdict_wakes_the_parent(api):
@@ -393,6 +394,37 @@ def test_with_no_other_provider_left_the_check_moves_to_the_authors_own(api, mon
     out_of_quota(api, machine, again)
     moved = claim(api, machine)
     assert moved["task"]["id"] == sub["id"], "another provider is preferred, not required: the review still runs"
+    assert moved["config"]["runtime"] == "claude"
+
+
+def test_a_moved_review_skips_the_builders_maker_not_the_reviewers(api, monkeypatch):
+    """#633: the reviewer (ops, Claude) has runs on work another bot (cpo) built on GPT. Out of Codex quota, the review
+    moves to Claude, the one maker that did not build it, not to Grok as if both makers had."""
+    machine, sub, check = codex_check(api)
+    parent = get(api, "tasks/" + sub["id"])["task"]["parent_id"]
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO attempts(id,bot_id,created_at,settled_at,task_id) VALUES('built','cpo',"
+            "'2026-01-01T00:00:00Z','2026-01-01T00:05:00Z',?)",
+            (parent,),
+        )
+        segment(
+            c,
+            "built",
+            input_tokens=10,
+            output_tokens=10,
+            model="gpt-6.2-sol",
+            provider="openai",
+            runtime="codex",
+            harness="codex",
+        )
+    start = H.now()
+    out_of_quota(api, machine, check)
+    later(api, monkeypatch, machine, H.shift(start, minutes=31))
+    again = claim(api, machine)
+    out_of_quota(api, machine, again)
+    moved = claim(api, machine)
+    assert moved["task"]["id"] == sub["id"]
     assert moved["config"]["runtime"] == "claude"
 
 

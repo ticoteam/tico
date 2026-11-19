@@ -38,6 +38,31 @@ def heartbeat(api, machine, grok="ready"):
     )
 
 
+def check_row(api, task_id):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT runtime,model,role FROM task_check_models WHERE task_id=?", (task_id,)).fetchone()
+
+
+def computer(api, machine, grok="ready"):
+    """Every runtime installed and signed in, Grok as given."""
+    runtimes = {name: {"installed": True, "authenticated": "ready"} for name in ("claude", "codex", "cursor")}
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "capabilities": ["task_lanes_v2", "session_roots_v1"],
+            "readiness": {
+                "schema_version": 1,
+                "runtimes": {**runtimes, "grok": {"installed": True, "authenticated": grok}},
+                "bots": {"ops": {"runtime": "claude", "ready": True}},
+            },
+        },
+        token=machine["token"],
+    )
+
+
 def parent_turn(api):
     """ops on Claude, working a person's task: its claimed turn."""
     company(api, "anthropic", "xai")

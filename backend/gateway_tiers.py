@@ -503,6 +503,33 @@ def long_prompt_for(model):
     return _long_tuple(found["long_prompt"]) if found else None
 
 
+# The maker of the model a Tico id runs underneath, by the first word of the catalog's `model` name (HQ's catalog names
+# no maker). A Gateway id is sold by Tico but written by this maker, so a check on Claude-built work never lands on a
+# Tico tier that runs Claude (check_models._auto). A name no rule knows has no maker: '' (the row stays `tico`).
+MAKERS = (
+    ("claude", "anthropic"),
+    ("gpt", "openai"),
+    ("gemini", "google"),
+    ("gemma", "google"),
+    ("grok", "xai"),
+    ("deepseek", "deepseek"),
+    ("kimi", "moonshot"),
+    ("llama", "meta"),
+    ("muse", "meta"),
+    ("mistral", "mistral"),
+    ("codestral", "mistral"),
+    ("inception", "inception"),
+    ("mercury", "inception"),
+)
+
+
+def maker_of(name):
+    """The maker id behind an underlying model name (`Claude Sonnet 5.5` -> `anthropic`), or ''."""
+    words = re.findall(r"[a-z]+", str(name or "").lower())
+    first = words[0] if words else ""
+    return next((maker for word, maker in MAKERS if first == word), "")
+
+
 def efforts_of(level):
     return ("low", "high", "max"), ("low" if level in ("xlow", "low") else "high")
 
@@ -522,6 +549,7 @@ def row_for(model):
         "runtime": "pi",
         "provider": "tico",
         "description": (found["model"] + " underneath") if found["model"] else "",
+        "maker": maker_of(found["model"]),
         "efforts": efforts,
         "default_effort": default,
     }
