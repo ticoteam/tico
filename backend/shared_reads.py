@@ -5,21 +5,22 @@ TIDY company (Nov 19) one person sent ten identical GET /api/v2/threads/rail, /c
 within two seconds, each of them seconds of SQL in Python, so the server did the same work ten times and every page
 waited behind it. Here a read of one of ROUTES, by one caller, with the same path, query and validators, is computed
 once for everyone who asks while it is being computed, and its answer serves the same request again for FRESH_SECONDS
-after its read began while nothing at all has been written since.
+after its read began while no change has been logged since.
 
 What makes it safe:
 - Never across callers: the key holds the caller's whole identity (actor, role, token, scope, view, ...), as
   backend/needs_cache.py does, so two callers who may see different things never share an answer.
-- Never older than a write, any write: each request reads the database's commit counter when it arrives (`Commits`:
-  SQLite's data_version, which moves on every commit from any connection or process, an access change, a heartbeat
-  or a logged change alike). It may take an answer only from a computation that began at that same count, so no
-  commit came between its read and this request. A request that arrives after a commit while a computation runs waits
-  for the next one, which begins when that one ends and so reads everything committed before any of its waiters asked
-  (backend/events.py Rounds does the same for streams). At most one computation per key runs at a time, and a queued
-  one that every waiter has left never runs.
-- When the counter cannot be read, or the shared state is full, the request computes on its own, as before.
-- The clock alone moves nothing in the database: a kept answer serves for FRESH_SECONDS from when its read began, and
-  /api/status (which says the server's time) is only shared while it is being computed.
+- Never older than a logged write: each request reads the company's newest change number when it arrives (`Changes`,
+  events.latest). It may take an answer only from a computation whose read began at or after that number. A request
+  that arrives after a newer change while a computation runs waits for the next one, which begins when that one ends
+  and so reads everything committed before any of its waiters asked (backend/events.py Rounds does the same for
+  streams). At most one computation per key runs at a time, and a queued one that every waiter has left never runs.
+- A write that logs no change (an access setting, a computer's heartbeat) reaches a shared answer late by at most the
+  running computation's time plus FRESH_SECONDS. The change number, not every commit, is the key on purpose: the hosted
+  companies commit several times a second, and a key that moved on every commit would share almost nothing.
+- When the number cannot be read, or the shared state is full, the request computes on its own, as before.
+- A kept answer serves for FRESH_SECONDS from when its read began, and /api/status (which says the server's time) is
+  only shared while it is being computed.
 - Each request gets its own copy of the answer, then its own validators and wire encoding (backend/json_response.py).
   An answer that streams, sets a cookie or runs work after it is sent is never shared.
 
@@ -55,7 +56,7 @@ ROUTES = frozenset(
 UNSHARED_PLACES = frozenset({"growth"})
 # Shared only while being computed, never kept: its answer carries the server's time.
 NOT_KEPT = frozenset({"/api/status"})
-FRESH_SECONDS = 3.0  # how long after its read began an answer serves the same request again, with no commit since
+FRESH_SECONDS = 3.0  # how long after its read began an answer serves the same request again, with no change since
 KEPT_BYTES = 64 * 1024 * 1024  # answers kept at once, for every caller together
 KEPT_ONE = 8 * 1024 * 1024  # a bigger answer is shared only while it is being computed
 MAX_SLOTS = 512  # keys tracked at once; past it a request computes on its own
@@ -66,10 +67,10 @@ clock: Callable[[], float] = time.monotonic
 Compute = Callable[[], Coroutine[Any, Any, Response]]
 
 
-class Commits:
-    """The database's commit counter: PRAGMA data_version on a read-only connection of its own, which moves whenever
-    another connection (in this process or any other) has committed since it last looked. The connection never writes,
-    so every commit counts. A replaced database file (a restore) is opened again, under a new epoch."""
+class Changes:
+    """The company's newest change number (events.latest, the `changes` log's sequence, which every logged write
+    moves), read on a read-only connection of its own so it never waits for the pool. A replaced database file (a
+    restore) is opened again, under a new epoch: (epoch, number) orders newest last."""
 
     def __init__(self, store: Any) -> None:
         self.store = store
@@ -79,7 +80,7 @@ class Commits:
         self.epoch = 0
 
     def __call__(self) -> tuple[int, int] | None:
-        """(epoch, count), or None when it cannot be read."""
+        """(epoch, newest change number), or None when it cannot be read."""
         path = self.store.settings.db_path
         try:
             file = self.store._file()
@@ -92,7 +93,8 @@ class Commits:
                         path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1, check_same_thread=False
                     )
                     self.file, self.epoch = file, self.epoch + 1
-                return self.epoch, self.c.execute("PRAGMA data_version").fetchone()[0]
+                row = self.c.execute("SELECT seq FROM sqlite_sequence WHERE name='changes'").fetchone()
+                return self.epoch, row[0] if row else 0
         except (sqlite3.Error, OSError):
             return None
 
@@ -139,9 +141,9 @@ def copy(response: Response) -> Response:
 
 
 class _Slot:
-    """One key's computation under way (`running`, begun at commit count `running_at`), the one queued behind it
-    (`waiting`, with how many requests wait on it and the newest count they read, `waiting_at`), and the newest answer
-    kept (`kept`, read at count `kept_at`, begun at `kept_began`)."""
+    """One key's computation under way (`running`, begun at change number `running_at`), the one queued behind it
+    (`waiting`, with how many requests wait on it and the newest number they read, `waiting_at`), and the newest answer
+    kept (`kept`, read at change number `kept_at`, begun at `kept_began`)."""
 
     __slots__ = ("route", "running", "running_at", "waiting", "waiting_at", "waiters", "kept", "kept_at", "kept_began")
 
@@ -184,23 +186,23 @@ class SharedReads:
             if len(state.slots) >= MAX_SLOTS:
                 return await compute()
             slot = state.slots[key] = _Slot(key[0])
-        if slot.kept is not None and slot.kept_at == count and now - slot.kept_began <= FRESH_SECONDS:
+        if slot.kept is not None and slot.kept_at >= count and now - slot.kept_began <= FRESH_SECONDS:
             self.reused += 1
             return copy(slot.kept)
-        if slot.running is not None and slot.running_at == count:
+        if slot.running is not None and slot.running_at is not None and slot.running_at >= count:
             return await self._join(slot.running, compute, owner=False)
         if slot.running is None:
             task = loop.create_task(compute())  # in this request's context: its timing and marks
             slot.running, slot.running_at = task, count
             task.add_done_callback(lambda done: self._ended(state, key, slot, done, count, now))
             return await self._join(task, compute, owner=True)
-        # A computation from before this request's newest commit is under way: the next one begins when it ends.
+        # A computation from before this request's newest change is under way: the next one begins when it ends.
         owner = slot.waiting is None
         if owner:
             slot.waiting = loop.create_task(self._after(slot, slot.running, compute))
             slot.waiting_at = count
         else:
-            slot.waiting_at = max(slot.waiting_at, count)  # (epoch, count): a newer file's epoch is higher
+            slot.waiting_at = max(slot.waiting_at, count)  # (epoch, number): a newer file's epoch is higher
         slot.waiters += 1
         waiting = slot.waiting
         assert waiting is not None
@@ -219,7 +221,7 @@ class SharedReads:
     def _ended(
         self, state: _Loop, key: tuple[Any, ...], slot: _Slot, task: asyncio.Task[Response], count: Any, began: float
     ) -> None:
-        """`task`, begun at commit count `count` at `began`, ended: keep its answer, and begin the one queued."""
+        """`task`, begun at change number `count` at `began`, ended: keep its answer, and begin the one queued."""
         if slot.running is task:
             slot.running = None
         if not task.cancelled() and task.exception() is None and slot.route not in NOT_KEPT:
@@ -234,7 +236,7 @@ class SharedReads:
         waiting, slot.waiting = slot.waiting, None
         if waiting is not None and not waiting.done():
             # The queued computation's read begins now, after every request that waits on it arrived: the newest count
-            # they read is its label, since a request that reads that count again has seen no commit since.
+            # they read is its label, since a request that reads that number again has seen no change since.
             started, label = clock(), slot.waiting_at
             slot.running, slot.running_at = waiting, label
             waiting.add_done_callback(lambda done: self._ended(state, key, slot, done, label, started))
@@ -283,10 +285,10 @@ def of(store: Any) -> SharedReads:
     return existing
 
 
-def commits(store: Any) -> Commits:
-    existing = getattr(store, "shared_reads_commits", None)
+def changes(store: Any) -> Changes:
+    existing = getattr(store, "shared_reads_changes", None)
     if existing is None:
-        existing = store.shared_reads_commits = Commits(store)
+        existing = store.shared_reads_changes = Changes(store)
     return existing
 
 
@@ -295,7 +297,7 @@ async def answer(store: Any, request: Any, route: str, compute: Compute) -> Resp
     key = key_of(request, route)
     if key is None:
         return await compute()
-    count = await asyncio.get_running_loop().run_in_executor(None, commits(store))
+    count = await asyncio.get_running_loop().run_in_executor(None, changes(store))
     if count is None:
         return await compute()
     return await of(store).answer(key, count, compute)
