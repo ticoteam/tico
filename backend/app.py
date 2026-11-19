@@ -2309,6 +2309,9 @@ def _install_features(
     from . import presence
 
     presence.install(app, store, mutate, auth)
+    from . import screen_actions
+
+    screen_actions.install(app, store)
     from .meeting_task_links import install as install_meeting_task_links
 
     install_meeting_task_links(app, store, auth, mutate)

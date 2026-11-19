@@ -72,6 +72,8 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
         "/api/v2/assistant/actions",
         "/api/v2/assistant/learned",
         "/api/v2/goals/read-back",
+        # Moving the person's own open app (backend/screen_actions.py) writes nothing: it only changes what they see.
+        "/api/v2/screen-actions",
     ):
         return True
     # Asking the settings catalogue for a change's plan changes no setting: it answers with the request, a refusal or a

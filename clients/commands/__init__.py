@@ -44,6 +44,7 @@ from clients.commands import (
     pipelines,
     browser,
     logins,
+    screen,
     _access,
     _mcp,
 )
@@ -84,6 +85,7 @@ MODULES = (
     pipelines,
     browser,
     logins,
+    screen,
     _access,
     _mcp,
 )

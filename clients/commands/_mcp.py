@@ -88,6 +88,10 @@ def argument_error(value, schema, path="arguments"):
             return k == "boolean"
         return isinstance(value, types[k]) or k == "integer" and isinstance(value, float) and value.is_integer()
 
+    if "anyOf" in schema:  # the value fits at least one (contracts/screen-actions.json: a string or null)
+        misses = [argument_error(value, sub, path) for sub in schema["anyOf"]]
+        if misses and all(misses):
+            return misses[0]
     if kinds and not any(is_kind(k) for k in kinds):
         return f"{path}: expected {' or '.join(kinds)}"
     if "enum" in schema and value not in schema["enum"]:
