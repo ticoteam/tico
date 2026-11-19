@@ -921,5 +921,258 @@
   "stdout": "# Email\n\nNo drafts.\n",
   "stderr": "",
   "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "trash",
+   "ops@acme.test",
+   "--thread",
+   "18c2f0a1b2c3d4e5",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_trash",
+    {
+     "ids": [],
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "threads": [
+      "18c2f0a1b2c3d4e5"
+     ]
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 100,
+     "threads": [
+      "18c2f0a1b2c3d4e5"
+     ],
+     "action": "trash"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"count\": 2,\n  \"mailbox\": \"ops@acme.test\",\n  \"ids\": [\n    \"m1\",\n    \"m2\"\n  ],\n  \"undo\": {\n    \"action\": \"unlabel\",\n    \"label\": \"Receipts\",\n    \"ids\": [\n      \"m1\",\n      \"m2\"\n    ]\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "star",
+   "ops@acme.test",
+   "18c2f0a1b2c3d4e5"
+  ],
+  "tools": [
+   [
+    "tico_email_star",
+    {
+     "ids": [
+      "18c2f0a1b2c3d4e5"
+     ],
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 100,
+     "ids": [
+      "18c2f0a1b2c3d4e5"
+     ],
+     "action": "star"
+    }
+   ]
+  ],
+  "stdout": "Starred 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "not-spam",
+   "ops@acme.test",
+   "--query",
+   "in:spam from:bank.example",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_not_spam",
+    {
+     "ids": [],
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "query": "in:spam from:bank.example"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "query": "in:spam from:bank.example",
+     "limit": 100,
+     "action": "not_spam"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"count\": 2,\n  \"mailbox\": \"ops@acme.test\",\n  \"ids\": [\n    \"m1\",\n    \"m2\"\n  ],\n  \"undo\": {\n    \"action\": \"unlabel\",\n    \"label\": \"Receipts\",\n    \"ids\": [\n      \"m1\",\n      \"m2\"\n    ]\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "labels",
+   "ops@acme.test"
+  ],
+  "tools": [
+   [
+    "tico_email_labels",
+    {
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/labels?mailbox=ops%40acme.test",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "label-create",
+   "ops@acme.test",
+   "Clients/Acme"
+  ],
+  "tools": [
+   [
+    "tico_email_label_create",
+    {
+     "mailbox": "ops@acme.test",
+     "name": "Clients/Acme",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/labels",
+    {
+     "mailbox": "ops@acme.test",
+     "name": "Clients/Acme"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "label-rename",
+   "ops@acme.test",
+   "Clients/Acme",
+   "Clients/Acme-Co"
+  ],
+  "tools": [
+   [
+    "tico_email_label_rename",
+    {
+     "label": "Clients/Acme",
+     "mailbox": "ops@acme.test",
+     "name": "Clients/Acme-Co",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PATCH",
+    "mail/labels/Clients%2FAcme",
+    {
+     "mailbox": "ops@acme.test",
+     "name": "Clients/Acme-Co"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "label-delete",
+   "ops@acme.test",
+   "Clients/Acme"
+  ],
+  "tools": [
+   [
+    "tico_email_label_delete",
+    {
+     "label": "Clients/Acme",
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "DELETE",
+    "mail/labels/Clients%2FAcme?mailbox=ops%40acme.test",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "original",
+   "ops@acme.test",
+   "18c2f0a1b2c3d4e5"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "mail/messages/18c2f0a1b2c3d4e5/original?mailbox=ops%40acme.test",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
  }
 ]

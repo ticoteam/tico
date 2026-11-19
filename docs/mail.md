@@ -33,14 +33,21 @@ snippet.
 
 ## Organizing live
 
-With Whole Workspace, use `tico email archive|unarchive|mark-read|mark-unread <address> <id> ...` or
-`tico email label|unlabel <address> <label> <id> ...`. Supply ids (up to 500) or `--query "<Gmail query>"` with
+With Whole Workspace, use `tico email archive|unarchive|mark-read|mark-unread|star|unstar|important|not-important|
+trash|untrash|spam|not-spam <address> <id> ...` or `tico email label|unlabel <address> <label> <id> ...`. Supply
+message ids (up to 500), `--thread <id>` (repeatable; every message in each thread) or `--query "<Gmail query>"` with
 `--limit` (default 100, maximum 500). Each call needs Read and write and the company's **What Tico may do >
 Organize mail** switch; the Assistant acts as its person, bots at their own level. Gmail keeps the mail;
 `mail.organize` records only ids and action details. Output gives count and undo; `--json` includes all ids.
 Undo applies the inverse to those ids, including mail already in that state. Only labeling creates a missing user
-label. These commands never delete, trash, or change Spam, Sent or Draft labels.
-API: `POST /api/v2/mail/messages/organize`.
+label. Trash and spam move mail out of the inbox and Gmail keeps it 30 days (`untrash`, `not-spam` bring it back; find
+it with `tico email search <address> in:trash`). Nothing deletes a message for good, and Sent and Draft labels never
+change. API: `POST /api/v2/mail/messages/organize`.
+
+`tico email labels <address>` lists every label with Gmail's message and thread counts. `label-create`,
+`label-rename` and `label-delete` change your own labels (never Gmail's system labels); deleting a label takes it off
+its messages and keeps every message. `tico email original <address> <id>` shows every header as the message was
+received (`--out file.eml` saves the whole message).
 
 Automation mail actions run on the server, for a Whole Workspace mailbox or one with its person's own Connect Google
 grant; owner access is checked again before acting. An action on a mailbox neither covers fails with why; one Google
