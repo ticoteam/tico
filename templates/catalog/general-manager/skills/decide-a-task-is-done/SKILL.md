@@ -2,7 +2,7 @@
 name: decide-a-task-is-done
 description: "Decide from the task's own evidence whether a stalled task is plainly done, plainly not needed, or unsure, and change it only when the evidence is there. A merged pull request is not done until its release ships."
 metadata:
-  function: operations
+  function: tico
 ---
 # Decide a task is done
 
