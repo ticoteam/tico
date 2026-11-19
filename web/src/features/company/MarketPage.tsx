@@ -19,6 +19,7 @@ import {
   marketSetupQuery,
   marketSpendQuery,
   valueChainQuery,
+  type ListeningStats,
   type MarketAnswer,
   type MarketBriefing,
   type MarketEstimate,
@@ -32,8 +33,9 @@ import {
 
 /* Market (pages/3-company/company.js marketPage; the old ui/app/redesign-market.ts): a Dashboard. Its figures, buyer
    posts a day, what each segment spends, what changed this week, how the market reaches buyers, and the organizations
-   in it. A row opens its panel: `?panel=segment:<id>`, `player:<entity id>` (an organization's note), `briefing` (the
-   week's briefing in full) and `definition` (what the market counts, and the owner's sentence that sizes it). A market
+   in it, then what buyers talk about (Listening's newest posts, each opening where it was written). A row opens its
+   panel: `?panel=segment:<id>`, `player:<entity id>` (an organization's note), `briefing` (the week's briefing in
+   full) and `definition` (what the market counts, and the owner's sentence that sizes it). A market
    never set up asks the owner Market's four questions instead. The map and its lenses are gone: nothing links there. */
 
 type Head = { title: string; path: string; tabs: readonly PageTab[]; className: string };
@@ -135,6 +137,7 @@ export function MarketTab({ head, search }: { head: Head; search: { panel?: stri
                 </Table>
               </Section>
             )}
+            <BuyersSay posts={posts.data?.recent ?? []} />
           </>
         )
       }
@@ -533,6 +536,37 @@ function NotePanel({ id, onClose }: { id: string; onClose: () => void }) {
         </section>
       )}
     </SidePanel>
+  );
+}
+
+// ---------------------------------------------------------------- what buyers are saying
+
+/** The newest buyer posts Listening sent on (redesign-market.ts rdmRowsHtml): each one's words, its site quiet beside
+    it, opening the post where it was written. */
+function BuyersSay({ posts }: { posts: NonNullable<ListeningStats['recent']> }) {
+  if (!posts.length) return null;
+  return (
+    <Section name="Buyers talk about" count={posts.length} target="market:saying">
+      {posts.map((p) => {
+        const inner = (
+          <>
+            <span className="row-title" title={p.text}>
+              {p.text}
+            </span>
+            <span className="row-age">{p.source}</span>
+          </>
+        );
+        return p.url ? (
+          <a key={p.item_id} href={p.url} target="_blank" rel="noreferrer" className="row mkt-node">
+            {inner}
+          </a>
+        ) : (
+          <div key={p.item_id} className="row mkt-node">
+            {inner}
+          </div>
+        );
+      })}
+    </Section>
   );
 }
 

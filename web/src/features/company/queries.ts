@@ -2,6 +2,8 @@ import { queryOptions } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type {
   CompanyFloor,
+  FactoryCreated,
+  FactoryMap,
   FinanceMetric,
   Goal,
   GoalCheckinView,
@@ -260,8 +262,11 @@ export interface MarketNote {
   evidence?: { our_read?: string | null; quote?: string | null }[];
   neighbors?: { id: string; name: string }[];
 }
+/** GET /api/v2/listening/stats (backend/listening.py stats; the schema leaves it untyped): posts sent on each day by
+    site, and the newest posts sent on, each one's text clipped. */
 export interface ListeningStats {
   daily?: { day: string; sources?: Record<string, number> }[];
+  recent?: { item_id: string; source: string; text: string; url?: string | null; at?: string | null }[];
 }
 
 export const marketSpendQuery = queryOptions({
@@ -354,6 +359,48 @@ export const listeningStatsQuery = queryOptions({
   },
   ...quiet,
 });
+
+// ---------------------------------------------------------------- Org: the factories and who may make one
+
+/** The live factories and the live pipelines with the factory each sits in; null when the read fails (the section is
+    then left out, as the old Org page did). */
+export const factoriesQuery = queryOptions({
+  queryKey: ['company', 'factories'],
+  queryFn: async ({ signal }) => {
+    try {
+      return await api.get<FactoryMap>('/api/v2/factories?period=7d', { signal });
+    } catch {
+      return null;
+    }
+  },
+  ...quiet,
+});
+
+/** The reader's company role as Access gives it ('owner', 'admin'); null for a member, whom Access refuses. */
+export const companyRoleQuery = queryOptions({
+  queryKey: ['company', 'role'],
+  queryFn: async ({ signal }) => {
+    try {
+      return (await api.get<{ you?: string }>('/api/v2/access', { signal })).you ?? null;
+    } catch {
+      return null;
+    }
+  },
+  ...quiet,
+});
+
+/** A new factory, shown at once at the end of the list. Only the company's owner and Admins (403 for anyone else; 409
+    when a live factory has the name). */
+export function createFactory(name: string, goal: string) {
+  const id = tmpId();
+  return write<FactoryCreated>({
+    key: factoriesQuery.queryKey,
+    optimistic: (m: FactoryMap | null | undefined) => m && { ...m, factories: [...m.factories, { id, name, goal, manager_id: null, done: 0 }] },
+    send: (idempotencyKey) => api.post<FactoryCreated>('/api/v2/factories', goal ? { name, goal } : { name }, { idempotencyKey }),
+    settle: (m: FactoryMap | null | undefined, r) => m && { ...m, factories: m.factories.map((f) => (f.id === id ? { ...f, id: r.factory.id } : f)) },
+    revert: (m: FactoryMap | null | undefined) => m && { ...m, factories: m.factories.filter((f) => f.id !== id) },
+  });
+}
 
 /** A group with its lead (sent when the caller may read leads; not in the schema). */
 export type Team = Group & { lead?: string };

@@ -154,10 +154,11 @@
 .co .table .dim,.co .table td.dim{color:var(--muted)}
 .co .table tr.is-us td:first-child{font-weight:var(--w-strong)}
 /* how it reaches buyers: each layer's name, then its organizations as rows, in order */
-.co .mkt-chain{list-style:none;margin:0;padding:0}
-.co .mkt-layer{margin:var(--s-2h) 0 var(--s-0);padding:0 var(--s-2);font-size:var(--t-sm);font-weight:var(--w-text);color:var(--muted)}
-.co .mkt-chain>li:first-child .mkt-layer{margin-top:0}
-.co .mkt-node{grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h)}
+/* Org's factories take the same shape: each factory's name, then its pipelines as rows */
+.co .mkt-chain,.co .fac-list{list-style:none;margin:0;padding:0}
+.co .mkt-layer,.co .fac-name{margin:var(--s-2h) 0 var(--s-0);padding:0 var(--s-2);font-size:var(--t-sm);font-weight:var(--w-text);color:var(--muted)}
+.co .mkt-chain>li:first-child .mkt-layer,.co .fac-list>li:first-child .fac-name{margin-top:0}
+.co .mkt-node,.co .fac-pipe{grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h)}
 .co .mkt-node.is-us .row-title{font-weight:var(--w-strong)}
 .co .row-fig{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--ink-2)}
 /* the four set-up questions, one at a time */

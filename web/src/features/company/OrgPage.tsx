@@ -2,18 +2,25 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { meQuery, useActor, useActors } from '@/data';
+import { useAction } from '@/actions';
+import type { FactoryMap } from '@/api/schema';
 import { Button } from '@/kit/Button';
+import { Field } from '@/kit/Field';
 import { IconButton } from '@/kit/IconButton';
+import { MenuItem } from '@/kit/Menu';
 import { FoldButton } from '@/kit/SectionHead';
 import { Select } from '@/kit/Select';
-import { List, SidePanel, type PageTab } from '@/pagekinds';
-import { Face, Go, NameOf, PanelLink, teamPath, useDo } from './parts';
-import { groupsQuery, type Team } from './queries';
+import { toast } from '@/kit/Toast';
+import { List, PageMore, Section, SidePanel, type PageTab } from '@/pagekinds';
+import { Face, Go, NameOf, PanelLink, refusal, teamPath, useDo } from './parts';
+import { companyRoleQuery, factoriesQuery, groupsQuery, type Team } from './queries';
 
 /* Org (pages/3-company/company.js orgPage): who reports to whom, as a light chart. A teammate opens its sheet beside
    the chart (`?panel=mate:<human:id | bot:slug>`, the old ui/app/redesign-org.ts rdoSheet): its group and what it
    leads, Move to another group for the owner (any group, or none) or a lead (within what it leads), its page, and a
-   call for an agent. The built-in agents stay in their group. */
+   call for an agent. The built-in agents stay in their group. Under the chart, the factories (ui/app/org-factories.ts):
+   each factory's pipelines in the order work moves through them, each opening its tasks; the owner and Admins make a
+   factory from the ⋯ (`?panel=factory-new`). */
 
 type Head = { title: string; path: string; tabs: readonly PageTab[]; className: string };
 
@@ -29,6 +36,8 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
   const me = useQuery(meQuery).data?.id;
   const actors = useActors();
   const close = useDo('company.closePanel');
+  const open = useDo('company.openPanel');
+  const maker = useMayMakeFactory();
   const all = q.data ?? [];
   const teams = all.filter((g) => !g.parent).sort((a, b) => a.order - b.order);
   const state = q.isPending ? 'loading' : q.isError ? 'fault' : teams.length ? 'ready' : 'empty';
@@ -37,28 +46,44 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
     <List
       {...head}
       state={state}
+      more={
+        maker && (
+          <PageMore target="org:more">
+            <MenuItem label="New factory" onSelect={() => void open.run({ panel: 'factory-new' })} />
+          </PageMore>
+        )
+      }
       onRetry={() => void q.refetch()}
       empty={{ title: 'No teams yet' }}
       sections={
-        <div className="oc" role="tree" aria-label="Org">
-          <header className="oc-root">
-            {me && (
-              <Link to={teamPath(me) as never} className="oc-me">
-                <Face id={me} size={36} />
-                <span>
-                  <NameOf id={me} />
-                </span>
-              </Link>
-            )}
-            <span className="grow" />
-            <span className="stage-n">{actors.length} teammates</span>
-          </header>
-          {teams.map((t) => (
-            <OrgTeam key={t.id} team={t} subs={all.filter((g) => g.parent === t.id).sort((a, b) => a.order - b.order)} open={mate} />
-          ))}
-        </div>
+        <>
+          <div className="oc" role="tree" aria-label="Org">
+            <header className="oc-root">
+              {me && (
+                <Link to={teamPath(me) as never} className="oc-me">
+                  <Face id={me} size={36} />
+                  <span>
+                    <NameOf id={me} />
+                  </span>
+                </Link>
+              )}
+              <span className="grow" />
+              <span className="stage-n">{actors.length} teammates</span>
+            </header>
+            {teams.map((t) => (
+              <OrgTeam key={t.id} team={t} subs={all.filter((g) => g.parent === t.id).sort((a, b) => a.order - b.order)} open={mate} />
+            ))}
+          </div>
+          <Factories />
+        </>
       }
-      panel={mate && q.data && <MateSheet who={mate} groups={q.data} onClose={() => void close.run({})} />}
+      panel={
+        search.panel === 'factory-new' && maker ? (
+          <NewFactory onClose={() => void close.run({})} />
+        ) : (
+          mate && q.data && <MateSheet who={mate} groups={q.data} onClose={() => void close.run({})} />
+        )
+      }
     />
   );
 }
@@ -220,6 +245,111 @@ function MateSheet({ who, groups, onClose }: { who: string; groups: readonly Tea
           </div>
         </section>
       )}
+    </SidePanel>
+  );
+}
+
+// ---------------------------------------------------------------- the factories
+
+/** The company's owner and Admins make factories (backend/task_factories_routes.py create); Access says who is one. */
+function useMayMakeFactory() {
+  const owner = useQuery(meQuery).data?.role === 'owner';
+  const role = useQuery({ ...companyRoleQuery, enabled: !owner }).data;
+  return owner || role === 'owner' || role === 'admin';
+}
+
+type Box = FactoryMap['pipelines'][number];
+export type FactoryGroup = { id: string; name: string; pipelines: Box[] };
+
+/** Each live factory with its pipelines, a pipeline before the ones it files into, then the pipelines in no factory
+    (org-factories.ts orgFacGroups). Nothing when there is no factory. */
+export function factoryGroups(map: FactoryMap | null | undefined): FactoryGroup[] {
+  if (!map?.factories.length) return [];
+  const ids = new Set(map.factories.map((f) => f.id));
+  const groups = map.factories.map((f) => ({ id: f.id, name: f.name, pipelines: flowOrder(map.pipelines.filter((p) => p.factory_id === f.id)) }));
+  const loose = map.pipelines.filter((p) => !p.factory_id || !ids.has(p.factory_id));
+  return loose.length ? [...groups, { id: '', name: 'No factory', pipelines: flowOrder(loose) }] : groups;
+}
+
+function flowOrder(boxes: Box[]): Box[] {
+  const fed = new Set(boxes.flatMap((b) => b.files_into));
+  const out: Box[] = [];
+  const walk = (b: Box): void => {
+    if (out.includes(b)) return;
+    out.push(b);
+    for (const to of b.files_into) {
+      const next = boxes.find((x) => x.id === to);
+      if (next) walk(next);
+    }
+  };
+  boxes.filter((b) => !fed.has(b.id)).forEach(walk);
+  boxes.forEach(walk); // a loop with no start
+  return out;
+}
+
+function Factories() {
+  const groups = factoryGroups(useQuery(factoriesQuery).data);
+  if (!groups.length) return null;
+  return (
+    <Section name="Factories" count={groups.filter((g) => g.id).length} target="org:factories">
+      <ol className="fac-list">
+        {groups.map((g) => (
+          <li key={g.id || 'none'} aria-label={g.name} data-target={g.id ? `factory:${g.id}` : undefined}>
+            <h3 className="fac-name">{g.name}</h3>
+            {g.pipelines.map((p) => (
+              <Go key={p.id} to={`/tasks/${encodeURIComponent(p.id)}`} className="row fac-pipe" data-target={`pipeline:${p.id}`}>
+                <span className="row-title">{p.name}</span>
+              </Go>
+            ))}
+          </li>
+        ))}
+      </ol>
+    </Section>
+  );
+}
+
+/** A factory's name and goal. A name a live factory has already is said on the field (409 factory_name). */
+function NewFactory({ onClose }: { onClose: () => void }) {
+  const make = useAction('org.newFactory');
+  const [name, setName] = useState('');
+  const [goal, setGoal] = useState('');
+  const [tried, setTried] = useState(false);
+  const [taken, setTaken] = useState('');
+  const save = async () => {
+    setTried(true);
+    if (!name.trim()) return;
+    const r = await make.run({ name: name.trim(), ...(goal.trim() ? { goal: goal.trim() } : {}) });
+    if (r.ok) onClose();
+    else if (r.error === 'factory_name') setTaken(name.trim());
+    else toast({ text: refusal(r.error), kind: 'failed' });
+  };
+  const bad = tried && !name.trim() ? 'Name it' : taken && taken === name.trim() ? 'Name taken' : undefined;
+  return (
+    <SidePanel
+      title="New factory"
+      target="panel:factory-new"
+      onClose={onClose}
+      foot={
+        <>
+          <Button variant="primary" busy={make.pending} onClick={() => void save()}>
+            Save
+          </Button>
+          <Button variant="quiet" onClick={onClose}>
+            Cancel
+          </Button>
+        </>
+      }
+    >
+      <form
+        className="rail-sec"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void save();
+        }}
+      >
+        <Field label="Name" value={name} onValueChange={setName} autoFocus error={bad} />
+        <Field label="Goal" value={goal} onValueChange={setGoal} />
+      </form>
     </SidePanel>
   );
 }

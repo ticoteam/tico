@@ -4,10 +4,16 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
-import type { KpiDetail } from '@/api/schema';
-import { moveTargets } from './OrgPage';
+import { run } from '@/actions';
+// eslint-disable-next-line no-restricted-imports -- the test lends its router to dispatch, as the shell's ActionsRoot does
+import { bind } from '@/actions/bind';
+import type { FactoryMap, KpiDetail } from '@/api/schema';
+import { factoryGroups, moveTargets } from './OrgPage';
 import {
+  companyRoleQuery,
+  factoriesQuery,
   groupsQuery,
+  listeningStatsQuery,
   kpiQuery,
   goalsTreeQuery,
   marketBriefingQuery,
@@ -16,6 +22,7 @@ import {
   marketSpendQuery,
   placedKpisQuery,
   valueChainQuery,
+  type ListeningStats,
   type MarketBriefing,
   type MarketSetupState,
   type MarketSpend,
@@ -105,6 +112,36 @@ function market(over: { spend?: MarketSpend; count?: number } = {}) {
   queryClient.setQueryData(marketCountQuery.queryKey, over.count ?? 3);
 }
 const at = (panel?: string) => `/company/strategy/market${panel ? `?panel=${panel}` : ''}`;
+
+describe('Market: what buyers say @s326', () => {
+  it('lists the newest buyer posts with their site, each opening where it was written', async () => {
+    serve(nothing);
+    market();
+    const stats: ListeningStats = {
+      recent: [
+        { item_id: 'i1', source: 'Reddit', text: 'Mobile groomers cost too much', url: 'https://example.com/post/1', at: '2026-11-18T10:00:00Z' },
+        { item_id: 'i2', source: 'News', text: 'Salons add evening hours', url: null },
+      ],
+    };
+    queryClient.setQueryData(listeningStatsQuery.queryKey, stats);
+    show(<StrategyPage tab="market" />, at());
+    const say = await screen.findByRole('region', { name: 'Buyers talk about' });
+    const post = within(say).getByText('Mobile groomers cost too much').closest('a');
+    expect(post?.getAttribute('href')).toBe('https://example.com/post/1');
+    expect(post?.getAttribute('target')).toBe('_blank');
+    expect(within(post!).getByText('Reddit')).toBeTruthy();
+    expect(within(say).getByText('Salons add evening hours').closest('a')).toBeNull();
+  });
+
+  it('leaves the section out when Listening sent nothing', async () => {
+    serve(nothing);
+    market();
+    queryClient.setQueryData(listeningStatsQuery.queryKey, { recent: [] } as ListeningStats);
+    show(<StrategyPage tab="market" />, at());
+    await screen.findByRole('link', { name: 'Mobile grooming' });
+    expect(screen.queryByRole('region', { name: 'Buyers talk about' })).toBeNull();
+  });
+});
 
 describe('Market @s325 @s357 @s360 @s361', () => {
   it('lists segments, changes, the value chain in order and the organizations, each opening its panel', async () => {
@@ -438,5 +475,82 @@ describe('Org teammate sheet @s362', () => {
     const panel = await screen.findByRole('complementary', { name: 'builder' });
     expect(within(panel).getByRole('button', { name: 'Call builder' })).toBeTruthy();
     expect(within(panel).queryByRole('button', { name: 'Move' })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------- the factories on Org
+
+describe('Org factories @s265', () => {
+  const map: FactoryMap = {
+    factories: [{ id: 'f1', name: 'Grooming', goal: '', manager_id: null, done: 0 }],
+    pipelines: [
+      { id: 'p2', name: 'Book', factory_id: 'f1', files_into: [], mark: null, open: 1 },
+      { id: 'p1', name: 'Leads', factory_id: 'f1', files_into: ['p2'], mark: null, open: 2 },
+      { id: 'p3', name: 'Hiring', factory_id: null, files_into: [], mark: null, open: 0 },
+    ],
+  };
+  const org = (m: FactoryMap | null = map) => {
+    queryClient.setQueryData(groupsQuery.queryKey, [{ id: 'ops', name: 'Ops', parent: '', order: 0, people: [], bots: [], bot_slugs: [] }]);
+    queryClient.setQueryData(factoriesQuery.queryKey, m);
+  };
+  const ORG = '/company/strategy/org';
+
+  it('lists each factory with its pipelines in the order work moves, each opening its tasks', async () => {
+    serve(nothing);
+    org();
+    show(<StrategyPage tab="org" />, ORG);
+    const sec = await screen.findByRole('region', { name: 'Factories' });
+    const grooming = within(sec).getByRole('listitem', { name: 'Grooming' });
+    expect(within(grooming).getAllByRole('link').map((a) => a.textContent)).toEqual(['Leads', 'Book']);
+    expect(href(within(grooming).getByText('Leads'))).toBe('/tasks/p1');
+    expect(href(within(sec).getByText('Hiring'))).toBe('/tasks/p3');
+  });
+
+  it('leaves the section out with no factory, and offers no New factory to a member', async () => {
+    serve(nothing);
+    org({ factories: [], pipelines: map.pipelines });
+    show(<StrategyPage tab="org" />, ORG);
+    await screen.findByRole('tree', { name: 'Org' });
+    expect(screen.queryByRole('region', { name: 'Factories' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
+    expect(factoryGroups(null)).toEqual([]);
+  });
+
+  it('lets an Admin make a factory from the ⋯, shown at once', async () => {
+    const made = { ...map, factories: [...map.factories, { id: 'f2', name: 'Sales', goal: '', manager_id: null, done: 0 }] };
+    const sent = serve((url, method) =>
+      method === 'POST' ? { status: 200, body: { factory: { id: 'f2', name: 'Sales', goal: '' } } } : url.includes('/api/v2/factories') ? { status: 200, body: made } : nothing(),
+    );
+    org();
+    queryClient.setQueryData(companyRoleQuery.queryKey, 'admin');
+    show(<StrategyPage tab="org" search={{ panel: 'factory-new' }} />, `${ORG}?panel=factory-new`);
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    expect(await screen.findByRole('menuitem', { name: 'New factory' })).toBeTruthy();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    const panel = await screen.findByRole('complementary', { name: 'New factory' });
+    fireEvent.change(within(panel).getByRole('textbox', { name: 'Name' }), { target: { value: 'Sales' } });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/factories', method: 'POST', body: { name: 'Sales' } }]));
+    expect(await screen.findByRole('listitem', { name: 'Sales' })).toBeTruthy();
+  });
+
+  it('says a taken name on the field and takes the factory back', async () => {
+    serve((url, method) => (method === 'POST' ? refused(409, 'factory_name') : url.includes('/api/v2/factories') ? { status: 200, body: map } : nothing()));
+    queryClient.setQueryData(['me'], owner);
+    org();
+    show(<StrategyPage tab="org" search={{ panel: 'factory-new' }} />, `${ORG}?panel=factory-new`);
+    const panel = await screen.findByRole('complementary', { name: 'New factory' });
+    fireEvent.change(within(panel).getByRole('textbox', { name: 'Name' }), { target: { value: 'Grooming' } });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Save' }));
+    expect(await within(panel).findByText('Name taken')).toBeTruthy();
+    expect(queryClient.getQueryData<FactoryMap>(factoriesQuery.queryKey)?.factories.map((f) => f.name)).toEqual(['Grooming']);
+  });
+
+  it('refuses Tico: a factory cannot be removed once made', async () => {
+    const sent = serve(nothing);
+    queryClient.setQueryData(['me'], owner);
+    bind({ router: createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: [ORG] }) }) });
+    expect(await run('org.newFactory', { name: 'Sales' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(sent).toEqual([]);
   });
 });

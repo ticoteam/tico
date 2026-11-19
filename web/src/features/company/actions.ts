@@ -8,6 +8,7 @@ import {
   closeGoal,
   createGoal,
   createKpi,
+  createFactory,
   createProduct,
   createRisk,
   decideProposal,
@@ -506,4 +507,17 @@ export const orgMove = defineAction({
   run: (_ctx, { who, from, to }) => moveTeammate(who, from, to),
   did: () => 'Moved the teammate',
   target: ({ who }) => ({ kind: 'mate', id: who }),
+});
+
+/** A factory: a name and what it is for (POST /api/v2/factories). The server has no way to remove one, so it is the
+    person's own press: Tico is refused. */
+export const orgNewFactory = defineAction({
+  id: 'org.newFactory',
+  title: 'Make a factory',
+  kind: 'change',
+  input: s.object({ name: s.string({ min: 1, max: 60 }), goal: s.optional(s.string({ max: 200 })) }),
+  can: (ctx) => ctx.via !== 'tico',
+  run: (_ctx, { name, goal }) => createFactory(name.trim(), (goal ?? '').trim()),
+  did: ({ name }) => `Made ${name}`,
+  target: (_input, out) => (out ? { kind: 'factory', id: out.factory.id } : null),
 });
