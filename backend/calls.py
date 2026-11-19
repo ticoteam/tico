@@ -34,7 +34,7 @@ import threading
 import time
 import urllib.parse
 import uuid
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
 from threading import Timer
 from typing import Literal
@@ -1538,10 +1538,11 @@ class Calls:
         buffer["heard"] = self.voice.clock()
         buffer["duration_ms"] = len(buffer["pcm"]) * 1000 // PCM_BYTES_PER_SECOND
         clip = {"n": order["n"], "start": buffer["start_ms"], "identity": identity, "buffer": buffer}
-        clip.update(text=None, ready=False, discard=None, early="none", reuse=None)
+        clip.update(text=None, ready=False, discard=None, early="none")
+        reuse = None
         if early := self.early.pop((call_id, identity), None):
             if early["snapshot"] == (buffer["start_ms"], buffer["pcm"]):
-                clip.update(early="hit", reuse=early["future"])
+                clip["early"], reuse = "hit", early["future"]
             else:
                 clip["early"] = "miss"
                 early["future"].cancel()
@@ -1552,19 +1553,35 @@ class Calls:
             for oldest in out[: len(out) - BACKLOG]:
                 self._discard_clip(oldest, "dropped_backlog")
             self._kick(call_id)
-        self._track(call_id, self.workers.submit(self._transcribe_clip, call_id, clip))
+        if reuse:
+            self._reuse_early(call_id, clip, reuse)
+        else:
+            self._track(call_id, self.workers.submit(self._transcribe_clip, call_id, clip))
+
+    def _reuse_early(self, call_id, clip, early):
+        """Give a clip the text of its early transcription when that is done (self.lock held), without a worker of its
+        own. Only now is the call's work tracked, so drain and settle wait for this clip, not for unused early requests."""
+        done = Future()
+        self._track(call_id, done)
+
+        def finish(future):
+            try:
+                self._finish_clip(call_id, clip, lambda: None if future.cancelled() else future.result())
+            finally:
+                done.set_result(None)
+
+        early.add_done_callback(finish)
 
     def _transcribe_early(self, key, segmenter):
         """Start transcribing an utterance as its pause begins (self.lock held), so its text can be ready when the pause
-        ends. The same `_transcribe` runs, on the same workers, ahead of the clip's own task, so the clip that waits on it
-        never waits on a task queued behind itself. Speech resuming (or a new pause) drops it; its text is then unused."""
+        ends. Speech resuming (or a new pause) drops it; its text is then unused. It is not the call's work until a clip
+        uses it (`_reuse_early`), so an unused one holds up neither drain nor speech_pending."""
         early = self.early.get(key)
         if early is not None and early["snapshot"] is segmenter.early:
             return
         self._drop_early(key)
         if segmenter.early is not None:
             future = self.workers.submit(self._transcribe, key[0], {"pcm": segmenter.early[1]})
-            self._track(key[0], future)
             self.early[key] = {"snapshot": segmenter.early, "future": future}
 
     def _drop_early(self, key):
@@ -1612,11 +1629,14 @@ class Calls:
         self.drain(call_id)
 
     def _transcribe_clip(self, call_id, clip):
+        self._finish_clip(call_id, clip, lambda: self._transcribe(call_id, clip["buffer"]))
+
+    def _finish_clip(self, call_id, clip, transcribe):
+        """Give a clip not discarded its text (None when transcription failed or was cancelled), and wake the writer."""
         text = None
         try:
             if not clip["discard"]:
-                reuse = clip["reuse"]
-                text = reuse.result() if reuse else self._transcribe(call_id, clip["buffer"])
+                text = transcribe()
         except Exception as exc:  # noqa: BLE001 - a failed transcription is reported, the call goes on
             from .batch_work import report
 

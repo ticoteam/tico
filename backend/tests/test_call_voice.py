@@ -11,6 +11,7 @@ import sys
 import threading
 import wave
 from array import array
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import aclosing
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -1285,38 +1286,79 @@ def test_a_completed_clip_moves_past_a_transcription_at_the_order_deadline(meet,
 
 
 def test_a_clip_whose_pause_began_is_transcribed_early_and_asks_the_gateway_once(meet, monkeypatch, caplog):
-    heard = []
-    monkeypatch.setattr(
-        call_media, "transcribe", lambda base, key, audio, **kw: heard.append(audio) or SYNTHETIC_SPEECH
-    )
+    heard, release, submitted = [], threading.Event(), []
+
+    def transcribe(base, key, audio, **kw):
+        heard.append(audio)
+        assert release.wait(10)
+        return SYNTHETIC_SPEECH
+
+    class Workers(ThreadPoolExecutor):
+        def submit(self, fn, /, *args, **kwargs):
+            submitted.append(fn.__name__)
+            return super().submit(fn, *args, **kwargs)
+
+    monkeypatch.setattr(call_media, "transcribe", transcribe)
     caplog.set_level(logging.INFO, logger="tico.calls")
     call = start_call(meet, thread(meet), speak_replies=False)
-    call_id, machine = call["id"], meet.app.state.calls
-    machine.ingest(call_id, "human:ana", PCM_ONE_SECOND, 0)
-    machine.ingest(call_id, "human:ana", ms(200, QUIET), 1000)
-    with machine.lock:
-        early = machine.early[(call_id, "human:ana")]["future"]
-    assert early.result(5) == SYNTHETIC_SPEECH and len(heard) == 1  # transcribed while the pause still runs
-    machine.ingest(call_id, "human:ana", ms(100, QUIET), 1200)
-    machine.ingest(call_id, "human:ana", ms(160, QUIET), 1300)  # the pause ends: the same audio is cut
-    assert machine.settle()
-    assert [chunk["text"] for chunk in _chunks(meet, call["meeting_id"])] == [SYNTHETIC_SPEECH]
-    assert len(heard) == 1 and machine.early == {}
-    assert [line.split(" early=")[1].split()[0] for line in caplog.messages if line.startswith("call_clip ")] == ["hit"]
+    call_id, meeting_id, machine = call["id"], call["meeting_id"], meet.app.state.calls
+    workers = Workers(max_workers=1)  # one worker: a hit must not need a second
+    monkeypatch.setattr(machine, "workers", workers)
+    try:
+        machine.ingest(call_id, "human:ana", PCM_ONE_SECOND, 0)
+        machine.ingest(call_id, "human:ana", ms(200, QUIET), 1000)
+        wait_until(lambda: len(heard) == 1)  # transcribing while the pause still runs, on the only worker
+        machine.ingest(call_id, "human:ana", ms(100, QUIET), 1200)
+        machine.ingest(call_id, "human:ana", ms(160, QUIET), 1300)  # the pause ends: the same audio is cut
+        assert submitted == ["_transcribe"] and machine.early == {}
+        assert machine.speech_pending(call_id) and _chunks(meet, meeting_id) == []  # drain waits for the hit's text
+        release.set()
+        assert machine.settle()
+        assert [chunk["text"] for chunk in _chunks(meet, meeting_id)] == [SYNTHETIC_SPEECH] and len(heard) == 1
+
+        machine.ingest(call_id, "human:ana", PCM_ONE_SECOND + ms(200, QUIET), 5000)
+        with machine.lock:
+            early = machine.early[(call_id, "human:ana")]["future"]
+        assert early.result(5) == SYNTHETIC_SPEECH  # its text is in before the pause ends
+        machine.ingest(call_id, "human:ana", ms(260, QUIET), 6200)
+        assert machine.settle()
+        assert len(_chunks(meet, meeting_id)) == 2 and len(heard) == 2 and submitted == ["_transcribe"] * 2
+    finally:
+        release.set()
+        workers.shutdown(wait=True)
+    assert [line.split(" early=")[1].split()[0] for line in caplog.messages if line.startswith("call_clip ")] == [
+        "hit",
+        "hit",
+    ]
 
 
 def test_speech_resuming_after_its_early_transcription_is_transcribed_again_whole(meet, monkeypatch, caplog):
-    monkeypatch.setattr(call_media, "transcribe", lambda base, key, audio, **kw: f"Clip of {len(audio)} bytes")
+    stale, release = threading.Event(), threading.Event()
+
+    def transcribe(base, key, audio, **kw):
+        if not stale.is_set():  # the early request is slow
+            stale.set()
+            assert release.wait(10)
+        return f"Clip of {len(audio)} bytes"
+
+    monkeypatch.setattr(call_media, "transcribe", transcribe)
     caplog.set_level(logging.INFO, logger="tico.calls")
     call = start_call(meet, thread(meet), speak_replies=False)
     call_id, machine = call["id"], meet.app.state.calls
-    machine.ingest(call_id, "human:ana", PCM_ONE_SECOND + ms(200, QUIET), 0)
-    assert (call_id, "human:ana") in machine.early
-    machine.ingest(call_id, "human:ana", PCM_ONE_SECOND + ms(460, QUIET), 1200)  # they go on, then pause
-    assert machine.settle()
-    whole = len(call_media.wav_bytes(PCM_ONE_SECOND + ms(200, QUIET) + PCM_ONE_SECOND + ms(200, QUIET)))
-    assert [chunk["text"] for chunk in _chunks(meet, call["meeting_id"])] == [f"Clip of {whole} bytes"]
-    assert machine.early == {}
+    try:
+        machine.ingest(call_id, "human:ana", PCM_ONE_SECOND + ms(200, QUIET), 0)
+        with machine.lock:
+            early = machine.early[(call_id, "human:ana")]["future"]
+        assert stale.wait(5)
+        machine.ingest(call_id, "human:ana", PCM_ONE_SECOND + ms(460, QUIET), 1200)  # they go on, then pause
+        assert machine.settle()
+        whole = len(call_media.wav_bytes(PCM_ONE_SECOND + ms(200, QUIET) + PCM_ONE_SECOND + ms(200, QUIET)))
+        assert [chunk["text"] for chunk in _chunks(meet, call["meeting_id"])] == [f"Clip of {whole} bytes"]
+        # the unused early request is still out, and holds up neither the call's speech nor its drain
+        assert not early.done() and not machine.speech_pending(call_id) and machine.early == {}
+    finally:
+        release.set()
+    early.result(5)
 
     machine.ingest(call_id, "human:ana", PCM_ONE_SECOND + ms(200, QUIET), 5000)
     assert (call_id, "human:ana") in machine.early
