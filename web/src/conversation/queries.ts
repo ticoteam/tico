@@ -3,7 +3,15 @@
 // what only a conversation knows: a pending send giving way to its echo, and a reply being written (`runs`).
 import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import type { Feedback as FeedbackRow, FeedbackMarkers, FeedbackReasons, FeedbackRuleDraft, FeedbackRuleMade } from '@/api/schema';
+import type {
+  Feedback as FeedbackRow,
+  FeedbackMarkers,
+  FeedbackReasons,
+  FeedbackRuleDraft,
+  FeedbackRuleMade,
+  SlackMessage,
+  SlackThread,
+} from '@/api/schema';
 import { keys, queryClient, quietRoot, write } from '@/data';
 import { onTopic } from '@/live';
 import { newId } from '@/lib/ids';
@@ -364,14 +372,7 @@ export function slackPlaceOf(m: Pick<ChatMessage, 'refs'>): SlackPlace | null {
 }
 
 /** One Slack message (backend/messaging.py _slack_message). */
-export interface SlackLine {
-  event_id: string;
-  ts: string;
-  author?: string | null;
-  text?: string | null;
-  deleted?: boolean;
-  url?: string | null;
-}
+export type SlackLine = SlackMessage;
 
 quietRoot('slackThread');
 
@@ -381,7 +382,7 @@ export const slackThreadQuery = ({ bot, channel, thread }: SlackPlace) =>
     queryKey: ['slackThread', bot, channel, thread] as const,
     queryFn: async ({ signal }) =>
       (
-        await api.get<{ messages?: SlackLine[] | null }>(
+        await api.get<SlackThread>(
           `/api/v2/messaging/bots/${enc(bot)}/slack-thread?${new URLSearchParams({ channel, thread_ts: thread }).toString()}`,
           { signal },
         )
