@@ -94,7 +94,7 @@ async function desktop(page: Page, hub: Hub) {
   const zoom = listed.obligations.find(d => d.title === 'Murphy discovery, Zoom notice');
   if (!zoom) throw new Error('the seed made no Zoom notice');
   const marked = await fetch(`${hub.url}/api/v2/rule-due/${zoom.id}/satisfied`,
-    {method: 'POST', headers, body: JSON.stringify({due_on: zoom.due_on, outcome: 'waived', note: 'The court dropped it.'})});
+    {method: 'POST', headers: {...headers, 'Idempotency-Key': 'zoom-waive'}, body: JSON.stringify({due_on: zoom.due_on, outcome: 'waived', note: 'The court dropped it.'})});
   assert.ok(marked.ok, await marked.text());
   await page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>('[data-rk-dates] .rk-due')]
     .some(r => r.textContent!.includes('Murphy discovery, Zoom notice') && r.dataset['rkState'] === 'waived'), null, {timeout: t(15000)});
