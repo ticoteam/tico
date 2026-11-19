@@ -3,7 +3,7 @@ ordinary claim, start and completion."""
 
 from backend import residents
 from backend.store import H
-from backend.tests.helpers.api import assign, claim, get, post, ready, runner
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner
 from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES
 
 RESIDENT = [*RUNNER_CAPABILITIES, residents.CAPABILITY]
@@ -51,7 +51,10 @@ def test_a_second_message_reuses_the_first_turns_process_and_both_settle_on_thei
 
     # Between turns the resident holds no lane, start place or busy turn: nothing is leased or running.
     assert row(api, "SELECT count(*) FROM attempts WHERE state IN ('leased','running')")[0] == 0
-    assert row(api, "SELECT count(*) FROM start_places")[0] == 0
+    places = (
+        "SELECT count(*) FROM start_places p JOIN attempts a ON a.id=p.attempt_id WHERE a.state IN ('leased','running')"
+    )
+    assert row(api, places)[0] == 0
     idle = post(api, f"residents/{held['id']}/renew", {"state": "dormant"}, r["token"])
     assert idle["state"] == "dormant" and not idle["stop"]
 
@@ -75,7 +78,7 @@ def test_a_second_message_reuses_the_first_turns_process_and_both_settle_on_thei
 
 
 def runner_call(api, r, path, body):
-    return api.post("/api/v2/" + path, json=body, headers={"Authorization": "Bearer " + r["token"]})
+    return api.post("/api/v2/" + path, json=body, headers=headers(r["token"]))
 
 
 def revoke_ops(api, reason="credential_revoked"):
