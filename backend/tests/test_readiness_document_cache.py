@@ -79,6 +79,8 @@ def test_the_memo_is_bounded(monkeypatch):
     assert len(store._READINESS_PARSED) <= 4
     assert store._readiness_chars == sum(len(k) for k in store._READINESS_PARSED)
     monkeypatch.setattr(store, "_READINESS_MOST_CHARS", len(_text(bots=50)) - 1)
-    readiness_document(_text(bots=50))  # larger than the whole budget: parsed, not kept
+    kept = set(store._READINESS_PARSED)
+    readiness_document(_text(bots=50))  # larger than the whole budget: parsed, not kept, and nothing else goes
     assert _text(bots=50) not in store._READINESS_PARSED
+    assert set(store._READINESS_PARSED) == kept
     assert store._readiness_chars <= store._READINESS_MOST_CHARS

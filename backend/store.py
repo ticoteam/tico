@@ -566,11 +566,12 @@ def reclaim_free_pages(store, step=VACUUM_STEP_PAGES, floor=VACUUM_FLOOR_PAGES, 
 
 # Parsed runner-readiness documents by their exact stored text (str or bytes): a runner's text changes only on its
 # heartbeat, while every claim, page and check reads it again, and parsing a computer of many bots costs more than
-# the rest of most of those reads. Bounded by count and by the texts' size; least recently used goes first.
+# the rest of most of those reads. Bounded by count and by the texts' size (a parsed document holds about three times
+# its text); least recently used goes first, and a text larger than the whole budget is parsed but not kept.
 _READINESS_PARSED: "OrderedDict[str | bytes, dict]" = OrderedDict()
 _READINESS_LOCK = threading.Lock()
 _READINESS_MOST = 128
-_READINESS_MOST_CHARS = 24 * 1024 * 1024
+_READINESS_MOST_CHARS = 16 * 1024 * 1024
 _readiness_chars = 0
 
 
@@ -636,7 +637,7 @@ def readiness_document(value):
             parsed = {}
         document = _readiness_shape(parsed)
         with _READINESS_LOCK:
-            if value not in _READINESS_PARSED:
+            if len(value) <= _READINESS_MOST_CHARS and value not in _READINESS_PARSED:
                 _READINESS_PARSED[value] = document
                 _readiness_chars += len(value)
                 while _READINESS_PARSED and (
