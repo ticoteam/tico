@@ -382,3 +382,54 @@ def test_the_gateway_with_no_tokens_says_where_to_paste_them(tmp_path, monkeypat
     caplog.set_level("INFO")
     assert G.main([], make_slack=FakeClient) == 0
     assert "No Slack tokens yet; paste them in Tools > Slack" in caplog.text
+
+
+def test_the_waiting_gateway_reports_a_refused_start_and_a_failed_socket_then_connects(tmp_path, monkeypatch, caplog):
+    """TICO_SLACK_WAIT=1: a refused verify and a socket that does not connect are reported on the Health page and
+    retried; the vault's unpinned tokens are pinned to the workspace and app they verified against."""
+    env = {
+        **ENV,
+        "TICO_DB": str(tmp_path / "hub.db"),
+        "TICO_SLACK_GATEWAY_ENABLED": "1",
+        "TICO_ENVIRONMENT_ID": "acme-test",
+    }
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("TICO_SLACK_WAIT", "1")
+    for name in ("TICO_AUTH_PROXY", "TICO_SLACK_SECRET_ARN"):
+        monkeypatch.delenv(name, raising=False)
+    stored = {"bot_token": BOT, "app_token": APP_TOKEN, "team_id": "", "app_id": "", "created_at": "2026-11-19"}
+    reports, pins, recovered, handlers = [], [], [], {}
+    monkeypatch.setattr(slack_app, "load", lambda store: dict(stored))
+    monkeypatch.setattr(slack_app, "report", lambda store, state, message="", team="": reports.append((state, message)))
+    monkeypatch.setattr(slack_app, "pin", lambda store, team, app: pins.append((team, app)))
+    monkeypatch.setattr(G.Gateway, "recover", lambda self: recovered.append(1))
+    monkeypatch.setattr(G, "_sleep", lambda stopping, seconds: True)  # every retry goes on at once
+    monkeypatch.setattr(G.signal, "signal", lambda sig, handler: handlers.__setitem__(sig, handler))
+    # The connected gateway runs until SIGTERM: here it is sent as soon as it runs.
+    monkeypatch.setattr(G.Gateway, "run", lambda self: handlers[G.signal.SIGTERM]())
+    steps = iter(["refused", "no socket", "ok"])
+
+    class Scripted(FakeClient):
+        def __init__(self, bot, app):
+            super().__init__(bot, app)
+            self.step = next(steps)
+
+        def auth_test(self):
+            if self.step == "refused":
+                raise RuntimeError("Slack token belongs to workspace T0OTHER, not T0FAKE1")
+            return super().auth_test()
+
+        def connect(self, on_envelope):
+            if self.step == "no socket":
+                raise ConnectionError("refused")
+            super().connect(on_envelope)
+
+    caplog.set_level("INFO")
+    assert G.main([], make_slack=Scripted) == 0
+    assert reports == [
+        ("disconnected", "Slack token belongs to workspace T0OTHER, not T0FAKE1"),
+        ("disconnected", "Socket Mode did not connect (ConnectionError); check the app-level token"),
+    ]
+    assert pins == [("T0FAKE1", "A0FAKE1")] * 2 and len(recovered) == 2
+    assert FakeClient.instances[-1].closed and "Socket Mode connected" in caplog.text
