@@ -1667,3 +1667,79 @@ def test_the_short_pause_is_only_for_an_active_backfill_whose_next_step_is_due(b
             (AT,),
         )
     assert sync.pause(books, at=AT) == sync.SWEEP  # backfilled: a due poll is a sweep's business
+
+
+def test_a_backfill_step_that_raises_goes_to_error_and_waits_the_sweep(books, monkeypatch):
+    """A step that raises before it records its outcome puts the connection in error, due a poll later: the worker
+    does not step it again on the short pause."""
+    stripe = FakeStripe()
+    cid = connect_stripe(books, stripe)
+    calls: list[str] = []
+
+    def broken(store: Any, provider: Any, cid: str, now: str) -> list[str]:
+        calls.append(cid)
+        raise RuntimeError("made-up failure")
+
+    monkeypatch.setattr(stripe_sync, "catch_up", broken)
+    assert _run_loop(books, stripe, monkeypatch, stop=3) == [sync.SWEEP, sync.SWEEP, sync.SWEEP]
+    assert calls == [cid]
+    with books.read() as c:
+        status, due, why = c.execute("SELECT status, next_sync_at, last_error FROM fin_connections").fetchone()
+    assert status == "error" and str(due) > sync._now() and "RuntimeError" in why
+
+
+def test_a_short_wake_steps_only_a_due_backfill(books, monkeypatch):
+    """Between backfill steps the worker steps only the backfills that are due: a connection in error with a waiting
+    webhook, or a finished one with owed work, waits for a full sweep or a ring."""
+    cid = connect_stripe(books, FakeStripe())
+    with books.transaction() as c:
+        store_banking.inbox_add(
+            c,
+            connection_id=cid,
+            provider="stripe",
+            event_id="evt_made_up",
+            payload={"type": "balance.available"},
+            at=AT,
+        )
+    stepped: list[str] = []
+    monkeypatch.setattr(sync, "connection", lambda store, vault, cid, **_k: stepped.append(cid) or "ok")
+    later = "2026-10-15T12:45:00.000000Z"
+    for status, due, backfilled, short, want in (
+        ("error", later, False, True, []),  # in error with a webhook waiting: not on a short wake
+        ("error", later, False, False, [cid]),  # a full sweep still tries it (and finds it idle)
+        ("active", AT, True, True, []),  # a finished backfill's poll is a sweep's business
+        ("active", AT, False, True, [cid]),  # the backfill itself steps
+    ):
+        with books.transaction() as c:
+            c.execute(
+                "UPDATE fin_connections SET status=?, next_sync_at=?, "
+                "settings=json_set(coalesce(settings, '{}'), '$.backfilled', json(?))",
+                (status, due, "true" if backfilled else "false"),
+            )
+        stepped.clear()
+        sync.step(books, None, at=AT, backfill_only=short)
+        assert stepped == want, (status, due, backfilled, short)
+
+
+def test_the_loop_steps_everything_after_a_ring_or_a_sweep(books, monkeypatch):
+    """The first step and any step after a ring or a SWEEP's time are full; a wake on the short pause is not."""
+    import threading
+
+    flags: list[bool] = []
+    monkeypatch.setattr(sync, "step", lambda *_a, backfill_only=False, **_k: flags.append(backfill_only))
+    monkeypatch.setattr(sync, "pause", lambda _store: sync.BACKFILL_PAUSE)
+    s = sync.SWEEP
+    clock = iter([0.0, 0.0, 2.0, 4.0, 6.0, 6.0 + s, 6.0 + s, 8.0 + s, 8.0 + s])
+    monkeypatch.setattr(sync.time, "monotonic", lambda: next(clock))
+    halt = threading.Event()
+
+    class Ringing(_CountingBell):
+        def wait(self, seen: int, timeout: float) -> int:
+            super().wait(seen, timeout)
+            if len(self.waits) == 3:
+                self.rung += 1  # a webhook rang during the third wait
+            return self.rung
+
+    monkeypatch.setattr(sync, "BELL", Ringing(halt, 6))
+    sync._loop(books, None, False, None, halt)
+    assert flags == [False, True, True, False, False, True]  # full, short, short, rung, a SWEEP gone by, short

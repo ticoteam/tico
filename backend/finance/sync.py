@@ -11,6 +11,7 @@ marks what it would send as withheld. The token is a Tico credential read at use
 
 import logging
 import threading
+import time
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
@@ -194,8 +195,20 @@ brex_probe = brex_sync.probe_credential
 
 
 # ------------------------------------------------------------------------------------------------ one step
-def step(store: Any, vault: Any, *, rehearsal: bool = False, make: Make | None = None, at: str | None = None) -> None:
-    """One pass over every connection that is due, or rung."""
+def step(
+    store: Any,
+    vault: Any,
+    *,
+    rehearsal: bool = False,
+    make: Make | None = None,
+    at: str | None = None,
+    backfill_only: bool = False,
+) -> None:
+    """One pass over every connection that is due, or rung. `backfill_only` (a short wake between backfill steps)
+    steps only the connections whose first backfill is due (_backfill_due): one in error, its webhooks, its owed
+    calls and its unknown transfers wait for a full sweep or a ring. A connection whose step raises is put in error
+    and due a poll later (_raised), so it never loops on the short pause."""
+    now = at or _now()
     with store.read() as c:
         if not is_set_up(c):
             return
@@ -203,10 +216,37 @@ def step(store: Any, vault: Any, *, rehearsal: bool = False, make: Make | None =
     for row in rows:
         if str(row["status"]) not in ("active", "error"):
             continue
+        if backfill_only and not _backfill_due(row, now):
+            continue
         try:
             connection(store, vault, str(row["id"]), rehearsal=rehearsal, make=make, at=at)
-        except Exception:
+        except Exception as e:
             log.exception("Finance sync step failed")
+            _raised(store, str(row["id"]), e, now)
+
+
+def _raised(store: Any, cid: str, e: Exception, now: str) -> None:
+    """A step that raised before it recorded its outcome: the connection goes to error and is due a poll later, as a
+    failed read is, and the owner is told once (banking.sync_failed)."""
+    try:
+        with store.read() as c:
+            row = SK.get(c, "fin_connections", cid)
+        if row is None or str(row["status"]) == "disconnected":
+            return
+        why = f"the sync stopped on an unexpected error ({type(e).__name__}); Tico tries again at the next poll"
+        _failed(store, cid, why, now, str(row["status"]))
+    except Exception:
+        log.exception("Finance sync could not record a failed step")
+
+
+def _backfill_due(row: Any, now: str) -> bool:
+    """An active Mercury, Stripe or Brex connection whose first backfill is unfinished and has its next step due."""
+    return (
+        str(row["provider"]) in ("mercury", "stripe", "brex")
+        and str(row["status"]) == "active"
+        and not _settings(row).get("backfilled")
+        and (not row["next_sync_at"] or str(row["next_sync_at"]) <= now)
+    )
 
 
 def _provider(store: Any, vault: Any, ref: str, make: Make | None) -> Provider | None:
@@ -1124,9 +1164,9 @@ def stop() -> None:
 def pause(store: Any, at: str | None = None) -> float:
     """How long the worker waits before its next sweep: BACKFILL_PAUSE while an active connection's first backfill has
     its next step due (Mercury, Stripe or Brex: `backfilled` not yet set), so a large history comes in step after step
-    and not one step a SWEEP; else SWEEP. A step that failed (a 429, an error) leaves its connection in error and due a
-    poll later, so a failing backfill falls back to SWEEP and never loops tight. Each sweep still steps every connection
-    in turn, the outbox with them."""
+    and not one step a SWEEP; else SWEEP. A step that failed (a 429, an error) or raised (_raised) leaves its connection
+    in error and due a poll later, so a failing backfill falls back to SWEEP and never loops tight. A short wake steps
+    only those backfills (step's backfill_only); a ring or a SWEEP steps every connection, the outbox with them."""
     now = at or _now()
     try:
         with store.read() as c:
@@ -1136,23 +1176,21 @@ def pause(store: Any, at: str | None = None) -> float:
     except Exception:
         log.exception("Finance sync could not read its connections")
         return SWEEP
-    for row in rows:
-        if (
-            str(row["provider"]) in ("mercury", "stripe", "brex")
-            and str(row["status"]) == "active"
-            and not _settings(row).get("backfilled")
-            and (not row["next_sync_at"] or str(row["next_sync_at"]) <= now)
-        ):
-            return BACKFILL_PAUSE
-    return SWEEP
+    return BACKFILL_PAUSE if any(_backfill_due(row, now) for row in rows) else SWEEP
 
 
 def _loop(store: Any, vault: Any, rehearsal: bool, make: Make | None, halt: threading.Event) -> None:
+    """Step, then wait for a ring or the pause. A wake on the short BACKFILL_PAUSE (no ring, a SWEEP not yet gone by
+    since the last full step) steps only the backfills that are due; a ring or a SWEEP's wait steps everything."""
+    short, full_at = False, time.monotonic()
     while not halt.is_set():
         seen = BELL.rung
         try:
-            step(store, vault, rehearsal=rehearsal, make=make)
+            step(store, vault, rehearsal=rehearsal, make=make, backfill_only=short)
         except Exception:
             log.exception("Finance sync failed")
+        if not short:
+            full_at = time.monotonic()
         FIRST_PASS.set()
-        BELL.wait(seen, SWEEP if rehearsal else pause(store))
+        rung = BELL.wait(seen, SWEEP if rehearsal else pause(store))
+        short = rung == seen and time.monotonic() - full_at < SWEEP
