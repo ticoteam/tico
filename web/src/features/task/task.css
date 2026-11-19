@@ -12,7 +12,7 @@
    where line under it keeps the pipeline ("Engineering › QA"), so its chevron never stands alone. The head grows to
    hold both lines, below the status bar. */
 html[data-layout="cards"] .tv .pk-head{height:auto;min-height:var(--head-h);align-items:flex-start;padding-top:calc(var(--page-top) + var(--s-3));padding-bottom:calc((var(--ctl) - 22px) / 2)}
-html[data-layout="cards"] .tv .pk-where>.pk-crumb{display:contents}
+html[data-layout="cards"] .tv:not(.is-quiet) .pk-where>.pk-crumb{display:contents}
 html[data-layout="cards"] .tv .pk-title h1{white-space:normal;font-size:var(--t-fig);line-height:var(--lh-tight);text-wrap:balance;
   display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3}
 html[data-layout="cards"] .tv .pk-where{margin-top:var(--s-2)}
@@ -174,7 +174,7 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .ap-paper{width:100%;max-width:640px;background:var(--shot-page);color:var(--shot-ink);border-radius:var(--r-paper);box-shadow:var(--lift-paper);line-height:var(--lh-read)}
 .ap-mail{padding:var(--s-6) var(--s-8) var(--s-8);white-space:pre-wrap;overflow-wrap:anywhere}
 /* a Word file, drawn as a sheet */
-.ap-sheet{max-width:560px;padding:var(--s-10) var(--s-12);font-size:var(--t-sm);flex:none;white-space:pre-wrap}
+.ap-sheet{max-width:560px;padding:var(--s-10) var(--s-12);font-size:var(--t-sm);flex:none;white-space:pre-wrap;overflow-wrap:anywhere}
 .ap-sheet p,.ap-sheet h3{margin-top:var(--s-2)}
 .ap-sheet h3{font-weight:var(--w-title);font-size:var(--t-base)}
 .ap-sheet .li{padding-left:var(--s-4)}
