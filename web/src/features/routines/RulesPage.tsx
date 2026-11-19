@@ -1,13 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
-import { MenuItem } from '@/kit/Menu';
+import { IconButton } from '@/kit/IconButton';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { pipelinesQuery, type Pipeline } from '@/features/tasks/exports';
 import { List, Section, type PageTab } from '@/pagekinds';
 import { ROUTINES, RULES, type RuleTab } from './actions';
 import { CompanyRules, holdsOf, OrgRuleRow, partiesOf } from './CompanyRules';
 import { press, RemoveItem, RuleRow, useConfirmRemove, useName } from './parts';
+import { ReadDocument } from './ReadDocument';
 import { dueQuery, holdsQuery, orgRulesQuery, routinesQuery, ruleGroupsQuery, stageRulesQuery, teamsQuery } from './queries';
 import { RulePanel } from './RulePanel';
 import { runnerOf } from './RoutinesPage';
@@ -16,8 +18,9 @@ import { agentWords, dayWords, stageParts, triggerWords } from './words';
 import './routines.css';
 
 /* Rules (pages/3-company/rules.js): one List, eight tabs on `?tab=`. Every rule is one dense row with no title; a row
-   opens its rule in `?panel=` (`org:<id>`, `stage:<id>`), where it is read, changed or removed. Wakes and routines on
-   tasks are routines: their rows open the routine on Routines. */
+   opens its rule in `?panel=` (`org:<id>`, `stage:<id>`, a due date's `due:<id>`), where it is read, changed or
+   removed. Wakes and routines on tasks are routines: their rows open the routine on Routines. The head's "⋯" adds a
+   due date or a document to read for outside rules. */
 
 export interface RulesSearch {
   tab?: Exclude<RuleTab, ''>;
@@ -67,6 +70,13 @@ export function RulesPage({ search }: { search: RulesSearch }) {
     </Button>
   );
   const body = useTab(t, search, remove.confirm);
+  const [reading, setReading] = useState(false);
+  const more = (
+    <Menu trigger={<IconButton icon="more" label="More" />}>
+      <MenuItem label="Add due date" icon="calendar" onSelect={() => void press('rules.newDue', {})} />
+      <MenuItem label="Add document" icon="file" onSelect={() => setReading(true)} />
+    </Menu>
+  );
   return (
     <List
       title="Rules"
@@ -77,9 +87,12 @@ export function RulesPage({ search }: { search: RulesSearch }) {
         <>
           {add}
           {remove.node}
+          {reading && <ReadDocument onClose={() => setReading(false)} />}
         </>
       }
-      state={body.state}
+      more={more}
+      // the page kind lays a panel over a ready page only: an open panel (a new due date on an empty tab) keeps it ready
+      state={search.panel && body.state === 'empty' ? 'ready' : body.state}
       onRetry={body.retry}
       empty={{ title: body.empty, action: t === 'suggested' || t === 'built-in' ? undefined : add }}
       sections={body.sections}
@@ -198,8 +211,8 @@ function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () 
                 how="date"
                 parts={[agentWords(d.rule.text), ...(d.task_days ? [`${d.task_days} days before`] : [])]}
                 to={RULES}
-                search={{ tab: 'due', panel: `org:${d.rule.id}` }}
-                selected={opened('org', d.rule.id)}
+                search={{ tab: 'due', panel: `due:${d.id}` }}
+                selected={panel === `due:${d.id}`}
                 word={d.status === 'overdue' ? 'Late' : undefined}
                 cols={{ who: true, at: true }}
                 who={d.owner}

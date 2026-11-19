@@ -18,6 +18,7 @@ import { fmtDate } from '@/lib';
 import { SidePanel } from '@/pagekinds';
 import type { RuleTab } from './actions';
 import { partiesOf, useNamer } from './CompanyRules';
+import { DuePanel } from './DuePanel';
 import { Face, press, RemoveItem, useConfirmRemove, useName } from './parts';
 import { holdsQuery, orgRulesQuery, stageRulesQuery, teamsQuery } from './queries';
 import type { OrgRule, RuleHold, StageRule } from './types';
@@ -27,7 +28,8 @@ import { agentWords, BROKEN, cap, STAGE_EVENTS, STAGE_THENS, STAGE_TIMERS, stage
    panel into the rule's editor; `org:new` and `stage:new` open the editor empty. */
 
 export function RulePanel({ panel, tab, onClose }: { panel: string; tab: RuleTab; onClose: () => void }) {
-  const [kind, id = ''] = panel.split(/:(.*)/s) as ['org' | 'stage', string?];
+  const [kind, id = ''] = panel.split(/:(.*)/s) as ['org' | 'stage' | 'due', string?];
+  if (kind === 'due') return <DuePanel id={id} onClose={onClose} />;
   if (kind === 'stage') return id === 'new' ? <StageEditor onDone={onClose} onClose={onClose} /> : <StageView id={id} onClose={onClose} />;
   if (id === 'new') return <OrgEditor outside={tab === 'outside'} onDone={onClose} onClose={onClose} />;
   return <OrgView id={id} onClose={onClose} />;

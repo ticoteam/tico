@@ -3,7 +3,10 @@ import { api } from '@/api/client';
 import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
 import type {
   Delivery,
+  DocFile,
+  DocRead,
   DueDate,
+  DueDetail,
   Group,
   Heartbeat,
   Hook,
@@ -11,17 +14,21 @@ import type {
   MaintenanceRun,
   Match,
   OrgRule,
+  Payload,
   Reach,
   ReachValues,
   Routine,
   RuleGroups,
   RuleHold,
+  Repeats,
+  RuleSource,
   Run,
   ShownOnce,
   StageRule,
   Step,
   SystemJob,
   Trigger,
+  Version,
   WatchSource,
 } from './types';
 
@@ -103,9 +110,20 @@ export function createRoutine(f: RoutineFields) {
   });
 }
 
-export function updateRoutine(id: string, f: RoutineFields) {
-  const patch = { name: f.name, owner: f.agent, trigger: f.trigger, steps: brief(f) };
-  const change = (r: Routine): Routine => ({ ...r, name: f.name, owner_id: f.agent, trigger: f.trigger, steps: brief(f) });
+/** Its steps with the agent's turn changed in place: every other step (a filter, an action, a second turn) is kept as
+   it is. A routine with no agent turn gets one only when an instruction was written. */
+export function stepsWith(was: Step[] | undefined, f: RoutineFields): Step[] {
+  const list = was ?? [];
+  const at = list.findIndex((x) => x.type === 'bot_turn');
+  if (at < 0) return !list.length || f.instruction ? [...list, ...brief(f)] : list;
+  return list.map((x, i) => (i === at ? { ...x, bot: f.agent, prompt: f.instruction } : x));
+}
+
+/** Name, agent, trigger and instruction; `was` is its steps as loaded, so the steps the editor does not draw stay. */
+export function updateRoutine(id: string, f: RoutineFields, was?: Step[]) {
+  const steps = stepsWith(was, f);
+  const patch = { name: f.name, owner: f.agent, trigger: f.trigger, steps };
+  const change = (r: Routine): Routine => ({ ...r, name: f.name, owner_id: f.agent, trigger: f.trigger, steps });
   return write<Routine>({
     key: [routinesQuery.queryKey, routineQuery(id).queryKey],
     optimistic: (cur: Routine[] | Routine | undefined) => (Array.isArray(cur) ? mapList(cur, id, change) : cur && change(cur)),
@@ -134,14 +152,48 @@ export function setRoutineLimit(id: string, per30m: number | null) {
   });
 }
 
-export function runRoutine(id: string) {
+/** Run it now; `input` stands in for the trigger's output (a test run). A sample its filters drop makes no run. */
+export function runRoutine(id: string, input?: Record<string, unknown>) {
   const shown: Run = { id: tmpId(), automation_id: id, status: 'queued', started_at: now(), steps: null, version: 0 };
-  return write<{ run: Run }>({
+  return write<{ run: Run | null; dropped?: boolean }>({
     key: runsQuery(id).queryKey,
     optimistic: (runs: Run[] | undefined) => [shown, ...(runs ?? [])],
-    send: (idempotencyKey) => api.post<{ run: Run }>(`/api/v2/automations/${enc(id)}/run`, {}, { idempotencyKey }),
-    settle: (runs: Run[] | undefined, r) => runs?.map((x) => (x.id === shown.id ? r.run : x)),
+    send: (idempotencyKey) =>
+      api.post<{ run: Run | null; dropped?: boolean }>(`/api/v2/automations/${enc(id)}/run`, input ? { input } : {}, { idempotencyKey }),
+    settle: (runs: Run[] | undefined, r) => runs?.flatMap((x) => (x.id !== shown.id ? [x] : r.run ? [r.run] : [])),
     revert: (runs: Run[] | undefined) => runs?.filter((x) => x.id !== shown.id),
+  });
+}
+
+/** Its versions, newest first; an agent's proposal is a `pending` one. */
+export const versionsQuery = (id: string) =>
+  queryOptions({
+    queryKey: ['routines', 'versions', id],
+    queryFn: async ({ signal }) => {
+      const r = await api.get<{ versions: Version[] }>(`/api/v2/automations/${enc(id)}/versions`, { signal });
+      return [...(r.versions ?? [])].sort((a, b) => b.n - a.n);
+    },
+    ...quiet,
+  });
+
+/** Restore a version as a new one, or turn a proposal on (it keeps its number). */
+export function restoreVersion(id: string, n: number) {
+  return write<Routine>({
+    key: [versionsQuery(id).queryKey, routinesQuery.queryKey, routineQuery(id).queryKey],
+    optimistic: (cur: unknown) => cur,
+    send: (idempotencyKey) => api.post<Routine>(`/api/v2/automations/${enc(id)}/versions/${n}/restore`, {}, { idempotencyKey }),
+    // a version has no id, so only the routine's own row takes the answer
+    settle: (cur: (Version | Routine)[] | Routine | undefined, made) =>
+      Array.isArray(cur) ? cur.map((x) => ('id' in x && x.id === id ? made : x)) : cur && made,
+  });
+}
+
+/** Set an agent's proposal aside. */
+export function discardVersion(id: string, n: number) {
+  return write<unknown>({
+    key: versionsQuery(id).queryKey,
+    optimistic: (list: Version[] | undefined) => list?.filter((v) => v.n !== n),
+    send: (idempotencyKey) => api.delete(`/api/v2/automations/${enc(id)}/versions/${n}`, { idempotencyKey }),
   });
 }
 
@@ -236,6 +288,15 @@ export const deliveriesQuery = (id: string) =>
     ...quiet,
   });
 
+/** One kept call's headers and body. Read when opened, and not kept after. */
+export const payloadQuery = (hook: string, delivery: string) =>
+  queryOptions({
+    queryKey: ['routines', 'hooks', hook, 'payload', delivery],
+    queryFn: async ({ signal }) => (await api.get<{ delivery: Payload }>(`/api/v2/triggers/${enc(hook)}/deliveries/${enc(delivery)}`, { signal })).delivery,
+    staleTime: 0,
+    gcTime: 0,
+  });
+
 /* The full address of a webhook, secret included, is given once: at creation and on a new secret. It is held in the
    cache only while its panel shows it (gcTime 0), under a root no write reads again, and is never sent anywhere. */
 const shownKey = (id: string) => ['shown-once', id] as const;
@@ -266,6 +327,25 @@ export function removeHook(id: string) {
     key: hooksQuery.queryKey,
     optimistic: (list: Hook[] | undefined) => list?.filter((h) => h.id !== id),
     send: (idempotencyKey) => api.post(`/api/v2/triggers/${enc(id)}/delete`, {}, { idempotencyKey }),
+  });
+}
+
+/** Check each call with a preset; with no secret given, the server makes one. The answer's secret goes back to the
+   caller only: no cache, no log. `replayed` means it was lost on the way (a resend), so ask again for a new one. */
+export async function signHook(id: string, preset: string, secret?: string): Promise<{ secret?: string; replayed?: boolean }> {
+  const r = await write<{ trigger: { signing_secret?: string; replayed?: boolean } }>({
+    key: hooksQuery.queryKey,
+    optimistic: (list: Hook[] | undefined) => list?.map((h) => (h.id === id ? { ...h, signed: true, preset } : h)),
+    send: (idempotencyKey) => api.post(`/api/v2/triggers/${enc(id)}/signing`, { preset, ...(secret ? { secret } : {}) }, { idempotencyKey }),
+  });
+  return { secret: secret ? undefined : r.trigger.signing_secret, replayed: r.trigger.replayed };
+}
+
+export function signHookOff(id: string) {
+  return write<unknown>({
+    key: hooksQuery.queryKey,
+    optimistic: (list: Hook[] | undefined) => list?.map((h) => (h.id === id ? { ...h, signed: false, preset: 'none' } : h)),
+    send: (idempotencyKey) => api.post(`/api/v2/triggers/${enc(id)}/signing`, { off: true }, { idempotencyKey }),
   });
 }
 
@@ -310,6 +390,88 @@ export const dueQuery = queryOptions({
   queryFn: async ({ signal }) => (await api.get<{ due: DueDate[] }>('/api/v2/rules/due?next=3660d', { signal })).due,
   ...quiet,
 });
+
+/** One due date in full: its history and what the viewer may do. */
+export const dueOneQuery = (id: string) =>
+  queryOptions({
+    queryKey: ['rules', 'due', id],
+    queryFn: ({ signal }) => api.get<DueDetail>(`/api/v2/rule-due/${enc(id)}`, { signal }),
+    ...quiet,
+  });
+
+export interface DueFields {
+  first_due?: string;
+  repeats?: Repeats;
+  /** `bot:<id>` or `human:<id>`. */
+  owner?: string;
+  /** Open a task this many days before each due day; null for none. */
+  task_days?: number | null;
+}
+
+/** A due date on a rule. Its row shows when the list is read again. */
+export function addDue(rule: string, f: Required<Pick<DueFields, 'first_due' | 'repeats' | 'owner'>> & Pick<DueFields, 'task_days'>) {
+  return write<DueDetail>({
+    key: dueQuery.queryKey,
+    optimistic: (list: DueDate[] | undefined) => list,
+    send: (idempotencyKey) => api.post<DueDetail>(`/api/v2/rules/${enc(rule)}/due`, f, { idempotencyKey }),
+  });
+}
+
+/** A new date or repeat starts a new row from it (the old one keeps its marks); the answer is the live row. */
+export function updateDue(id: string, f: DueFields) {
+  return write<DueDetail>({
+    key: [dueQuery.queryKey, dueOneQuery(id).queryKey],
+    optimistic: (cur: DueDate[] | DueDetail | undefined) =>
+      Array.isArray(cur) ? cur.map((d) => (d.id === id ? { ...d, ...(f.first_due ? { due_on: f.first_due } : {}), ...(f.owner ? { owner: f.owner } : {}) } : d)) : cur && { ...cur, ...f, due_on: f.first_due ?? cur.due_on },
+    send: (idempotencyKey) => api.post<DueDetail>(`/api/v2/rule-due/${enc(id)}`, f, { idempotencyKey }),
+  });
+}
+
+/** Mark an occurrence satisfied: `due_on` names which when more than one is open. */
+export function satisfyDue(id: string, dueOn?: string) {
+  return write<unknown>({
+    key: [dueQuery.queryKey, dueOneQuery(id).queryKey],
+    optimistic: (cur: DueDate[] | DueDetail | undefined) => (Array.isArray(cur) || !cur ? cur : { ...cur, status: 'satisfied' }),
+    send: (idempotencyKey) => api.post(`/api/v2/rule-due/${enc(id)}/satisfied`, dueOn ? { due_on: dueOn } : {}, { idempotencyKey }),
+  });
+}
+
+export function removeDue(id: string) {
+  return write<unknown>({
+    key: dueQuery.queryKey,
+    optimistic: (list: DueDate[] | undefined) => list?.filter((d) => d.id !== id),
+    send: (idempotencyKey) => api.post(`/api/v2/rule-due/${enc(id)}/remove`, {}, { idempotencyKey }),
+  });
+}
+
+/** Where outside rules come from (From). */
+export const ruleSourcesQuery = queryOptions({
+  queryKey: ['rules', 'sources'],
+  queryFn: async ({ signal }) => (await api.get<{ sources: RuleSource[] }>('/api/v2/rule-sources?limit=200', { signal })).sources,
+  ...quiet,
+});
+
+/** Files kinds no text is read from. */
+const UNREAD = new Set(['image', 'media']);
+/** The recent files a document can be picked from: ones with text to read. */
+export const docFilesQuery = queryOptions({
+  queryKey: ['rules', 'files'],
+  queryFn: async ({ signal }) => {
+    const r = await api.get<{ files?: DocFile[] }>('/api/v2/files?limit=50', { signal });
+    return (r.files ?? []).filter((f) => f.locator !== 'remote_link' && !f.url && !UNREAD.has(f.library_kind ?? '') && !f.archived);
+  },
+  ...quiet,
+});
+
+/** A file or a link for an agent to read and suggest outside rules from. `source` is a From's id, or a new one's name
+   with its kind. */
+export function readDocument(b: { file_id?: string; url?: string; note: string; source_id: string; kind?: string }) {
+  return write<DocRead>({
+    key: [ruleSourcesQuery.queryKey],
+    optimistic: (cur: unknown) => cur,
+    send: (idempotencyKey) => api.post<DocRead>('/api/v2/rules/read', b, { idempotencyKey }),
+  });
+}
 
 export const holdsQuery = queryOptions({
   queryKey: ['rules', 'holds'],

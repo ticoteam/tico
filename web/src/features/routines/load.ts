@@ -12,7 +12,7 @@ const text = (v: unknown, max = 200): string | undefined => {
   const s = typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '';
   return s ? s.slice(0, max) : undefined;
 };
-const PANEL = /^(routine|builtin|hook|org|stage):\S+$/;
+const PANEL = /^(routine|builtin|hook|org|stage|due):\S+$/;
 const PARTY = /^(group|bot|human):\S+$/;
 
 export function validateRoutinesSearch(raw: Record<string, unknown>): RoutinesSearch {

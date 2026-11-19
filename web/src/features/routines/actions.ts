@@ -2,6 +2,7 @@ import type { AnyRouter } from '@tanstack/react-router';
 import { defineAction, s, type Ctx } from '@/actions';
 import { meQuery } from '@/data';
 import {
+  addDue,
   addOrgRule,
   addStageRule,
   createHook,
@@ -9,10 +10,14 @@ import {
   createWatch,
   decideOrgRule,
   decideStageRule,
+  discardVersion,
   hooksQuery,
   orgRulesQuery,
+  readDocument,
+  removeDue,
   removeHook,
   removeRoutine,
+  restoreVersion,
   rotateHook,
   routineQuery,
   routinesQuery,
@@ -25,7 +30,11 @@ import {
   setRoutineLimit,
   setRoutineOn,
   setWatchTrigger,
+  satisfyDue,
+  signHook,
+  signHookOff,
   stageRulesQuery,
+  updateDue,
   updateOrgRule,
   updateRoutine,
   updateStageRule,
@@ -56,6 +65,9 @@ const agent = s.string({ min: 1, max: 200, pattern: /^bot:\S+$/, what: 'bot:<id>
 const party = s.string({ min: 1, max: 200, pattern: /^(\*|(group|bot|human):\S+)$/, what: '*, group:<id>, bot:<id> or human:<id>' });
 const cron = s.string({ min: 9, max: 100, pattern: /^\S+( \S+){4}$/, what: 'a five-part cron, like 0 9 * * 1-5' });
 const name = s.string({ min: 1, max: 200 });
+const owner = s.string({ min: 1, max: 200, pattern: /^(bot|human):\S+$/, what: 'bot:<id> or human:<id>' });
+const day = s.string({ min: 10, max: 10, pattern: /^\d{4}-\d{2}-\d{2}$/, what: 'a day, YYYY-MM-DD' });
+const REPEATS = ['once', 'weekly', 'monthly', 'quarterly', 'yearly'] as const;
 
 const go = (router: AnyRouter, to: string, search: Record<string, string | undefined> = {}) => router.navigate({ to, search });
 const panelOff = (router: AnyRouter) =>
@@ -169,7 +181,7 @@ export const updateRoutineAction = defineAction({
       instruction: (i.instruction ?? step?.prompt ?? '').trim(),
       trigger: triggerOf(i, was?.trigger),
     };
-    return said(updateRoutine(i.routine, f));
+    return said(updateRoutine(i.routine, f, was?.steps));
   },
   did: () => 'Saved',
   target: (i) => ({ kind: 'routine', id: i.routine }),
@@ -183,6 +195,55 @@ export const runNow = defineAction({
   run: (_ctx, i) => said(runRoutine(i.routine)),
   did: () => 'Started a run',
   target: (i) => ({ kind: 'routine-runs', id: i.routine }),
+});
+
+/** The sample as an object: blank is none, anything else must be a JSON object. */
+const sampleOf = (text: string | undefined): Record<string, unknown> | undefined => {
+  if (!text?.trim()) return undefined;
+  let v: unknown;
+  try {
+    v = JSON.parse(text);
+  } catch {
+    v = null;
+  }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) throw Object.assign(new Error("Sample input isn't a JSON object"), { code: "bad_input: Sample input isn't a JSON object" });
+  return v as Record<string, unknown>;
+};
+
+export const testRun = defineAction({
+  id: 'routines.testRun',
+  title: 'Test a routine with sample input',
+  kind: 'change',
+  // `sample`: JSON standing in for what its trigger gives (a message, an event, a webhook body)
+  input: s.object({ routine: id, sample: s.optional(s.string({ max: 50_000 })) }),
+  run: async (_ctx, i) => {
+    const r = await said(runRoutine(i.routine, sampleOf(i.sample)));
+    return { dropped: !!r.dropped };
+  },
+  did: (_i, out) => (out?.dropped ? "Dropped by the trigger's filters" : 'Started a test run'),
+  target: (i) => ({ kind: 'routine-runs', id: i.routine }),
+});
+
+export const restoreVersionAction = defineAction({
+  id: 'routines.restoreVersion',
+  title: "Restore a routine's version, or turn on a proposed one",
+  kind: 'change',
+  input: s.object({ routine: id, n: s.number({ int: true, min: 1, max: 1_000_000 }) }),
+  can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
+  run: (_ctx, i) => said(restoreVersion(i.routine, i.n)).then(() => undefined),
+  did: (i) => `Restored v${i.n}`,
+  target: (i) => ({ kind: 'routine', id: i.routine }),
+});
+
+export const discardVersionAction = defineAction({
+  id: 'routines.discardVersion',
+  title: "Discard an agent's proposed version",
+  kind: 'change',
+  input: s.object({ routine: id, n: s.number({ int: true, min: 1, max: 1_000_000 }) }),
+  can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
+  run: (_ctx, i) => said(discardVersion(i.routine, i.n)).then(() => undefined),
+  did: (i) => `Discarded v${i.n}`,
+  target: (i) => ({ kind: 'routine', id: i.routine }),
 });
 
 export const pause = defineAction({
@@ -315,6 +376,34 @@ export const rotateWebhook = defineAction({
     await go(router, ROUTINES, { tab: 'webhooks', panel: `hook:${i.hook}` });
   },
   did: () => 'New secret made',
+  target: (i) => ({ kind: 'hook', id: i.hook }),
+});
+
+/* A signing secret shows once, to the person who set it: the action hands it back as its output (never to Tico, never
+   cached), and the panel holds it until it closes. */
+export const signWebhook = defineAction({
+  id: 'webhooks.sign',
+  title: "Check a webhook's calls with a signing secret",
+  kind: 'change',
+  tico: false,
+  input: s.object({
+    hook: id,
+    preset: s.oneOf(['hmac', 'github', 'standard', 'stripe', 'slack'] as const),
+    secret: s.optional(s.string({ max: 300 })),
+  }),
+  run: (_ctx, i) => said(signHook(i.hook, i.preset, i.secret?.trim() || undefined)),
+  did: () => 'Signing on',
+  target: (i) => ({ kind: 'hook', id: i.hook }),
+});
+
+export const signWebhookOff = defineAction({
+  id: 'webhooks.signOff',
+  title: "Stop checking a webhook's signature",
+  kind: 'change',
+  tico: false,
+  input: s.object({ hook: id }),
+  run: (_ctx, i) => said(signHookOff(i.hook)).then(() => undefined),
+  did: () => 'Signing off',
   target: (i) => ({ kind: 'hook', id: i.hook }),
 });
 
@@ -563,6 +652,122 @@ export const setReachAction = defineAction({
     ),
   did: () => 'Saved',
   target: (i) => ({ kind: 'scope', id: i.who }),
+});
+
+// ---------------------------------------------------------------- rules: due dates
+
+export const openDue = defineAction({
+  id: 'rules.openDue',
+  title: 'Open a due date',
+  kind: 'view',
+  input: s.object({ due: id }),
+  run: ({ router }, i) => ruleTab(router, 'due', `due:${i.due}`),
+  did: () => 'Opened the due date',
+  target: (i) => ({ kind: 'due', id: i.due }),
+});
+
+export const newDue = defineAction({
+  id: 'rules.newDue',
+  title: 'Start a new due date',
+  kind: 'view',
+  input: s.object({}),
+  run: ({ router }) => ruleTab(router, 'due', 'due:new'),
+  did: () => 'Opened a new due date',
+  target: () => ({ kind: 'panel', id: 'due:new' }),
+});
+
+export const addDueAction = defineAction({
+  id: 'rules.addDue',
+  title: 'Add a due date to a rule',
+  kind: 'change',
+  input: s.object({
+    rule: id,
+    due: day,
+    repeats: s.oneOf(REPEATS),
+    owner,
+    // a task opens this many days before each due day
+    taskDays: s.optional(s.number({ int: true, min: 0, max: 366 })),
+  }),
+  run: async ({ router }, i) => {
+    const made = await said(addDue(i.rule, { first_due: i.due, repeats: i.repeats, owner: i.owner, ...(i.taskDays !== undefined ? { task_days: i.taskDays } : {}) }));
+    await ruleTab(router, 'due', `due:${made.id}`);
+    return made.id;
+  },
+  did: () => 'Added the due date',
+  target: (_i, out) => (out ? { kind: 'due', id: out } : null),
+});
+
+export const updateDueAction = defineAction({
+  id: 'rules.updateDue',
+  title: 'Change a due date',
+  kind: 'change',
+  input: s.object({
+    due: id,
+    first: s.optional(day),
+    repeats: s.optional(s.oneOf(REPEATS)),
+    owner: s.optional(owner),
+    // null: no task before it
+    taskDays: s.optional(s.nullable(s.number({ int: true, min: 0, max: 366 }))),
+  }),
+  run: async ({ router }, i) => {
+    const saved = await said(
+      updateDue(i.due, {
+        ...(i.first ? { first_due: i.first } : {}),
+        ...(i.repeats ? { repeats: i.repeats } : {}),
+        ...(i.owner ? { owner: i.owner } : {}),
+        ...(i.taskDays !== undefined ? { task_days: i.taskDays } : {}),
+      }),
+    );
+    // a new date or repeat ends this row and starts another: open the live one
+    if (saved?.id && saved.id !== i.due) await ruleTab(router, 'due', `due:${saved.id}`);
+    return saved?.id;
+  },
+  did: () => 'Saved',
+  target: (i, out) => ({ kind: 'due', id: out ?? i.due }),
+});
+
+export const satisfyDueAction = defineAction({
+  id: 'rules.satisfyDue',
+  title: 'Mark a due date satisfied',
+  kind: 'change',
+  input: s.object({ due: id, on: s.optional(day) }),
+  run: (_ctx, i) => said(satisfyDue(i.due, i.on)).then(() => undefined),
+  did: () => 'Marked satisfied',
+  target: (i) => ({ kind: 'due', id: i.due }),
+});
+
+export const removeDueAction = defineAction({
+  id: 'rules.removeDue',
+  title: 'Remove a due date',
+  kind: 'change',
+  input: s.object({ due: id }),
+  run: async ({ router }, i) => {
+    await said(removeDue(i.due));
+    await panelOff(router);
+  },
+  did: () => 'Removed the due date',
+});
+
+// ---------------------------------------------------------------- rules: a document to read
+
+export const readDocumentAction = defineAction({
+  id: 'rules.readDocument',
+  title: 'Have a document read for outside rules',
+  kind: 'change',
+  input: s.object({
+    file: s.optional(id),
+    url: s.optional(s.string({ min: 8, max: 2000, pattern: /^https?:\/\/\S+$/i, what: 'an http(s) link' })),
+    note: s.optional(s.string({ max: 2000 })),
+    // an existing From's id, or a new From's name with `kind`
+    source: s.string({ min: 1, max: 200 }),
+    kind: s.optional(s.oneOf(['vendor', 'customer', 'government', 'other'] as const)),
+  }),
+  run: (_ctx, i) => {
+    if (!i.file === !i.url) throw Object.assign(new Error('Pick a file or paste a link'), { code: 'bad_input: Pick a file or paste a link' });
+    return said(readDocument({ ...(i.file ? { file_id: i.file } : { url: i.url }), note: i.note?.trim() ?? '', source_id: i.source.trim(), ...(i.kind ? { kind: i.kind } : {}) }));
+  },
+  did: (_i, out) => (out?.screening === 'hold' ? 'Screening held it' : 'Reading it'),
+  target: (_i, out) => (out ? { kind: 'task', id: out.task_id } : null),
 });
 
 // ---------------------------------------------------------------- listening

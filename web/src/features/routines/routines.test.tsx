@@ -7,12 +7,12 @@ import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
 import { ListeningPage } from './ListeningPage';
 import { validateListeningSearch, validateRoutinesSearch, validateRulesSearch } from './load';
-import { routinesQuery, stageRulesQuery, watchesQuery, type StageRules } from './queries';
+import { dueQuery, hooksQuery, orgRulesQuery, routinesQuery, stageRulesQuery, watchesQuery, type StageRules } from './queries';
 import { runLink } from './RoutinePanel';
 import { RoutinesPage } from './RoutinesPage';
 import { RulesPage } from './RulesPage';
 import { StageRules as StageRulesList } from './StageRules';
-import type { Routine, StageRule } from './types';
+import type { Hook, OrgRule, Routine, StageRule } from './types';
 import { cronWords, orgParts, stageParts } from './words';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -33,6 +33,26 @@ function serve(reply: (url: string, method: string) => Reply | Promise<Reply>) {
   });
 }
 const nothing = (): Reply => ({ status: 404, body: { detail: 'not_found' } });
+
+type Sent = { url: string; method: string; body: unknown };
+/** serve(), keeping every write the page sends. */
+function record(reply: (url: string, method: string) => Reply | Promise<Reply>): Sent[] {
+  const sent: Sent[] = [];
+  vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET';
+    if (method !== 'GET') sent.push({ url: String(url), method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    const r = await reply(String(url), method);
+    return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
+  });
+  return sent;
+}
+const ok = (body: unknown): Reply => ({ status: 200, body });
+const pick = async (name: string | RegExp, option: string | RegExp) => {
+  fireEvent.click(screen.getByRole('combobox', { name }));
+  const o = await screen.findByRole('option', { name: option });
+  fireEvent.pointerDown(o, { pointerType: 'mouse' });
+  fireEvent.click(o);
+};
 
 /** The page under a route at its own address, with the action layer bound to that router. */
 function show(node: ReactNode, at: string) {
@@ -128,6 +148,190 @@ describe('Routines', () => {
     show(<RoutinesPage search={{}} />, '/company/routines');
     expect(await screen.findByText('Routines did not load')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+  });
+});
+
+describe('A routine: test run, versions, edit', () => {
+  const openMenu = async (item: string) => {
+    const panel = await screen.findByRole('complementary', { name: 'Morning numbers' });
+    fireEvent.click(within(panel).getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: item }));
+  };
+
+  it('runs it with sample input for its trigger, and says when the filters drop it', async () => {
+    let answer: unknown = { run: { id: 'run9', status: 'ok', steps: null } };
+    const sent = record((url, method) => (method === 'POST' && url.endsWith('/automations/r1/run') ? ok(answer) : nothing()));
+    queryClient.setQueryData(routinesQuery.queryKey, [routine({ trigger: { type: 'event', name: 'task.created' } })]);
+    show(<RoutinesPage search={{ panel: 'routine:r1' }} />, '/company/routines?panel=routine:r1');
+    await openMenu('Test run');
+    const dialog = await screen.findByRole('dialog', { name: 'Test run' });
+    answer = { run: null, dropped: true };
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Run' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.body).toEqual({ input: { event: { name: 'task.created' } } });
+    expect(await within(dialog).findByText("Dropped by the trigger's filters")).toBeTruthy();
+  });
+
+  it('lists its versions and proposals; restores one and discards a proposal', async () => {
+    const versions = [
+      { n: 1, actor: 'human:me', created_at: '2026-11-01T09:00:00Z', flow: {}, status: 'active' },
+      { n: 2, actor: 'human:me', created_at: '2026-11-02T09:00:00Z', flow: {}, status: 'active' },
+      { n: 3, actor: 'bot:growth', created_at: '2026-11-03T09:00:00Z', flow: {}, status: 'pending', summary: 'Post at 8 instead' },
+    ];
+    const sent = record((url, method) =>
+      url.endsWith('/automations/r1/versions') && method === 'GET' ? ok({ next: null, versions }) : url.includes('/restore') ? ok(routine({ version: 3 } as Partial<Routine>)) : method === 'DELETE' ? ok({}) : nothing(),
+    );
+    queryClient.setQueryData(routinesQuery.queryKey, [routine({ version: 2 } as Partial<Routine>)]);
+    show(<RoutinesPage search={{ panel: 'routine:r1' }} />, '/company/routines?panel=routine:r1');
+    await openMenu('Versions');
+    const current = await screen.findByTitle(/^v2 /);
+    expect(within(current).getByText('Current')).toBeTruthy();
+    expect(screen.getByTitle('v3 Post at 8 instead')).toBeTruthy();
+    fireEvent.click(within(screen.getByTitle(/^v1 /)).getByRole('button', { name: 'Restore' }));
+    await waitFor(() => expect(sent.some((x) => x.method === 'POST' && x.url.endsWith('/automations/r1/versions/1/restore'))).toBe(true));
+    fireEvent.click(within(screen.getByTitle('v3 Post at 8 instead')).getByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(sent.some((x) => x.method === 'DELETE' && x.url.endsWith('/automations/r1/versions/3'))).toBe(true));
+  });
+
+  it('changes the instruction and keeps the steps the editor does not draw', async () => {
+    const filter = { id: 'f1', type: 'filter', rules: [{ when: [{ field: 'task.pipeline', value: 'p1' }] }] };
+    const sent = record((_url, method) => (method === 'PATCH' ? ok(routine()) : nothing()));
+    queryClient.setQueryData(routinesQuery.queryKey, [routine({ steps: [filter, { id: 's1', type: 'bot_turn', bot: 'bot:growth', prompt: 'Post the numbers.' }] })]);
+    show(<RoutinesPage search={{ panel: 'routine:r1' }} />, '/company/routines?panel=routine:r1');
+    await openMenu('Edit');
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Instruction' }), { target: { value: 'Post the totals.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect((sent[0]!.body as { steps: unknown[] }).steps).toEqual([filter, { id: 's1', type: 'bot_turn', bot: 'bot:growth', prompt: 'Post the totals.' }]);
+  });
+});
+
+describe('A webhook: payload and signing', () => {
+  const hook: Hook = { id: 'h1', name: 'Shop orders', url: 'https://in.example/hooks/h1', signed: false, automations: [] };
+  const calls = { deliveries: [{ delivery: 'd1', received_at: '2026-11-19T07:00:00Z', outcome: 'accepted', tasks: 1, stored: true }] };
+
+  it('opens a kept call’s headers and body', async () => {
+    record((url) =>
+      url.endsWith('/triggers/h1/deliveries/d1')
+        ? ok({ delivery: { received_at: '2026-11-19T07:00:00Z', type: 'order.paid', bytes: 7, expired: false, headers: { 'content-type': 'application/json' }, body: '{"a":1}' } })
+        : url.endsWith('/triggers/h1/deliveries')
+          ? ok(calls)
+          : nothing(),
+    );
+    queryClient.setQueryData(hooksQuery.queryKey, [hook]);
+    show(<RoutinesPage search={{ tab: 'webhooks', panel: 'hook:h1' }} />, '/company/routines?tab=webhooks&panel=hook:h1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Payload' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Payload' });
+    const body = await within(dialog).findByRole('region', { name: 'Body' });
+    expect(body.querySelector('pre')?.textContent).toBe('{\n  "a": 1\n}');
+    expect(within(dialog).getByRole('region', { name: 'Headers' }).textContent).toContain('content-type: application/json');
+  });
+
+  it('turns signing on and shows the made secret once, never in the cache', async () => {
+    const secret = 'whsec_made_up_7f3a';
+    const sent = record((url, method) =>
+      method === 'POST' && url.endsWith('/triggers/h1/signing')
+        ? ok({ trigger: { id: 'h1', signed: true, preset: 'hmac', signing_secret: secret, replayed: false } })
+        : url.endsWith('/api/v2/triggers')
+          ? ok({ triggers: [{ ...hook, signed: true, preset: 'hmac' }] })
+          : url.endsWith('/deliveries')
+            ? ok(calls)
+            : nothing(),
+    );
+    queryClient.setQueryData(hooksQuery.queryKey, [hook]);
+    show(<RoutinesPage search={{ tab: 'webhooks', panel: 'hook:h1' }} />, '/company/routines?tab=webhooks&panel=hook:h1');
+    const panel = await screen.findByRole('complementary', { name: 'Shop orders' });
+    fireEvent.click(within(panel).getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Signing' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Signing' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.body).toEqual({ preset: 'hmac' });
+    expect(await within(panel).findByText(secret)).toBeTruthy();
+    const cached = JSON.stringify(queryClient.getQueryCache().getAll().map((q) => q.state.data));
+    expect(cached).not.toContain(secret);
+    expect(window.location.href).not.toContain(secret);
+  });
+});
+
+describe('Rules: due dates and documents', () => {
+  const detail = {
+    id: 'd1',
+    due_on: '2026-12-01',
+    repeats: 'yearly',
+    status: 'due_soon',
+    owner: 'human:me',
+    rule: { id: 'o1', text: 'File the yearly report' },
+    can_edit: true,
+    can_satisfy: true,
+    open_days: ['2026-12-01'],
+    task_days: null,
+    chain: [{ id: 'd1', satisfied: [{ due_on: '2025-12-01', satisfied_by: 'human:me', via: 'person' }] }],
+  };
+
+  it('opens a due date from its row, with its history, and marks it satisfied', async () => {
+    const sent = record((url, method) =>
+      method === 'POST' && url.endsWith('/rule-due/d1/satisfied') ? ok({}) : url.endsWith('/rule-due/d1') ? ok(detail) : url.includes('/rules/due') ? ok({ due: [] }) : nothing(),
+    );
+    queryClient.setQueryData(dueQuery.queryKey, [{ id: 'd1', due_on: '2026-12-01', status: 'due_soon', owner: 'human:me', rule: { id: 'o1', text: 'File the yearly report' } }]);
+    show(<RulesPage search={{ tab: 'due', panel: 'due:d1' }} />, '/company/rules?tab=due&panel=due:d1');
+    expect(href(within(await screen.findByTitle('File the yearly report')).getByRole('link'))).toBe('/company/rules?tab=due&panel=due:d1');
+    const panel = await screen.findByRole('complementary', { name: 'Due date' });
+    expect(await within(panel).findByText('Dec 1, 2026')).toBeTruthy();
+    expect(within(panel).getByTitle(/Marked by/)).toBeTruthy();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Mark satisfied' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.body).toEqual({});
+  });
+
+  it('adds a due date to a rule', async () => {
+    const sent = record((url, method) => (method === 'POST' && url.endsWith('/rules/o1/due') ? ok({ ...detail, id: 'd2' }) : nothing()));
+    queryClient.setQueryData(dueQuery.queryKey, []);
+    queryClient.setQueryData<OrgRule[]>(orgRulesQuery('active').queryKey, [
+      { id: 'o1', kind: 'external', text: 'File the yearly report', status: 'active', version: 1, can_edit: true },
+    ]);
+    show(<RulesPage search={{ tab: 'due', panel: 'due:new' }} />, '/company/rules?tab=due&panel=due:new');
+    await screen.findByRole('complementary', { name: 'New due date' });
+    await pick(/Rule/, 'File the yearly report');
+    const next = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 15);
+    fireEvent.click(screen.getByRole('button', { name: /Due/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Next month' }));
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`${next.toLocaleString('en-US', { month: 'long' })} 15$`) }));
+    await pick(/Routine/, 'A task before it');
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    const day = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-15`;
+    expect(sent[0]!.body).toEqual({ first_due: day, repeats: 'yearly', owner: 'human:me', task_days: 14 });
+  });
+
+  it('sends a file to be read for outside rules and links the reading task', async () => {
+    const sent = record((url, method) =>
+      method === 'POST' && url.endsWith('/rules/read')
+        ? ok({ task_id: 't5', existing: false })
+        : url.includes('/files?')
+          ? ok({ files: [{ id: 'f1', title: 'Vendor terms' }, { id: 'f2', title: 'Logo', library_kind: 'image' }] })
+          : url.includes('/rule-sources')
+            ? ok({ sources: [{ id: 'src1', name: 'Made Up Supply', kind: 'vendor' }] })
+            : url.includes('/rules/due')
+              ? ok({ due: [] })
+              : nothing(),
+    );
+    queryClient.setQueryData(dueQuery.queryKey, []);
+    show(<RulesPage search={{ tab: 'due' }} />, '/company/rules?tab=due');
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Add document' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add document' });
+    const box = within(dialog).getByRole('combobox', { name: 'File' });
+    box.focus();
+    fireEvent.input(box, { target: { value: 'vendor' }, inputType: 'insertText' });
+    fireEvent.click(await screen.findByRole('option', { name: /Vendor terms/ }));
+    await pick(/From/, 'Made Up Supply');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Read it' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.body).toEqual({ file_id: 'f1', note: '', source_id: 'src1' });
+    const done = await screen.findByRole('dialog', { name: 'Add document' });
+    expect(await within(done).findByText('Reading Vendor terms.')).toBeTruthy();
+    expect(href(within(done).getByRole('link', { name: 'Open task' }))).toBe('/task/t5');
   });
 });
 

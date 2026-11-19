@@ -89,6 +89,8 @@
 .rr .rr-once{display:grid;gap:var(--s-2);justify-items:start}
 .rr-form{display:grid;gap:var(--s-3)}
 .rr-field{display:flex;align-items:center;gap:var(--s-2h)}
+/* a kept call's headers and body, as sent (Payload) */
+.rr-pre{margin:var(--s-1) 0 0;font-family:var(--font-code);font-size:var(--t-sm);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)}
 
 /* ---------- a stage's rules in the pipeline editor: a moment, its rules, a rule being written (pages/1-tasks/more.css) ---------- */
 .ps-moments .ph{margin-top:var(--s-2h)}

@@ -135,8 +135,26 @@ export interface Delivery {
   reason?: string | null;
   type?: string | null;
   tasks?: number;
+  /** Its body is still kept, so it can be read. */
+  stored?: boolean;
 }
-/** What a create or a new secret gives back once: the full address, secret included. */
+/** One kept call (triggers.py read): redacted headers and, while kept, the body as sent. */
+export interface Payload {
+  received_at: string;
+  type?: string | null;
+  bytes?: number;
+  expired: boolean;
+  headers?: Record<string, string>;
+  body?: string;
+}
+/** A routine's saved version (`active`) or an agent's proposal (`pending`). */
+export interface Version {
+  n: number;
+  actor: string;
+  created_at: string;
+  status: 'active' | 'pending';
+  summary?: string;
+}
 export interface ShownOnce {
   id: string;
   url: string;
@@ -208,6 +226,54 @@ export interface DueDate {
   task_days?: number;
   owner?: string | null;
   rule: { id: string; text: string };
+}
+export type Repeats = 'once' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+/** A marked occurrence (rule_due.py detail): who or what satisfied it. */
+export interface DueMark {
+  due_on: string;
+  satisfied_by?: string | null;
+  via?: string | null;
+  satisfied_at?: string | null;
+  outcome?: string | null;
+}
+/** One due date in full, for its panel (GET /rule-due/{id}). */
+export interface DueDetail extends Omit<DueDate, 'rule' | 'repeats' | 'task_days'> {
+  repeats: Repeats;
+  rule: { id: string; text: string; kind?: string; status?: string };
+  can_edit?: boolean;
+  can_satisfy?: boolean;
+  open_days?: string[];
+  ended_on?: string | null;
+  replaced_by?: string | null;
+  retired_at?: string | null;
+  routine_id?: string | null;
+  /** A task opens this many days before each due day; null is no routine. */
+  task_days?: number | null;
+  chain?: { id: string; satisfied?: DueMark[] }[];
+}
+/** Where outside rules come from (From). */
+export interface RuleSource {
+  id: string;
+  name: string;
+  kind?: string;
+}
+/** A file in Files, as the document picker reads it. */
+export interface DocFile {
+  id: string;
+  title?: string | null;
+  name?: string | null;
+  locator?: string | null;
+  url?: string | null;
+  library_kind?: string | null;
+  archived?: boolean;
+}
+/** What POST /rules/read answers: the reading task, and whether screening held the document. */
+export interface DocRead {
+  task_id: string;
+  existing?: boolean;
+  screening?: string | null;
+  truncated?: boolean;
+  file?: { title?: string | null } | null;
 }
 export interface RuleHold {
   id: string;

@@ -17,12 +17,18 @@ import { toast } from '@/kit/Toast';
 
 /** Run an action from a click; a refusal toasts its reason ("code: reason" reads as the reason). */
 export async function press(id: string, input: unknown): Promise<boolean> {
+  return !!(await pressOut(id, input));
+}
+
+/** A press that hands back what the action gave (a secret shown once, whether a sample was dropped); null when refused. */
+export async function pressOut<T>(id: string, input: unknown): Promise<{ out: T | undefined } | null> {
   const r = await run(id, input, { via: 'click' });
   if (!r.ok) {
     const why = r.error?.includes(': ') ? r.error.slice(r.error.indexOf(': ') + 2).trim() : '';
     toast({ text: why || "Couldn't save", kind: 'failed' });
+    return null;
   }
-  return r.ok;
+  return { out: r.out as T | undefined };
 }
 
 /** Something went wrong, said in ink with a mark: no red. */
