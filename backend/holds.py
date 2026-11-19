@@ -31,6 +31,7 @@ claim's rules (turn_budgets.refusal, run_failures.typed_since); `human` speaks o
 lets it through. `words` is the sentence the pages show for a kind.
 """
 
+import functools
 import json
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
@@ -329,9 +330,11 @@ def task_quarantine_sql(many: bool = False) -> str:
     )
 
 
-def _task_reads() -> list[tuple[str, str]]:
-    """Each task-scoped kind with its one-task read."""
-    return [(CANT_START, cant_start_sql()), (TASK_QUARANTINE, task_quarantine_sql()), (CLAIM_HELD, claim_held_sql())]
+@functools.cache
+def _task_reads() -> tuple[tuple[str, str], ...]:
+    """Each task-scoped kind with its one-task read: the same statements every time, so they are built once (a page
+    asks them for each bot on each task)."""
+    return ((CANT_START, cant_start_sql()), (TASK_QUARANTINE, task_quarantine_sql()), (CLAIM_HELD, claim_held_sql()))
 
 
 def _many_sql(kind: str) -> str:
@@ -352,10 +355,15 @@ def _held_bots(kind: str, bots: str, now: str) -> set[str]:
     return found
 
 
-def _read(c: Any, sql: str, args: tuple[Any, ...]) -> Any:
+@functools.cache  # the module, found once: a page reads through here for each bot on each task
+def _read_cache() -> Any:
     from . import read_cache
 
-    return cast(Any, read_cache).one(c, sql, args)
+    return read_cache
+
+
+def _read(c: Any, sql: str, args: tuple[Any, ...]) -> Any:
+    return _read_cache().one(c, sql, args)
 
 
 def on_tasks(c: Any, task_ids: Collection[str] | None = None) -> dict[str, set[str]]:

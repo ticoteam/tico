@@ -8,6 +8,7 @@ words before its own, and the first is canceled, so one run starts and nothing s
 was folded into it (`refs.parts`), so taking one of them back (`cancel`) takes out its words alone.
 """
 
+import functools
 import hashlib
 import json
 import logging
@@ -39,6 +40,7 @@ ENDINGS = (
 )
 
 
+@functools.cache  # the module, found once: an import statement costs more than the cached read it is for
 def _h() -> Any:
     from . import hubdb
 
@@ -687,6 +689,7 @@ def task_cause(
     return None if state is None else WORKTREE_RESERVED if state == "reserved" else WORKTREE_WAITING
 
 
+@functools.cache  # the same statement every time: built once, as task_cause asks it of each task
 def _held_runs_sql(many: bool = False) -> str:
     """The bots (slugs, comma-joined) with a run held on one task (`RUN_HELD`): a job still uncertain that nobody has
     chosen for yet (no `job_recovery` for its try; a saved choice waits only for its lane, and runs by itself). With
@@ -1195,12 +1198,17 @@ def _range(prefix: str) -> tuple[str, str]:
 
 
 # ----------------------------------------------------------------------------- reads for a pass over many tasks
+@functools.cache  # likewise: a page reads through `_read` for each task
+def _read_cache() -> Any:
+    from . import read_cache
+
+    return read_cache
+
+
 def _read(conn: "sqlite3.Connection", sql: str, args: tuple[object, ...]) -> Any:
     """One row through the snapshot's read cache (`read_cache.one`): a pass over many tasks fills it first (`prime`),
     and any write empties it, so a row read here is never older than the last write."""
-    from . import read_cache
-
-    return cast("Any", read_cache).one(conn, sql, args)
+    return _read_cache().one(conn, sql, args)
 
 
 def _listed(*columns: str) -> str:

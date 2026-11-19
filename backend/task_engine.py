@@ -13,6 +13,7 @@ quarantining a bot.
 Names and signatures are in docs/dev/pipelines-v3-build.md.
 """
 
+import functools
 import hashlib
 import json
 import logging
@@ -45,6 +46,7 @@ FIRST_TRY_S = 120
 GUARDED = ("status", "stage_id", "owner_id", "pipeline_id")
 
 
+@functools.cache  # the module, found once: an import statement costs more than the cached read it is for
 def _h() -> Any:
     from . import hubdb
 
