@@ -1,4 +1,4 @@
-import { queryOptions } from '@tanstack/react-query';
+import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '@/api/client';
 import type {
   FinanceAction,
@@ -23,7 +23,7 @@ import type {
   FinanceSalesTax,
   FinanceTransactions,
 } from '@/api/schema';
-import { isNetworkError, QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
+import { directoryQuery, isNetworkError, QUIET_STALE_MS, queryClient, quietRoot, write, type Directory } from '@/data';
 import { newId } from '@/lib';
 
 /* Finance, budgets and Growth. None has a live topic: each root is read again after the person's own writes, on
@@ -649,21 +649,131 @@ export const segmentsQuery = queryOptions({
   ...quiet,
 });
 
+/** GET /api/v2/growth/sources (backend/growth.py source_view, growth_sync.py view); the schema leaves it untyped. */
 export interface GrowthSource {
   id: string;
   name?: string;
   system?: string;
-  kind?: string;
+  kind?: string | null;
   truth_for?: string[] | string | null;
   fills?: string[];
+  /** How agents reach it: mcp, credential, url or person, then which one. */
+  reach_kind?: string | null;
   reach_ref?: string | null;
+  /** What agents may do with it: `read`, `write`, `act`, comma separated. */
+  may?: string | null;
+  owner_ref?: string | null;
   health: 'fresh' | 'stale' | 'failing' | 'waiting' | 'not_synced';
+  health_since?: string | null;
   last_run_at?: string | null;
   last_good_run?: string | null;
+  last_error?: string | null;
+  has_file?: boolean;
   retired_at?: string | null;
 }
 export const growthSourcesQuery = queryOptions({
   queryKey: ['growth', 'sources'],
-  queryFn: ({ signal }) => api.get<{ sources: GrowthSource[] }>('/api/v2/growth/sources', { signal }),
+  queryFn: ({ signal }) => api.get<{ sources: GrowthSource[]; conflicts?: string[] }>('/api/v2/growth/sources', { signal }),
   ...quiet,
 });
+
+/** A number's origin (backend/growth_sync.py origins_view, growth.py beside): synced by a source, typed by someone, or
+    computed from customers; `conflict` is a source's value held beside a typed actual. */
+export interface GrowthOrigin {
+  origin: 'synced' | 'typed' | 'computed';
+  quality?: string | null;
+  source?: string | null;
+  at?: string | null;
+  by?: string | null;
+  computed_from?: number;
+  sources?: { source: string }[];
+  conflict?: { value: number | null; source: string | null } | null;
+  differs?: { typed: number | null; chosen: string | null } | null;
+}
+/** One channel's month as GET /api/v2/growth/cohorts lists it. Money in dollars; kept and margin are percents, 0 to 100. */
+export interface GrowthCohortMonth {
+  id: string | null;
+  channel: string | null;
+  month: string;
+  spend: number | null;
+  bot_cost: number | null;
+  new_customers: number | null;
+  kept_d30: number | null;
+  kept_d90: number | null;
+  kept_d180: number | null;
+  revenue_month: number | null;
+  margin_pct: number | null;
+  quality: 'actual' | 'estimate' | null;
+  origins?: Record<string, GrowthOrigin>;
+  /** Why a computed figure has no value (not_yet, too_few), by field. */
+  status?: Record<string, string>;
+}
+
+/** A channel's months, newest first; its month panel reads the same list. */
+export const channelMonthsQuery = (channel: string) =>
+  queryOptions({
+    queryKey: ['growth', 'cohorts', channel],
+    queryFn: ({ signal }) => api.get<{ cohorts: GrowthCohortMonth[] }>(`/api/v2/growth/cohorts?${qs({ channel })}`, { signal }),
+    ...quiet,
+  });
+
+export interface GrowthKeptFigure {
+  value: number | null;
+  status: string;
+  count?: number | null;
+  denominator?: number;
+  rule?: string;
+  /** Only for the owner, admins and the key readers. */
+  customers?: { still: string[]; churned: { key: string; churned: string | null }[] };
+}
+/** GET /api/v2/growth/computed (backend/growth_computed.py), the fields the customers panel reads. */
+export interface GrowthComputed {
+  keys_visible: boolean;
+  cohorts: ({ period: string } & Partial<Record<'kept_d30' | 'kept_d90' | 'kept_d180', GrowthKeptFigure>>)[];
+}
+
+/** The customers behind one month's retention, all customers or one segment's. */
+export const growthCustomersQuery = (segment: string | undefined, month: string) =>
+  queryOptions({
+    queryKey: ['growth', 'customers', growthScope(segment), month],
+    queryFn: ({ signal }) => api.get<GrowthComputed>(`/api/v2/growth/computed?${qs({ by: 'all', month, segment, customers: 'true' })}`, { signal }),
+    ...quiet,
+  });
+
+export interface PageOwnerRow {
+  bot?: string | null;
+  /** 'default', 'none' or the chosen agent ('bot:<id>'). */
+  choice?: string;
+}
+/** Each page's owner (backend/page_owners.py); Settings and Library read the same key. */
+export const pageOwnersQuery = queryOptions({
+  queryKey: ['settings', 'page-owners'],
+  queryFn: async ({ signal }) => (await api.get<{ pages?: Record<string, PageOwnerRow> }>('/api/v2/page-owners', { signal })).pages ?? {},
+  ...quiet,
+});
+
+const botId = (ref: string) => (ref.includes(':') ? ref : `bot:${ref}`);
+
+/** The Growth Manager: the agent that owns the Growth page, never the General Manager standing in for none
+    (backend/growth_setup.py manager). `same` says whether two agent refs (id or slug) are one agent. */
+export function growthManagerOf(row: PageOwnerRow | undefined, same: (a: string, b: string) => boolean): string | null {
+  if (!row?.bot || row.choice === 'none') return null;
+  const bot = botId(row.bot);
+  if (row.choice && row.choice !== 'default' && same(botId(row.choice), bot)) return bot;
+  return same(bot, 'bot:general-manager') ? null : bot;
+}
+
+/** Two refs to one agent, by the directory (an agent answers to its id and its slug). */
+export const sameAgent = (dir: Directory | undefined) => (a: string, b: string) => a === b || (!!dir?.byId[a] && dir.byId[a] === dir.byId[b]);
+
+/** The Growth Manager as the directory names it (`bot:<id>`, not a slug), or null when the company has none. */
+export function growthManager(owners: Record<string, PageOwnerRow> | undefined, dir: Directory | undefined): string | null {
+  const bot = growthManagerOf(owners?.growth, sameAgent(dir));
+  return bot && (dir?.byId[bot]?.id ?? bot);
+}
+
+/** The Growth Manager, read from the server if not held yet. */
+export async function findGrowthManager(qc: QueryClient): Promise<string | null> {
+  const [owners, dir] = await Promise.all([qc.ensureQueryData(pageOwnersQuery), qc.ensureQueryData(directoryQuery).catch(() => undefined)]);
+  return growthManager(owners, dir);
+}

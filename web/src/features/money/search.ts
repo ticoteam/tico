@@ -57,12 +57,13 @@ export interface GrowthSearch {
   segment?: string;
   /** YYYY-MM; the last full month when left out. */
   month?: string;
-  /** `channel:<slug>`. */
+  /** `channel:<slug>`, `month:<channel slug>:<YYYY-MM>`, `customers:<YYYY-MM>:<30|90|180>`, or on Sources `source:<id>`. */
   panel?: string;
 }
 
 const text = (v: unknown, max = 200) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
 const PANEL = /^(line|budget|channel):\S+$/;
+const GROWTH_PANEL = /^(channel|source):\S+$|^month:[\w-]+:\d{4}-(0[1-9]|1[0-2])$|^customers:\d{4}-(0[1-9]|1[0-2]):(30|90|180)$/;
 
 /** `?tab=pnl&period=quarter&basis=cash&from=2026-07&panel=line:<account>&as=human:<id>`; anything else is dropped. */
 export function validateFinanceSearch(raw: Record<string, unknown>): FinanceSearch {
@@ -82,7 +83,7 @@ export function validateFinanceSearch(raw: Record<string, unknown>): FinanceSear
   return out;
 }
 
-/** `?segment=<slug>&month=2026-10&panel=channel:<slug>`, or `?tab=sources`. */
+/** `?segment=<slug>&month=2026-10&panel=channel:<slug>`, or `?tab=sources&panel=source:<id>`. */
 export function validateGrowthSearch(raw: Record<string, unknown>): GrowthSearch {
   const out: GrowthSearch = {};
   if (raw.tab === 'sources') out.tab = 'sources';
@@ -90,9 +91,16 @@ export function validateGrowthSearch(raw: Record<string, unknown>): GrowthSearch
   if (segment && /^[\w-]+$/.test(segment)) out.segment = segment;
   if (isYm(raw.month)) out.month = raw.month;
   const panel = text(raw.panel);
-  if (panel && PANEL.test(panel)) out.panel = panel;
+  // A source opens on Sources only; the rest on the board.
+  if (panel && GROWTH_PANEL.test(panel) && panel.startsWith('source:') === (out.tab === 'sources')) out.panel = panel;
   return out;
 }
+
+/** `month:search:2026-10` is ['search', '2026-10']; `customers:2026-10:90` is ['2026-10', '90']. */
+export const pairOf = (rest: string): [string, string] => {
+  const i = rest.lastIndexOf(':');
+  return [rest.slice(0, i), rest.slice(i + 1)];
+};
 
 /** The panel's kind and id: `line:acc_1` is ['line', 'acc_1']. */
 export const panelOf = (panel: string | undefined): [string, string] | null => {
