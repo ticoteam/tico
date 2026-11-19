@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useRef, useState, type KeyboardEvent } from 'react';
 import { IconButton } from '@/kit/IconButton';
 import { Icon } from '@/kit/Icon';
 import { readPref, writePref } from '@/prefs';
 
-const DRAFT_WRITE_MS = 300;
 const DRAFT_KEEP_MS = 30 * 86_400_000;
 
 interface Draft {
@@ -46,7 +45,6 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true }
   const [files, setFiles] = useState<File[]>([]);
   const box = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [shownFor, setShownFor] = useState(`${me}:${id}`);
   const [filled, setFilled] = useState(fill);
 
@@ -61,20 +59,10 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true }
     if (fill) setText(fill.text);
   }
 
-  useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current);
-  }, []);
-
-  const keep = (next: string) => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => writeDraft(me, id, next), DRAFT_WRITE_MS);
-  };
-
   const ready = text.trim().length > 0 || files.length > 0;
 
   const send = () => {
     if (!ready) return;
-    if (timer.current) clearTimeout(timer.current);
     onSend(text.trim(), files);
     setText('');
     setFiles([]);
@@ -108,7 +96,7 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true }
           value={text}
           onChange={(e) => {
             setText(e.target.value);
-            keep(e.target.value);
+            writeDraft(me, id, e.target.value);
           }}
           onKeyDown={onKey}
         />

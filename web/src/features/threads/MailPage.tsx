@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQueries, useQuery, useSuspenseInfiniteQuery, useSuspenseQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueries, useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { ApiError } from '@/api/client';
 import { clock, Composer, dayKey, dayLabel, MessageBones, stamp } from '@/conversation';
@@ -7,7 +7,7 @@ import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Count } from '@/kit/Count';
 import { Empty } from '@/kit/Empty';
-import { Search, SettledSearch } from '@/kit/Field';
+import { SettledSearch } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Markdown } from '@/kit/Markdown';
@@ -18,7 +18,7 @@ import { VirtualList } from '@/kit/VirtualList';
 import { ItemHead, ListAndItem, PageMore } from '@/pagekinds';
 import { letterAt, letterRows, letterUnread, senderName, type Letter, type LetterRow, type Text } from './model';
 import { ChatWith, press, useMe } from './people';
-import { contactTextsQuery, letterQuery, mailboxesQuery, mailFindQuery, mailInstructionsQuery, textListQuery, textQuery, type Mailbox } from './queries';
+import { letterQuery, mailboxesQuery, mailFindQuery, mailInstructionsQuery, textListQuery, textQuery, textsBySenderQuery, type Mailbox } from './queries';
 import { NewButton, useThreadTabs } from './ThreadsPage';
 import './threads.css';
 
@@ -238,9 +238,11 @@ function LetterBody({ box, id }: { box: string; id: string }) {
 function Reply({ box, id }: { box: string; id: string }) {
   const me = useMe();
   const { data } = useQuery(letterQuery(box, id));
-  const to = data?.find((l) => !l.labels?.includes(DRAFT) && l.from_addr !== box);
   if (!me) return null;
-  const name = to ? senderName(to) : 'this mail';
+  // The mail API returns oldest first and replies to the newest letter from outside the mailbox, if there is one.
+  const mailbox = box.toLowerCase();
+  const to = data?.findLast((l) => (l.from_addr ?? '').toLowerCase() !== mailbox) ?? data?.at(-1);
+  const name = to?.from_addr ? senderName(to) : 'this mail';
   return (
     <Composer
       id={`mail:${id}`}
@@ -307,10 +309,11 @@ export interface MessagingPageProps {
     the server receives texts and sends none. */
 export function MessagingPage({ open }: MessagingPageProps) {
   const tabs = useThreadTabs('/threads');
-  const list = useSuspenseInfiniteQuery(textListQuery);
   const [words, setWords] = useState('');
-  const contacts = contactsOf(list.data.pages.flatMap((p) => p.messages));
-  const shown = words.trim() ? contacts.filter((c) => (c.from ?? '').toLowerCase().includes(words.trim().toLowerCase())) : contacts;
+  const list = useInfiniteQuery(words ? textsBySenderQuery(words) : textListQuery);
+  const find = words.toLowerCase();
+  const messages = list.data?.pages.flatMap((p) => p.messages) ?? [];
+  const contacts = contactsOf(find ? messages.filter((t) => (t.from ?? '').toLowerCase().includes(find)) : messages);
   const more = () => {
     if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
   };
@@ -319,17 +322,17 @@ export function MessagingPage({ open }: MessagingPageProps) {
       title="Threads"
       path="/threads/messaging"
       actions={<NewButton />}
-      search={<Search label="Find a conversation" placeholder="Find a conversation" value={words} onValueChange={setWords} wide />}
+      search={<SettledSearch label="Find a conversation" placeholder="Find a conversation" value={words} onSettle={setWords} wide />}
       tabs={tabs}
       listLabel="Messaging"
       list={
-        shown.length === 0 && words.trim() ? (
+        contacts.length === 0 && words ? (
           <Empty icon="search" title="No matches" />
         ) : (
           <VirtualList
             className="tl-vl"
             label="Messaging"
-            items={shown}
+            items={contacts}
             getKey={(t) => t.from ?? t.message_id}
             estimateSize={35}
             onReachEnd={more}
@@ -338,8 +341,9 @@ export function MessagingPage({ open }: MessagingPageProps) {
         )
       }
       open={!!open}
-      state={contacts.length === 0 && !open ? 'empty' : 'ready'}
+      state={list.isPending ? 'loading' : list.isError ? 'fault' : contacts.length === 0 && !open && !words ? 'empty' : 'ready'}
       empty={{ title: 'No texts yet' }}
+      onRetry={() => void list.refetch()}
       {...(open
         ? {
             itemHead: (
@@ -379,8 +383,8 @@ function ContactRow({ t, selected }: { t: Text; selected: boolean }) {
 
 /** One contact's texts, oldest first, with a break at each day; each text in full. */
 function Texts({ from }: { from: string }) {
-  const list = useInfiniteQuery(contactTextsQuery(from));
-  const texts = (list.data?.pages.flatMap((p) => p.messages) ?? []).reverse();
+  const list = useInfiniteQuery(textsBySenderQuery(from));
+  const texts = (list.data?.pages.flatMap((p) => p.messages.filter((t) => t.from === from)) ?? []).reverse();
   const full = useQueries({ queries: texts.map((t) => textQuery(t.message_id)) });
   if (list.isPending) return <MessageBones label="Loading texts" className="lt-bones" />;
   if (list.isError)

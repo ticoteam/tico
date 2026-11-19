@@ -63,12 +63,9 @@ function serve(reply: (url: string) => Reply) {
   });
 }
 
+const chat = (id: string) => <Conversation id={id} variant="side" title="Ana" actor="bot:qa" page={{ path: '/tasks/engineering', title: 'Engineering' }} />;
 const show = () =>
-  render(
-    <QueryClientProvider client={queryClient}>
-      <Conversation id={T} variant="side" title="Ana" actor="bot:qa" page={{ path: '/tasks/engineering', title: 'Engineering' }} />
-    </QueryClientProvider>,
-  );
+  render(chat(T), { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> });
 
 const type = (text: string) => {
   const box = screen.getByRole('textbox', { name: 'Message Ana' });
@@ -204,6 +201,25 @@ describe('Conversation', () => {
     expect(line?.className).toBe('day is-new');
     expect(line?.closest('.vl-item')?.nextElementSibling?.textContent).toContain('Fresh');
   });
+
+  it('opens the newest messages when switching to a cached conversation', async () => {
+    const other = 't2';
+    const messages = Array.from({ length: 20 }, (_, i) => msg(i + 1, 'bot:qa', `Line ${i + 1}`));
+    seed(messages);
+    queryClient.setQueryData(['thread', other, 'timeline'], {
+      pages: [{ messages: messages.map((m) => ({ ...m, id: `other-${m.id}`, thread_id: other, conversation_id: other })), next_cursor: null }],
+      pageParams: [null],
+    });
+    serve(() => ({ status: 200, body: {} }));
+    const { rerender } = show();
+    const log = () => screen.getByRole('log', { name: 'Chat with Ana' });
+    await act(async () => {});
+    log().scrollTo({ top: 100 });
+    await act(async () => {});
+    rerender(chat(other));
+    await act(async () => {});
+    expect(log().scrollTop).toBe(log().scrollHeight - VIEW);
+  });
 });
 
 describe('Message', () => {
@@ -263,13 +279,11 @@ describe('Conversation loading @s157', () => {
 });
 
 describe('Composer', () => {
-  it('keeps a draft through a remount, and clears it once sent', () => {
-    vi.useFakeTimers();
+  it('keeps a draft when the box is closed immediately, and clears it once sent', () => {
     const onSend = vi.fn();
     const box = () => screen.getByRole('textbox', { name: 'Message Tico' }) as HTMLTextAreaElement;
     const first = render(<Composer id={T} me={ME} to="Tico" onSend={onSend} />);
     fireEvent.change(box(), { target: { value: 'Half a thought' } });
-    vi.advanceTimersByTime(300);
     first.unmount();
 
     render(<Composer id={T} me={ME} to="Tico" onSend={onSend} />);

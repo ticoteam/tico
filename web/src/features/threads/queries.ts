@@ -290,28 +290,20 @@ export function markMailUnread(box: string, letter: string) {
 
 /* ---------------------------------------------------------------- texts (Messaging) */
 
-export const textListQuery = infiniteQueryOptions({
-  queryKey: textKeys.list,
-  queryFn: ({ pageParam, signal }) =>
-    api.get<{ messages: Text[]; next?: number | null }>(`/api/v2/inbound/messages${qs({ kind: 'sms', limit: PAGE, before: pageParam })}`, { signal }),
-  initialPageParam: null as number | null,
-  getNextPageParam: (last) => last.next ?? undefined,
-});
-
-/** One contact's texts, newest first, a page at a time (the server's `from` matches a part; the page keeps only theirs). */
-export const contactTextsQuery = (from: string) =>
+/** The server matches substrings in `from`; a single contact's timeline keeps only exact matches. */
+export const textsBySenderQuery = (from?: string) =>
   infiniteQueryOptions({
-    queryKey: [...textKeys.list, from] as const,
-    queryFn: async ({ pageParam, signal }) => {
-      const page = await api.get<{ messages: Text[]; next?: number | null }>(
+    queryKey: from ? [...textKeys.list, from] as const : textKeys.list,
+    queryFn: ({ pageParam, signal }) =>
+      api.get<{ messages: Text[]; next?: number | null }>(
         `/api/v2/inbound/messages${qs({ kind: 'sms', from, limit: PAGE, before: pageParam })}`,
         { signal },
-      );
-      return { ...page, messages: page.messages.filter((t) => t.from === from) };
-    },
+      ),
     initialPageParam: null as number | null,
     getNextPageParam: (last) => last.next ?? undefined,
   });
+
+export const textListQuery = textsBySenderQuery();
 
 export const textQuery = (id: string) =>
   queryOptions({
@@ -333,10 +325,10 @@ export type UpdateList = InfiniteData<UpdatePage, string | null>;
 export const updateListQuery = (tab: UpdateTab) =>
   infiniteQueryOptions({
     queryKey: updateKeys.list(tab),
-    queryFn: ({ pageParam, signal }) =>
+    // The menu can stop observing while the page loader still needs the same request.
+    queryFn: ({ pageParam }) =>
       api.get<UpdatePage>(
         `/api/v2/updates${qs({ kind: tab === 'daily' || tab === 'weekly' ? tab : undefined, archive: tab === 'archive' || undefined, limit: PAGE, before: pageParam })}`,
-        { signal },
       ),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.next_before ?? undefined,

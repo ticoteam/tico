@@ -216,6 +216,7 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
 
   const list = (
     <VirtualList
+      key={id}
       ref={scroller}
       items={items}
       getKey={(it) => it.key}
