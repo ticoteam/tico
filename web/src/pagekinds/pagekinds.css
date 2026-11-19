@@ -213,6 +213,21 @@
 .pk-ph{display:block;height:var(--h, var(--row));margin:var(--s-1) var(--s-3) var(--s-1) var(--s-8);border-radius:var(--r-row);background:var(--well)}
 
 /* ---------- phone: each kind collapses to the back card (page-types.html, per type) ---------- */
+/* Edges (phone/phone.css; parts.css and finance.css at 760): the head 16 in, the notch above it; the body 8 in and a
+   row's own 8, so words stand 16 from both edges. Inside the body --page-x is what is left of the 16, so a section name,
+   a figure or a table's first column set on --page-x lands on the same 16. Body rules keep a class's weight, so a
+   page's own body class (.dt, .lr-sec) still wins. The notch: every kind's head pads by --page-top, set here only. */
+html[data-layout="cards"]{--page-top:env(safe-area-inset-top,0px)}
+html[data-layout="cards"] .pk{--page-x:var(--s-4)}
+html[data-layout="cards"] .pk-head,
+html[data-layout="cards"] .pk-split .conv>.conv-head{height:calc(var(--head-h) + var(--page-top));padding-top:var(--page-top)}
+html[data-layout="cards"] .pk-head{padding-right:var(--s-1);padding-left:var(--page-x)}
+:where(html[data-layout="cards"]) .pk-body{--page-x:var(--s-2);padding-right:var(--s-2);padding-left:var(--s-2)}
+:where(html[data-layout="cards"] .pk-body) .stage-head{padding-left:var(--page-x)}
+:where(html[data-layout="cards"]) :is(.pk-body>.table,.pk-sec .table:not(.md-table *)) :is(th,td):first-child:not(.t-mark){padding-left:var(--page-x)}
+:where(html[data-layout="cards"]) :is(.pk-body>.table,.pk-sec .table:not(.md-table *)) :is(th,td):last-child{padding-right:var(--page-x)}
+html[data-layout="cards"] .pk .read-body{padding-right:var(--s-4);padding-left:var(--s-4)}
+:where(html[data-layout="cards"]) .filter-row{padding:0 var(--s-2) var(--s-2) var(--page-x)}
 html[data-layout="cards"] .pk-crumb{display:none}
 html[data-layout="cards"] .pk .pk-back{display:inline-grid;margin:0 calc(var(--s-0) * -1) 0 calc(var(--s-3) * -1)}
 html[data-layout="cards"] .pk-acts>:not([data-phone]):not(.btn-fill){display:none}
@@ -248,15 +263,18 @@ html[data-layout="cards"] .pk-split.is-list .tl{display:flex;flex:1;width:auto;b
 html[data-layout="cards"] .pk-split.is-list .conv{display:none}
 /* record: one column, side facts fold in under the facts */
 html[data-layout="cards"] .pk-rec.has-side{grid-template-columns:minmax(0,1fr);grid-template-areas:"facts" "side" "figs" "secs"}
-html[data-layout="cards"] .pk-rec-side{padding:0 var(--s-3) var(--s-4) var(--page-x)}
+html[data-layout="cards"] .pk-rec-side{padding:0 var(--page-x) var(--s-4)}
+html[data-layout="cards"] .pk-body .pk-rec-facts{padding-right:var(--page-x)}
 /* document: one column; the outline becomes the head's jump menu */
 html[data-layout="cards"] .pk-doc-side{display:none}
 html[data-layout="cards"] .pk-foot{padding:var(--s-2) var(--s-3) var(--s-3) var(--page-x)}
-/* dashboard: widgets stack */
+/* dashboard: widgets stack; the chart keeps the 16 on its right too (phone.css .chart) */
 html[data-layout="cards"] .pk-widgets{grid-template-columns:minmax(0,1fr)}
+html[data-layout="cards"] .pk-chart{padding-right:var(--page-x)}
+html[data-layout="cards"] .pk-sk-chart{margin-right:var(--page-x)}
 /* settings: the section list, then a section alone */
 html[data-layout="cards"] .split{grid-template-columns:minmax(0,1fr)}
-html[data-layout="cards"] .set-nav{border-right:0}
+html[data-layout="cards"] .set-nav{padding-left:var(--s-2);border-right:0}
 html[data-layout="cards"] .set-link{height:44px}
 html[data-layout="cards"] .pk-settings.is-list .set-body,
 html[data-layout="cards"] .pk-settings.is-open .set-nav{display:none}

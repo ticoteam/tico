@@ -91,8 +91,7 @@ export function RulesPage({ search }: { search: RulesSearch }) {
         </>
       }
       more={more}
-      // the page kind lays a panel over a ready page only: an open panel (a new due date on an empty tab) keeps it ready
-      state={search.panel && body.state === 'empty' ? 'ready' : body.state}
+      state={body.state}
       onRetry={body.retry}
       empty={{ title: body.empty, action: t === 'suggested' || t === 'built-in' ? undefined : add }}
       sections={body.sections}

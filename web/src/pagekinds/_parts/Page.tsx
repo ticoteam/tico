@@ -77,7 +77,8 @@ export interface PageProps extends PageBaseProps {
   /** Under the head and tabs while ready: the filter row. */
   under?: ReactNode;
   skeleton: ReactNode;
-  /** Laid over the page when no shell place holds it: the inline side panel. */
+  /** Laid over the page when no shell place holds it: the inline side panel. Drawn in every state, so "Add" from an
+   *  empty tab opens its form while the empty state stays in the body. */
   over?: ReactNode;
   children: ReactNode;
 }
@@ -103,7 +104,7 @@ export function Page({ kind, className, tabs, tabsAfter, under, skeleton, over, 
       <StateBody state={state} title={head.title} empty={empty} onRetry={onRetry} skeleton={skeleton}>
         {children}
       </StateBody>
-      {(state ?? 'ready') === 'ready' && over}
+      {over}
     </main>
   );
 }

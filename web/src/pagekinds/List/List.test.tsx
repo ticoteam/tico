@@ -33,6 +33,25 @@ describe('List', () => {
     expect(within(main).getByRole('complementary', { name: 'First product' })).toBeTruthy();
   });
 
+  it('opens its panel on an empty list, the empty state still in the body', async () => {
+    const main = await showPage(
+      <List
+        title="Routines"
+        path="/routines"
+        state="empty"
+        empty={{ title: 'No due dates' }}
+        sections={null}
+        panel={
+          <SidePanel title="New due date" onClose={() => {}}>
+            Form
+          </SidePanel>
+        }
+      />,
+    );
+    expect(within(main).getByRole('heading', { name: 'No due dates' })).toBeTruthy();
+    expect(within(main).getByRole('complementary', { name: 'New due date' })).toBeTruthy();
+  });
+
   it('folds a section from its name', async () => {
     const main = await showPage(
       <List title="Tasks" path="/tasks" sections={<Section name="Review">Row</Section>} />,
