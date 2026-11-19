@@ -145,6 +145,11 @@
             "minLength": 1,
             "maxLength": 100,
             "description": "an agent's slug"
+          },
+          "successor": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "the id of the agent that takes its open tasks; empty for the person who runs it"
           }
         },
         "required": [
@@ -653,6 +658,51 @@
         "required": [
           "slug",
           "task"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "brand.check",
+      "title": "Check copy against the brand book",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "brand.decide",
+      "title": "Add a suggested brand change to the draft, or decline it",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "proposal": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "decision": {
+            "enum": [
+              "confirm",
+              "reject"
+            ]
+          }
+        },
+        "required": [
+          "proposal",
+          "decision"
         ],
         "additionalProperties": false
       }
@@ -1581,8 +1631,32 @@
             "maxLength": 2000000,
             "description": "a transcript: Name: text, WebVTT, SRT or JSON"
           },
+          "source": {
+            "enum": [
+              "upload",
+              "zoom",
+              "google-meet",
+              "granola",
+              "otter",
+              "fireflies",
+              "other"
+            ]
+          },
+          "recording": {
+            "type": "string",
+            "maxLength": 2000,
+            "pattern": "^https:\\/\\/\\S+$",
+            "description": "a recording link, https://…"
+          },
           "private": {
             "type": "boolean"
+          },
+          "send": {
+            "type": "string",
+            "minLength": 4,
+            "maxLength": 200,
+            "pattern": "^(auto|bot:\\S+)$",
+            "description": "auto or bot:<id>"
           }
         },
         "additionalProperties": false
@@ -1804,10 +1878,51 @@
               "dismiss",
               "restore"
             ]
+          },
+          "private": {
+            "type": "boolean"
+          },
+          "send": {
+            "type": "string",
+            "minLength": 4,
+            "maxLength": 200,
+            "pattern": "^(auto|bot:\\S+)$",
+            "description": "auto or bot:<id>"
           }
         },
         "required": [
           "meeting",
+          "action"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "calls.reviewMany",
+      "title": "Share or put away several pending meetings",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "meetings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "a meeting id"
+            },
+            "maxItems": 200
+          },
+          "action": {
+            "enum": [
+              "approve",
+              "dismiss"
+            ]
+          }
+        },
+        "required": [
+          "meetings",
           "action"
         ],
         "additionalProperties": false
@@ -2221,6 +2336,34 @@
         },
         "required": [
           "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "computers.setScreen",
+      "title": "Turn a computer's screen off, view only or on",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "computer": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a computer's id"
+          },
+          "mode": {
+            "enum": [
+              "off",
+              "view",
+              "control"
+            ]
+          }
+        },
+        "required": [
+          "computer",
+          "mode"
         ],
         "additionalProperties": false
       }
@@ -3290,6 +3433,45 @@
       }
     },
     {
+      "id": "finance.importHistory",
+      "title": "Import a spreadsheet's monthly totals as history",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "csv": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000000
+          },
+          "basis": {
+            "enum": [
+              "accrual",
+              "cash"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 120
+          }
+        },
+        "required": [
+          "csv",
+          "basis",
+          "mapping"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "finance.mapSource",
       "title": "Choose the balance sheet line a bank, card or payments account books to",
       "kind": "change",
@@ -3798,6 +3980,36 @@
       }
     },
     {
+      "id": "goals.answer",
+      "title": "Answer a suggestion that waits on you in Goals",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "proposal": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "decision": {
+            "enum": [
+              "confirm",
+              "reject"
+            ]
+          },
+          "option": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "proposal",
+          "decision"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "goals.close",
       "title": "Close a goal",
       "kind": "change",
@@ -3977,35 +4189,6 @@
         "required": [
           "channel"
         ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "growth.openSource",
-      "title": "Open a Growth source: what it is the truth for and its last sync",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "source": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "source"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "growth.openSources",
-      "title": "Open Growth sources",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {},
         "additionalProperties": false
       }
     },
@@ -4380,24 +4563,45 @@
           "kind": {
             "enum": [
               "search",
-              "page"
+              "page",
+              "github",
+              "push"
             ]
           },
           "target": {
             "type": "string",
-            "minLength": 1,
             "maxLength": 500
           },
           "site": {
             "type": "string",
             "maxLength": 200
+          },
+          "follow": {
+            "enum": [
+              "prs",
+              "releases"
+            ]
           }
         },
         "required": [
           "watch",
-          "kind",
-          "target"
+          "kind"
         ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "listening.list",
+      "title": "Search the listening watches",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
         "additionalProperties": false
       }
     },
@@ -4513,6 +4717,93 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200
+          }
+        },
+        "required": [
+          "watch"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "listening.update",
+      "title": "Rename a listening watch, or change what it keeps, how many it sends and when",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "watch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "do": {
+                  "enum": [
+                    "keep",
+                    "drop"
+                  ]
+                },
+                "tag": {
+                  "type": "string",
+                  "maxLength": 24
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300
+                }
+              },
+              "required": [
+                "do",
+                "text"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 20
+          },
+          "limits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "count": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                },
+                "per": {
+                  "enum": [
+                    "hour",
+                    "day",
+                    "week",
+                    "month"
+                  ]
+                }
+              },
+              "required": [
+                "count",
+                "per"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 4
+          },
+          "at": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 5,
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+            "description": "a time, HH:MM"
           }
         },
         "required": [
@@ -4638,6 +4929,31 @@
       }
     },
     {
+      "id": "market.cite",
+      "title": "Cite a market segment in a bet",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "bet": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "segment": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "bet",
+          "segment"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "market.open",
       "title": "Open Market or one of its panels",
       "kind": "view",
@@ -4652,6 +4968,31 @@
             "description": "segment:<id>, player:<id>, definition or briefing"
           }
         },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "market.research",
+      "title": "Ask the Librarian to research a market segment",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "segment": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "instructions": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "segment",
+          "instructions"
+        ],
         "additionalProperties": false
       }
     },
@@ -5062,6 +5403,39 @@
       }
     },
     {
+      "id": "products.addTo",
+      "title": "Add an agreement, a repository or a vendor to a product",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "product": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "field": {
+            "enum": [
+              "agreements",
+              "repositories",
+              "depends_on"
+            ]
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "product",
+          "field",
+          "value"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "products.create",
       "title": "Add a product",
       "kind": "change",
@@ -5100,6 +5474,64 @@
       }
     },
     {
+      "id": "products.removeFrom",
+      "title": "Take an agreement, a repository or a vendor off a product",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "product": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "field": {
+            "enum": [
+              "agreements",
+              "repositories",
+              "depends_on"
+            ]
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "product",
+          "field",
+          "value"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "products.rename",
+      "title": "Rename a product",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "product": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "product",
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "products.update",
       "title": "Change a product",
       "kind": "change",
@@ -5133,6 +5565,40 @@
       }
     },
     {
+      "id": "risk.addMatter",
+      "title": "Add a matter to a risk",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "risk": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "kind": {
+            "enum": [
+              "dispute",
+              "request",
+              "notice",
+              "incident"
+            ]
+          }
+        },
+        "required": [
+          "risk",
+          "title",
+          "kind"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "risk.create",
       "title": "Add a risk",
       "kind": "change",
@@ -5147,6 +5613,95 @@
         },
         "required": [
           "label"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "risk.edit",
+      "title": "Change a risk's name and page",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "risk": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "markdown": {
+            "type": "string",
+            "maxLength": 20000
+          }
+        },
+        "required": [
+          "risk",
+          "version",
+          "label",
+          "markdown"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "risk.markDate",
+      "title": "Mark a risk's date met with proof, waived or missed",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "risk": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "date": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "on": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "a date, 2026-12-31"
+          },
+          "how": {
+            "enum": [
+              "proof",
+              "waived",
+              "missed"
+            ]
+          },
+          "link": {
+            "type": "string",
+            "maxLength": 2000,
+            "pattern": "^https:\\/\\/\\S+$",
+            "description": "a link, https://…"
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "risk",
+          "date",
+          "on",
+          "how"
         ],
         "additionalProperties": false
       }
@@ -5181,6 +5736,134 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "risk.setMatter",
+      "title": "Change a matter's facts",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "dispute",
+                  "request",
+                  "notice",
+                  "incident"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "side": {
+            "anyOf": [
+              {
+                "enum": [
+                  "theirs",
+                  "ours"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "party": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "party_name": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z]{3}$",
+                "description": "three letters, USD"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "claim": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "forum": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "product": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "product_name": {
+            "type": "string",
+            "maxLength": 300
           }
         },
         "required": [
@@ -5906,6 +6589,23 @@
               "24h",
               "7d"
             ]
+          },
+          "trigger": {
+            "enum": [
+              "schedule",
+              "event",
+              "webhook",
+              "due",
+              "message",
+              "task_received",
+              "listening",
+              "system"
+            ]
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
           }
         },
         "additionalProperties": false
@@ -5977,7 +6677,9 @@
           "event": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 100
+            "maxLength": 100,
+            "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_*-]+)+$",
+            "description": "an event name, like task.created or custom.order_paid"
           }
         },
         "required": [
@@ -6003,12 +6705,33 @@
               "org",
               "stage"
             ]
+          },
+          "who": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^(\\*|(group|bot|human):\\S+)$",
+              "description": "*, group:<id>, bot:<id> or human:<id>"
+            },
+            "maxItems": 100
           }
         },
         "required": [
           "rule",
           "kind"
         ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "rules.acceptAll",
+      "title": "Add every suggested rule that says who follows it",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {},
         "additionalProperties": false
       }
     },
@@ -6048,14 +6771,61 @@
                 "description": "*, group:<id>, bot:<id> or human:<id>"
               },
               "who": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "pattern": "^(\\*|(group|bot|human):\\S+)$",
+                  "description": "*, group:<id>, bot:<id> or human:<id>"
+                },
+                "maxItems": 100
+              },
+              "with": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "pattern": "^(group|bot|human):\\S+$",
+                  "description": "group:<id>, bot:<id> or human:<id>"
+                },
+                "maxItems": 100
+              },
+              "description": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 200,
-                "pattern": "^(\\*|(group|bot|human):\\S+)$",
-                "description": "*, group:<id>, bot:<id> or human:<id>"
+                "maxLength": 2000
               },
               "outside": {
                 "type": "boolean"
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "newSource": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "kind": {
+                    "enum": [
+                      "vendor",
+                      "customer",
+                      "government",
+                      "other"
+                    ]
+                  }
+                },
+                "required": [
+                  "name",
+                  "kind"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [
@@ -6199,6 +6969,45 @@
       }
     },
     {
+      "id": "rules.list",
+      "title": "Search or filter the rules on a tab",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "tab": {
+            "enum": [
+              "",
+              "stages",
+              "built-in",
+              "outside",
+              "due",
+              "wakes",
+              "on-tasks",
+              "suggested"
+            ]
+          },
+          "q": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "from": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "status": {
+            "enum": [
+              "overdue",
+              "due_soon",
+              "upcoming"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "rules.new",
       "title": "Start a new rule",
       "kind": "view",
@@ -6225,7 +7034,13 @@
       "kind": "view",
       "input": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "rule": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
         "additionalProperties": false
       }
     },
@@ -6564,14 +7379,61 @@
                 "description": "*, group:<id>, bot:<id> or human:<id>"
               },
               "who": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "pattern": "^(\\*|(group|bot|human):\\S+)$",
+                  "description": "*, group:<id>, bot:<id> or human:<id>"
+                },
+                "maxItems": 100
+              },
+              "with": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "pattern": "^(group|bot|human):\\S+$",
+                  "description": "group:<id>, bot:<id> or human:<id>"
+                },
+                "maxItems": 100
+              },
+              "description": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 200,
-                "pattern": "^(\\*|(group|bot|human):\\S+)$",
-                "description": "*, group:<id>, bot:<id> or human:<id>"
+                "maxLength": 2000
               },
               "outside": {
                 "type": "boolean"
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "newSource": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "kind": {
+                    "enum": [
+                      "vendor",
+                      "customer",
+                      "government",
+                      "other"
+                    ]
+                  }
+                },
+                "required": [
+                  "name",
+                  "kind"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [
@@ -6794,6 +7656,33 @@
       }
     },
     {
+      "id": "settings.addPlace",
+      "title": "Add a place the company operates in",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "us": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "our company id"
+          },
+          "place": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a place id"
+          }
+        },
+        "required": [
+          "us",
+          "place"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "settings.agentLimit",
       "title": "Change how many agents a person may have",
       "kind": "change",
@@ -6808,6 +7697,98 @@
         },
         "required": [
           "limit"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.agentMail",
+      "title": "Let an agent send mail without asking",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "an agent id or slug"
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "agent",
+          "on"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.askReplay",
+      "title": "See what screening would have done with one past day",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "a day, YYYY-MM-DD"
+          }
+        },
+        "required": [
+          "date"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.askReset",
+      "title": "Use the team default for what agents may ask",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.askRules",
+      "title": "Change what agents may ask a person",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "enum": [
+              "off",
+              "on"
+            ]
+          },
+          "budget": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "criteria": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 10
+          },
+          "team": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "mode",
+          "budget",
+          "criteria"
         ],
         "additionalProperties": false
       }
@@ -6879,9 +7860,43 @@
       }
     },
     {
+      "id": "settings.changelogRead",
+      "title": "Mark product updates read",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "an entry id"
+            },
+            "maxItems": 250
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "settings.checkGateway",
       "title": "Check the Tico Gateway key now",
       "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.checkHealth",
+      "title": "Check health now",
+      "kind": "view",
       "input": {
         "type": "object",
         "properties": {},
@@ -6925,6 +7940,26 @@
       "input": {
         "type": "object",
         "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.dropPlace",
+      "title": "Remove a place the company operates in",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "link": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a link id"
+          }
+        },
+        "required": [
+          "link"
+        ],
         "additionalProperties": false
       }
     },
@@ -6980,6 +8015,30 @@
         },
         "required": [
           "email"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.mailFeed",
+      "title": "Add every sender of an inbox to Contacts",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "box": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a mailbox id"
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "box",
+          "on"
         ],
         "additionalProperties": false
       }
@@ -7187,35 +8246,6 @@
       }
     },
     {
-      "id": "settings.productUpdate",
-      "title": "Add a product update",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "title": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 90
-          },
-          "bullets": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 500
-            },
-            "maxItems": 12
-          }
-        },
-        "required": [
-          "title",
-          "bullets"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "settings.refreshRepos",
       "title": "Read the repositories from GitHub again",
       "kind": "change",
@@ -7298,6 +8328,43 @@
       }
     },
     {
+      "id": "settings.reportFinding",
+      "title": "Report a Tico bug Check health found to Tico support",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a finding key"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.reportRule",
+      "title": "Report Tico bugs to Tico support without asking",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "on"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "settings.reportsDirect",
       "title": "Agents report to Tico support",
       "kind": "change",
@@ -7367,6 +8434,101 @@
         },
         "required": [
           "on"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.roadmapLabels",
+      "title": "Change the labels on the public roadmap",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "maxItems": 50
+          }
+        },
+        "required": [
+          "labels"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.roadmapLimits",
+      "title": "Change the public roadmap's visitor limits",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "action_limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "suggestion_limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.roadmapSites",
+      "title": "Change the websites that can show the public roadmap",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "origins": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "description": "an https origin"
+            },
+            "maxItems": 50
+          }
+        },
+        "required": [
+          "origins"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.roadmapSuggestions",
+      "title": "Choose the agent that takes visitors' suggestions",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "description": "an agent id or slug"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "agent"
         ],
         "additionalProperties": false
       }
@@ -7590,6 +8752,16 @@
         "required": [
           "theme"
         ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "settings.setupCheck",
+      "title": "Run the installer's setup checks from the server",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {},
         "additionalProperties": false
       }
     },
@@ -8018,12 +9190,106 @@
       }
     },
     {
+      "id": "skills.askSubmit",
+      "title": "Ask an agent to submit a skill",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "suggestion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "skill": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "suggestion",
+          "skill",
+          "agent"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "skills.connect",
       "title": "Connect Claude Code to skills",
       "kind": "view",
       "input": {
         "type": "object",
         "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "skills.decline",
+      "title": "Send back a skill change",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "proposal": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "proposal",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "skills.dismissSuggestion",
+      "title": "Dismiss a skill suggestion",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "suggestion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "suggestion"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "skills.filter",
+      "title": "Filter skills by function",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "function": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "q": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
         "additionalProperties": false
       }
     },
@@ -8166,6 +9432,88 @@
       }
     },
     {
+      "id": "skills.removeInstall",
+      "title": "Take a skill off a teammate",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "skill": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "install": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "skill",
+          "install"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "skills.removeUnused",
+      "title": "Take off a skill nobody uses",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "suggestion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "suggestion"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "skills.rescreen",
+      "title": "Screen a skill change again",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "proposal": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "proposal"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "skills.withdraw",
+      "title": "Withdraw a skill change",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "proposal": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "proposal"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "start.open",
       "title": "Open Start",
       "kind": "view",
@@ -8289,6 +9637,264 @@
         },
         "required": [
           "message"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tags.create",
+      "title": "New tag or template",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "a tag key: lowercase words joined by hyphens"
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 20000,
+            "description": "markdown; \"- [ ] step\" lines are its checklist"
+          },
+          "template": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tags.edit",
+      "title": "Change a tag's name, notes or metadata",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "tag": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a tag's id or key"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 20000
+          },
+          "metadata": {
+            "type": "string",
+            "maxLength": 4000,
+            "description": "a JSON object of fields, such as {\"date\": \"2030-01-02\"}"
+          }
+        },
+        "required": [
+          "tag"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tags.filter",
+      "title": "Search or filter tags, or a tag's tasks",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "description": "an actor id: human:<id> or bot:<slug>"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "late": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tags.makeFromTemplate",
+      "title": "Make a tag from a template",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "template": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a tag's id or key"
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "a tag key: lowercase words joined by hyphens"
+          },
+          "metadata": {
+            "type": "string",
+            "maxLength": 4000,
+            "description": "a JSON object of fields, such as {\"date\": \"2030-01-02\"}"
+          }
+        },
+        "required": [
+          "template",
+          "key"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tags.moreTasks",
+      "title": "Read the next 500 of a tag's tasks",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "tag": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a tag's id or key"
+          }
+        },
+        "required": [
+          "tag"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tags.newTask",
+      "title": "New task with a tag on it",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "tag": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a tag's id or key"
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "the tag's key"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "pipeline": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a pipeline id"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "description": "an actor id: human:<id> or bot:<slug>"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "tag",
+          "key",
+          "title",
+          "pipeline"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tags.releaseChecklist",
+      "title": "Open the release checklist template, made if there is none",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tags.tick",
+      "title": "Tick or clear a box in a tag's checklist",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "tag": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a tag's id or key"
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "done": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tag",
+          "line",
+          "done"
         ],
         "additionalProperties": false
       }
@@ -10634,8 +12240,15 @@
           "audience": {
             "enum": [
               "members",
+              "team",
               "company"
             ]
+          },
+          "team": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "a team's id, when a team reads it"
           }
         },
         "required": [
@@ -10836,6 +12449,25 @@
         },
         "required": [
           "tool"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.checkAddress",
+      "title": "Check a mailing address",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "address"
         ],
         "additionalProperties": false
       }
@@ -11106,6 +12738,94 @@
       }
     },
     {
+      "id": "tools.requestNumber",
+      "title": "Ask for a US mobile number",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.retryLetter",
+      "title": "Try a failed letter again",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "letter": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "letter"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.retrySend",
+      "title": "Send one webhook send again",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "webhook": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "send": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "webhook",
+          "send"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.retryWebhook",
+      "title": "Send an outgoing webhook’s failed sends again",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "webhook": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "since": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "a day like 2026-11-12"
+          }
+        },
+        "required": [
+          "webhook",
+          "since"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "tools.revokeKey",
       "title": "Take a stored key away from someone",
       "kind": "change",
@@ -11163,6 +12883,31 @@
           "tool",
           "name",
           "value"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.sendMissed",
+      "title": "Send an outgoing webhook the events it missed",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "webhook": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "since": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "a day like 2026-11-12"
+          }
+        },
+        "required": [
+          "webhook",
+          "since"
         ],
         "additionalProperties": false
       }
@@ -11231,6 +12976,89 @@
           "account",
           "subject",
           "on"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.setAddressAccess",
+      "title": "Change who may read one address’s letters",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "type": {
+            "enum": [
+              "person",
+              "bot"
+            ]
+          },
+          "who": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "read": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "address",
+          "type",
+          "who",
+          "read"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.setAgentLetters",
+      "title": "Change one agent’s letter rule and monthly cap",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "bot": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ask_first",
+                  "on_their_own",
+                  "never"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "monthly_cap_micros": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "bot",
+          "mode",
+          "monthly_cap_micros"
         ],
         "additionalProperties": false
       }
@@ -11442,6 +13270,36 @@
           "type",
           "who",
           "read"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.setLetterSender",
+      "title": "Change who may send letters",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "person",
+              "bot"
+            ]
+          },
+          "who": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "send": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "type",
+          "who",
+          "send"
         ],
         "additionalProperties": false
       }
@@ -12023,6 +13881,99 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200
+          }
+        },
+        "required": [
+          "hook"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "webhooks.recover",
+      "title": "Check a webhook's refused calls again under its current secret",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "hook": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sinceHours": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 720
+          }
+        },
+        "required": [
+          "hook"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "webhooks.replay",
+      "title": "Run a webhook's kept call again",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "hook": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "delivery": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "hook",
+          "delivery"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "webhooks.update",
+      "title": "Change a webhook's name or settings",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "hook": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "typeFrom": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "hourly": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 600
+          },
+          "keepDays": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          },
+          "unheard": {
+            "enum": [
+              "log",
+              "note"
+            ]
           }
         },
         "required": [
