@@ -4,7 +4,7 @@
 import hashlib
 import json
 import logging
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from . import bot_settings as BS
 from . import harnesses as _harnesses
@@ -262,9 +262,9 @@ def _log_timing(call_id: str, turn_id: Any, timing: Any) -> None:
     """The runner's share of one answer, no words in it: its poll, and question sent to first output and first text."""
     if not isinstance(timing, dict):
         return
+    got = cast("dict[str, object]", timing)
     keys = ("poll_ms", "first_frame_ms", "first_text_ms")
-    values = [timing.get(k) for k in keys]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-    shown = [v if isinstance(v, int) and not isinstance(v, bool) else "null" for v in values]
+    shown = [v if isinstance(v := got.get(k), int) and not isinstance(v, bool) else "null" for k in keys]
     log.info(
         "call_voice_runner call=%s turn=%s poll_ms=%s first_frame_ms=%s first_text_ms=%s", call_id, turn_id, *shown
     )
