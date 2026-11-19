@@ -1,0 +1,162 @@
+import { Dialog } from '@base-ui/react/dialog';
+import { useEffect, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { ctxFor, registry, run } from '@/actions';
+import { Icon } from '@/kit/Icon';
+import { IconButton } from '@/kit/IconButton';
+import * as copy from './copy';
+import { providers, type Lead, type SearchHit } from './providers';
+import { gather, highlight, remember, RECENT, type Group } from './results';
+import './search.css';
+import { closeSearch, useSearchState } from './state';
+
+/* The palette from pages/8-settings/more.html?screen=search: it drops from the menu's head and covers the menu and the
+   page, which dim; Tico stays lit, since the last row hands the words to it. Base UI's dialog directly, not kit's:
+   that one is a titled modal with a foot of buttons over a scrim that would dim Tico too. */
+export function SearchDialog() {
+  const { open, q, n } = useSearchState();
+  return (
+    <Dialog.Root open={open} onOpenChange={(next) => !next && closeSearch()}>
+      <Dialog.Portal>
+        {/* keyed by each open, so the field starts again from what it was opened with */}
+        <Palette key={n} opened={q} />
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+/** Where the menu starts, which is where the palette drops from (more.js sets the same from `.app > .nav`). */
+function dropAt(): CSSProperties {
+  const r = document.querySelector('.app > .nav')?.getBoundingClientRect();
+  return r ? { left: Math.round(r.left), top: Math.round(r.top) } : {};
+}
+
+function Palette({ opened }: { opened: string }) {
+  const [q, setQ] = useState(opened);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [on, setOn] = useState(0);
+  const [at] = useState(dropAt);
+
+  useEffect(() => {
+    const app = document.querySelector('.app');
+    app?.classList.add('is-search');
+    return () => app?.classList.remove('is-search');
+  }, []);
+
+  useEffect(() => {
+    const stop = new AbortController();
+    void gather(q, providers, registry.values(), ctxFor('search'), stop.signal).then((g) => {
+      if (stop.signal.aborted) return;
+      setGroups(g);
+      setOn(0);
+    });
+    return () => stop.abort();
+  }, [q]);
+
+  const ask = q.trim() && registry.has('tico.ask') ? q.trim() : '';
+  const hits = groups.flatMap((g) => g.hits);
+  const count = hits.length + (ask ? 1 : 0);
+  const starts = groups.map((_, g) => groups.slice(0, g).reduce((sum, x) => sum + x.hits.length, 0));
+
+  const choose = (i: number) => {
+    closeSearch();
+    const hit = hits[i];
+    if (hit) {
+      remember(hit);
+      void run(hit.run.id, hit.run.input, { via: 'search' });
+    } else if (ask) void run('tico.ask', { text: ask }, { via: 'search' });
+  };
+  const keys = (e: KeyboardEvent) => {
+    if (!count) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      setOn((i) => (i + (e.key === 'ArrowDown' ? 1 : count - 1)) % count);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      choose(on);
+    }
+  };
+  const option = (i: number) => ({
+    id: `pal-${i}`,
+    role: 'option',
+    'aria-selected': i === on,
+    onPointerMove: () => setOn(i),
+    onClick: () => choose(i),
+  });
+
+  const row = (hit: SearchHit, i: number) => (
+    <div key={hit.key} className={i === on ? 'sr is-on' : 'sr'} {...option(i)}>
+      <LeadOf lead={hit.lead} />
+      <span>{highlight(hit.title, q).map((p, k) => (p.hit ? <mark key={k}>{p.text}</mark> : p.text))}</span>
+      <em>{hit.meta ?? ''}</em>
+    </div>
+  );
+
+  return (
+    <Dialog.Popup className="pal is-drop" aria-label={copy.label} style={at}>
+      <label className="pal-field" data-target="search:field">
+        <Icon name="search" />
+        <input
+          className="pal-text"
+          type="text"
+          value={q}
+          placeholder={copy.label}
+          aria-label={copy.label}
+          role="combobox"
+          aria-expanded={count > 0}
+          aria-controls="pal-list"
+          aria-activedescendant={count ? `pal-${on}` : undefined}
+          autoComplete="off"
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={keys}
+        />
+        {q && <IconButton icon="close" label={copy.clear} size="sm" onClick={() => setQ('')} />}
+      </label>
+      <div className="pal-list" id="pal-list" role="listbox" aria-label={copy.label}>
+        {groups.map((g, gi) => (
+          <div key={g.name} role="group" aria-label={g.name} className="pal-set">
+            <div className="pal-group t-label">
+              <span>{g.name}</span>
+              {g.name !== RECENT && <span className="count">{g.hits.length}</span>}
+            </div>
+            {g.hits.map((h, k) => row(h, (starts[gi] ?? 0) + k))}
+          </div>
+        ))}
+        {q.trim() && !hits.length && (
+          <p className="sr-none">
+            {copy.nothing} <b>{q.trim()}</b>
+          </p>
+        )}
+        {ask && (
+          <div className={on === hits.length ? 'sr pal-ask is-on' : 'sr pal-ask'} {...option(hits.length)}>
+            <span className="av-dot" style={{ '--a': '22px' } as CSSProperties}>
+              <span aria-hidden="true" className="dot" style={{ '--d': '19px' } as CSSProperties}>
+                <i />
+                <b />
+              </span>
+            </span>
+            <span>
+              {copy.ask} <b>{ask}</b>
+            </span>
+            <em />
+          </div>
+        )}
+      </div>
+    </Dialog.Popup>
+  );
+}
+
+function LeadOf({ lead }: { lead: Lead | undefined }) {
+  if (!lead) return <span />;
+  if ('icon' in lead)
+    return (
+      <span className="tl-kind">
+        <Icon name={lead.icon} />
+      </span>
+    );
+  const f = lead.face;
+  return (
+    <span className={f.bot ? 'av av-22 is-bot' : 'av av-22'} style={{ '--h': f.hue } as CSSProperties} title={f.name}>
+      {f.initials}
+    </span>
+  );
+}

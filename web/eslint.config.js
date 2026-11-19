@@ -87,7 +87,8 @@ export default defineConfig(
   },
   {
     files: ['src/actions/**'],
-    rules: ban(...['features', 'kit', 'shell', 'routes', 'tico'].map((a) => NO(a, 'Actions are below the screens'))),
+    // Actions fold sheets (@/shell) and fly from the Dot (@/tico/dot); they never draw.
+    rules: ban(...['features', 'kit', 'routes'].map((a) => NO(a, 'Actions are below the screens'))),
   },
   {
     files: ['src/lib/**'],

@@ -1,0 +1,125 @@
+import type { AnyRouter } from '@tanstack/react-router';
+import { useRouter } from '@tanstack/react-router';
+import { useState } from 'react';
+import { queryClient } from '@/data';
+import { flight, waitForTarget, wash } from '@/motion';
+import { bound } from './bind';
+import { registry } from './registry';
+import type { AnyAction, Ctx, Result, Target, Via } from './types';
+
+/* After Tico navigates, the target may not exist yet; motion.md 5, case 5: wait up to 1500ms, then give up. */
+const WAIT_MS = 1500;
+
+/** The context an input function reads (a shortcut's "the open task"), or null before the app has started. */
+export function ctxFor(via: Via): Ctx | null {
+  return bound.router && { router: bound.router, queryClient, via };
+}
+
+/** The single dispatch for a click, a shortcut, search and Tico. Never throws. */
+export function run(id: string, input: unknown, opts: { via: Via }): Promise<Result> {
+  return runIn(registry, id, input, opts.via, bound.router);
+}
+
+export async function runIn(
+  actions: ReadonlyMap<string, AnyAction>,
+  id: string,
+  raw: unknown,
+  via: Via,
+  router: AnyRouter | null,
+): Promise<Result> {
+  const a = actions.get(id);
+  if (!a) return { ok: false, error: `unknown_action: ${id}` };
+  const parsed = a.input.parse(raw);
+  if (!parsed.ok) return { ok: false, error: `bad_input: ${parsed.error}` };
+  if (!router) return { ok: false, error: 'not_ready: the app is still starting' };
+  const input = parsed.value;
+  const ctx: Ctx = { router, queryClient, via };
+  if (!allowed(a, ctx, input)) return { ok: false, error: 'not_allowed' };
+  let out: unknown;
+  try {
+    out = await a.run(ctx, input);
+  } catch (e) {
+    return { ok: false, error: problem(e) };
+  }
+  // Reads never get here (they are not actions), and only Tico's hand flies the Dot.
+  if (via === 'tico') await land(a.target?.(input, out) ?? null, a.kind === 'view', a.did?.(input, out) ?? a.title);
+  return { ok: true, did: a.did?.(input, out) ?? a.title };
+}
+
+/** Tico already made the change (`done`): go where it shows, fly, and do not write again. */
+export function show(id: string, input: unknown): Promise<Result> {
+  return showIn(registry, id, input, bound.router);
+}
+
+export async function showIn(
+  actions: ReadonlyMap<string, AnyAction>,
+  id: string,
+  raw: unknown,
+  router: AnyRouter | null,
+): Promise<Result> {
+  const a = actions.get(id);
+  if (!a) return { ok: false, error: `unknown_action: ${id}` };
+  const parsed = a.input.parse(raw);
+  if (!parsed.ok) return { ok: false, error: `bad_input: ${parsed.error}` };
+  if (!router) return { ok: false, error: 'not_ready: the app is still starting' };
+  try {
+    await a.show?.({ router, queryClient, via: 'tico' }, parsed.value);
+  } catch (e) {
+    return { ok: false, error: problem(e) };
+  }
+  await land(a.target?.(parsed.value, undefined) ?? null, true, a.did?.(parsed.value, undefined) ?? a.title);
+  return { ok: true, did: a.did?.(parsed.value, undefined) ?? a.title };
+}
+
+function allowed(a: AnyAction, ctx: Ctx, input: unknown): boolean {
+  if (!a.can) return true;
+  try {
+    return a.can(ctx, input);
+  } catch {
+    return false;
+  }
+}
+
+function problem(e: unknown): string {
+  const status = (e as { status?: unknown } | null)?.status;
+  if (status === 401 || status === 403) return 'not_allowed';
+  const code = (e as { code?: unknown } | null)?.code;
+  if (typeof code === 'string' && code) return code;
+  return `failed: ${e instanceof Error ? e.message : String(e)}`;
+}
+
+/* ---------- the flight after a Tico run (motion.md 5) ---------- */
+
+/** Motion's findTarget resolves off-screen, folded and undrawn targets; `show` (a view action) jumps it into view. */
+async function land(t: Target | null, show: boolean, label: string): Promise<void> {
+  if (!t) return;
+  const el = await waitForTarget(t.kind, t.id, WAIT_MS, { show, label });
+  if (!el) return; // cases 5 and 6: nothing to land on; the chat line stands alone
+  const from = bound.dot();
+  // The flight resolves at landing; the result does not wait for it.
+  if (from) void flight(from, el, { kind: show ? 'open' : 'edit', label });
+  else wash(el);
+}
+
+/* ---------- buttons ---------- */
+
+/** For a button: `disabled` when `can` says no (given an input) or while it runs. */
+export function useAction(id: string, input?: unknown) {
+  const router = useRouter();
+  const [pending, setPending] = useState(false);
+  const a = registry.get(id);
+  let can = !!a;
+  if (a && input !== undefined) {
+    const parsed = a.input.parse(input);
+    can = parsed.ok && allowed(a, { router, queryClient, via: 'click' }, parsed.value);
+  }
+  const press = async (i: unknown = input, via: Via = 'click'): Promise<Result> => {
+    setPending(true);
+    try {
+      return await runIn(registry, id, i, via, router);
+    } finally {
+      setPending(false);
+    }
+  };
+  return { run: press, pending, can, disabled: !can || pending };
+}
