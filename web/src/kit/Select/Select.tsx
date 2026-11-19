@@ -2,7 +2,8 @@ import { Select as BaseSelect } from '@base-ui/react/select';
 import { Icon } from '@/kit/Icon';
 import { MenuItemBody } from '@/kit/Menu';
 import { sheetScrim, usePlacement } from '@/kit/Popover';
-import './Select.css';
+// The quiet look is the value button's `.dd`: one rule set for both.
+import '@/kit/ValueButton/ValueButton.css';
 
 export type SelectOption<V extends string = string> = {
   value: V;

@@ -14,3 +14,4 @@
 .sec-fold[aria-expanded="false"]>.ico{transform:rotate(-90deg)}
 .sec-name.is-2 .sec-fold{gap:var(--s-1h)}
 .stage.is-folded .stage-head{position:static}
+.stage-head>.sec-sum{min-width:0;flex:0 100 auto;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted);font-size:var(--t-sm);line-height:var(--lh-tight);font-variant-numeric:tabular-nums}

@@ -1,11 +1,12 @@
 import { useRef, useState, type CSSProperties } from 'react';
-import { Composer, DidLine, Message, type ChatMessage } from '@/conversation';
+import { Composer, LiveRow, Message, type ChatMessage, type LiveRun } from '@/conversation';
 import { Avatar, Faces } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Sparkline } from '@/kit/Chart';
 import { Checkbox } from '@/kit/Checkbox';
 import { ConfirmCard } from '@/kit/ConfirmCard';
 import { Count } from '@/kit/Count';
+import { DidLine } from '@/kit/DidLine';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Fault } from '@/kit/Fault';
@@ -13,6 +14,7 @@ import { Field, Search } from '@/kit/Field';
 import { FlowMark } from '@/kit/FlowMark';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
+import { OwnerButton } from '@/kit/OwnerButton';
 import { LatePill, Pill } from '@/kit/Pill';
 import { TaskRow, ThreadRow, WhoRow } from '@/kit/Row';
 import { SectionHead } from '@/kit/SectionHead';
@@ -21,9 +23,10 @@ import { Select } from '@/kit/Select';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
+import { ValueButton } from '@/kit/ValueButton';
 import { fmtMoney } from '@/lib';
 import { flight, useMotionLevel, wash } from '@/motion';
-import { FiguresStrip, FilterRow, Section } from '@/pagekinds';
+import { FiguresStrip, FilterRow, PageMore, Section } from '@/pagekinds';
 import { Dot } from '@/tico/dot';
 import { Area, Face, MATES, Named, Sp, Specimens, Tok, ago } from './parts';
 
@@ -281,6 +284,14 @@ export function RowsArea() {
                 </Section>
               </div>,
             ],
+            [
+              'With a summary',
+              <div className="sg-demo">
+                <Section name="Builders" count={2} summary={`Haiku 5.5, ${fmtMoney(40)} this month`}>
+                  {REVIEW}
+                </Section>
+              </div>,
+            ],
           ]}
         />
       </Section>
@@ -382,6 +393,77 @@ function Choices() {
   );
 }
 
+const MODELS = ['Haiku 5.5', 'Claude Opus 5.5', 'GPT 6.2'] as const;
+
+/** The page head's own parts, right of the title: a scope, the owner's face, then "⋯", last. */
+function HeadParts() {
+  const [scope, setScope] = useState<string>(TEAMS[0].label);
+  const [chat, setChat] = useState(false);
+  const em = MATES.em;
+  return (
+    <Specimens>
+      <Sp name="A scope">
+        <Menu align="start" trigger={<ValueButton look="scope">{scope}</ValueButton>}>
+          {TEAMS.map((t) => (
+            <MenuItem key={t.value} label={t.label} on={t.label === scope} onSelect={() => setScope(t.label)} />
+          ))}
+        </Menu>
+      </Sp>
+      <Sp name="The owner">
+        <OwnerButton name={em.name} kind={em.kind} hue={em.hue} on={chat} onPress={() => setChat(!chat)} />
+      </Sp>
+      <Sp name="Their chat open">
+        <OwnerButton name={em.name} kind={em.kind} hue={em.hue} on onPress={noop} />
+      </Sp>
+      <Sp name="⋯">
+        <PageMore>
+          <MenuItem icon="archive" label="Archived" onSelect={noop} />
+          <MenuItem icon="edit" label="Edit pipeline" onSelect={noop} />
+        </PageMore>
+      </Sp>
+    </Specimens>
+  );
+}
+
+/** A value changed where it stands: its words and a small chevron. */
+function Values() {
+  const [model, setModel] = useState<string>(MODELS[0]);
+  return (
+    <Specimens>
+      <Sp name="A value">
+        <span className="sg-w">
+          <Menu align="start" trigger={<ValueButton label="Model">{model}</ValueButton>}>
+            {MODELS.map((m) => (
+              <MenuItem key={m} label={m} on={m === model} onSelect={() => setModel(m)} />
+            ))}
+          </Menu>
+        </span>
+      </Sp>
+      <Sp name="With a tail">
+        <span className="sg-w">
+          <ValueButton label="Tasks model" more="High" onClick={noop}>
+            Claude Opus 5.5
+          </ValueButton>
+        </span>
+      </Sp>
+      <Sp name="The default">
+        <span className="sg-w">
+          <ValueButton label="Tasks model" muted onClick={noop}>
+            Same
+          </ValueButton>
+        </span>
+      </Sp>
+      <Sp name="Off">
+        <span className="sg-w">
+          <ValueButton label="Computer" disabled>
+            Studio Mac
+          </ValueButton>
+        </span>
+      </Sp>
+    </Specimens>
+  );
+}
+
 export function ControlsArea() {
   return (
     <Area id="controls" title="Controls" rule="One filled button to a page, before the ⋯. A button is a verb of two words at most.">
@@ -422,6 +504,12 @@ export function ControlsArea() {
             <IconButton icon="filter" label="Filter" on />
           </Sp>
         </Specimens>
+      </Section>
+      <Section name="In a page head">
+        <HeadParts />
+      </Section>
+      <Section name="A value">
+        <Values />
       </Section>
       <Section name="Choices">
         <Choices />
@@ -477,6 +565,15 @@ function Chat({ m, variant }: { m: ChatMessage; variant: 'tico' | 'side' }) {
   );
 }
 
+function Writing({ variant, text }: { variant: 'tico' | 'side'; text: string }) {
+  const r: LiveRun = { run: `sg-${variant}`, bot: 'bot:builder-one', parts: [], typing: null, doing: text ? 'type' : 'think', ended: false };
+  return (
+    <div className="chat-body sg-chat">
+      <LiveRow r={r} variant={variant} text={text} />
+    </div>
+  );
+}
+
 export function ChatArea() {
   return (
     <Area id="chat" title="Chat" rule="Tico says each thing it did in a quiet line. Money, sending and deleting wait for a yes.">
@@ -497,12 +594,30 @@ export function ChatArea() {
               <DidLine text="Opened Finance" />
             </div>
           </Sp>
+          <Sp name="With its own mark">
+            <div className="chat-body sg-chat is-did">
+              <DidLine text="Moved to Friday" icon="calendar" />
+            </div>
+          </Sp>
+          <Sp name="A teammate did it">
+            <div className="chat-body sg-chat is-did">
+              <DidLine text="Asked QA Owner" face={<Face who="qa" />} />
+            </div>
+          </Sp>
           <Sp name="It could not">
             <div className="chat-body sg-chat is-did">
               <DidLine text="Turn on Two-step" fault />
             </div>
           </Sp>
         </Specimens>
+      </Section>
+      <Section name="Writing">
+        <Named
+          rows={[
+            ['Tico writing', <Writing variant="tico" text="The shipping checks in Engineering. They are" />],
+            ['An agent thinking', <Writing variant="side" text="" />],
+          ]}
+        />
       </Section>
       <Section name="The message box">
         <Specimens>

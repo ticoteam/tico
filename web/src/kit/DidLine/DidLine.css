@@ -1,0 +1,4 @@
+/* A line that could not be done, from pages/14-acts/acts.css: in ink, the words wrap. The plain line is shell.css .did. */
+.did.is-fault{align-items:flex-start;color:var(--ink);font-weight:var(--w-strong)}
+.did.is-fault .did-ico{color:var(--ink)}
+.did.is-fault span:last-child{white-space:normal;overflow:visible;line-height:18px;padding-top:var(--s-0)}

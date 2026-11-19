@@ -20,6 +20,19 @@ describe('SectionHead', () => {
     expect(fold.closest('section')?.className).toBe('stage is-folded');
   });
 
+  it('a summary sits right of the name and count, outside the fold button', () => {
+    render(
+      <Section name="Builders" count={3} summary="3 agents, $40">
+        <p>Row</p>
+      </Section>,
+    );
+    const fold = screen.getByRole('button', { name: /Builders/ });
+    const sum = screen.getByText('3 agents, $40');
+    expect(sum.className).toBe('sec-sum');
+    expect(fold.contains(sum)).toBe(false);
+    expect(sum.previousElementSibling?.tagName).toBe('H2');
+  });
+
   it('names a section in an h2 and a group one step down in an h3', () => {
     render(
       <>

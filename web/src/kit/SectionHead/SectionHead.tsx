@@ -31,10 +31,12 @@ export type SectionHeadProps = Omit<FoldButtonProps, 'open' | 'onToggle'> & {
   onToggle?: () => void;
   /** Quiet icon buttons at the right of a section's head. */
   actions?: ReactNode;
+  /** One muted line right of the name and count ("3 agents, $40"); it gives way first. Level 1 only. */
+  summary?: ReactNode;
 };
 
 /** A section's head. Level 1 is the sticky `.stage-head`; level 2 is the name alone, in the page's own group head. */
-export function SectionHead({ level = 1, name, count, open = true, onToggle, controls, actions }: SectionHeadProps) {
+export function SectionHead({ level = 1, name, count, open = true, onToggle, controls, actions, summary }: SectionHeadProps) {
   const label = onToggle ? (
     <FoldButton name={name} count={count} open={open} onToggle={onToggle} controls={controls} />
   ) : (
@@ -47,6 +49,7 @@ export function SectionHead({ level = 1, name, count, open = true, onToggle, con
   return (
     <header className="stage-head">
       <h2 className="sec-name">{label}</h2>
+      {summary ? <span className="sec-sum">{summary}</span> : null}
       <span className="grow" />
       {actions}
     </header>

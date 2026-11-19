@@ -42,6 +42,19 @@ describe('Style guide', () => {
     expect(themes).toEqual(['dark', 'light']);
   });
 
+  it('shows the head parts, a value, a summary, did lines with a mark or a face, and a reply being written', async () => {
+    const main = await show();
+    const owner = within(main).getAllByRole('button', { name: 'Chat with Engineering Manager' });
+    expect(owner.map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'true']);
+    fireEvent.click(owner[0]!);
+    expect(owner[0]!.getAttribute('aria-pressed')).toBe('true');
+    expect(within(main).getByRole('button', { name: 'Model' }).className).toBe('dd');
+    expect(within(main).getByRole('button', { name: 'Engineering' }).className).toBe('scope-pick');
+    expect(within(main).getByText('Haiku 5.5, $40 this month').className).toBe('sec-sum');
+    expect(within(main).getByText('Asked QA Owner').closest('.did')?.querySelector('.av')).toBeTruthy();
+    expect(main.querySelectorAll('.msg.is-live .typing').length).toBe(2);
+  });
+
   it('a section folds from its name', async () => {
     const main = await show();
     const fold = within(main).getAllByRole('button', { name: /^Steps/ })[0]!;

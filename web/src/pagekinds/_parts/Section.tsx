@@ -10,6 +10,8 @@ export interface SectionProps {
   count?: number;
   /** Quiet icon buttons at the right of the section's head ("+"). */
   actions?: ReactNode;
+  /** One muted line right of the name and count ("3 agents, $40"); it truncates first. */
+  summary?: ReactNode;
   defaultOpen?: boolean;
   /** Controlled: a remembered fold. */
   open?: boolean;
@@ -24,7 +26,7 @@ export interface SectionProps {
  * Its name sits on `--page-x` and a row's mark hangs in the margin, so row titles line up under the name. Folded, its
  * rows are not drawn.
  */
-export function Section({ name, label, count, actions, defaultOpen = true, open: openProp, onOpenChange, target, children }: SectionProps) {
+export function Section({ name, label, count, actions, summary, defaultOpen = true, open: openProp, onOpenChange, target, children }: SectionProps) {
   const [own, setOwn] = useState(defaultOpen);
   const open = openProp ?? own;
   const id = useId();
@@ -34,7 +36,7 @@ export function Section({ name, label, count, actions, defaultOpen = true, open:
   };
   return (
     <section className={open ? 'stage pk-sec' : 'stage pk-sec is-folded'} data-target={target} aria-label={label ?? (typeof name === 'string' ? name : undefined)}>
-      <SectionHead name={name} count={count} actions={actions} open={open} onToggle={toggle} controls={id} />
+      <SectionHead name={name} count={count} actions={actions} summary={summary} open={open} onToggle={toggle} controls={id} />
       <div id={id} hidden={!open}>
         {open && children}
       </div>
