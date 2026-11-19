@@ -89,6 +89,12 @@ def verb(which, **args):
             ("browser/needs-you", {"site": SITE, "line": "Type the code texted to the office phone"}),
             "Asked a person; their Done wakes you. End this turn now.",
         ),
+        (
+            ["browser", "needs-you", SITE, "Sign in", "--task", "t_1"],
+            {"requirement_id": "rq_2"},
+            ("browser/needs-you", {"site": SITE, "line": "Sign in", "task": "t_1"}),
+            "Asked a person; their Done wakes you. End this turn now.",
+        ),
         (["login", "fill", SITE, "username"], {"ok": True}, verb("fill", field="username"), "Filled the username."),
         (
             ["login", "fill", SITE, "password", "--ref", "e4"],

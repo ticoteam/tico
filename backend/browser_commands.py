@@ -1367,7 +1367,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             if task is None:
                 raise Problem(
                     "needs_a_task",
-                    "Asking a person needs a task; create a task and ask for browser help from its turn.",
+                    "Asking a person needs a task: name one of your open tasks (--task), or create one and ask from it.",
                     409,
                 )
             holder = str(picked.get("holder") or "")

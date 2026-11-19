@@ -67,6 +67,7 @@ to do next. `--json` prints the answer as JSON. Exit 0 is done, 2 refused, 1 whe
   else is refused and the value is dropped.
 - Never solve a captcha, a code sent by text or email, or a new-device check yourself. Run
   `tico browser needs-you <site> "<what to do>"`, end the turn, and read the page again when their Done wakes you.
+  The ask goes on your task; from a chat turn, name one of your open tasks with `--task <id>`.
 - One teammate at a time per account. Your commands hold it for 2 minutes after the last one; `tico browser close`
   when you are done. A busy answer names who has it: try again in a minute. While a person has taken control, wait
   until they give it back.
