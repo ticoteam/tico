@@ -129,6 +129,10 @@ UPGRADE_TESTS = (
 #   the map sees no edge from a command module to it: #3798 added `advice` to `tico computer performance` in
 #   clients/commands/computers.py without re-recording computer.json, and release validation for v0.6.66 went red
 #   (fixed by #4303). A change under clients/commands/ picks it too.
+# - GROWTH_FIXTURES writes the Growth read (backend/growth_core.py, reached through the API and growth_computed) into
+#   ui/tests/fixtures/growth-read-*.json and fails when the files are not the read, so the map sees no edge from a
+#   growth module to it: #4489 added `sources` to the read's health without writing the files again, and release
+#   validation for v0.6.110 went red. A change to backend/growth*.py picks it.
 # - UI_SHELL_SIZE builds the whole UI bundle and fails when a cold open of Home downloads more JavaScript than its ceiling
 #   (backend/ui_build.py SHELL_JS_CEILING, P05b). Any UI source, ui/parts.json, a vendor script, the bundler, the UI
 #   build or the npm lockfile (esbuild's version decides the minified bytes) can move that number: each picks it.
@@ -136,6 +140,7 @@ UPGRADE_TESTS = (
 RELEASE_SHOTS = "scripts/tests/test_release_shots.py"
 CLI_SPEC = "clients/tests/test_cli_spec.py"
 CLI_FIXTURES = "clients/tests/test_cli_fixtures.py"
+GROWTH_FIXTURES = "backend/tests/test_growth_page_fixtures.py"
 CLI_COMMANDS = "clients/commands/"
 UI_SHELL_SIZE = "backend/tests/test_ui_shell_size.py"
 UI_SHELL_INPUTS = (
@@ -1454,7 +1459,8 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     7. A path a CONTENT_SWEEPS test reads turns that slow test on in the contracts job (`sweeps`), with its environment.
     8. A file under MIGRATIONS runs UPGRADE_TESTS, which a light plan keeps (narrow).
     9. Guard tests (`guards`, which a light plan keeps): a ui/ file the release-shot harness lists that is added or gone
-       runs RELEASE_SHOTS; a file under CLI_COMMANDS runs CLI_SPEC and CLI_FIXTURES; a path that can move what a
+       runs RELEASE_SHOTS; a file under CLI_COMMANDS runs CLI_SPEC and CLI_FIXTURES; a backend/growth*.py file runs
+       GROWTH_FIXTURES; a path that can move what a
        cold open of Home downloads (moves_ui_shell) runs UI_SHELL_SIZE.
     10. Inputs in CHECK_ALSO run the tests and browser scripts that exercise them through HTTP or catalog discovery.
 
@@ -1669,6 +1675,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         if cli_guards:
             guards |= cli_guards
             notes.append("rule 9: a CLI command change runs the CLI spec and frozen command-line tests")
+    if any(n.startswith("backend/growth") and n.endswith(".py") for n in names) and (root / GROWTH_FIXTURES).is_file():
+        guards.add(GROWTH_FIXTURES)
+        notes.append("rule 9: a Growth module change runs the Growth page fixture test")
     if any(moves_ui_shell(n) for n in names) and (root / UI_SHELL_SIZE).is_file():
         guards.add(UI_SHELL_SIZE)
         notes.append("rule 9: a UI, bundler or UI build change runs the cold-open size ceiling")
