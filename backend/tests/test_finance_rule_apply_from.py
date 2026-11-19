@@ -360,3 +360,33 @@ def test_apply_from_leaves_a_card_charge_a_person_categorized(books):
         kept = _feed(c, "ctx_made_up")[2]
         assert _rule(c, "Cafe", "EXAMPLE CAFE", "6100", apply_from="2026-10-01")["reposted"] == 0
         assert _feed(c, "ctx_made_up")[2] == kept
+
+
+def _split_by_hand(c, entry):
+    line = c.execute(
+        "SELECT l.id FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id WHERE l.entry_id=? AND a.code='6900'",
+        (entry,),
+    ).fetchone()[0]
+    splits = [{"teammate": "human:eve", "share_bps": 6_000}, {"teammate": "human:fay", "share_bps": 4_000}]
+    assert act(c, OWNER, "attribute", {"line_id": line, "splits": splits}).status == "committed"
+
+
+def test_apply_from_leaves_a_card_charge_a_person_split_between_teammates(books):
+    _brex_charge(books)
+    with books.transaction() as c:
+        entry = _feed(c, "ctx_made_up")[2]
+        _split_by_hand(c, entry)
+        assert _rule(c, "Cafe", "EXAMPLE CAFE", "6100", apply_from="2026-10-01")["reposted"] == 0
+        assert _feed(c, "ctx_made_up")[2] == entry  # the split stays where the person put it
+
+
+def test_apply_from_leaves_a_bank_debit_a_person_split_between_teammates(books):
+    _past(
+        books,
+        _txn("dc-2", "acct-chk", -25.0, "debitCardTransaction", day="2026-10-04", counterpartyName="Example Diner"),
+    )
+    with books.transaction() as c:
+        entry = _feed(c, "dc-2")[2]
+        _split_by_hand(c, entry)
+        assert _rule(c, "Diner", "Example Diner", "6100", apply_from="2026-10-01")["reposted"] == 0
+        assert _feed(c, "dc-2")[2] == entry

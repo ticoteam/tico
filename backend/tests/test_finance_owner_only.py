@@ -173,3 +173,50 @@ def test_a_bot_whose_slug_is_not_its_id_is_found_by_its_slug(owner_only_books: S
         grant = {"subject": "bot:consumer-example-ad-owner", "what": "expenses", "whose": "own"}
         assert act(c, OWNER, "view_grant", grant).status == "committed"
         assert load(c, AT).view("bot:cmo").sees_anything()
+
+
+def test_a_grant_asked_for_a_bot_by_slug_goes_to_that_bot_even_if_the_slug_changes_hands(books: Store):
+    """A bot's grant waits for a person's OK. The subject is fixed to the bot's id when it is asked: a slug renamed and
+    handed to another bot before the OK still grants the bot that was asked about."""
+    from backend import hubdb as H
+    from backend.finance import actions as FA
+    from backend.tests.helpers.finance_oks import give
+
+    with books.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='bot:finance-owner' WHERE bot='coder'")
+        H.rename_bot(c, "coder", "example-web-helper")
+        grant = {"subject": "bot:example-web-helper", "what": "expenses", "whose": "own"}
+        asked = act(c, "bot:finance-owner", "view_grant", grant)
+        assert asked.status == "needs_approval", (asked.code, asked.reason)
+        stored = c.execute("SELECT payload FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0]
+        assert '"subject": "bot:coder"' in stored
+        H.rename_bot(c, "coder", "example-coder-two")
+        H.rename_bot(c, "seller", "example-web-helper")
+        give(c, asked.approver, asked.approval_id)
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done.status == "committed", (done.code, done.reason)
+        ctx = load(c, AT)
+        assert ctx.view("bot:coder").grant_ids == (done.result["grant_id"],) and not ctx.view("bot:seller").grant_ids
+
+
+def test_every_teammate_a_request_names_is_kept_by_bot_id(owner_only_books: Store):
+    """What is stored for an approval names bots by id: a teammate anywhere (attribution shares, a budget, a right), a
+    card's holder, a teammate allocation's target and a teammate grant's subject; a team or a card is left alone."""
+    from backend import hubdb as H
+    from backend.finance import actions as FA
+
+    with owner_only_books.transaction() as c:
+        H.rename_bot(c, "coder", "example-ads")
+        bot = "bot:example-ads"
+        teammates = FA._teammates(c, "attribution_rule_set", {"splits": [{"teammate": bot, "share_bps": 10_000}]})
+        assert teammates == {"splits": [{"teammate": "bot:coder", "share_bps": 10_000}]}
+        assert FA._teammates(c, "card_create", {"holder": bot})["holder"] == "bot:coder"
+        allocation = {"target_kind": "teammate", "target_id": bot}
+        assert FA._teammates(c, "allocation_set", allocation)["target_id"] == "bot:coder"
+        assert FA._teammates(c, "allocation_set", {**allocation, "target_kind": "card"})["target_id"] == bot
+        assert FA._teammates(c, "view_grant", {"subject": bot})["subject"] == "bot:coder"
+        assert FA._teammates(c, "view_grant", {"subject_kind": "team", "subject": bot})["subject"] == bot
+        assert FA._teammates(c, "budget_create", {"teammate": bot, "holder": bot}) == {
+            "teammate": "bot:coder",
+            "holder": bot,
+        }

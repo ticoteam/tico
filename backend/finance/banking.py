@@ -36,6 +36,7 @@ from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
 from .core.org import SYSTEM
 from .handlers import Plan, Result, may_write
 from .store import ap as SAP
+from .store import attribution as ATT
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
@@ -1868,7 +1869,7 @@ def default_debit(ctx: Ctx, row: Any) -> bool:
     """Whether a posted row sits on the automatic Other expenses default _settle gives a debit nothing else took: its
     live entry is the Other expenses line alone, shared with no other row, with no refund posted against it and no
     document settled from it; the default's needs_category ask was raised for it (a payment, a contact default or a
-    rule that posts to Other expenses on purpose raises none); and no categorize put it there."""
+    rule that posts to Other expenses on purpose raises none); and no categorize or split by hand put it there."""
     other = by_code(ctx, OTHER)
     fid = str(row["id"])
     return (
@@ -1876,19 +1877,28 @@ def default_debit(ctx: Ctx, row: Any) -> bool:
         and _only_line(ctx, row, other.id)
         and SK.asked(ctx.c, CATEGORY_EVENT, fid)
         and not SAP.categorized_into(ctx.c, str(row["entry_id"]))
+        and not _split_by_hand(ctx, row)
         and not SK.refunds_of(ctx.c, fid)
         and not SAP.settled_from(ctx.c, "feed", fid)
     )
 
 
+def _split_by_hand(ctx: Ctx, row: Any) -> bool:
+    """Whether a person or a bot split a line of the row's entry between teammates (an attribution override): a re-post
+    would drop it, as it would a categorize."""
+    lines = [str(r["id"]) for r, _ in SL.entry_lines(ctx.c, str(row["entry_id"]))]
+    return bool(ATT.lines_owned_by_people(ctx.c, lines))
+
+
 def default_card(ctx: Ctx, row: Any, card: Any) -> bool:
     """Whether a posted charge on a card Tico issued sits on the card's default (card_line: its budget's line, else
     Other expenses) that _settle gives it when no posting rule matched: that line alone, shared with no other row, no
-    refund posted against it, no document settled from it, and no categorize put it there."""
+    refund posted against it, no document settled from it, and no categorize or split by hand put it there."""
     fid = str(row["id"])
     return (
         _only_line(ctx, row, card_line(ctx, card)[0])
         and not SAP.categorized_into(ctx.c, str(row["entry_id"]))
+        and not _split_by_hand(ctx, row)
         and not SK.refunds_of(ctx.c, fid)
         and not SAP.settled_from(ctx.c, "feed", fid)
     )

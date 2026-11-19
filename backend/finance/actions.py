@@ -217,6 +217,34 @@ def _canonical(payload: object) -> dict[str, object]:
     return _trim_ids(cast(dict[str, object], loaded))
 
 
+# Payload fields that name a teammate beyond `teammate` itself (anywhere): the kind and, when one says so, the field
+# that must name a teammate for it to be one.
+TEAMMATE_FIELDS: dict[str, tuple[str, str]] = {
+    "view_grant": ("subject", "subject_kind"),
+    "allocation_set": ("target_id", "target_kind"),
+    "card_create": ("holder", ""),
+}
+
+
+def _teammates(c: sqlite3.Connection, kind: str, body: dict[str, object]) -> dict[str, object]:
+    """The payload with each teammate it names as the org chart keys it (`bot:<slug>` as `bot:<id>`), fixed when it is
+    asked: what is stored, approved and run names the bot that was asked about, even if its slug changes hands."""
+
+    def walk(value: object) -> object:
+        if isinstance(value, dict):
+            items = cast(dict[str, object], value).items()
+            return {k: tico.teammate(c, v) if k == "teammate" and isinstance(v, str) else walk(v) for k, v in items}
+        if isinstance(value, list):
+            return [walk(v) for v in cast(list[object], value)]
+        return value
+
+    out = cast(dict[str, object], walk(body))
+    key, kind_key = TEAMMATE_FIELDS.get(kind, ("", ""))
+    if key and isinstance(out.get(key), str) and (not kind_key or out.get(kind_key, "teammate") == "teammate"):
+        out[key] = tico.teammate(c, str(out[key]))
+    return out
+
+
 def _trim_ids(payload: Mapping[str, object]) -> dict[str, object]:
     return {
         k: v.strip() if isinstance(v, str) and (k.endswith("_id") or k == "obligation") else v
@@ -397,7 +425,7 @@ def act(
         # recorded: the request may name bank details, and a refusal that names none needs no stored copy.
         return ActionResult(status="denied", kind=kind, code=NOT_AVAILABLE, reason=_mirror_refusal(kind))
     try:
-        body, sealed = payments.strip_details(c, kind, _canonical(payload))
+        body, sealed = payments.strip_details(c, kind, _teammates(c, kind, _canonical(payload)))
     except FinanceError as e:
         return ActionResult(status="failed", kind=kind, code=e.code, reason=e.message)
     except tico.Refused as e:
