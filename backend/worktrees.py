@@ -259,11 +259,6 @@ def relative(path):
     return str(p)
 
 
-def supported(c):
-    # No runtime schema changes: the tasks migration owns these columns.
-    return 'computer_id' in {r[1] for r in c.execute('PRAGMA table_info(task_links)')}
-
-
 LIMIT = 100  # live worktrees per bot; the computer's free-disk floor can stop it sooner
 CLEANUP_TRIES = 6  # a refused worktree cleanup is asked again after 2, 4, ... 64 minutes, then left
 READINGS = ('last_activity', 'size_mb', 'activity_at')  # a worktree report's readings that move as a bot works
@@ -474,7 +469,7 @@ def held_reason(c, row, detail, memo=None):
 
 
 def inventory(c, computer):
-    if not supported(c) or retired(c, computer):
+    if retired(c, computer):
         return []
     owner = "coalesce(json_extract(l.detail,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner_id END)"
     return [
@@ -495,7 +490,7 @@ def inventory(c, computer):
 def attached(c, task_id, computer, bot):
     """The task's worktrees this bot's turn on this computer works in: its own, set up, not removed. A claimed
     task turn carries them (backend/execution.py) so the runner adds each to the session with its repo's rules."""
-    if not supported(c) or not task_id or not computer:
+    if not task_id or not computer:
         return []
     owner = "coalesce(json_extract(l.detail,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner_id END)"
     rows = c.execute(
@@ -625,8 +620,6 @@ def preparable(c, row, detail):
 
 
 def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
-    if not supported(c):
-        return []
     rows = {r['id']: r for r in inventory(c, who.runner_id)}
     for report in reports or []:
         row = rows.get(report.link_id)
@@ -1029,8 +1022,6 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
     being served (backend/worktree_waits.py) all go through it, so each checks permission, ownership and computer.
     `brief` refuses a bot at its limit without listing its worktrees: a wait asks on every heartbeat, and nobody reads
     that refusal."""
-    if not supported(c):
-        raise Problem('worktrees_unavailable', 'The server is too old for task worktrees', 409)
     bot = H.actor_id(task['owner_id'])
     connection = c.execute("SELECT * FROM github_app WHERE id='app'").fetchone()
     org = connection['org'] if connection else default_org
@@ -1412,8 +1403,6 @@ def install(app, store, auth, mutate):
         def work(c):
             validate_identity(c, who)
             task_id = auth.resolve_task(c, who, tid) if who.role != 'runner' else tid
-            if not supported(c):
-                raise Problem('worktrees_unavailable', 'The server is too old for task worktrees', 409)
             link = c.execute(
                 "SELECT * FROM task_links WHERE id=? AND task_id=? AND kind='worktree'", (link_id, task_id)
             ).fetchone()
