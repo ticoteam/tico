@@ -221,6 +221,7 @@ const PAGES: PageSpec[] = [
     'ui/app/stage-rules.ts', 'ui/app/stage-rules-mark.ts', 'ui/styles/stage-rules.css']},
   {name: 'contacts', route: '#/library/contacts', ready: 'Bright Homes Retail', ui: ['ui/app/directory*.ts', 'ui/styles/directory.css']},
   {name: 'products', route: '#/products', ready: 'Lightshow Kit', ui: ['ui/app/products.ts', 'ui/styles/products.css']},
+  {name: 'risk', route: '#/risk', ready: 'Customer disputes', ui: ['ui/app/risk.ts', 'ui/styles/risk.css']},
   {name: 'automations', route: '#/automations', ready: 'Automations', ui: ['ui/app/automations*.js', 'ui/app/automations*.ts', 'ui/styles/automations.css']},
   {name: 'listening', route: '#/listening', ready: 'Listening', ui: ['ui/app/listening.ts', 'ui/styles/listening.css', 'ui/app/page-chat.ts', 'ui/styles/page-chat.css', 'ui/app/empty-art.ts']},
   {name: 'learnings', route: '#/learnings', ready: 'set the phone on a flat surface before calibrating',
