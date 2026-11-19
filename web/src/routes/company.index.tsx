@@ -1,6 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { Placeholder } from '@/kit/placeholder/Placeholder';
+import { CompanyPage, loadCompany, panelSearch } from '@/features/company/exports';
 
 export const Route = createFileRoute('/company/')({
-  component: () => <Placeholder title="Company" />,
+  validateSearch: panelSearch,
+  loader: ({ context: { queryClient } }) => loadCompany(queryClient),
+  component: Company,
 });
+
+function Company() {
+  return <CompanyPage search={Route.useSearch()} />;
+}
