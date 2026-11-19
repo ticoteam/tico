@@ -148,3 +148,7 @@ a.lr-row{color:inherit}
   .lr-row.is-who{grid-template-columns:var(--av-sm) minmax(0,1fr) 52px 28px}
   .lr-more{opacity:1}
 }
+
+/* ---------- a mail row's labels and attachment, as quiet pills after the subject ---------- */
+.ml-pills{flex:0 1 auto;min-width:0;display:flex;gap:var(--s-1);overflow:hidden;align-self:center}
+.tl>.filter-row{padding-left:var(--s-3)}

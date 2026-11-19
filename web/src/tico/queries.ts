@@ -10,13 +10,16 @@ import { onRefetch } from '@/live';
 // Read again after the person's own turn-on and when the stream is back.
 quietRoot('tico');
 
-export type TicoPower = Pick<Assistant, 'available' | 'bot' | 'can_turn_on' | 'state'>;
+export type TicoPower = Pick<Assistant, 'available' | 'bot' | 'can_turn_on' | 'state'> & {
+  /** The owner's earlier chat (with the Strategy Owner), read only; null for anyone else or when it has nothing. */
+  earlier?: Assistant['earlier'];
+};
 
 export const ticoPowerQuery = queryOptions({
   queryKey: ['tico', 'power'] as const,
   queryFn: async ({ signal }): Promise<TicoPower> => {
     const a = await api.get<Assistant>('/api/v2/assistant', { signal });
-    return { available: a.available, bot: a.bot, can_turn_on: a.can_turn_on, state: a.state };
+    return { available: a.available, bot: a.bot, can_turn_on: a.can_turn_on, state: a.state, earlier: a.earlier ?? null };
   },
   staleTime: QUIET_STALE_MS,
 });

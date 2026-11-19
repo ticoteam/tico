@@ -411,3 +411,29 @@ export const removeViewerAction = defineAction({
   did: () => 'Can no longer read your chat',
   target: () => ({ kind: 'page', id: '/learned' }),
 });
+
+/* ---------------------------------------------------------------- finding mail */
+
+// The label filter's choices (old mail.ts MAIL_CHIPS); any other label id the server knows is taken too.
+export const MAIL_LABELS = [
+  { id: 'INBOX', name: 'Inbox' },
+  { id: 'UNREAD', name: 'Unread' },
+  { id: 'STARRED', name: 'Starred' },
+] as const;
+
+export const findMail = defineAction({
+  id: 'mail.find',
+  title: 'Find mail',
+  kind: 'view',
+  input: s.object({
+    box: s.optional(id('a mailbox address')),
+    q: s.optional(s.string({ max: 500, what: 'the words to find' })),
+    label: s.optional(s.string({ max: 200, what: 'a Gmail label id, such as UNREAD or STARRED' })),
+    attach: s.optional(s.boolean()),
+  }),
+  // Each narrowing replaces the last in history: Back leaves the list, not each word typed.
+  run: ({ router }, { box, q, label, attach }) =>
+    router.navigate({ to: '/threads/mail', search: { box, q: q || undefined, label: label || undefined, attach: attach || undefined }, replace: true }),
+  did: ({ q }) => (q ? 'Searched the mail' : 'Filtered the mail'),
+  target: () => ({ kind: 'page', id: '/threads/mail' }),
+});

@@ -118,6 +118,14 @@
 .co .bet::before{counter-increment:bet;content:counter(bet);color:var(--muted);font-variant-numeric:tabular-nums}
 .co .bet .pill{margin-top:calc(var(--s-0) / 2)}
 .co .brand-frame{margin-top:0}
+/* Where we play, Competitors, Related news: the market's rows as plain lines, each opening Market or the post (mock .play,
+   without its share column: the server has no number for it) */
+.co .play{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-3h);align-items:center;min-height:var(--row);border-top:1px solid var(--line);color:var(--ink);text-decoration:none}
+.co .play:first-of-type{border-top:0}
+.co .play .row-title{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.co .play.is-us .row-title{font-weight:var(--w-strong)}
+.co a.play:hover .row-title{text-decoration:underline}
+.co .play-fault{display:flex;align-items:center;gap:var(--s-2);min-height:var(--row)}
 
 /* ---------- versions: the pick and the changes count in the head, the changes marked in place (files.css) ---------- */
 .co .chg-pick,.co .ver-pick{font-variant-numeric:tabular-nums}

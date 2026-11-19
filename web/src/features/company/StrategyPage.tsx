@@ -1,22 +1,26 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { Button } from '@/kit/Button';
+import { Fault } from '@/kit/Fault';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { FoldButton } from '@/kit/SectionHead';
+import { SkeletonRows } from '@/kit/Skeleton';
 import { fmtDate } from '@/lib';
 import { Document, type PageState, type PageTab } from '@/pagekinds';
 import { lineDiff, paragraphs } from './diff';
 import { GoalsPage, type GoalsSearch } from './GoalsPage';
-import { MarketTab } from './MarketPage';
+import { MarketTab, spendOf } from './MarketPage';
 import { OrgTab } from './OrgPage';
-import { Face, NameOf, useDo } from './parts';
+import { Face, Go, NameOf, usdShort, useDo } from './parts';
 import {
   brandQuery,
   brandVersionQuery,
+  listeningStatsQuery,
+  marketSpendQuery,
   strategyDiffQuery,
   strategyQuery,
   strategyVersionQuery,
@@ -228,9 +232,7 @@ function StrategyText({ v, bets: all, live, marks }: { v: StrategyVersion | null
       ) : (
         (v?.summary || v?.vision) && <p className="read-lead">{v.summary || v.vision}</p>
       )}
-      <Part name="Where we play">
-        <p className="none">None yet</p>
-      </Part>
+      <WherePlay />
       {(bets.length > 0 || (marks?.bets.retired.length ?? 0) > 0) && (
         <Part name="Bets">
           <ol className="bets">
@@ -259,6 +261,8 @@ function StrategyText({ v, bets: all, live, marks }: { v: StrategyVersion | null
           </ol>
         </Part>
       )}
+      <Rivals />
+      <News />
       {PARTS.map(([k, name]) => {
         const f = changed.get(`sections.${k}`);
         const body = sections[k];
@@ -295,6 +299,110 @@ function StrategyText({ v, bets: all, live, marks }: { v: StrategyVersion | null
         );
       })}
     </>
+  );
+}
+
+// ---------------------------------------------------------------- the market's rows, as Market shows them
+
+const MARKET = '/company/strategy/market';
+const forbidden = (e: unknown) => (e as { status?: number } | null)?.status === 403;
+
+/** The Market read's waiting, failed and closed states. */
+function MarketState({ q }: { q: UseQueryResult<unknown> }) {
+  if (q.isPending) return <SkeletonRows rows={3} />;
+  if (forbidden(q.error)) return <p className="none">No access</p>;
+  return (
+    <div className="play-fault">
+      <Fault label="Market did not load" size={16} />
+      <Button onClick={() => void q.refetch()}>Try again</Button>
+    </div>
+  );
+}
+
+/** The market's segments, each with its size as Market shows it, ours in bold; a row opens its Market panel. The mock's
+    share column is left out: the server has no number for it (GET /api/v2/market/spend sizes segments, it splits nothing). */
+function WherePlay() {
+  const q = useQuery(marketSpendQuery);
+  const segs = q.data?.segments ?? [];
+  return (
+    <Part name="Where we play">
+      {!q.isSuccess ? (
+        <MarketState q={q} />
+      ) : segs.length ? (
+        <div>
+          {segs.map((s) => {
+            const usd = spendOf(s);
+            return (
+              <Go key={s.id} to={MARKET} search={{ panel: `segment:${s.id}` }} className={s.self ? 'play is-us' : 'play'} data-target={`segment:${s.id}`}>
+                <span className="row-title">{s.name}</span>
+                <span className="row-fig">{usd != null ? usdShort(usd) : <span className="none">Not sized</span>}</span>
+              </Go>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="none">None yet</p>
+      )}
+    </Part>
+  );
+}
+
+/** The organizations the market lists as players, once each; one with a note opens it on Market. */
+function Rivals() {
+  const q = useQuery(marketSpendQuery);
+  const seen = new Set<string>();
+  const players = (q.data?.segments ?? [])
+    .flatMap((s) => s.players ?? [])
+    .filter((p) => {
+      const k = p.entity_id ?? `name:${p.name}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  // Waiting, failed or closed, Where we play above says so once.
+  if (!q.isSuccess) return null;
+  return (
+    <Part name="Competitors">
+      {players.length ? (
+        <div>
+          {players.map((p) =>
+            p.entity_id ? (
+              <Go key={p.entity_id} to={MARKET} search={{ panel: `player:${p.entity_id}` }} className="play" data-target={`player:${p.entity_id}`}>
+                <span className="row-title">{p.name}</span>
+              </Go>
+            ) : (
+              <div key={`name:${p.name}`} className="play">
+                <span className="row-title">{p.name}</span>
+              </div>
+            ),
+          )}
+        </div>
+      ) : (
+        <p className="none">None yet</p>
+      )}
+    </Part>
+  );
+}
+
+/** What Listening found lately (GET /api/v2/listening/stats): the newest posts with a link, each opening where it was
+    written. Left out while Listening has nothing (the read gives null when it fails). */
+function News() {
+  const q = useQuery(listeningStatsQuery);
+  const posts = (q.data?.recent ?? []).filter((p) => /^https?:\/\//i.test(p.url ?? '')).slice(0, 8);
+  if (!posts.length) return null;
+  return (
+    <Part name="Related news">
+      <div>
+        {posts.map((p) => (
+          <a key={p.item_id} href={p.url ?? undefined} target="_blank" rel="noreferrer" className="play">
+            <span className="row-title" title={p.text}>
+              {p.text}
+            </span>
+            <span className="row-age">{p.source}</span>
+          </a>
+        ))}
+      </div>
+    </Part>
   );
 }
 

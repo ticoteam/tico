@@ -32,6 +32,8 @@ export interface FrameProps {
   widgets?: ReactNode;
   /* a call's chat, transcript and people */
   side?: ReactNode;
+  /* on the phone: what a card's lip shows at rest (the menu's: the company and its Flow count) */
+  lips?: PhoneCardsProps['lips'];
   /* on the phone: a control on a card's lip that is not its tap target (mute on a call's) */
   lipActs?: PhoneCardsProps['lipActs'];
   /* by default the address decides */
@@ -297,8 +299,8 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
     // a call takes the screen in the chat's place (phone/notes.md)
     const call = p.arr === 'call';
     // a teammate's own page: their page at the back, their chat the card that comes up over it
-    if (p.arr === 'agent' && p.widgets) return <PhoneCards page={p.widgets} tico={p.tico} menu={p.menu} chat={p.page} lipActs={p.lipActs} />;
-    return <PhoneCards page={call ? null : p.page} tico={p.tico} menu={p.menu} chat={call ? undefined : p.chat} call={call ? p.page : undefined} lipActs={p.lipActs} />;
+    if (p.arr === 'agent' && p.widgets) return <PhoneCards page={p.widgets} tico={p.tico} menu={p.menu} chat={p.page} lips={p.lips} lipActs={p.lipActs} />;
+    return <PhoneCards page={call ? null : p.page} tico={p.tico} menu={p.menu} chat={call ? undefined : p.chat} call={call ? p.page : undefined} lips={p.lips} lipActs={p.lipActs} />;
   }
 
   const st = find(stretch.id);

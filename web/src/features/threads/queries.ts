@@ -593,3 +593,30 @@ export function removeViewer(bot: string) {
     settle: (_d: Viewers | undefined, answer) => answer,
   });
 }
+
+/* ---------------------------------------------------------------- finding mail (search, label, attachments) */
+
+/** What the Mail list is narrowed to, as the address holds it. The server turns these into one Gmail query. */
+export interface MailFind {
+  q?: string;
+  /** A Gmail label id ("UNREAD", "STARRED", ...). */
+  label?: string;
+  /** Only mail with an attachment. */
+  attach?: boolean;
+}
+
+/** The Mail list, narrowed. While a new narrowing loads, the rows already shown stay (the search field keeps focus). */
+export const mailFindQuery = (box: string, find: MailFind) =>
+  infiniteQueryOptions({
+    queryKey: [...mailKeys.list(box), { q: find.q ?? '', label: find.label ?? '', attach: !!find.attach }] as const,
+    queryFn: ({ pageParam, signal }) =>
+      api.get<{ messages: Letter[]; next_cursor?: string | null }>(
+        `/api/v2/mail/messages${qs({ mailbox: box, q: find.q, label: find.label, has_attachment: find.attach ? 'true' : undefined, limit: PAGE, cursor: pageParam })}`,
+        { signal },
+      ),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    // Only within one mailbox: another mailbox's rows never stand in for this one's.
+    placeholderData: (previous, last) => (last?.queryKey[2] === box ? previous : undefined),
+    enabled: !!box,
+  });

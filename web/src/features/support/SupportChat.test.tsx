@@ -113,7 +113,7 @@ describe('Tico support', () => {
     await waitFor(() => expect(posts().map((c) => c.url)).toContain('/api/v2/support/tickets/t1/read'));
   });
 
-  it('sends to the open ticket', async () => {
+  it('sends to the open ticket @s1123', async () => {
     show();
     await screen.findByText('We see it. Try the new key.');
     await say('Pasted the new key');
@@ -124,7 +124,7 @@ describe('Tico support', () => {
     expect(sent.body).toEqual({ message: 'Pasted the new key', diagnostics: '' });
   });
 
-  it('starts a new ticket when none is open, with the reply email and a key', async () => {
+  it('starts a new ticket when none is open, with the reply email and a key @s1123', async () => {
     list = CLOSED;
     show();
     await screen.findByText('We see it. Try the new key.');

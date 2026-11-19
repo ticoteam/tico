@@ -47,7 +47,7 @@ const CONFIDENCE: Record<string, string> = { high: 'High confidence', medium: 'M
 const OPEN_TASK = (status: unknown) => typeof status === 'string' && !['done', 'closed', 'declined'].includes(status);
 
 const range = (r: { low_usd?: number | null; high_usd?: number | null }) => (r.low_usd != null && r.high_usd != null ? `${usdShort(r.low_usd)} to ${usdShort(r.high_usd)}` : '');
-const spendOf = (s: MarketSegment) => s.size?.spend_usd ?? s.rolled_usd?.spend_usd ?? null;
+export const spendOf = (s: MarketSegment) => s.size?.spend_usd ?? s.rolled_usd?.spend_usd ?? null;
 
 export function MarketTab({ head, search }: { head: Head; search: { panel?: string } }) {
   const owner = useQuery(meQuery).data?.role === 'owner';
