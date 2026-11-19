@@ -97,18 +97,11 @@
    "health",
    "report"
   ],
-  "tools": [
-   [
-    "tico_health_report",
-    {
-     "operation_id": null
-    }
-   ]
-  ],
+  "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"ValueError: name a finding's key\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "stdout": "",
+  "stderr": "Example: tico health report <finding-key>\nfinding-key: The finding's key: its signature (hm-...) on the finding's task, or a key from `tico health findings`\ntico health report: error: the following arguments are required: finding-key",
+  "exit": 64
  },
  {
   "argv": [

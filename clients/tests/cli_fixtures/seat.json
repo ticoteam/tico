@@ -64,7 +64,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico seat create <title>\ntico seat create: error: the following arguments are required: title",
+  "stderr": "Example: tico seat create <title>\ntitle: The role's title\ntico seat create: error: the following arguments are required: title",
   "exit": 64
  },
  {
@@ -143,7 +143,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico seat update <seat>\ntico seat update: error: the following arguments are required: seat",
+  "stderr": "Example: tico seat update <seat>\nseat: The seat id, from `seat list`\ntico seat update: error: the following arguments are required: seat",
   "exit": 64
  },
  {
@@ -223,7 +223,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico seat close <seat>\ntico seat close: error: the following arguments are required: seat",
+  "stderr": "Example: tico seat close <seat>\nseat: The seat id, from `seat list`\ntico seat close: error: the following arguments are required: seat",
   "exit": 64
  },
  {
