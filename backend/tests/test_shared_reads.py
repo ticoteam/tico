@@ -92,7 +92,9 @@ def test_a_streamed_answer_is_never_handed_to_another_request():
     asyncio.run(run())
 
 
-def test_a_callers_own_write_drops_their_kept_answers():
+def test_a_callers_own_write_drops_their_kept_answers(monkeypatch):
+    monkeypatch.setenv("TICO_READ_CACHE_SECONDS", "5")
+
     async def run():
         store = SimpleNamespace()
         reads, (calls, compute) = shared_reads.of(store), _counting()
