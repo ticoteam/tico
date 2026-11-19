@@ -8,7 +8,9 @@ export interface FiguresStripProps {
 
 /**
  * The one row of figures (aaa-audit-a, KPI strip): across the full width with a rule between them and a sparkline each
- * (pages/3-company/finance.js `widgets`). Two by two only in a narrow column (the agent's 360) and on a phone.
+ * (pages/3-company/finance.js `widgets`). Two by two only in a narrow column (the agent's 360) and on a phone. Every
+ * tile draws all three lines, as the mock does, so a missing value or sub keeps its line and the tiles' words share
+ * baselines; the sparkline keeps to the bottom right.
  */
 export function FiguresStrip({ figures, label = 'Figures' }: FiguresStripProps) {
   return (
@@ -18,7 +20,7 @@ export function FiguresStrip({ figures, label = 'Figures' }: FiguresStripProps) 
           <div className="widget-main">
             <span className="widget-title">{f.label}</span>
             <b>{f.value}</b>
-            {f.sub && <span className="widget-sub">{f.sub}</span>}
+            <span className="widget-sub">{f.sub}</span>
           </div>
           {f.spark}
         </div>

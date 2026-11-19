@@ -128,7 +128,9 @@ function Hall({ hall, open }: { hall: Factory; open: { pipeline: string; stage: 
 function Pipe({ pipe, open }: { pipe: Pipeline; open: string | null }) {
   return (
     <div className="pipe">
-      <span className="pipe-name">{pipe.name}</span>
+      <span className="pipe-name" title={pipe.name}>
+        {pipe.name}
+      </span>
       <span className="rate" title="In a day">
         {pipe.in.day}/day
       </span>

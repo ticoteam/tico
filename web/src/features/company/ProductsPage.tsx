@@ -72,7 +72,7 @@ export function ProductsPage({ search }: { search: ProductsSearch }) {
           <thead>
             <tr>
               <th className="t-mark" aria-hidden="true" />
-              <th className="t-title">Name</th>
+              <th className="t-name">Name</th>
               <Th>Kind</Th>
               <Th>Status</Th>
               <Th>Tax kind</Th>
@@ -84,7 +84,7 @@ export function ProductsPage({ search }: { search: ProductsSearch }) {
             {products.map((p) => (
               <Tr key={p.id} kind={p.status === 'retired' ? 'quiet' : undefined} selected={p.key === panel} linked>
                 <td className="t-mark" />
-                <td className="t-title" data-opens>
+                <td className="t-name" data-opens>
                   <PanelLink panel={p.key} data-target={`product:${p.key}`}>
                     {p.name}
                   </PanelLink>

@@ -24,6 +24,20 @@
 /* ---------- tabs: one underlined row right under the head, never pills (kit Tabs.css, at the page margin) ---------- */
 .pk .page-tabs{flex:none;margin-top:calc(var(--s-2) * -1);padding:0 var(--page-x);box-shadow:inset 0 -1px 0 var(--line)}
 .pk .page-tabs .docs{scroll-behavior:auto}
+/* a row wider than its sheet (finance.css .is-long): it runs to the sheet's edge and fades where it runs off. The reach
+   is always set, not only while long, so marking it never changes the row's width (PageTabs measures it). */
+.pk .page-tabs:not(.has-after) .docs{margin-right:calc(var(--page-x) * -1);padding-right:calc(var(--s-6) + var(--s-1))}
+/* stylelint-disable color-no-hex -- mask */
+.pk .page-tabs .docs.is-long{
+  -webkit-mask-image:linear-gradient(90deg,#000 calc(100% - var(--s-10)),transparent);
+  mask-image:linear-gradient(90deg,#000 calc(100% - var(--s-10)),transparent)}
+.pk .page-tabs .docs.is-long.is-scrolled{
+  -webkit-mask-image:linear-gradient(90deg,transparent,#000 calc(var(--s-6) + var(--s-1)),#000 calc(100% - var(--s-10)),transparent);
+  mask-image:linear-gradient(90deg,transparent,#000 calc(var(--s-6) + var(--s-1)),#000 calc(100% - var(--s-10)),transparent)}
+.pk .page-tabs .docs.is-long.is-end{
+  -webkit-mask-image:linear-gradient(90deg,transparent,#000 calc(var(--s-6) + var(--s-1)));
+  mask-image:linear-gradient(90deg,transparent,#000 calc(var(--s-6) + var(--s-1)))}
+/* stylelint-enable color-no-hex */
 .pk .page-tabs .doc-tab span{display:inline-grid;justify-items:center}
 .pk .page-tabs .doc-tab span::after{content:attr(data-t);height:0;overflow:hidden;visibility:hidden;font-weight:var(--w-strong)}
 /* the controls at the row's end (`tabsAfter`), as the mock's .tv-tabs keeps them */
@@ -43,6 +57,13 @@
   /* stylelint-disable-next-line color-no-hex -- mask */
   mask-image:linear-gradient(#000 calc(100% - 28px),transparent)}
 .pk-body.is-empty{display:flex;flex-direction:column;-webkit-mask-image:none;mask-image:none}
+/* What stands under a Section's name starts where the name does, on --page-x. The mock puts the body on the page margin
+   less 12 and each block 12 in (finance.css .fin-body, .sec-head, .table cells, .chart-sec, .hbars). Here the body has
+   no left padding, since rows hang their marks in the margin, so a table's first column and a chart block take the
+   whole margin. A mark column (.t-mark) keeps hanging in it; a table inside written text (.md-table) keeps its own edge.
+   The phone keeps the mock's phone edges. */
+:where(html:not([data-layout="cards"])) :is(.pk-body>.table,.pk-sec .table:not(.md-table *)) :is(th,td):first-child:not(.t-mark){padding-left:var(--page-x)}
+:where(html:not([data-layout="cards"])) .pk-body .pk-sec :is(.chart-sec,.hbars){padding-left:var(--page-x)}
 .pk-loading{flex:1;min-height:0;display:flex;flex-direction:column}
 
 /* ---------- a side panel with no shell place: over the page's right side; a raised card on a phone ---------- */
@@ -52,13 +73,17 @@
 
 /* ---------- figures: one strip across the width, a rule between (pages/3-company/finance.css) ---------- */
 .pk .widgets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:calc(var(--s-1) + var(--s-0)) calc(var(--page-x) - var(--s-3)) var(--s-4) var(--page-x)}
-.widget{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--s-2);padding:0 var(--s-4);border-left:1px solid var(--line)}
+/* every tile draws its three lines from the top, whatever is missing (an empty line keeps its height), so the words
+   share baselines across the strip; the sparkline keeps to the bottom right and never moves them */
+.widget{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--s-2);padding:0 var(--s-4);border-left:1px solid var(--line)}
 .widget:first-child{padding-left:0;border-left:0}
 .widget:last-child{padding-right:0}
 .widget-main{display:grid;gap:calc(var(--s-0) + 1px);min-width:0}
 .widget-title{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 .widget b{font-family:var(--font-display);font-size:var(--t-lg);font-weight:var(--w-title);line-height:var(--lh-display);font-feature-settings:"ss09";letter-spacing:var(--track-title);font-variant-numeric:tabular-nums;white-space:nowrap}
 .widget-sub{font-size:var(--t-xs);color:var(--muted);white-space:nowrap}
+.widget>:not(.widget-main){align-self:flex-end}
+.widget b:empty::before,.widget-title:empty::before,.widget-sub:empty::before{content:"\a0"}
 .pk-sk-fig{gap:var(--s-2)}
 /* two by two only in a narrow column and on a phone (DRIFT: the 2x2 grid on wide pages) */
 @container page (max-width:480px){
@@ -192,11 +217,17 @@ html[data-layout="cards"] .pk-crumb{display:none}
 html[data-layout="cards"] .pk .pk-back{display:inline-grid;margin:0 calc(var(--s-0) * -1) 0 calc(var(--s-3) * -1)}
 html[data-layout="cards"] .pk-acts>:not([data-phone]):not(.btn-fill){display:none}
 html[data-layout="cards"] .pk .page-tabs{margin-top:0;padding:0 0 0 var(--s-4)}
-html[data-layout="cards"] .pk .page-tabs .docs{padding-right:calc(var(--s-6) + var(--s-1));
+html[data-layout="cards"] .pk .page-tabs .docs{margin-right:0;padding-right:calc(var(--s-6) + var(--s-1));
   /* stylelint-disable-next-line color-no-hex -- mask */
   -webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent);
   /* stylelint-disable-next-line color-no-hex -- mask */
   mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent)}
+/* scrolled, the left edge fades too (company.css, phone) */
+html[data-layout="cards"] .pk .page-tabs .docs.is-scrolled{
+  /* stylelint-disable-next-line color-no-hex -- mask */
+  -webkit-mask-image:linear-gradient(90deg,transparent,#000 calc(var(--s-6) + var(--s-1)),#000 calc(100% - 32px),transparent);
+  /* stylelint-disable-next-line color-no-hex -- mask */
+  mask-image:linear-gradient(90deg,transparent,#000 calc(var(--s-6) + var(--s-1)),#000 calc(100% - 32px),transparent)}
 html[data-layout="cards"] .pk .page-tabs .doc-tab{min-width:44px;justify-content:center}
 html[data-layout="cards"] .pk-list .filter-row{display:none}
 html[data-layout="cards"] .pk-panel{left:0;width:auto;z-index:var(--z-overlay)}

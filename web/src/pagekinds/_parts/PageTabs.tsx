@@ -1,7 +1,8 @@
 import { Link, useLocation, type LinkProps } from '@tanstack/react-router';
-import type { ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import { Count } from '@/kit/Count';
 import type { PageTab } from '@/pagekinds/types';
+import { rowMarks, scrollFor, stepTab } from './tabFit';
 
 export interface PageTabsProps {
   tabs: readonly PageTab[];
@@ -24,22 +25,72 @@ function isOn(t: PageTab, path: string, search: Record<string, unknown>, rowKeys
   return pathOn && rowKeys.every((k) => String(search[k] ?? '') === (t.search?.[k] ?? ''));
 }
 
+const isPhone = () => document.documentElement.dataset.layout === 'cards';
+
+/** Sets the row's fade marks from where it is scrolled (the classes the mock's finance.js toggles). */
+function mark(row: HTMLElement) {
+  const m = rowMarks(row, isPhone());
+  row.classList.toggle('is-long', m.long);
+  row.classList.toggle('is-scrolled', m.scrolled);
+  row.classList.toggle('is-end', m.end);
+}
+
 /**
  * The one tab row: underlined, right under the head, one line that scrolls sideways and never wraps. Never the
- * segmented pill (aaa-audit-a Top 5); a pill only switches the view of the same data. Each tab is a link.
+ * segmented pill (aaa-audit-a Top 5); a pill only switches the view of the same data. Each tab is a link. A row wider
+ * than its sheet fades where it runs off, and the open tab is scrolled into view.
  */
 export function PageTabs({ tabs, label, after }: PageTabsProps) {
   const at = useLocation();
   const search = at.search as Record<string, unknown>;
   const rowKeys = [...new Set(tabs.flatMap((t) => Object.keys(t.search ?? {})))];
+  const keyOf = (t: PageTab) => `${t.to}?${new URLSearchParams(t.search).toString()}`;
+  const onKey = tabs.filter((t) => isOn(t, at.pathname, search, rowKeys)).map(keyOf)[0] ?? '';
+  const row = useRef<HTMLDivElement>(null);
+
+  // the open tab in view, each time it changes
+  useLayoutEffect(() => {
+    const el = row.current;
+    if (!el) return;
+    const on = el.querySelector<HTMLElement>('.doc-tab.is-on');
+    const box = el.getBoundingClientRect();
+    const tab = on?.getBoundingClientRect();
+    const span = tab ? { left: tab.left - box.left + el.scrollLeft, right: tab.right - box.left + el.scrollLeft } : null;
+    const to = scrollFor(el, span, isPhone());
+    if (to !== null) el.scrollLeft = to;
+    mark(el);
+  }, [onKey]);
+
+  // the fades follow the sheet's width and the person's scrolling
+  useEffect(() => {
+    const el = row.current;
+    if (!el) return;
+    const update = () => mark(el);
+    el.addEventListener('scroll', update, { passive: true });
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+    ro?.observe(el);
+    return () => {
+      el.removeEventListener('scroll', update);
+      ro?.disconnect();
+    };
+  }, []);
+
+  const walk = (e: KeyboardEvent<HTMLDivElement>) => {
+    const links = [...e.currentTarget.querySelectorAll<HTMLElement>('.doc-tab')];
+    const next = stepTab(links.indexOf(e.target as HTMLElement), links.length, e.key);
+    if (next === null || !links.includes(e.target as HTMLElement)) return;
+    e.preventDefault();
+    links[next]?.focus();
+  };
+
   return (
     <nav className={after ? 'page-tabs pk-tabs has-after' : 'page-tabs pk-tabs'} aria-label={label}>
-      <div className="docs">
+      <div className="docs" ref={row} onKeyDown={walk}>
         {tabs.map((t) => {
-          const on = isOn(t, at.pathname, search, rowKeys);
+          const on = keyOf(t) === onKey;
           return (
             <Link
-              key={`${t.to}?${new URLSearchParams(t.search).toString()}`}
+              key={keyOf(t)}
               className={on ? 'doc-tab is-on' : 'doc-tab'}
               aria-current={on ? 'page' : undefined}
               to={t.to as LinkProps['to']}

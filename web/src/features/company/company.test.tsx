@@ -66,6 +66,8 @@ describe('Company', () => {
     expect(href(review)).toBe('/company?panel=stage:p1:s2');
     expect(within(review).getByRole('img', { name: 'Waits on you' })).toBeTruthy();
     expect(screen.getByRole('region', { name: 'Engineering' })).toBeTruthy();
+    // a long pipeline name is clamped in its column; the full name stays in its title
+    expect(screen.getByTitle('Features').textContent).toBe('Features');
   });
 
   it('says so when nothing runs yet', async () => {

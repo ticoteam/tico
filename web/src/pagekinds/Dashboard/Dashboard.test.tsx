@@ -19,6 +19,8 @@ describe('Dashboard', () => {
     expectHeadAndTabs(main, 'Growth', '/company/growth');
     const figs = within(main).getByRole('group', { name: 'Figures' });
     expect(within(figs).getByText('1,200')).toBeTruthy();
+    // a tile with no sub still draws the sub's line, so its words sit on the same lines as its neighbours'
+    expect(figs.querySelectorAll('.widget-main>*')).toHaveLength(3);
     expect(within(main).getByRole('img', { name: 'Visits by week' })).toBeTruthy();
     expect(within(main).getByRole('region', { name: 'Funnel' })).toBeTruthy();
   });

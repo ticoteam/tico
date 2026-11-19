@@ -11,7 +11,9 @@
 .co .pipes{display:flex;flex-direction:column}
 .co .pipe{height:88px;display:grid;grid-template-columns:80px 44px minmax(0,1fr) 44px;column-gap:var(--s-2h);align-items:end}
 .co .pipe-name,.co .rate{height:20px;line-height:20px;margin-bottom:var(--s-3h);font-size:var(--t-sm);white-space:nowrap}
-.co .pipe-name{color:var(--ink);font-weight:var(--w-strong)}
+/* a name longer than its column (the mock's names all fit one line) wraps to a second line, then ends in an ellipsis;
+   it never runs into the rate. The full name is the title. */
+.co .pipe-name{color:var(--ink);font-weight:var(--w-strong);min-width:0;height:auto;white-space:normal;overflow-wrap:anywhere;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}
 .co .rate{color:var(--ink-2);font-variant-numeric:tabular-nums;text-align:right}
 .co .rate-out{text-align:left}
 .co .line{position:relative;align-self:stretch;display:flex;align-items:stretch}
@@ -204,7 +206,8 @@
 .co .table td a{color:inherit}
 .co .table th.num,.co .table td.num{text-align:right}
 .co .table th.t-mark,.co .table td.t-mark{width:28px;padding:0 0 0 var(--s-3)}
-.co .table th.t-title,.co .table td.t-title{padding-left:var(--s-2)}
+/* the name column (records.css .t-title, renamed: .t-title is the page title's type step in styles/type.css) */
+.co .table th.t-name,.co .table td.t-name{padding-left:var(--s-2)}
 .co .table td.t-words{color:var(--ink-2)}
 .co .table td.is-none{color:var(--muted)}
 .co .table td.t-who{width:44px;padding-right:var(--s-1)}

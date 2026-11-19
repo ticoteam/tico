@@ -178,7 +178,7 @@ function Disputes({ search }: { search: RiskSearch }) {
               <thead>
                 <tr>
                   <th className="t-mark" aria-hidden="true" />
-                  <th className="t-title">Name</th>
+                  <th className="t-name">Name</th>
                   <Th>Risk</Th>
                   <Th num>Amount</Th>
                   <Th>Forum</Th>
@@ -190,7 +190,7 @@ function Disputes({ search }: { search: RiskSearch }) {
                 {list.map((m) => (
                   <Tr key={m.task.id} kind={name === 'Closed' ? 'quiet' : undefined} selected={search.panel === `matter:${m.task.id}`} linked>
                     <td className="t-mark" />
-                    <td className="t-title" data-opens>
+                    <td className="t-name" data-opens>
                       <PanelLink panel={`matter:${m.task.id}`} data-target={`matter:${m.task.id}`}>
                         {m.task.title ?? m.task.label}
                       </PanelLink>
