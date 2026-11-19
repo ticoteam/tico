@@ -24,7 +24,7 @@ first, the last full month by default. The address keeps both (`#/growth?scope=s
 - **KPIs**: Growth's KPIs, each opening on Goals.
 - **Health**: Unknown's share, rows with no segment, mismatches, reconciliation and stale sources, in one muted line.
 
-A figure the read has no value for says why in a muted word: too few, not supplied, no spend, not yet. It never reads
+A figure the read has no value for says why in a muted word: too few, not supplied, no spend, not yet, nobody (no one in the cohort). It never reads
 0. The page's chat (the Growth Manager, `#/growth`'s page owner) carries the scope and month on screen with each message.
 
 ## The numbers

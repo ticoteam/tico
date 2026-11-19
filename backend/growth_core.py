@@ -693,7 +693,10 @@ class Scope:
             if figure["status"] == "ok":
                 return figure
             young = young or figure
-        return young or {"value": None, "status": "not_yet"}
+        if young:
+            return young
+        anyone = any(int(r["entered"]) for r in self.rows if r["anchor"] == anchor and r["period"] <= upto)
+        return {"value": None, "status": "not_yet" if anyone else "nobody"}
 
     def average(self, fn: Callable[[str], float | None], month: str) -> float | None:
         values = [v for v in (fn(shift(month, k)) for k in (1, 2, 3)) if v is not None]
@@ -857,6 +860,12 @@ def channels(scope: Scope, month: str) -> list[Row]:
     total_cost = scope.cost(month, MONEY) or 0
     out: list[Row] = []
     owned = {ch for ch in scope.owned if not data.lines[ch].get("retired_at")}
+    live = {ch for ch, line in data.lines.items() if not line.get("retired_at")}
+    if scope.kind == "all":
+        owned |= live  # every channel set up shows, with its owner and budget, even with no rows
+    elif scope.kind == "segment" and scope.slug:
+        owned |= {ch for ch in live if data.segs.channels.get(ch) == scope.slug}
+    customers_supplied = scope.entered("customer", month) is not None
     if scope.kind == "channel" and scope.slug:
         owned.add(scope.slug)  # the channel shows, with its budget, even in a quiet month
     for slug in sorted(set(new) | set(signups) | spent | owned):
@@ -864,7 +873,7 @@ def channels(scope: Scope, month: str) -> list[Row]:
         row: Row = {
             "slug": slug or GX.UNKNOWN,
             "signups": signups.get(slug, 0),
-            "new_customers": n,
+            "new_customers": n if customers_supplied else None,
             "new_share": round(n / total_new, 2) if total_new else None,
         }
         if not slug:
@@ -903,21 +912,21 @@ def channels(scope: Scope, month: str) -> list[Row]:
         if effort is not None and n:
             row["with_effort"] = _r(((money or 0) + effort) / n)
         out.append(row)
-    out.sort(key=lambda r: (r["slug"] == GX.UNKNOWN, -int(r["new_customers"]), -int(r["signups"]), str(r["slug"])))
+    out.sort(key=lambda r: (r["slug"] == GX.UNKNOWN, -int(r["new_customers"] or 0), -int(r["signups"]), str(r["slug"])))
     return out
 
 
 def health(scope: Scope, month: str) -> Row:
     data = scope.data
     # Customers when the company pushes any, else sign-ups: a team that pushes only sign-ups still sees its gaps.
-    anchor = "customer" if any(r["anchor"] == "customer" for r in data.rows) else "signup"
+    anchor = "customer" if any(r["anchor"] == "customer" and int(r["entered"]) for r in data.rows) else "signup"
     unknown = sum(int(r["entered"]) for r in scope.at(anchor, month) if not r["channel"])
     total = scope.entered(anchor, month) or 0
     out: Row = {"basis": "customers" if anchor == "customer" else "signups"}
     out["unknown_share"] = round(unknown / total, 2) if total else None
     if data.segs.rows:
         no_segment = mismatch = 0
-        for r in data.rows:
+        for r in data.rows:  # company-wide, as `segment show` has it
             if r["anchor"] != anchor or r["period"] != month:
                 continue
             if not r["segment"]:
