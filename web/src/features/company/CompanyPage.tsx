@@ -1,4 +1,4 @@
-import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useAction } from '@/actions';
@@ -12,7 +12,7 @@ import { LatePill } from '@/kit/Pill';
 import { chatAddress, fmtAge } from '@/lib';
 import { Dashboard, FiguresStrip, PageMore, SidePanel, type Figure } from '@/pagekinds';
 import { Face, Go, NameOf, PanelLink, usd } from './parts';
-import { floorQuery, revenueQuery, spendQuery, stageTasksQuery, type Pipeline, type Stage } from './queries';
+import { floorQuery, loadMoreStageTasks, revenueQuery, spendQuery, stageTasksQuery, type Pipeline, type Stage } from './queries';
 import './company.css';
 
 /* Company (pages/3-company/company.js companyPage): a Dashboard, Floor variant. Figures across the top, each from its
@@ -65,7 +65,7 @@ export function CompanyPage({ search }: { search: CompanySearch }) {
           ))}
         </div>
       }
-      panel={pipeline && stage && <StagePanel pipeline={pipeline} stage={stage} onClose={close} />}
+      panel={pipeline && stage && <StagePanel key={search.panel} pipeline={pipeline} stage={stage} onClose={close} />}
     />
   );
 }
@@ -152,6 +152,7 @@ function Pipe({ pipe, open }: { pipe: Pipeline; open: string | null }) {
             key={st.id}
             panel={`stage:${pipe.id}:${st.id}`}
             className={['st', st.needs_you ? 'needs' : '', st.id === open ? 'is-open' : ''].filter(Boolean).join(' ')}
+            aria-label={`${st.name}: ${st.count}${st.needs_you ? ', waits on you' : ''}`}
             title={`${st.name}: ${st.count}`}
             data-target={`stage:${st.id}`}
           >
@@ -185,6 +186,8 @@ function Deck({ actor, n }: { actor: string; n: number }) {
 /** A stage, opened: every open task in it, the ones that wait on you first. */
 function StagePanel({ pipeline, stage, onClose }: { pipeline: Pipeline; stage: Stage; onClose: () => void }) {
   const tasks = useQuery(stageTasksQuery(pipeline.id, stage.id));
+  const more = useMutation({ mutationFn: (after: string) => loadMoreStageTasks(pipeline.id, stage.id, after) });
+  const next = tasks.data?.next_after;
   const me = useQuery(meQuery).data?.id;
   const mine = (t: { turn: { state: string; who: string | null } | null }) => t.turn?.state === 'person' && t.turn.who === me;
   const list = [...(tasks.data?.tasks ?? [])].sort((a, b) => Number(mine(b)) - Number(mine(a)));
@@ -245,6 +248,11 @@ function StagePanel({ pipeline, stage, onClose }: { pipeline: Pipeline; stage: S
             <span className="row-age">{t.stage_since ? fmtAge(t.stage_since) : ''}</span>
           </Go>
         ))}
+        {next && (
+          <Button variant="quiet" busy={more.isPending} onClick={() => more.mutate(next)}>
+            {more.isError ? 'Try again' : 'Load more'}
+          </Button>
+        )}
       </section>
     </SidePanel>
   );

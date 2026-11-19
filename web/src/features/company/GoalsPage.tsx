@@ -87,15 +87,15 @@ export function GoalsPage({ head, search }: { head: Head; search: GoalsSearch })
         ) : panel === 'goal-new' ? (
           <GoalForm goals={goals} />
         ) : kind === 'goal' ? (
-          <GoalPanel gid={ref} />
+          <GoalPanel key={ref} gid={ref} />
         ) : kind === 'kpi' ? (
-          <KpiPanel kid={ref} />
+          <KpiPanel key={ref} kid={ref} />
         ) : kind === 'kpi-new' ? (
-          <KpiForm goal={ref} goals={goals} />
+          <KpiForm key={ref} goal={ref} goals={goals} />
         ) : kind === 'kpi-edit' ? (
-          <KpiEdit kid={ref} goals={goals} />
+          <KpiEdit key={ref} kid={ref} goals={goals} />
         ) : kind === 'kpi-place' ? (
-          <KpiPlace kid={ref} />
+          <KpiPlace key={ref} kid={ref} />
         ) : null
       }
     />
