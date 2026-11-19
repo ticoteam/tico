@@ -660,5 +660,6 @@ def test_the_plans_next_in_line_are_read_once_per_poll_and_are_the_ones_each_pla
 
     monkeypatch.setattr(MS, "_ordered", ordered)
     with store.read_transaction() as c:
-        assert {sid for sid in plans if sid in CL._Line(c)} == expected
+        shared = CL._Line(c)
+        assert {sid for sid in plans if sid in shared} == expected
     assert picks == ["claude"]
