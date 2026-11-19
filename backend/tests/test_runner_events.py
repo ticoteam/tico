@@ -108,7 +108,7 @@ def test_a_stream_opens_while_the_database_is_busy_and_writes_its_contact_beside
     computer = runner(api, label="A")
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen_at=NULL WHERE id=?", (computer["runner_id"],))
+        c.execute("UPDATE runner_states SET last_seen_at=NULL WHERE runner_id=?", (computer["runner_id"],))
     holder = sqlite3.connect(str(store.settings.db_path), isolation_level=None)
     holder.execute("BEGIN IMMEDIATE")
     try:
@@ -120,7 +120,8 @@ def test_a_stream_opens_while_the_database_is_busy_and_writes_its_contact_beside
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
         with store.read() as c:
-            if c.execute("SELECT last_seen_at FROM runners WHERE id=?", (computer["runner_id"],)).fetchone()[0]:
+            row = c.execute("SELECT last_seen_at FROM runner_states WHERE runner_id=?", (computer["runner_id"],))
+            if (row.fetchone() or [None])[0]:
                 return
         time.sleep(0.1)
     raise AssertionError("the open stream never wrote its contact")

@@ -69,7 +69,9 @@ def main():
                 starts, readies = [], []
                 for _ in range(RUNS):
                     with store.transaction() as c:  # its contact is due, as when it last wrote five minutes ago
-                        c.execute("UPDATE runners SET last_seen_at=NULL WHERE id=?", (computer["runner_id"],))
+                        c.execute(
+                            "UPDATE runner_states SET last_seen_at=NULL WHERE runner_id=?", (computer["runner_id"],)
+                        )
                     holder = None
                     if busy:
                         holder = sqlite3.connect(str(store.settings.db_path), isolation_level=None)
@@ -87,7 +89,8 @@ def main():
                     f" | ready median {statistics.median(readies):8.1f} ms max {max(readies):8.1f} ms"
                 )
             with store.read() as c:
-                seen = c.execute("SELECT last_seen_at FROM runners WHERE id=?", (computer["runner_id"],)).fetchone()[0]
+                row = c.execute("SELECT last_seen_at FROM runner_states WHERE runner_id=?", (computer["runner_id"],))
+                seen = (row.fetchone() or [None])[0]
             print("contact written:", bool(seen))
             server.should_exit = True
             thread.join(timeout=20)
