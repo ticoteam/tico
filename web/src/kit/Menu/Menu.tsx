@@ -99,3 +99,28 @@ export function MenuItem({ label, icon, lead, meta, on = false, onSelect, disabl
 export function MenuRule() {
   return <BaseMenu.Separator render={<hr />} />;
 }
+
+export type MenuSubProps = {
+  label: string;
+  icon?: IconName;
+  /** `MenuItem`s: the second level. */
+  children: ReactNode;
+};
+
+/** A row that opens a second level beside the menu, on the side with room (list.css `.menu a>.ico.is-next`). */
+export function MenuSub({ label, icon, children }: MenuSubProps) {
+  return (
+    <BaseMenu.SubmenuRoot>
+      <BaseMenu.SubmenuTrigger render={<a />}>
+        {icon && <Icon name={icon} />}
+        <span>{label}</span>
+        <Icon name="chevron" className="is-next" />
+      </BaseMenu.SubmenuTrigger>
+      <BaseMenu.Portal>
+        <BaseMenu.Positioner className={popLayer} side="left" align="start" sideOffset={6}>
+          <BaseMenu.Popup className={`menu is-select ${popMotion}`}>{children}</BaseMenu.Popup>
+        </BaseMenu.Positioner>
+      </BaseMenu.Portal>
+    </BaseMenu.SubmenuRoot>
+  );
+}

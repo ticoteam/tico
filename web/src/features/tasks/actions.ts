@@ -1,12 +1,25 @@
-import { defineAction, s } from '@/actions';
+import { defineAction, s, type Schema } from '@/actions';
 import { ApiError } from '@/api/client';
 import { toast } from '@/kit/Toast';
 import { writePref } from '@/prefs';
-import { createTask, listsOf, moveTask, pipelinesQuery, type Pipeline } from './queries';
-import { VIEW_PREF, type View } from './search';
+import {
+  assignMany,
+  createTask,
+  listsOf,
+  moveMany,
+  moveTask,
+  pipelinesQuery,
+  savePipeline,
+  snoozeMany,
+  type Pipeline,
+  type Skipped,
+} from './queries';
+import { VIEW_PREF } from './search';
 
 const pipeline = s.string({ min: 1, max: 100, what: 'a pipeline id' });
 const task = s.string({ min: 1, max: 100, what: 'a task id' });
+const tasks = s.array(task, { max: 500 });
+const actor = s.string({ min: 1, max: 120, what: 'an actor id: human:<id> or bot:<slug>' });
 const where = (p: string) => `/tasks/${encodeURIComponent(p)}`;
 
 /** A pipeline's page is on screen (`/tasks/<pipeline>`), not a task or another page. */
@@ -28,18 +41,21 @@ export const openTasks = defineAction({
     })),
 });
 
+/** Board or list is remembered per pipeline; Archived is a place to look, so going back finds the view it left. */
 export const setView = defineAction({
   id: 'tasks.setView',
-  title: 'Show tasks as a board or a list',
+  title: 'Show tasks as a board, a list, or the archived ones',
   kind: 'view',
-  input: s.object({ pipeline, view: s.oneOf(['board', 'list'] as const) }),
+  input: s.object({ pipeline, view: s.oneOf(['board', 'list', 'archived'] as const) }),
   run: async ({ router }, { pipeline, view }) => {
-    writePref(`${VIEW_PREF}:${pipeline}`, view satisfies View);
+    if (view !== 'archived') writePref(`${VIEW_PREF}:${pipeline}`, view);
     await router.navigate({ to: where(pipeline), search: (prev: Record<string, unknown>) => ({ ...prev, view }) });
   },
-  did: ({ view }) => (view === 'board' ? 'Switched Tasks to a board' : 'Switched Tasks to a list'),
-  target: () => ({ kind: 'tasks', id: 'view' }),
+  did: ({ view }) => (view === 'archived' ? 'Opened Archived' : view === 'board' ? 'Switched Tasks to a board' : 'Switched Tasks to a list'),
+  target: ({ view }) => ({ kind: 'tasks', id: view === 'archived' ? 'archived' : 'view' }),
 });
+
+const clearable = <T>(sch: Schema<T>) => s.optional(s.nullable(sch));
 
 /** Sets or clears filters on the pipeline on screen; null clears one. Filters replace the address, they do not push. */
 export const filterTasks = defineAction({
@@ -47,10 +63,13 @@ export const filterTasks = defineAction({
   title: 'Filter tasks',
   kind: 'view',
   input: s.object({
-    owner: s.optional(s.nullable(s.string({ max: 120, what: 'an actor id: human:<id> or bot:<slug>' }))),
-    tag: s.optional(s.nullable(s.string({ max: 120, what: 'a tag key' }))),
-    late: s.optional(s.nullable(s.boolean())),
-    q: s.optional(s.nullable(s.string({ max: 200 }))),
+    owner: clearable(actor),
+    waiting: clearable(actor),
+    asked: clearable(actor),
+    tag: clearable(s.string({ max: 120, what: 'a tag key' })),
+    due: clearable(s.oneOf(['overdue', 'week', 'any'] as const)),
+    late: clearable(s.boolean()),
+    q: clearable(s.string({ max: 200 })),
   }),
   can: ({ router }) => onPipeline(router.state.location.pathname),
   run: async ({ router }, change) => {
@@ -75,19 +94,21 @@ export const filterTasks = defineAction({
 /** The server's words for a refusal, else a plain line. */
 const reason = (e: unknown, fallback: string) => (e instanceof ApiError && e.status !== 0 && e.message ? e.message : fallback);
 
+async function said<T>(run: () => Promise<T>, fallback: string): Promise<T> {
+  try {
+    return await run();
+  } catch (e) {
+    toast({ text: reason(e, fallback), kind: 'failed' });
+    throw e;
+  }
+}
+
 export const move = defineAction({
   id: 'tasks.move',
   title: 'Move a task to a stage',
   kind: 'change',
   input: s.object({ task, to: s.string({ min: 1, max: 100, what: 'a stage id or name, or next, done or closed' }) }),
-  run: async (_ctx, { task, to }) => {
-    try {
-      return await moveTask(task, to);
-    } catch (e) {
-      toast({ text: reason(e, "Couldn't move the task"), kind: 'failed' });
-      throw e;
-    }
-  },
+  run: (_ctx, { task, to }) => said(() => moveTask(task, to), "Couldn't move the task"),
   did: (_input, out) => (out ? `Moved #${out.number ?? out.id}` : 'Moved the task'),
   target: ({ task }, out) => ({ kind: 'task', id: out?.number ?? task }),
 });
@@ -99,16 +120,100 @@ export const create = defineAction({
   input: s.object({
     title: s.string({ min: 1, max: 300 }),
     pipeline,
-    owner: s.optional(s.nullable(s.string({ max: 120, what: 'an actor id: human:<id> or bot:<slug>' }))),
+    owner: clearable(actor),
+    stage: clearable(s.string({ min: 1, max: 100, what: 'a stage id' })),
   }),
   run: async (_ctx, input) => {
-    try {
-      return await createTask(input, listsOf(input.pipeline));
-    } catch (e) {
-      toast({ text: reason(e, "Couldn't create the task"), kind: 'failed' });
-      throw e;
-    }
+    const { task, notMoved } = await said(() => createTask(input, listsOf(input.pipeline)), "Couldn't create the task");
+    if (notMoved) toast({ text: reason(notMoved, 'Filed in the first stage'), kind: 'failed' });
+    return task;
   },
   did: (_input, out) => (out?.number ? `Filed #${out.number}` : 'Filed a task'),
   target: (_input, out) => (out ? { kind: 'task', id: out.number ?? out.id } : null),
+});
+
+/* ---------------------------------------------------------------- many at once */
+
+const plural = (n: number) => `${n} task${n === 1 ? '' : 's'}`;
+
+/** Anything the server left as it was: how many, and why (the first reason). */
+function tell(left: Skipped, total: number) {
+  if (left.n) toast({ text: left.n === total ? left.why || 'Nothing changed' : `${plural(left.n)} not changed: ${left.why}`, kind: 'failed' });
+  return left;
+}
+
+export const moveAll = defineAction({
+  id: 'tasks.moveMany',
+  title: 'Move tasks to a stage',
+  kind: 'change',
+  input: s.object({ tasks, to: s.string({ min: 1, max: 100, what: 'a stage id, or done, closed or reopen' }) }),
+  run: async (_ctx, { tasks, to }) => {
+    const left = tell(await said(() => moveMany(tasks, to), "Couldn't move the tasks"), tasks.length);
+    // Closing is the one a slip makes: it says so and takes it back.
+    if (to === 'closed' && left.n < tasks.length)
+      toast({ text: `Closed ${plural(tasks.length - left.n)}`, action: { label: 'Undo', run: () => void moveMany(tasks, 'reopen') } });
+    return left;
+  },
+  did: ({ tasks, to }) => (to === 'closed' ? `Closed ${plural(tasks.length)}` : `Moved ${plural(tasks.length)}`),
+  target: ({ to }) => (to === 'done' || to === 'closed' || to === 'reopen' ? null : { kind: 'stage', id: to }),
+});
+
+export const assignAll = defineAction({
+  id: 'tasks.assignMany',
+  title: 'Give tasks to an owner',
+  kind: 'change',
+  input: s.object({ tasks, owner: actor }),
+  run: async (_ctx, { tasks, owner }) => tell(await said(() => assignMany(tasks, owner), "Couldn't change the owner"), tasks.length),
+  did: ({ tasks }) => `Assigned ${plural(tasks.length)}`,
+});
+
+export const snoozeAll = defineAction({
+  id: 'tasks.snoozeMany',
+  title: 'Snooze tasks',
+  kind: 'change',
+  input: s.object({ tasks, until: s.string({ min: 10, max: 40, what: 'an ISO date and time' }) }),
+  run: async (_ctx, { tasks, until }) => tell(await said(() => snoozeMany(tasks, until), "Couldn't snooze the tasks"), tasks.length),
+  did: ({ tasks }) => `Snoozed ${plural(tasks.length)}`,
+});
+
+/* ---------------------------------------------------------------- Edit pipeline */
+
+export const editPipeline = defineAction({
+  id: 'tasks.editPipeline',
+  title: 'Edit pipeline',
+  kind: 'view',
+  input: s.object({ pipeline, open: s.optional(s.boolean()) }),
+  run: async ({ router }, { pipeline, open = true }) => {
+    await router.navigate({
+      to: where(pipeline),
+      search: (prev: Record<string, unknown>) => {
+        const next: Record<string, unknown> = { ...prev, panel: 'pipeline' };
+        if (!open) delete next.panel;
+        return next;
+      },
+    });
+  },
+  did: ({ open = true }) => (open ? 'Opened Edit pipeline' : 'Closed Edit pipeline'),
+  target: () => ({ kind: 'panel', id: 'pipeline' }),
+});
+
+const stageDraft = s.object({
+  id: s.optional(s.string({ min: 1, max: 100, what: 'a saved stage id; leave out for a new stage' })),
+  name: s.string({ min: 1, max: 80 }),
+  side: s.boolean(),
+});
+
+/** Saves a pipeline's stages in order. A removed stage that holds tasks needs `move_to`: where they go. */
+export const savePipelineStages = defineAction({
+  id: 'tasks.savePipeline',
+  title: 'Save a pipeline’s stages',
+  kind: 'change',
+  input: s.object({
+    pipeline,
+    stages: s.array(stageDraft, { max: 40 }),
+    move_to: s.optional(s.object({ pipeline, stage: s.string({ min: 1, max: 100 }) })),
+  }),
+  run: (_ctx, { pipeline, stages, move_to }) => savePipeline(pipeline, stages, move_to),
+  did: () => 'Saved the pipeline',
+  target: ({ pipeline }) => ({ kind: 'page', id: where(pipeline) }),
 });

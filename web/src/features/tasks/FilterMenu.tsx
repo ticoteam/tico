@@ -1,55 +1,51 @@
-import { Menu as BaseMenu } from '@base-ui/react/menu';
-import type { ReactNode } from 'react';
 import { useAction } from '@/actions';
 import type { Actor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
-import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
-import { popLayer, popMotion } from '@/kit/Popover';
-import type { Filters } from './queries';
+import { MenuItem, MenuRule, MenuSub, Menu } from '@/kit/Menu';
+import { isFiltered, type Due, type Filters } from './queries';
 
-/** A second level beside the first, on the side with room (list.css `.anchor>.menu.is-sub`). */
-function Sub({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <BaseMenu.SubmenuRoot>
-      <BaseMenu.SubmenuTrigger render={<a />}>
-        <span>{label}</span>
-        <Icon name="chevron" className="is-next" />
-      </BaseMenu.SubmenuTrigger>
-      <BaseMenu.Portal>
-        <BaseMenu.Positioner className={popLayer} side="left" align="start" sideOffset={6}>
-          <BaseMenu.Popup className={`menu is-select ${popMotion}`}>{children}</BaseMenu.Popup>
-        </BaseMenu.Positioner>
-      </BaseMenu.Portal>
-    </BaseMenu.SubmenuRoot>
-  );
-}
+/** Due's choices, as the menu and the chip say them (backend/task_match.py DUE). */
+export const DUE_NAMES: Record<Due, string> = { overdue: 'Overdue', week: 'Due this week', any: 'Has a due date' };
 
-/** Filter: Owner ›, Tag ›, then Late (list.js filterMenu). Each choice is `tasks.filter`, so it lands in the address. */
-export function FilterMenu({ filters, owners, tags }: { filters: Filters; owners: readonly Actor[]; tags: readonly string[] }) {
+type Who = 'owner' | 'waiting' | 'asked';
+
+/**
+ * Filter: Owner ›, Waiting on ›, Asked by ›, Tag ›, Due ›, then Late (list.js filterMenu). Each choice is `tasks.filter`,
+ * so it lands in the address.
+ */
+export function FilterMenu({ filters, actors, tags }: { filters: Filters; actors: readonly Actor[]; tags: readonly string[] }) {
   const filter = useAction('tasks.filter');
-  const on = !!(filters.owner || filters.tag || filters.late);
+  const people = (key: Who, label: string) => (
+    <MenuSub label={label}>
+      {actors.map((a) => (
+        <MenuItem
+          key={a.id}
+          label={a.name}
+          lead={<Avatar kind={a.kind} name={a.name} hue={a.hue} decorative />}
+          on={filters[key] === a.id}
+          onSelect={() => void filter.run({ [key]: filters[key] === a.id ? null : a.id })}
+        />
+      ))}
+    </MenuSub>
+  );
   return (
-    <Menu trigger={<IconButton icon="filter" label="Filter" on={on} data-target="tasks:filter" />}>
-      <Sub label="Owner">
-        {owners.map((a) => (
-          <MenuItem
-            key={a.id}
-            label={a.name}
-            lead={<Avatar kind={a.kind} name={a.name} hue={a.hue} decorative />}
-            on={filters.owner === a.id}
-            onSelect={() => void filter.run({ owner: filters.owner === a.id ? null : a.id })}
-          />
-        ))}
-      </Sub>
+    <Menu trigger={<IconButton icon="filter" label="Filter" on={isFiltered({ ...filters, q: undefined })} data-target="tasks:filter" />}>
+      {people('owner', 'Owner')}
+      {people('waiting', 'Waiting on')}
+      {people('asked', 'Asked by')}
       {tags.length > 0 && (
-        <Sub label="Tag">
+        <MenuSub label="Tag">
           {tags.map((t) => (
             <MenuItem key={t} label={t} on={filters.tag === t} onSelect={() => void filter.run({ tag: filters.tag === t ? null : t })} />
           ))}
-        </Sub>
+        </MenuSub>
       )}
+      <MenuSub label="Due">
+        {(Object.keys(DUE_NAMES) as Due[]).map((d) => (
+          <MenuItem key={d} label={DUE_NAMES[d]} on={filters.due === d} onSelect={() => void filter.run({ due: filters.due === d ? null : d })} />
+        ))}
+      </MenuSub>
       <MenuRule />
       <MenuItem label="Late" on={!!filters.late} onSelect={() => void filter.run({ late: !filters.late })} />
     </Menu>

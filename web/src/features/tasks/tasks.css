@@ -1,8 +1,5 @@
 /* Tasks and Flow: what pages/1-tasks/list.css has that styles/ and pagekinds.css do not. Class names are the mock's. */
 
-/* a menu item that opens a second level */
-.menu a>.ico.is-next{width:14px;height:14px;color:var(--muted);stroke-width:1.8}
-
 /* pipeline, then stage: a list that crosses pipelines */
 .sec-sep{width:12px;height:12px;stroke-width:2;margin:calc(var(--s-0) / 2) var(--s-1h) 0;color:var(--faint)}
 
@@ -42,3 +39,40 @@ html[data-layout="cards"] .tk-item>.tk-more{display:none}
 
 /* a row that crosses stages names its stage (more.css) */
 .row-stage{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Select: a picked card, and the box that stands in a row's or a card's mark */
+.card.is-selected{--surface:var(--selected);background:var(--selected)}
+.row-mark>.check,.card-marks>.check{min-height:0}
+
+/* a stage head's "+" and "⋯" show under a pointer (parts.css .ib-ghost), and stay while their menu is open */
+.stage-head .ib-ghost[aria-expanded="true"]{opacity:1}
+
+/* Flow with nothing waiting: the Dot stands in the middle, as an empty body does */
+.pk-body:has(>.empty){display:flex;flex-direction:column;-webkit-mask-image:none;mask-image:none}
+
+/* Archived: a row names its stage (list.css) */
+.is-arch .row-title{color:var(--ink-2)}
+@media (min-width:761px){.task.is-arch{grid-template-columns:24px minmax(0,1fr) 104px var(--av-sm) 38px}}
+@media (max-width:760px){.task.is-arch .row-stage{grid-area:pills;padding:0}}
+
+/* Edit pipeline: the stages in order down one line; a side stage hangs off it (more.css) */
+.pe-held{margin-bottom:var(--s-2);color:var(--ink-2)}
+.pe-stages{display:grid;grid-template-columns:minmax(0,1fr)}
+.ps{position:relative;padding-left:calc(var(--s-6) + var(--s-1))}
+.ps::before{content:"";position:absolute;left:13.25px;top:0;bottom:0;width:1.5px;background:var(--line-strong)}
+.ps:first-child::before{top:calc(var(--ctl-lg)/2)}
+.ps.is-add::before{bottom:calc(100% - var(--ctl-lg)/2)}
+.ps-node{position:absolute;left:9.5px;top:calc(var(--ctl-lg)/2 - 4.5px);width:9px;height:9px;border-radius:50%;background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--muted)}
+.ps-row{height:var(--ctl-lg);display:flex;align-items:center;gap:var(--s-2);padding:0 var(--s-0) 0 var(--s-2);border-radius:var(--r-row)}
+.ps-row .field{width:176px;margin-left:calc(var(--s-2h) * -1);font-weight:var(--w-strong)}
+.ps-row .ib{color:var(--muted)}
+.ps-name{font-weight:var(--w-strong);white-space:nowrap}
+.ps.is-side{padding-left:calc(var(--s-12) + var(--s-1))}
+.ps.is-side>.ps-node{left:33.5px;background:none;box-shadow:none;border:1.5px dashed var(--muted)}
+.ps.is-side .field{font-weight:var(--w-text)}
+.ps.is-add>.ps-node{left:6px;top:calc(var(--ctl-lg)/2 - 8px);width:16px;height:16px;display:grid;place-items:center;box-shadow:none;color:var(--muted)}
+.ps.is-add .ps-node .ico{width:14px;height:14px;stroke-width:2}
+.ps.is-add .ps-row{width:100%;border:0;background:none;font:inherit;cursor:pointer;transition:background var(--dur-fast) var(--ease)}
+.ps.is-add .ps-row:hover{--surface:var(--hover);background:var(--hover)}
+.ps.is-add .ps-name{font-weight:var(--w-text);color:var(--muted)}
+.ps.is-add .ps-row:hover .ps-name{color:var(--ink)}

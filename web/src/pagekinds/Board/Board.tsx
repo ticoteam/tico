@@ -1,7 +1,7 @@
 import { useId, type ReactNode } from 'react';
 import { FoldButton } from '@/kit/SectionHead';
 import { Skeleton } from '@/kit/Skeleton';
-import { Page } from '@/pagekinds/_parts';
+import { Page, PanelSlot } from '@/pagekinds/_parts';
 import type { PageBaseProps } from '@/pagekinds/types';
 
 export interface BoardProps extends PageBaseProps {
@@ -11,12 +11,14 @@ export interface BoardProps extends PageBaseProps {
   columns: ReactNode;
   /** Empty or folded stages, as strips at the right (`<BoardColumn folded>`). */
   folded?: ReactNode;
+  /** A side panel beside the board (`<SidePanel>`), as List has. */
+  panel?: ReactNode;
 }
 
 /** The same rows as cards in columns, one per stage, scrolling sideways. Only a pipeline has a board. */
-export function Board({ filter, columns, folded, ...page }: BoardProps) {
+export function Board({ filter, columns, folded, panel, ...page }: BoardProps) {
   return (
-    <Page kind="board" under={filter} skeleton={<BoardSkeleton />} {...page}>
+    <Page kind="board" under={filter} over={panel && <PanelSlot>{panel}</PanelSlot>} skeleton={<BoardSkeleton />} {...page}>
       <div className="page-body board-wrap pk-body-board">
         <div className="board" data-scroll role="region" aria-label="Stages">
           <div className="board-in">

@@ -12,13 +12,15 @@ export type PanelProps = {
   /** Buttons for the whole panel. */
   foot?: ReactNode;
   onClose: () => void;
+  /** Added to the sheet's classes, for a panel of one kind (a record, a form). */
+  className?: string;
 };
 
 /**
  * The side panel: its own sheet, with a head, sections and a foot. Where it sits (beside the page or over it) is the
  * shell's call. It closes with its x or Escape, and focus goes back to whatever opened it, usually a row.
  */
-export function Panel({ label, head, children, foot, onClose }: PanelProps) {
+export function Panel({ label, head, children, foot, onClose, className }: PanelProps) {
   const sheet = useRef<HTMLElement>(null);
   const close = useRef(onClose);
   useEffect(() => {
@@ -40,7 +42,7 @@ export function Panel({ label, head, children, foot, onClose }: PanelProps) {
     };
   }, []);
   return (
-    <aside ref={sheet} className="pane side pnl" aria-label={label} tabIndex={-1}>
+    <aside ref={sheet} className={className ? `pane side pnl ${className}` : 'pane side pnl'} aria-label={label} tabIndex={-1}>
       <header className="side-head">
         {head}
         <span className="grow" />

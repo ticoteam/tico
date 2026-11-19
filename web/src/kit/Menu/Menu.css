@@ -4,3 +4,5 @@
 /* A quiet note at a row's right, as the model menu draws it (pages/8-settings/settings.css .mdrop). */
 .menu a em{font-style:normal;font-weight:var(--w-text);margin-left:auto;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 .menu a em+.ico{margin-left:0}
+/* a row that opens a second level (pages/1-tasks/list.css) */
+.menu a>.ico.is-next{width:14px;height:14px;color:var(--muted);stroke-width:1.8}

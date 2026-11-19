@@ -6,6 +6,8 @@ import type { PageBaseProps, PageTab } from '@/pagekinds/types';
 export interface ListProps extends PageBaseProps {
   /** The underlined tab row under the head. */
   tabs?: readonly PageTab[];
+  /** At the tab row's end: the controls that act on the open tab. */
+  tabsAfter?: ReactNode;
   /** The filter row (`<FilterRow>`), while a filter is set. Folds into the head's filter button on a phone. */
   filter?: ReactNode;
   /** A strip of figures over the sections (`<FiguresStrip>`): Team, Budget. */

@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { IconButton } from '@/kit/IconButton';
-import { FlowMark } from './parts';
+import { FlowMark } from '@/kit/FlowMark';
 
 /* The board's fit (list.js fitBoard): whole columns only. Open columns share one width so the columns on screen end on
    the board's right edge; what does not fit lies past that edge, behind an arrow that says how many stages are there

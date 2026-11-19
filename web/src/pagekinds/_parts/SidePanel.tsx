@@ -15,16 +15,19 @@ export interface SidePanelProps {
   foot?: ReactNode;
   /** Close button and Escape. */
   onClose: () => void;
+  /** Added to the sheet's classes, for a panel of one kind (a record, a form). */
+  className?: string;
   children: ReactNode;
 }
 
 /** A row opened as its own sheet right of the page (R24): the kit's panel with the name as a flight target. */
-export function SidePanel({ title, target, lead, actions, foot, onClose, children }: SidePanelProps) {
+export function SidePanel({ title, target, lead, actions, foot, onClose, className, children }: SidePanelProps) {
   return (
     <Panel
       label={title}
       onClose={onClose}
       foot={foot}
+      className={className}
       head={
         <>
           {lead}

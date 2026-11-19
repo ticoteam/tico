@@ -26,6 +26,8 @@ export interface ConversationProps {
   actor?: string;
   /** The page it sits beside: the look chip, and `refs.page` on what is sent. Defaults to the address and title. */
   page?: (PageRef & { icon?: IconName }) | null;
+  /** Above the composer, in the chat's foot: a card the chat is waiting on (a task's answer card). */
+  foot?: ReactNode;
 }
 
 type Item =
@@ -86,7 +88,7 @@ const herePage = (): PageRef => ({
 
 installConversationLive();
 
-export function Conversation({ id, variant, title, actor, page }: ConversationProps) {
+export function Conversation({ id, variant, title, actor, page, foot }: ConversationProps) {
   useFollow(variant === 'tico' ? { conversation: id } : { thread: id });
 
   const { data: me } = useQuery(meQuery);
@@ -176,6 +178,7 @@ export function Conversation({ id, variant, title, actor, page }: ConversationPr
 
   const footer = (
     <footer className="chat-foot">
+      {foot}
       {look}
       {myId && <Composer id={id} me={myId} to={name} onSend={(text, files) => send(text, files)} />}
     </footer>

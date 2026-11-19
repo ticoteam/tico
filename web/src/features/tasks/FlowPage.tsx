@@ -1,20 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { useId, useState } from 'react';
 import { useFollow } from '@/live/follow';
+import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { TaskRow } from '@/kit/Row';
-import { VirtualList } from '@/kit/VirtualList';
-import { List, type PageState } from '@/pagekinds';
-import { Face, FlowButton, FlowMark } from './parts';
+import { List, Section, type PageState } from '@/pagekinds';
+import { Dot } from '@/tico/dot';
+import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
+import { Face, FlowButton } from './parts';
 import { flowQuery, pipelinesQuery, type FlowItem, type Pipeline } from './queries';
 import './tasks.css';
-
-const CAP = 12;
-const SHOW = 10;
-/** Opened past this many rows, a section draws only what is on screen. */
-const LONG = 100;
-const ROW_H = 34;
 
 interface Group {
   key: string;
@@ -61,41 +56,42 @@ function FlowRow({ it }: { it: FlowItem }) {
 
 /** A section named by its pipeline, then its stage (list.js path()); its name folds it like every section. */
 function FlowSection({ g }: { g: Group }) {
-  const [open, setOpen] = useState(true);
-  const [all, setAll] = useState(false);
-  const id = useId();
-  const shown = all || g.items.length <= CAP ? g.items : g.items.slice(0, SHOW);
   return (
-    <section className={open ? 'stage pk-sec' : 'stage pk-sec is-folded'} aria-label={`${g.pipe}, ${g.stage}`} data-target={`stage:${g.key}`}>
-      <header className="stage-head">
-        <h2 className="sec-name">
-          <button type="button" className="sec-fold" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
-            <span>
-              {g.pipe}
-              <Icon name="chevron" className="sec-sep" />
-              {g.stage}
-            </span>
-            <span className="stage-n">{g.items.length}</span>
-            <Icon name="chevdown" />
-          </button>
-        </h2>
-      </header>
-      <div id={id} hidden={!open}>
-        {open && shown.length > LONG ? (
-          <VirtualList className="tk-long" items={shown} getKey={(it) => it.id} estimateSize={ROW_H} renderItem={(it) => <FlowRow it={it} />} />
-        ) : (
-          open && shown.map((it) => <FlowRow key={it.id} it={it} />)
-        )}
-        {open && shown.length < g.items.length && (
-          <button className="row task row-more" type="button" onClick={() => setAll(true)}>
-            <span className="row-mark" />
-            <span className="row-title">{g.items.length - shown.length} more</span>
-          </button>
-        )}
-      </div>
-    </section>
+    <Section
+      name={
+        <>
+          {g.pipe}
+          <Icon name="chevron" className="sec-sep" />
+          {g.stage}
+        </>
+      }
+      label={`${g.pipe}, ${g.stage}`}
+      count={g.items.length}
+      target={`stage:${g.key}`}
+    >
+      <Capped
+        list={g.items}
+        cap={LIST_CAP}
+        show={LIST_SHOW}
+        height={ROW_H}
+        more={undefined}
+        draw={(it) => <FlowRow key={it.id} it={it} />}
+        moreRow={(n, open) => <RowMore key="more" n={n} onClick={open} />}
+      />
+    </Section>
   );
 }
+
+/** Nothing waits on you: the Dot at rest, then a way back to Tasks (list.js flowBody). */
+const Clear = () => (
+  <div className="empty">
+    <Dot size={44} state="rest" />
+    <h2>Nothing waits on you</h2>
+    <Link to="/tasks" className="btn">
+      Open Tasks
+    </Link>
+  </div>
+);
 
 /** Flow: every task that waits on you, in every pipeline, one after another. A row opens it in Flow. */
 export function FlowPage() {
@@ -105,17 +101,18 @@ export function FlowPage() {
   let state: PageState = 'ready';
   if (flow.isError || pipes.isError) state = 'fault';
   else if (!flow.data || !pipes.data) state = 'loading';
-  else if (!flow.data.items.length) state = 'empty';
+  let sections = null;
+  if (flow.data && pipes.data)
+    sections = flow.data.items.length ? groups(flow.data.items, pipes.data).map((g) => <FlowSection key={g.key} g={g} />) : <Clear />;
   return (
     <List
       title="Tasks"
       path="/flow"
       actions={<FlowButton on count={flow.data?.count ?? 0} />}
       state={state}
-      empty={{ title: 'Nothing waits on you', action: <Link to="/tasks" className="btn">Open Tasks</Link> }}
       onRetry={() => void (flow.isError ? flow.refetch() : pipes.refetch())}
       className="tasks-page"
-      sections={flow.data && pipes.data ? groups(flow.data.items, pipes.data).map((g) => <FlowSection key={g.key} g={g} />) : null}
+      sections={sections}
     />
   );
 }

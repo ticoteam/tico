@@ -7,18 +7,21 @@ import { Field } from '@/kit/Field';
 import { Select } from '@/kit/Select';
 import type { Pipeline } from './queries';
 
-/** New task: title, pipeline and owner, then Create (list.js newTask). The row shows in the pipeline at once. */
+/** New task: title, pipeline and owner, then Create (list.js newTask). The row shows at once, in `stage` when one is given. */
 export function NewTask({
   open,
   onOpenChange,
   pipelines,
   pipeline,
+  stage = null,
   owner,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   pipelines: readonly Pipeline[];
   pipeline: string;
+  /** A stage head's "+": the stage it lands in, while the pipeline stays the same. */
+  stage?: string | null;
   owner: string | null;
 }) {
   const create = useAction('tasks.create');
@@ -29,7 +32,7 @@ export function NewTask({
   const ready = title.trim().length > 0;
   const submit = () => {
     if (!ready) return;
-    void create.run({ title: title.trim(), pipeline: into, owner: who || null });
+    void create.run({ title: title.trim(), pipeline: into, owner: who || null, stage: into === pipeline ? stage : null });
     setTitle('');
     onOpenChange(false);
   };

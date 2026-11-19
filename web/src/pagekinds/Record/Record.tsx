@@ -1,11 +1,13 @@
 import type { ReactNode } from 'react';
 import { Skeleton } from '@/kit/Skeleton';
-import { Page, PageBody, SidePanel, SkRows, type SidePanelProps } from '@/pagekinds/_parts';
+import { Page, PageBody, PanelSlot, SidePanel, SkRows, type SidePanelProps } from '@/pagekinds/_parts';
 import type { PageBaseProps, PageTab } from '@/pagekinds/types';
 
 export interface RecordProps extends PageBaseProps {
   /** About, People, Threads, Files. */
   tabs?: readonly PageTab[];
+  /** At the tab row's end: the controls that act on the open tab. */
+  tabsAfter?: ReactNode;
   /** Label and value (`<Facts>` from `@/kit/LabelValue`); each saves at once. */
   facts?: ReactNode;
   /** A few stats (`<FiguresStrip>`). */
@@ -14,12 +16,14 @@ export interface RecordProps extends PageBaseProps {
   sections?: ReactNode;
   /** Facts in a column at the right. On a phone they fold in under `facts`. */
   side?: ReactNode;
+  /** The open row (a `<SidePanel>`): a matter, a date. Drawn in the shell's panel place. */
+  panel?: ReactNode;
 }
 
 /** One thing: label and value, its own sections, a side column. Reached from a row; its crumb leads back. */
-export function Record({ tabs, facts, figures, sections, side, ...page }: RecordProps) {
+export function Record({ tabs, facts, figures, sections, side, panel, ...page }: RecordProps) {
   return (
-    <Page kind="record" tabs={tabs} skeleton={<RecordSkeleton />} {...page}>
+    <Page kind="record" tabs={tabs} over={panel && <PanelSlot>{panel}</PanelSlot>} skeleton={<RecordSkeleton />} {...page}>
       <PageBody>
         <div className={side ? 'pk-rec has-side' : 'pk-rec'}>
           {facts && <div className="pk-rec-facts">{facts}</div>}

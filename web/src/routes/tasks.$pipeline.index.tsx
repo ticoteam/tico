@@ -1,15 +1,16 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { filtersOf, pipelinesQuery, pipelineTasksQuery, TasksPage, validateTasksSearch } from '@/features/tasks/exports';
 
-/** One pipeline: `?view=board|list` and its filters (`owner`, `tag`, `late`, `q`) live in the address. */
+/** One pipeline: `?view=board|list|archived`, its filters and `?panel=pipeline` live in the address. */
 export const Route = createFileRoute('/tasks/$pipeline/')({
   validateSearch: validateTasksSearch,
-  loaderDeps: ({ search }) => filtersOf(search),
+  loaderDeps: ({ search }) => ({ ...filtersOf(search), archived: search.view === 'archived' }),
   // A failed read is the page's own fault state (Try again), not the router's error screen.
-  loader: async ({ context, params, deps }) => {
+  // Archived reads its own three lists on the page.
+  loader: async ({ context, params, deps: { archived, ...filters } }) => {
     await Promise.all([
       context.queryClient.ensureQueryData(pipelinesQuery),
-      context.queryClient.ensureQueryData(pipelineTasksQuery(params.pipeline, deps)),
+      archived ? null : context.queryClient.ensureQueryData(pipelineTasksQuery(params.pipeline, filters)),
     ]).catch(() => undefined);
   },
   component: Page,

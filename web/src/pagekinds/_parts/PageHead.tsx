@@ -1,9 +1,10 @@
 import { Link, type LinkProps } from '@tanstack/react-router';
-import { Fragment } from 'react';
+import { Fragment, useState } from 'react';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { useSheet } from '@/shell';
 import type { HeadProps } from '@/pagekinds/types';
+import { EditableTitle } from './EditableTitle';
 
 export type PageHeadProps = HeadProps;
 
@@ -14,9 +15,20 @@ const to = (path: string) => path as LinkProps['to'];
  * the name (aaa-audit-a, Breadcrumb). Then the controls, "⋯" last, then a button for each sheet the frame tucked
  * behind the page.
  */
-export function PageHead({ title, path, crumb, lead, after, actions, more }: PageHeadProps) {
+export function PageHead({ title, path, crumb, lead, after, actions, more, onRename, sub }: PageHeadProps) {
   const sheet = useSheet();
   const back = crumb?.at(-1);
+  const [renaming, setRenaming] = useState(false);
+  const trail = crumb && crumb.length > 0 && (
+    <nav className={sub ? 'pk-crumb' : 'tv-where pk-crumb'} aria-label="Breadcrumb">
+      {crumb.map((c, i) => (
+        <Fragment key={c.to}>
+          {i > 0 && <Icon name="chevron" />}
+          <Link to={to(c.to)}>{c.label}</Link>
+        </Fragment>
+      ))}
+    </nav>
+  );
   return (
     <header className="page-head pk-head">
       {back && (
@@ -26,19 +38,41 @@ export function PageHead({ title, path, crumb, lead, after, actions, more }: Pag
       )}
       {lead}
       <div className="pk-title">
-        {crumb && crumb.length > 0 && (
-          <nav className="tv-where pk-crumb" aria-label="Breadcrumb">
-            {crumb.map((c, i) => (
-              <Fragment key={c.to}>
-                {i > 0 && <Icon name="chevron" />}
-                <Link to={to(c.to)}>{c.label}</Link>
-              </Fragment>
-            ))}
-          </nav>
+        {sub ? (
+          <div className="tv-where pk-where">
+            {trail}
+            {sub}
+          </div>
+        ) : (
+          trail
         )}
-        <h1 data-target={`page:${path}`} title={title}>
-          {title}
-        </h1>
+        {onRename && renaming ? (
+          <h1 data-target={`page:${path}`}>
+            <EditableTitle
+              title={title}
+              label="Title"
+              onDone={(next) => {
+                setRenaming(false);
+                if (next && next !== title) onRename(next);
+              }}
+            />
+          </h1>
+        ) : onRename ? (
+          <h1
+            data-target={`page:${path}`}
+            title={title}
+            className="is-editable"
+            tabIndex={0}
+            onClick={() => setRenaming(true)}
+            onKeyDown={(e) => e.key === 'Enter' && setRenaming(true)}
+          >
+            {title}
+          </h1>
+        ) : (
+          <h1 data-target={`page:${path}`} title={title}>
+            {title}
+          </h1>
+        )}
       </div>
       {after}
       <span className="grow" />

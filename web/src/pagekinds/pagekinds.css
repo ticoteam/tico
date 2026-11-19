@@ -15,6 +15,9 @@
 .pk-title h1{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .pk-crumb a{white-space:nowrap}
 .pk-crumb a:hover{color:var(--ink)}
+/* the trail inside a where line (`sub`): its steps sit in the line's own row */
+.pk-where>.pk-crumb{display:contents}
+.pk-where>.pk-crumb>.ico{width:12px;height:12px;stroke-width:2;color:var(--faint)}
 .pk-acts{display:contents}
 .pk .pk-back{display:none}
 
@@ -23,6 +26,9 @@
 .pk .page-tabs .docs{scroll-behavior:auto}
 .pk .page-tabs .doc-tab span{display:inline-grid;justify-items:center}
 .pk .page-tabs .doc-tab span::after{content:attr(data-t);height:0;overflow:hidden;visibility:hidden;font-weight:var(--w-strong)}
+/* the controls at the row's end (`tabsAfter`), as the mock's .tv-tabs keeps them */
+.pk .page-tabs.has-after{display:flex;align-items:center;gap:var(--s-2)}
+.pk .page-tabs.has-after .docs{flex:1}
 
 /* ---------- the filter row (pages/1-tasks/list.css) ---------- */
 .filter-row{flex:none;display:flex;align-items:center;gap:calc(var(--s-1) + var(--s-0));height:36px;padding:0 var(--s-3) var(--s-2) calc(var(--page-x) + var(--s-3));overflow-x:auto;scrollbar-width:none}
@@ -102,6 +108,10 @@
 
 /* ---------- list and item (parts.css .page-thread): states and a skeleton in the list column ---------- */
 .tl .pk-loading .tl-list{overflow:hidden}
+/* a title renamed in place (an item head's, a page head's): the same line, as a field */
+.conv-head h2.is-editable,.pk-title h1.is-editable{cursor:text}
+.pk-title .ih-title{width:100%}
+.conv-head .ih-title,.pk-title .ih-title{flex:1;min-width:0;height:var(--ctl);margin:0;padding:0 var(--s-2);border:0;border-radius:var(--r-ctl);background:var(--well);color:var(--ink);font-family:inherit;font-size:inherit;font-weight:inherit;box-shadow:inset 0 0 0 1.5px var(--focus)}
 
 /* ---------- record: facts with a side column at 30%; figures and sections under them ---------- */
 .pk-rec{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:"facts" "figs" "secs"}

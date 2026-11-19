@@ -1,103 +1,188 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import { useAction } from '@/actions';
 import { directoryQuery, meQuery, useActors } from '@/data';
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Search } from '@/kit/Field';
+import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { Menu, MenuItem } from '@/kit/Menu';
+import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { LatePill } from '@/kit/Pill';
 import { TaskRow } from '@/kit/Row';
 import { Segmented } from '@/kit/Segmented';
-import { VirtualList } from '@/kit/VirtualList';
 import { Board, BoardColumn, FilterRow, List, Section, type FilterChip, type PageState } from '@/pagekinds';
 import { usePref, writePref } from '@/prefs';
+import { ArchivedSections, useShelves } from './Archived';
 import { BoardFit } from './BoardFit';
+import { Capped, CARD_H, COL_CAP, COL_SHOW, LIST_CAP, LIST_SHOW, moreText, RowMore, ROW_H } from './capped';
 import { useCardDrag } from './drag';
-import { FilterMenu } from './FilterMenu';
+import { DUE_NAMES, FilterMenu } from './FilterMenu';
+import { SelectBar, StageMenu } from './many';
 import { NewTask } from './NewTask';
-import { Face, FlowButton, isPending, markOf, Movable, OwnerButton, taskHref, waitsOnMe, FlowMark } from './parts';
-import { flowQuery, loadMore, pipelinesQuery, pipelineTasksQuery, tagsQuery, type Pipeline, type Stage, type TaskItem } from './queries';
+import { PipelinePanel } from './PipelinePanel';
+import { Face, FlowButton, isPending, markOf, Movable, OwnerButton, taskHref, waitsOnMe } from './parts';
+import {
+  flowQuery,
+  isFiltered,
+  loadMore,
+  pipelinesQuery,
+  pipelineTasksQuery,
+  stageCountsQuery,
+  tagsQuery,
+  type Filters,
+  type Pipeline,
+  type Stage,
+  type TaskItem,
+} from './queries';
 import { filtersOf, LAST_PREF, VIEW_PREF, type TasksSearch, type View } from './search';
 import './tasks.css';
 
-/* The mock's caps (list.js): a list stage past twelve rows shows ten, a column past ten cards shows eight, then
-   "N more", which opens the rest. A stage opened past this many rows draws only what is on screen. */
-const LIST_CAP = 12;
-const LIST_SHOW = 10;
-const COL_CAP = 10;
-const COL_SHOW = 8;
-const LONG = 100;
-const ROW_H = 34;
-const CARD_H = 96;
-
 const FOLD_PREF = 'tasks.fold.v1';
 
-/** One pipeline's open tasks: a board (stages are columns) or a list (stages are sections), with filters in the address. */
+/** One pipeline's tasks: open ones as a board (stages are columns) or a list (stages are sections), or the archived ones. */
 export function TasksPage({ pipeline, search }: { pipeline: string; search: TasksSearch }) {
   useFollow({ allTasks: true });
   const pipes = useQuery(pipelinesQuery);
   const p = pipes.data?.find((x) => x.id === pipeline);
-  const [saved] = usePref<View>(`${VIEW_PREF}:${pipeline}`, 'board');
-  const view = search.view ?? saved;
-  const filters = filtersOf(search);
-  const tasks = useQuery(pipelineTasksQuery(pipeline, filters));
-  const me = useQuery(meQuery).data?.id;
-  const flow = useQuery(flowQuery).data?.count ?? 0;
-  const [folds, setFolds] = usePref<string[]>(`${FOLD_PREF}:${pipeline}`, []);
-  const [newOpen, setNewOpen] = useState(false);
+  const [saved] = usePref<'board' | 'list'>(`${VIEW_PREF}:${pipeline}`, 'board');
+  const view: View = search.view ?? saved;
 
   useEffect(() => {
     if (p) writePref(LAST_PREF, p.id);
   }, [p]);
 
+  const edit = useAction('tasks.editPipeline');
+  const panel =
+    search.panel === 'pipeline' && p?.mayChange ? <PipelinePanel p={p} onClose={() => void edit.run({ pipeline, open: false })} /> : undefined;
+  const head = {
+    path: `/tasks/${pipeline}`,
+    after: pipes.data && p && <PipelinePick pipelines={pipes.data} current={p} />,
+    className: 'tasks-page',
+  };
+  if (view === 'archived') return <ArchivedPage pipeline={pipeline} p={p} pipes={pipes} search={search} head={head} panel={panel} />;
+  return <OpenPage pipeline={pipeline} p={p} pipes={pipes} search={search} view={view} head={head} panel={panel} />;
+}
+
+interface PageProps {
+  pipeline: string;
+  p: Pipeline | undefined;
+  pipes: UseQueryResult<Pipeline[]>;
+  search: TasksSearch;
+  head: { path: string; after: ReactNode; className: string };
+  panel: ReactNode;
+}
+
+function OpenPage({ pipeline, p, pipes, search, view, head, panel }: PageProps & { view: 'board' | 'list' }) {
+  const filters = filtersOf(search);
+  const tasks = useQuery(pipelineTasksQuery(pipeline, filters));
+  const me = useQuery(meQuery).data?.id;
+  const flow = useQuery(flowQuery).data?.count ?? 0;
+  const [folds, setFolds] = usePref<string[]>(`${FOLD_PREF}:${pipeline}`, []);
+  const edit = useAction('tasks.editPipeline');
+  const [newIn, setNewIn] = useState<{ stage: string | null } | null>(null);
+  // Select: null while off; the picked task ids while on. Another pipeline starts with it off.
+  const [picked, setPicked] = useState<{ pipeline: string; ids: ReadonlySet<string> } | null>(null);
+  const picking = picked?.pipeline === pipeline ? picked.ids : null;
+
   // Another pipeline's rows, kept while this one's first read is out, are not this board.
   const other = tasks.isPlaceholderData && tasks.data?.tasks.some((t) => t.pipeline_id !== pipeline);
   const rows = other ? undefined : tasks.data?.tasks;
-  const filtered = !!(filters.owner || filters.tag || filters.late || filters.q);
+  const filtered = isFiltered(filters);
+  const cut = !!tasks.data?.next_after;
+  // Past what was read, a stage's count is the Floor's (it knows no filter): filtered and cut short, there is none.
+  const floor = useQuery({ ...stageCountsQuery, enabled: cut && !filtered });
+  const countOf = (stage: string, loaded: number) => (!cut ? loaded : filtered ? undefined : floor.data?.get(stage));
 
   let state: PageState = 'ready';
   if (pipes.isError || tasks.isError) state = 'fault';
   else if (!pipes.data || !rows) state = 'loading';
   else if (!p || (!rows.length && !filtered)) state = 'empty';
 
-  const newButton = (
-    <Button variant="primary" icon="plus" onClick={() => setNewOpen(true)}>
-      New task
-    </Button>
-  );
-  const head = {
+  const page = {
+    ...head,
     title: 'Tasks',
-    path: `/tasks/${pipeline}`,
-    after: pipes.data && p && <PipelinePick pipelines={pipes.data} current={p} />,
-    actions: <HeadActions pipeline={pipeline} view={view} search={search} flow={flow} owner={p?.owner ?? null} onNew={() => setNewOpen(true)} />,
+    actions: <HeadActions pipeline={pipeline} view={view} search={search} flow={flow} owner={p?.owner ?? null} onNew={() => setNewIn({ stage: null })} />,
+    more: p && <PageMore p={p} onSelect={() => setPicked({ pipeline, ids: new Set() })} />,
     state,
-    empty: p ? { title: `Nothing in ${p.name}`, action: newButton } : { title: 'No such pipeline', action: <Link to="/tasks">Open Tasks</Link> },
+    empty: p
+      ? {
+          title: `Nothing in ${p.name}`,
+          action: (
+            <Button variant="primary" icon="plus" onClick={() => setNewIn({ stage: null })}>
+              New task
+            </Button>
+          ),
+        }
+      : { title: 'No such pipeline', action: <Link to="/tasks">Open Tasks</Link> },
     onRetry: () => void (pipes.isError ? pipes.refetch() : tasks.refetch()),
-    filter: <Chips search={search} />,
-    className: 'tasks-page',
+    filter:
+      picking && p ? (
+        <SelectBar p={p} ids={[...picking]} onDone={() => setPicked(null)} />
+      ) : (
+        <Chips search={search} />
+      ),
+    panel,
   };
+  const toggle = picking
+    ? (id: string) => {
+        const next = new Set(picking);
+        if (!next.delete(id)) next.add(id);
+        setPicked({ pipeline, ids: next });
+      }
+    : undefined;
   const fold = (id: string, open: boolean) => setFolds(open ? folds.filter((x) => x !== id) : [...folds, id]);
-  const more = () => void loadMore(pipeline, filters);
-  const hasMore = !!tasks.data?.next_after;
-  const body =
-    p && rows ? { p, rows, me, folds, fold, more: hasMore ? more : undefined } : null;
+  const more = cut ? () => void loadMore(pipeline, filters) : undefined;
+  const body: BodyProps | null =
+    p && rows
+      ? { p, rows, me, folds, fold, more, cut, countOf, picking, toggle, onNew: (stage) => setNewIn({ stage }), onEdit: () => void edit.run({ pipeline }) }
+      : null;
 
   return (
     <>
       {view === 'board' ? (
-        <Board {...head} columns={body ? <Columns {...body} /> : null} />
+        <Board {...page} columns={body ? <Columns {...body} /> : null} />
       ) : (
-        <List {...head} sections={body ? <Sections {...body} /> : null} />
+        <List {...page} sections={body ? <Sections {...body} edit={p?.mayChange} /> : null} />
       )}
-      {pipes.data && newOpen && (
-        <NewTask open={newOpen} onOpenChange={setNewOpen} pipelines={pipes.data} pipeline={pipeline} owner={filters.owner ?? null} />
+      {pipes.data && newIn && (
+        <NewTask
+          open
+          onOpenChange={(o) => !o && setNewIn(null)}
+          pipelines={pipes.data}
+          pipeline={pipeline}
+          stage={newIn.stage}
+          owner={filters.owner ?? null}
+        />
       )}
     </>
+  );
+}
+
+function ArchivedPage({ pipeline, p, pipes, search, head, panel }: PageProps) {
+  const filters: Filters = filtersOf(search);
+  const shelves = useShelves(pipeline, filters);
+  const flow = useQuery(flowQuery).data?.count ?? 0;
+  let state: PageState = 'ready';
+  if (pipes.isError || shelves.fault) state = 'fault';
+  else if (!pipes.data || shelves.loading) state = 'loading';
+  else if (!p || (shelves.empty && !isFiltered(filters))) state = 'empty';
+  return (
+    <List
+      {...head}
+      title="Archived"
+      crumb={[{ label: 'Tasks', to: `/tasks/${encodeURIComponent(pipeline)}` }]}
+      actions={<HeadActions pipeline={pipeline} view="archived" search={search} flow={flow} owner={p?.owner ?? null} />}
+      state={state}
+      empty={{ title: p ? `Nothing archived in ${p.name}` : 'No such pipeline' }}
+      onRetry={() => void (pipes.isError ? pipes.refetch() : shelves.retry())}
+      filter={<Chips search={search} />}
+      panel={panel}
+      sections={p ? <ArchivedSections p={p} filters={filters} shelves={shelves} /> : null}
+    />
   );
 }
 
@@ -122,7 +207,25 @@ function PipelinePick({ pipelines, current }: { pipelines: readonly Pipeline[]; 
   );
 }
 
-/** Search, Filter, the view switch, New task, Flow, the owner (list.js head). */
+/** The page's "⋯" (list.js moreItems): Archived, Select, then Edit pipeline. */
+function PageMore({ p, onSelect }: { p: Pipeline; onSelect: () => void }) {
+  const setView = useAction('tasks.setView');
+  const edit = useAction('tasks.editPipeline');
+  return (
+    <Menu trigger={<IconButton icon="more" label="More" data-target="tasks:more" />}>
+      <MenuItem icon="archive" label="Archived" onSelect={() => void setView.run({ pipeline: p.id, view: 'archived' })} />
+      <MenuItem icon="square" label="Select" onSelect={onSelect} />
+      {p.mayChange && (
+        <>
+          <MenuRule />
+          <MenuItem icon="edit" label="Edit pipeline" onSelect={() => void edit.run({ pipeline: p.id })} />
+        </>
+      )}
+    </Menu>
+  );
+}
+
+/** Search, Filter, the view switch, New task, Flow, the owner (list.js head). Archived keeps search and filter. */
 function HeadActions({
   pipeline,
   view,
@@ -136,7 +239,7 @@ function HeadActions({
   search: TasksSearch;
   flow: number;
   owner: string | null;
-  onNew: () => void;
+  onNew?: () => void;
 }) {
   const setView = useAction('tasks.setView');
   const filter = useAction('tasks.filter');
@@ -163,20 +266,22 @@ function HeadActions({
       ) : (
         <IconButton icon="search" label="Search" onClick={() => setOpen(true)} />
       )}
-      <FilterMenu filters={search} owners={actors} tags={tags.map((t) => t.key)} />
-      <span data-target="tasks:view">
-        <Segmented
-          label="View"
-          value={view}
-          onValueChange={(v) => void setView.run({ pipeline, view: v })}
-          options={[
-            { value: 'board', label: 'Board', icon: 'columns' },
-            { value: 'list', label: 'List', icon: 'list' },
-          ]}
-        />
-      </span>
-      <IconButton icon="plus" label="New task" onClick={onNew} data-target="tasks:new" />
-      <FlowButton on={false} count={flow} />
+      <FilterMenu filters={search} actors={actors} tags={tags.map((t) => t.key)} />
+      {view !== 'archived' && (
+        <span data-target="tasks:view">
+          <Segmented
+            label="View"
+            value={view}
+            onValueChange={(v) => void setView.run({ pipeline, view: v })}
+            options={[
+              { value: 'board', label: 'Board', icon: 'columns' },
+              { value: 'list', label: 'List', icon: 'list' },
+            ]}
+          />
+        </span>
+      )}
+      {onNew && <IconButton icon="plus" label="New task" onClick={onNew} data-target="tasks:new" />}
+      {view !== 'archived' && <FlowButton on={false} count={flow} />}
       {owner && <OwnerButton actor={owner} />}
     </>
   );
@@ -186,11 +291,20 @@ function HeadActions({
 function Chips({ search }: { search: TasksSearch }) {
   const filter = useAction('tasks.filter');
   const dir = useQuery(directoryQuery).data;
+  const name = (id: string) => dir?.byId[id]?.name;
   const chips: FilterChip[] = [];
-  if (search.owner) chips.push({ label: dir?.byId[search.owner]?.name ?? 'Owner', onClear: () => void filter.run({ owner: null }) });
+  if (search.owner) chips.push({ label: name(search.owner) ?? 'Owner', onClear: () => void filter.run({ owner: null }) });
+  if (search.waiting) chips.push({ label: `Waiting on ${name(search.waiting) ?? 'someone'}`, onClear: () => void filter.run({ waiting: null }) });
+  if (search.asked) chips.push({ label: `Asked by ${name(search.asked) ?? 'someone'}`, onClear: () => void filter.run({ asked: null }) });
   if (search.tag) chips.push({ label: search.tag, onClear: () => void filter.run({ tag: null }) });
+  if (search.due) chips.push({ label: DUE_NAMES[search.due], onClear: () => void filter.run({ due: null }) });
   if (search.late) chips.push({ label: 'Late', onClear: () => void filter.run({ late: null }) });
-  return <FilterRow filters={chips} onClearAll={() => void filter.run({ owner: null, tag: null, late: null, q: null })} />;
+  return (
+    <FilterRow
+      filters={chips}
+      onClearAll={() => void filter.run({ owner: null, waiting: null, asked: null, tag: null, due: null, late: null, q: null })}
+    />
+  );
 }
 
 /* ---------------------------------------------------------------- the body */
@@ -203,6 +317,15 @@ interface BodyProps {
   fold: (stage: string, open: boolean) => void;
   /** Read the next page; only while the server has one. */
   more: (() => void) | undefined;
+  /** The server holds more than was read. */
+  cut: boolean;
+  /** A stage's count: what was read when that is all, else the Floor's, else none. */
+  countOf: (stage: string, loaded: number) => number | undefined;
+  /** Select is on: the picked ids. A click picks instead of opening. */
+  picking: ReadonlySet<string> | null;
+  toggle: ((id: string) => void) | undefined;
+  onNew: (stage: string) => void;
+  onEdit: () => void;
 }
 
 function byStage(stages: readonly Stage[], rows: readonly TaskItem[]) {
@@ -211,50 +334,24 @@ function byStage(stages: readonly Stage[], rows: readonly TaskItem[]) {
   return out;
 }
 
-/** The first `show` rows, or all of them once opened; past LONG, only what is on screen is drawn. */
-function Capped({
-  list,
-  cap,
-  show,
-  more,
-  draw,
-  moreRow,
-  height,
-  cards,
-}: {
-  list: readonly TaskItem[];
-  cap: number;
-  show: number;
-  more: (() => void) | undefined;
-  draw: (t: TaskItem) => ReactNode;
-  moreRow: (n: number, open: () => void) => ReactNode;
-  height: number;
-  cards?: boolean;
-}) {
-  const [all, setAll] = useState(false);
-  if (all && list.length > LONG)
-    return (
-      <VirtualList
-        className="tk-long"
-        items={list}
-        getKey={(t) => t.id}
-        estimateSize={height}
-        measure={cards}
-        renderItem={(t) => draw(t)}
-        onReachEnd={more}
-      />
-    );
-  if (all || list.length <= cap) return list.map(draw);
-  return (
-    <>
-      {list.slice(0, show).map(draw)}
-      {moreRow(list.length - show, () => setAll(true))}
-    </>
-  );
-}
+/** In Select, the box in the mark's place. */
+const Pick = ({ on }: { on: boolean }) => (
+  <span className={on ? 'check is-on' : 'check'} aria-hidden="true">
+    <span className="check-box">
+      <Icon name="check" />
+    </span>
+  </span>
+);
 
-function Card({ t, p, me }: { t: TaskItem; p: Pipeline; me: string | undefined }) {
-  const mark = markOf(t, me);
+const picker = (toggle: BodyProps['toggle'], id: string) =>
+  toggle &&
+  ((e: MouseEvent) => {
+    e.preventDefault();
+    toggle(id);
+  });
+
+function Card({ t, p, me, picked, onPick }: { t: TaskItem; p: Pipeline; me: string | undefined; picked?: boolean; onPick?: (e: MouseEvent) => void }) {
+  const mark = onPick ? <Pick on={!!picked} /> : markOf(t, me);
   const inner = (
     <>
       <span className="card-title">{t.title}</span>
@@ -280,18 +377,20 @@ function Card({ t, p, me }: { t: TaskItem; p: Pipeline; me: string | undefined }
     );
   return (
     <Link
-      className="card"
+      className={picked ? 'card is-selected' : 'card'}
       to="/tasks/$pipeline/$task"
       params={{ pipeline: p.id, task: String(t.number ?? t.id) }}
       title={t.title}
       data-target={`task:${t.number ?? t.id}`}
+      aria-pressed={onPick ? !!picked : undefined}
+      onClick={onPick}
     >
       {inner}
     </Link>
   );
 }
 
-function Columns({ p, rows, me, folds, fold, more }: BodyProps) {
+function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle }: BodyProps) {
   const move = useAction('tasks.move');
   const drag = useCardDrag((task, to) => void move.run({ task, to }));
   const groups = byStage(p.stages, rows);
@@ -306,7 +405,7 @@ function Columns({ p, rows, me, folds, fold, more }: BodyProps) {
           <BoardColumn
             key={s.id}
             name={s.name}
-            count={list.length}
+            count={countOf(s.id, list.length)}
             folded={folded}
             onToggle={list.length ? () => fold(s.id, folded) : undefined}
             target={`stage:${s.id}`}
@@ -327,13 +426,13 @@ function Columns({ p, rows, me, folds, fold, more }: BodyProps) {
               height={CARD_H}
               cards
               draw={(t) => (
-                <Movable key={t.id} task={t} stages={p.stages} wrap={drag(t)}>
-                  <Card t={t} p={p} me={me} />
+                <Movable key={t.id} task={t} stages={p.stages} wrap={picking ? undefined : drag(t)}>
+                  <Card t={t} p={p} me={me} picked={picking?.has(t.id)} onPick={picker(toggle, t.id)} />
                 </Movable>
               )}
               moreRow={(n, open) => (
                 <button key="more" className="col-more" type="button" onClick={open}>
-                  {n} more
+                  {moreText(n, cut)}
                 </button>
               )}
             />
@@ -345,7 +444,7 @@ function Columns({ p, rows, me, folds, fold, more }: BodyProps) {
   );
 }
 
-function Sections({ p, rows, me, folds, fold, more }: BodyProps) {
+function Sections({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle, onNew, onEdit, edit }: BodyProps & { edit?: boolean }) {
   const groups = byStage(p.stages, rows);
   const none = p.stages.filter((s) => !groups.get(s.id)?.length);
   return (
@@ -355,7 +454,20 @@ function Sections({ p, rows, me, folds, fold, more }: BodyProps) {
         .map((s) => {
           const list = groups.get(s.id) ?? [];
           return (
-            <Section key={s.id} name={s.name} count={list.length} open={!folds.includes(s.id)} onOpenChange={(o) => fold(s.id, o)} target={`stage:${s.id}`}>
+            <Section
+              key={s.id}
+              name={s.name}
+              count={countOf(s.id, list.length)}
+              open={!folds.includes(s.id)}
+              onOpenChange={(o) => fold(s.id, o)}
+              target={`stage:${s.id}`}
+              actions={
+                <>
+                  <IconButton icon="plus" label={`New task in ${s.name}`} size="sm" className="ib-ghost" onClick={() => onNew(s.id)} />
+                  <StageMenu p={p} stage={s} ids={list.filter((t) => !isPending(t)).map((t) => t.id)} onEdit={edit ? onEdit : undefined} />
+                </>
+              }
+            >
               <Capped
                 list={list}
                 cap={LIST_CAP}
@@ -368,19 +480,17 @@ function Sections({ p, rows, me, folds, fold, more }: BodyProps) {
                       title={t.title}
                       href={isPending(t) ? undefined : taskHref(p.id, t)}
                       target={`task:${t.number ?? t.id}`}
-                      mark={markOf(t, me)}
+                      mark={picking ? <Pick on={picking.has(t.id)} /> : markOf(t, me)}
+                      selected={picking?.has(t.id)}
+                      aria-pressed={picking ? picking.has(t.id) : undefined}
+                      onClick={picker(toggle, t.id)}
                       late={!!t.late}
                       avatar={<Face actor={t.owner_id} />}
                       at={t.stage_since ?? t.updated_at}
                     />
                   </Movable>
                 )}
-                moreRow={(n, open) => (
-                  <button key="more" className="row task row-more" type="button" onClick={open}>
-                    <span className="row-mark" />
-                    <span className="row-title">{n} more</span>
-                  </button>
-                )}
+                moreRow={(n, open) => <RowMore key="more" n={n} cut={cut} onClick={open} />}
               />
             </Section>
           );
@@ -400,4 +510,3 @@ function Sections({ p, rows, me, folds, fold, more }: BodyProps) {
     </>
   );
 }
-

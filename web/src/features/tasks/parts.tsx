@@ -1,23 +1,14 @@
 import { Link, useLocation } from '@tanstack/react-router';
-import type { CSSProperties, HTMLAttributes, ReactElement, ReactNode } from 'react';
+import type { HTMLAttributes, ReactElement, ReactNode } from 'react';
 import { useAction } from '@/actions';
 import { useActor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
+import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Link as KitLink } from '@/kit/Link';
 import { ContextMenu, Menu, MenuItem } from '@/kit/Menu';
 import type { Stage, TaskItem } from './queries';
-
-/** Flow's mark: two play-shaped dots (parts-kit.js flow()). Jade lives in dot.css. */
-export function FlowMark({ size = 12 }: { size?: number }) {
-  return (
-    <span className="dot flow" style={{ '--d': `${size}px` } as CSSProperties} role="img" aria-label="Waits on you">
-      <i />
-      <b />
-    </span>
-  );
-}
 
 const FLOW_PLAY = 'M16 5.5C8 4 4.5 12 5 24 4.5 36 8 44 16 42.5 27 40 45 32 45 24 45 16 27 8 16 5.5Z';
 

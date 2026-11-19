@@ -72,6 +72,8 @@ export type PageKind ='list' | 'board' | 'split' | 'record' | 'document' | 'dash
 export interface PageProps extends PageBaseProps {
   kind: PageKind;
   tabs?: readonly PageTab[];
+  /** At the tab row's end: the controls that act on the open tab. */
+  tabsAfter?: ReactNode;
   /** Under the head and tabs while ready: the filter row. */
   under?: ReactNode;
   skeleton: ReactNode;
@@ -81,7 +83,7 @@ export interface PageProps extends PageBaseProps {
 }
 
 /** The page sheet every kind but the centered card stands in: head, tab row, the state's body. */
-export function Page({ kind, className, tabs, under, skeleton, over, children, state, empty, onRetry, noAccess, ...head }: PageProps) {
+export function Page({ kind, className, tabs, tabsAfter, under, skeleton, over, children, state, empty, onRetry, noAccess, ...head }: PageProps) {
   const cls = `pane page pk pk-${kind}${className ? ` ${className}` : ''}`;
   if (state === 'no-access') {
     // The mock draws no head here: nothing of the page shows (15-start, noaccess).
@@ -96,7 +98,7 @@ export function Page({ kind, className, tabs, under, skeleton, over, children, s
   return (
     <main className={cls} aria-label={head.title}>
       <PageHead {...head} />
-      {tabs && tabs.length > 0 && <PageTabs tabs={tabs} label={`${head.title} pages`} />}
+      {tabs && tabs.length > 0 && <PageTabs tabs={tabs} label={`${head.title} pages`} after={tabsAfter} />}
       {(state ?? 'ready') === 'ready' && under}
       <StateBody state={state} title={head.title} empty={empty} onRetry={onRetry} skeleton={skeleton}>
         {children}

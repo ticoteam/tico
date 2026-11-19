@@ -18,6 +18,10 @@ export interface PageTab {
   exact?: boolean;
   /** `<kind>:<id>` for Tico's flights. */
   target?: string;
+  /** Before the words: the tab's state (approved, waits on you, not yet). */
+  mark?: ReactNode;
+  /** Merged into the link's search. The tab is on only while the address's search holds each of these too. */
+  search?: Record<string, string>;
 }
 
 /** The head every kind but the centered card has: one height, title and trail on the left, controls and "⋯" on the right. */
@@ -39,6 +43,13 @@ export interface HeadProps {
   actions?: ReactNode;
   /** "⋯", always last: a menu node that brings its own trigger, or a function the plain "⋯" button calls. */
   more?: ReactNode | (() => void);
+  /** The title edits in place: click it, type, Enter saves, Escape puts it back. */
+  onRename?: (next: string) => void;
+  /**
+   * The rest of the where line, after the trail: a task's stage, owner, age and Late. On a phone the where line sits
+   * under the title.
+   */
+  sub?: ReactNode;
 }
 
 /** Which body a page shows. The head (and tabs) stay in every state except no access. */

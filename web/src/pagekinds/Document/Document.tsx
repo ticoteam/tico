@@ -6,6 +6,8 @@ import type { PageBaseProps, PageTab } from '@/pagekinds/types';
 export interface DocumentProps extends PageBaseProps {
   /** The thing's pages (Spec, QA report), right under the head. */
   tabs?: readonly PageTab[];
+  /** At the tab row's end: the controls that act on the open tab. */
+  tabsAfter?: ReactNode;
   /** Reading text, or a page that keeps its own look (`framed`). */
   body: ReactNode;
   /** The body is a page in a frame (`.frame`): it fills the width and keeps no reading measure. */

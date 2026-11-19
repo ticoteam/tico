@@ -6,6 +6,8 @@ import type { PageBaseProps, PageTab } from '@/pagekinds/types';
 export interface DashboardProps extends PageBaseProps {
   /** Scope tabs: All and each segment. */
   tabs?: readonly PageTab[];
+  /** At the tab row's end: the controls that act on the open tab. */
+  tabsAfter?: ReactNode;
   /** Four stats across, each with a sparkline (`<FiguresStrip>`). */
   figures?: ReactNode;
   /** One wide chart. */

@@ -3,7 +3,8 @@ import { Icon } from '@/kit/Icon';
 import './SectionHead.css';
 
 export type FoldButtonProps = {
-  name: string;
+  /** Usually a string; a list that crosses pipelines names a section "pipeline › stage". */
+  name: ReactNode;
   count?: number;
   open: boolean;
   onToggle: () => void;

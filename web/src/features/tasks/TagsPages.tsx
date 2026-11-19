@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import { meQuery } from '@/data';
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
-import { Link } from '@/kit/Link';
 import { TaskRow } from '@/kit/Row';
 import { Table, Td, Th } from '@/kit/Table';
 import { List, Section, type PageState } from '@/pagekinds';
@@ -37,8 +37,7 @@ export function TagsPage() {
             {list.map((t) => (
               <tr key={t.id}>
                 <Td>
-                  {/* /tags/<id> has no route file yet: a plain in-app link until it does */}
-                  <Link href={`/tags/${encodeURIComponent(t.id)}`} data-target={`tag:${t.id}`}>
+                  <Link to="/tags/$tag" params={{ tag: t.id }} data-target={`tag:${t.id}`}>
                     {t.label || t.key}
                   </Link>
                 </Td>
