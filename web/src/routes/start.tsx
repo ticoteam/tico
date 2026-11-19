@@ -1,6 +1,19 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { Placeholder } from '@/kit/placeholder/Placeholder';
+import { directoryQuery } from '@/data';
+import { StartPage, needsQuery, todayQuery } from '@/features/start/exports';
 
+// `setup` is the first run's step, open over this page (or any other); the root's FirstRun reads it.
 export const Route = createFileRoute('/start')({
-  component: () => <Placeholder title="Start" />,
+  validateSearch: (search: Record<string, unknown>): { setup?: string } =>
+    typeof search.setup === 'string' && search.setup ? { setup: search.setup } : {},
+  // A part that fails shows its own fault on the page; the page still opens.
+  loader: async ({ context: { queryClient: qc } }) => {
+    const shown = () => undefined;
+    await Promise.all([
+      qc.ensureQueryData(needsQuery).catch(shown),
+      qc.ensureQueryData(todayQuery()).catch(shown),
+      qc.ensureQueryData(directoryQuery).catch(shown),
+    ]);
+  },
+  component: StartPage,
 });

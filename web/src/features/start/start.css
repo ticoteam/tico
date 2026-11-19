@@ -1,0 +1,42 @@
+/* First run and the boot cards: what pages/9-first-run/first.css and pages/15-start/start.css have that styles/,
+   pagekinds.css and the kit do not. Class names are the mock's. */
+
+/* the server did not answer: what to check, under the line (15-start) */
+.q-try{width:100%;margin-top:var(--s-6);padding:0 0 0 var(--s-5);text-align:left;color:var(--ink-2);line-height:var(--lh-read);display:grid;gap:var(--s-1)}
+.q-try li::marker{color:var(--faint)}
+
+/* ---------- Welcome (9-first-run): a dialog of a few steps. Where you are, one title, one thing to do. ---------- */
+.modal.wl{width:440px;padding:var(--s-6);gap:var(--s-5)}
+.wl-head{display:flex;align-items:center;gap:var(--s-2);height:28px}
+.wl-head .ib{margin-left:calc(var(--s-1h) * -1)}
+.wl-head .grow{flex:1}
+.wl-steps{display:flex;gap:var(--s-1)}
+.wl-steps i{width:20px;height:3px;border-radius:var(--r-pill);background:var(--line-strong)}
+.wl-steps i.is-on{background:var(--ink)}
+.wl .field{height:var(--ctl-lg);padding:0 var(--s-3);font-size:var(--t-md)}
+.wl-fields{display:grid;gap:var(--s-2)}
+/* a step that is a form (Enter sends): its parts stay the dialog's own rows */
+.wl-form{display:contents}
+.wl-foot{justify-content:space-between;align-items:center;min-height:var(--ctl)}
+.wl-foot .btn-quiet{margin-left:calc(var(--s-3) * -1)}
+.wl-foot .btn-fill{min-width:96px}
+
+/* a row you choose in a dialog: a mark, a name, and on the right the one thing you can do */
+.wl-list{display:grid;margin:calc(var(--s-1)*-1) 0}
+.wl-row{display:grid;grid-template-columns:var(--av-md) minmax(0,1fr) auto;align-items:center;column-gap:var(--s-3);min-height:56px}
+.wl-row+.wl-row{border-top:1px solid var(--line-strong)}
+.wl-mark{width:var(--av-md);height:var(--av-md);border-radius:var(--r-ctl);background:var(--well-2);color:var(--ink-2);display:grid;place-items:center;font-weight:var(--w-title);font-size:var(--t-sm)}
+.wl-row b{font-weight:var(--w-strong)}
+.wl-done{display:inline-flex;align-items:center;gap:var(--s-2);color:var(--ink-2)}
+.wl-done .ico{width:16px;height:16px;stroke-width:2.2;color:var(--ink)}
+.wl-row.radio{grid-template-columns:16px minmax(0,1fr) auto;min-height:48px;display:grid}
+.wl-row.radio.is-on b{color:var(--ink)}
+
+@media (max-width:760px){
+  .modal.wl{width:auto;padding:var(--s-6) var(--s-4) var(--s-4)}
+  .wl-row{min-height:60px}
+  .wl-row.radio{min-height:52px}
+  .wl-foot .btn-quiet{margin-left:0}
+  .wl-foot>span:empty{display:none}
+  .wl .field{height:48px}
+}
