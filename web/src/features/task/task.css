@@ -118,6 +118,20 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .tv-new{display:grid;gap:var(--s-4)}
 .tv-new .f{justify-items:stretch}
 
+/* ---------- a task's files and pages: two versions side by side, link a page, add from disk, who can see a page ---------- */
+.frame.fv-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+.fv-side{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--desk)}
+.fv-side+.fv-side{box-shadow:inset 1px 1px 0 var(--line)}
+.fv-side>small{flex:none;padding:var(--s-1) var(--s-3);font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums}
+.fv-side>img,.fv-side>video,.fv-side>iframe{flex:1;min-width:0;min-height:0;width:100%;height:100%;object-fit:contain;border:0}
+@media (max-width:759px){.frame.fv-pair{grid-template-columns:minmax(0,1fr)}}
+.tv-pages{display:grid;max-height:320px;overflow:hidden auto}
+.tv-pages .row{width:100%;border:0;background:none;text-align:left;color:inherit;font:inherit}
+.tv-drop{display:grid;justify-items:center;gap:var(--s-3);padding:var(--s-6) var(--s-4);border:1.5px dashed var(--line-strong);border-radius:var(--r-card)}
+.tv-drop.is-over{background:var(--hover)}
+.tv-who{display:grid;gap:var(--s-2);margin:0;padding:0;border:0;min-width:0}
+.tv-who legend{padding:0;margin-bottom:var(--s-2);font-size:var(--t-sm);color:var(--muted)}
+
 /* ---------- the answer card, over the message box in the task's chat ---------- */
 .an-err{margin:var(--s-2) var(--s-1h) 0 0;font-size:var(--t-sm);line-height:var(--lh);color:var(--ink-2);text-wrap:pretty}
 
@@ -133,3 +147,12 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
   .tv.is-flow .pk-head .pk-back,.tv.is-flow .pk-head .pk-acts{display:none}
   .tv-n{display:inline-flex;align-items:center;gap:var(--s-2)}
 }
+
+/* ---------- Details' facts and meetings (s58; more.css dKv, dMeet) ---------- */
+.dt-v .faces{display:inline-flex;align-items:center;gap:var(--s-1);padding:0}
+.dt-v .faces .av{box-shadow:none}
+.dt-face{display:inline-flex;padding:0;border:0;border-radius:50%;background:none;cursor:pointer}
+.dt-pick{display:inline-flex;align-items:center;gap:var(--s-2)}
+.dt-meet{grid-template-columns:24px minmax(0,1fr) auto 38px}
+.dt-meet .row-mark .ico{width:15px;height:15px;stroke-width:1.8;color:var(--muted)}
+.dt-meet .row-stage{padding:0 var(--s-3h) 0 var(--s-4)}

@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useState, type ReactElement } from 'react';
 import { run, type Result } from '@/actions';
-import { useActors } from '@/data';
+import { meQuery, useActor, useActors } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
@@ -13,7 +13,10 @@ import { Icon } from '@/kit/Icon';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { LatePill } from '@/kit/Pill';
 import { toast } from '@/kit/Toast';
+import { Select } from '@/kit/Select';
 import { PageMore } from '@/pagekinds';
+import { pipelinesQuery } from '@/features/tasks/exports';
+import { whoHref } from '@/features/team/exports';
 import { earlierStages, failedToast, reasonOf, refusalOf, tabAddress, type Refusal } from './model';
 import { Face, FlowMark, Go, Mark } from './parts';
 import { pipelineStagesQuery, waitingQuery, type TaskData } from './queries';
@@ -240,13 +243,25 @@ export function FlowTop({ t }: { t: TaskData }) {
   );
 }
 
-type Asking = 'due' | 'tags' | null;
+type Asking = 'due' | 'tags' | 'move' | 'reopen' | 'delete' | null;
 
-/** "⋯": due, tags, done; in Flow, Give to and Move back, after which Flow goes on to the next task. */
+/** "⋯": due, tags, done; in Flow, Give to and Move back, after which Flow goes on to the next task. Then the old task
+    window's rest (ui/app/task-props.ts): watch the agent's session, copy the link, move to another pipeline, the
+    Human, reopen with a reason, delete. Reopen and Delete ask first. */
 export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
   const [asking, setAsking] = useState<Asking>(null);
   const [due, setDue] = useState<Date | null>(null);
   const [tags, setTags] = useState('');
+  const [why, setWhy] = useState('');
+  const [to, setTo] = useState<{ pipeline: string; name: string; stage: string | null } | null>(null);
+  const navigate = useNavigate();
+  const owner = useActor(t.owner_id);
+  const people = useActors().filter((a) => a.kind === 'person');
+  const me = useQuery(meQuery).data?.id;
+  const pipelines = useQuery(pipelinesQuery).data ?? [];
+  const others = pipelines.filter((p) => p.id !== t.pipeline_id);
+  const stagesTo = pipelines.find((p) => p.id === to?.pipeline)?.stages.filter((s) => !s.side) ?? [];
+  const mayDelete = t.mover || (!!me && t.requester_id === me);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const order = useFlowOrder(t);
@@ -255,6 +270,7 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
 
   const open = (what: Exclude<Asking, null>) => {
     setError('');
+    setWhy('');
     setDue(t.due_at ? new Date(t.due_at) : null);
     setTags(t.labels.join(', '));
     setAsking(what);
@@ -277,6 +293,22 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
   };
   const day = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   const close = () => setAsking(null);
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(`${location.origin}/task/${t.number ?? t.id}`);
+      toast({ text: 'Link copied' });
+    } catch {
+      toast({ text: 'Couldn’t copy the link', kind: 'failed' });
+    }
+  };
+  const moveTo = (pipeline: string, name: string) => {
+    open('move');
+    setTo({ pipeline, name, stage: null });
+  };
+  const setHuman = async (human: string | null) => {
+    const r = await run('task.setHuman', { task: t.id, human }, { via: 'click' });
+    if (!r.ok) failed(r);
+  };
   const cancel = <Button onClick={close}>Cancel</Button>;
 
   return (
@@ -318,7 +350,103 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
             />
           </>
         )}
+        <MenuRule />
+        {owner?.kind === 'agent' && t.status === 'open' && (
+          <MenuItem label="Watch session" icon="computer" onSelect={() => void navigate({ to: whoHref(owner) as never, search: { tab: 'screen' } as never })} />
+        )}
+        <MenuItem label="Copy link" icon="link" onSelect={() => void copyLink()} />
+        {others.length > 0 && (
+          <MenuSub label="Move to" icon="tasks">
+            {others.map((p) => (
+              <MenuItem key={p.id} label={p.name} onSelect={() => moveTo(p.id, p.name)} />
+            ))}
+          </MenuSub>
+        )}
+        {people.length > 0 && (
+          <MenuSub label="Human" icon="people">
+            {people.map((a) => (
+              <MenuItem key={a.id} label={a.name} on={a.id === t.human_id} onSelect={() => void setHuman(a.id)} />
+            ))}
+            {t.human_id && (
+              <>
+                <MenuRule />
+                <MenuItem label="None" onSelect={() => void setHuman(null)} />
+              </>
+            )}
+          </MenuSub>
+        )}
+        {t.status !== 'open' && <MenuItem label="Reopen" icon="refresh" onSelect={() => open('reopen')} />}
+        {mayDelete && (
+          <>
+            <MenuRule />
+            <MenuItem label="Delete" icon="close" onSelect={() => open('delete')} />
+          </>
+        )}
       </PageMore>
+
+      <Dialog
+        open={asking === 'move'}
+        onOpenChange={(o) => !o && close()}
+        title={`Move to ${to?.name ?? ''}`}
+        actions={
+          <>
+            {cancel}
+            <Button
+              variant="primary"
+              busy={busy}
+              disabled={!to || busy}
+              onClick={() => to && void press('task.moveTo', { pipeline: to.pipeline, ...(to.stage && { stage: to.stage }), ...(why.trim() && { why: why.trim() }) })}
+            >
+              Move
+            </Button>
+          </>
+        }
+      >
+        {stagesTo.length > 0 && to && (
+          <Select
+            label="Stage"
+            options={stagesTo.map((s) => ({ value: s.id, label: s.name }))}
+            value={to.stage ?? stagesTo[0]!.id}
+            onValueChange={(stage) => setTo({ ...to, stage })}
+          />
+        )}
+        <Field label="Why" area value={why} onValueChange={setWhy} />
+        {error && <p className="an-err">{error}</p>}
+      </Dialog>
+
+      <Dialog
+        open={asking === 'reopen'}
+        onOpenChange={(o) => !o && close()}
+        title="Reopen it?"
+        actions={
+          <>
+            {cancel}
+            <Button variant="primary" busy={busy} disabled={!why.trim() || busy} onClick={() => void press('task.reopen', { why: why.trim() })}>
+              Reopen
+            </Button>
+          </>
+        }
+      >
+        <Field label="Why reopen it?" area autoFocus value={why} onValueChange={setWhy} error={error || undefined} />
+      </Dialog>
+
+      <Dialog
+        open={asking === 'delete'}
+        alert
+        onOpenChange={(o) => !o && close()}
+        title={`Delete “${t.title}”?`}
+        description="It goes to the trash, from which it can be restored."
+        actions={
+          <>
+            {cancel}
+            <Button variant="primary" busy={busy} disabled={busy} onClick={() => void press('task.delete', {})}>
+              Delete
+            </Button>
+          </>
+        }
+      >
+        {error && <p className="an-err">{error}</p>}
+      </Dialog>
 
       <Dialog
         open={asking === 'due'}

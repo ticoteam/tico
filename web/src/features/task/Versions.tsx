@@ -8,6 +8,7 @@ import { Menu, MenuItem } from '@/kit/Menu';
 import { fmtDate } from '@/lib';
 import { frameDoc, markChanges, parsePage } from './changes';
 import { DocFrame, PAGE_SANDBOX } from './FileView';
+import { PageMenu } from './Files';
 import { pageVersionQuery } from './queries';
 
 /* A page's versions (more.js taskflow): "v2" names the one open and lists the rest; "11 changes" says how it differs
@@ -66,9 +67,10 @@ export function useVersions(doc: TaskDocument | undefined, v?: number, vs?: numb
 const clock = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' });
 const when = (at: string) => `${fmtDate(at)}, ${clock.format(new Date(at))}`;
 
-/** At the tab row's end, for a page with more than one version: the version pick, Changes, and its two steps. */
+/** At the tab row's end: for a page with more than one version the version pick, Changes and its two steps; for every
+    page its ⋯ (who can see it, archive, download, delete). */
 export function VersionBar({ task, vs, at, onAt }: { task: string; vs: Versions; at: number; onAt: (at: number) => void }) {
-  if (vs.list.length < 2) return null;
+  if (vs.list.length < 2) return <PageMenu task={task} vs={vs} />;
   const n = vs.count ?? 0;
   const step = (d: number, label: string, flip: boolean) => (
     <button className="ib ib-sm" type="button" aria-label={label} title={label} disabled={!n} onClick={() => onAt(at < 0 ? (d > 0 ? 0 : n - 1) : (at + d + n) % n)}>
@@ -110,6 +112,7 @@ export function VersionBar({ task, vs, at, onAt }: { task: string; vs: Versions;
       )}
       {vs.on && step(-1, 'Previous change', true)}
       {vs.on && step(1, 'Next change', false)}
+      <PageMenu task={task} vs={vs} />
     </>
   );
 }

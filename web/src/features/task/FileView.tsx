@@ -1,14 +1,21 @@
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate, useSearch } from '@tanstack/react-router';
 import { run } from '@/actions';
-import type { TaskDocument } from '@/api/schema';
+import type { TaskDocument, TaskFileView } from '@/api/schema';
+import { meQuery } from '@/data';
 import { FilePreview } from '@/features/library/exports';
 import { Ago } from '@/kit/Ago';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
+import { IconButton } from '@/kit/IconButton';
+import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { PictureViewer, type Picture } from '@/kit/PictureViewer';
-import { DETAILS, tabAddress } from './model';
+import { toast } from '@/kit/Toast';
+import type { TaskSearch } from './exports';
+import { download } from './Files';
+import { DETAILS, failedToast, tabAddress } from './model';
 import { Face, Go } from './parts';
-import { taskFilesQuery, taskPageQuery, type TaskData } from './queries';
+import { pageShownQuery, taskFilesQuery, type TaskData } from './queries';
 
 /* What a task shows in its page sheet: one of its pages (a tab), or one of its files opened from Details. Both keep
    their own look in a frame (page-types: a file is a Document with its content in a frame). */
@@ -17,9 +24,9 @@ import { taskFilesQuery, taskPageQuery, type TaskData } from './queries';
 export const PAGE_SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox';
 
 export function DocFrame({ task, doc }: { task: string; doc: TaskDocument }) {
-  const page = useQuery(taskPageQuery(task, doc.file_id));
+  const page = useQuery(pageShownQuery(task, doc.file_id));
   if (page.isError) return <Empty icon="alert" title={`${doc.title || doc.name} did not load`} />;
-  const src = page.data?.src;
+  const src = page.data?.page.src;
   return (
     <div className="frame is-inset">
       {src && <iframe src={src} title={doc.title || doc.name} sandbox={PAGE_SANDBOX} referrerPolicy="no-referrer" />}
@@ -27,16 +34,45 @@ export function DocFrame({ task, doc }: { task: string; doc: TaskDocument }) {
   );
 }
 
-/** A file open in the page sheet (more.js fileBar): back to Details, its name, which of the task's files it is. */
+type FileVersion = TaskFileView['versions'][number];
+
+/** One version of a file as the frame draws it. */
+function Body({ f, v, onPicture }: { f: TaskFileView; v: FileVersion; onPicture?: () => void }) {
+  const name = f.title || f.name;
+  if (v.mime.startsWith('image/'))
+    return onPicture ? (
+      <button type="button" className="fv-pic" aria-label={`${name}, full size`} title="Full size" onClick={onPicture}>
+        <img src={v.url} alt={name} />
+      </button>
+    ) : (
+      <img src={v.url} alt={`${name}, v${v.n}`} />
+    );
+  if (v.mime.startsWith('video/')) return <video src={v.url} poster={v.poster_url ?? undefined} controls />;
+  if (v.mime.startsWith('text/html')) return <iframe src={v.url} title={`${name}, v${v.n}`} sandbox="" referrerPolicy="no-referrer" />;
+  return <FilePreview file={f.id} version={v.n} />;
+}
+
+/** A file open in the page sheet (more.js fileBar): back to Details, its name, which of the task's files it is, and its
+    ⋯ (Download, its versions, Compare, Remove). The address keeps the version (`v`) and the one compared with (`vs`). */
 export function FileView({ t, file, full, flow }: { t: TaskData; file: string; full?: string; flow: boolean }) {
   const files = useQuery(taskFilesQuery(t.id));
+  const me = useQuery(meQuery);
+  const search = useSearch({ strict: false }) as TaskSearch;
+  const navigate = useNavigate();
   const list = (files.data ?? []).filter((f) => !f.archived);
   const i = list.findIndex((f) => f.id === file);
   const f = list[i];
   const details = tabAddress(t, DETAILS, flow);
   const at = (id: string) => (flow ? { tab: DETAILS, file: id } : { file: id });
   const back = flow ? { tab: DETAILS } : {};
-  const v = f?.versions.find((x) => x.n === f.current_version) ?? f?.versions.at(-1);
+  const current = f?.versions.find((x) => x.n === f.current_version) ?? f?.versions.at(-1);
+  const v = (search.v && f?.versions.find((x) => x.n === search.v)) || current;
+  const versions = [...(f?.versions ?? [])].sort((a, b) => b.n - a.n);
+  const other = search.vs && search.vs !== v?.n ? f?.versions.find((x) => x.n === search.vs) : undefined;
+  // Compare puts the one before the shown version beside it; the oldest is compared with the one after.
+  const pair = versions.find((x) => v && x.n < v.n) ?? versions.find((x) => v && x.n > v.n);
+  // The server's rule (ui/app/task-files.ts tfCanRemove): its owner, its requester, or someone who may move tasks.
+  const mayRemove = t.mover || [t.owner_id, t.requester_id].includes(me.data?.id ?? '');
   // The task's pictures, each at its current version: the full size view walks them.
   const pictures = list.flatMap((x) => {
     const cur = x.versions.find((y) => y.n === x.current_version) ?? x.versions.at(-1);
@@ -57,6 +93,40 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
     );
   };
 
+  const remove = async (x: TaskFileView) => {
+    const r = await run('task.archiveFile', { task: t.id, file: x.id, archived: true }, { via: 'click' });
+    if (!r.ok) return void toast(failedToast(r));
+    toast({ text: 'Removed', name: x.title || x.name, action: { label: 'Undo', run: () => void run('task.archiveFile', { task: t.id, file: x.id, archived: false }, { via: 'click' }) } });
+    void navigate({ to: details.to as never, search: back as never });
+  };
+
+  const menu = f && v && (
+    <Menu trigger={<IconButton icon="more" label="More" size="sm" data-target={`task-version:${t.id}`} />}>
+      <MenuItem label="Download" icon="download" onSelect={() => download(v.url, f.name)} />
+      {versions.length > 1 && (
+        <MenuSub label="Versions" icon="clock">
+          {versions.map((x) => (
+            <MenuItem
+              key={x.n}
+              label={`v${x.n}`}
+              on={x.n === v.n}
+              onSelect={() => void run('task.showVersion', { task: t.id, version: x.n === current?.n ? null : x.n }, { via: 'click' })}
+            />
+          ))}
+        </MenuSub>
+      )}
+      {pair && (
+        <MenuItem label="Compare" icon="columns" on={!!other} onSelect={() => void run('task.compare', { task: t.id, against: other ? null : pair.n }, { via: 'click' })} />
+      )}
+      {mayRemove && (
+        <>
+          <MenuRule />
+          <MenuItem label="Remove file" icon="close" onSelect={() => void remove(f)} />
+        </>
+      )}
+    </Menu>
+  );
+
   return (
     <>
       <div className="fv-bar">
@@ -64,6 +134,7 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
           <Icon name="chevron" className="flip" />
         </Go>
         <b>{f ? f.title || f.name : 'File'}</b>
+        {versions.length > 1 && v && <small>v{v.n}</small>}
         {v?.width && v.height ? (
           <small>
             {v.width} by {v.height}
@@ -79,25 +150,25 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
         )}
         {list.length > 1 && step(-1, 'Previous', true)}
         {list.length > 1 && step(1, 'Next', false)}
+        {menu}
       </div>
       {files.isError ? (
         <Empty icon="alert" title="This file did not load" />
       ) : files.isSuccess && !f ? (
         <Empty title="This file is gone" />
-      ) : (
-        <div className="frame fv">
-          {v && f && (v.mime.startsWith('image/') ? (
-            <button type="button" className="fv-pic" aria-label={`${f.title || f.name}, full size`} title="Full size" onClick={() => showPicture(f.id)}>
-              <img src={v.url} alt={f.title || f.name} />
-            </button>
-          ) : v.mime.startsWith('video/') ? (
-            <video src={v.url} poster={v.poster_url ?? undefined} controls />
-          ) : v.mime.startsWith('text/html') ? (
-            <iframe src={v.url} title={f.title || f.name} sandbox="" referrerPolicy="no-referrer" />
-          ) : (
-            <FilePreview file={f.id} version={v.n} />
-          ))}
+      ) : f && v && other ? (
+        <div className="frame fv fv-pair" data-target={`task-changes:${t.id}`}>
+          {[other, v]
+            .sort((a, b) => a.n - b.n)
+            .map((x) => (
+              <section key={x.n} className="fv-side" aria-label={`v${x.n}`}>
+                <small>v{x.n}</small>
+                <Body f={f} v={x} />
+              </section>
+            ))}
         </div>
+      ) : (
+        <div className="frame fv">{v && f && <Body f={f} v={v} onPicture={v === current ? () => showPicture(f.id) : undefined} />}</div>
       )}
       <PictureViewer pictures={pictures} at={fullAt >= 0 ? fullAt : null} onAtChange={(i) => showPicture(i == null ? null : (pictures[i]?.id ?? null))} />
     </>

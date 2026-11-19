@@ -14,7 +14,9 @@ import { Row } from '@/kit/Row';
 import { Section as Group } from '@/kit/SectionHead';
 import { PageBody, Section } from '@/pagekinds';
 import { ActorItems, OwnerMenu, tagsOf } from './Head';
-import { DETAILS, reasonOf, tabAddress } from './model';
+import { EditKv, Inline, Kv, saved } from './Fact';
+import { Meetings, MoreFacts, PublicFacts, SizeFact } from './Facts';
+import { DETAILS, tabAddress } from './model';
 import { NewPage } from './NewPage';
 import { Face, Mark, NameOf, Go } from './parts';
 import { taskFilesQuery, type TaskData } from './queries';
@@ -57,82 +59,6 @@ function TaskLine({ t }: { t: Linked }) {
       {t.owner ? <Face id={t.owner} decorative /> : <span className="av-gap" />}
       <span className="row-age" />
     </Row>
-  );
-}
-
-function Kv({ k, children, target }: { k: string; children: ReactNode; target?: string }) {
-  return (
-    <div className="dt-kv" data-target={target}>
-      <span className="dt-k">{k}</span>
-      <span className="dt-v">{children}</span>
-    </div>
-  );
-}
-
-/** A field written in place: Enter saves, Escape puts it back. A refusal reads under it and the words stay. */
-function Inline({ label, initial = '', placeholder, onSave, onEnd }: { label: string; initial?: string; placeholder?: string; onSave: (value: string) => Promise<string | null>; onEnd: () => void }) {
-  const [value, setValue] = useState(initial);
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const save = async () => {
-    if (busy) return;
-    if (!value.trim() && !initial) return onEnd();
-    setBusy(true);
-    const refused = await onSave(value);
-    setBusy(false);
-    if (refused) setError(refused);
-    else onEnd();
-  };
-  return (
-    <span className="dt-in">
-      <label className={error ? 'field is-wide is-error' : 'field is-wide'}>
-        <input
-          type="text"
-          aria-label={label}
-          placeholder={placeholder}
-          value={value}
-          disabled={busy}
-          autoFocus
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void save();
-            else if (e.key === 'Escape') onEnd();
-          }}
-        />
-      </label>
-      {error && (
-        <span className="f-err" role="alert">
-          <Icon name="alert" />
-          <span>{error}</span>
-        </span>
-      )}
-    </span>
-  );
-}
-
-/** Runs a change on the task; the refusal's reason, or null once it is saved. */
-async function saved(id: string, input: object): Promise<string | null> {
-  const r = await run(id, input, { via: 'click' });
-  return r.ok ? null : reasonOf(r.error);
-}
-
-/** A fact that edits in place: its value is the button that opens the field. */
-function EditKv({ k, target, value, edit }: { k: string; target?: string; value: ReactNode; edit: (end: () => void) => ReactNode }) {
-  const [on, setOn] = useState(false);
-  if (on)
-    return (
-      <div className="dt-kv is-edit" data-target={target}>
-        <span className="dt-k">{k}</span>
-        <div className="dt-v">{edit(() => setOn(false))}</div>
-      </div>
-    );
-  return (
-    <div className="dt-kv" data-target={target}>
-      <span className="dt-k">{k}</span>
-      <button type="button" className="dt-v dt-val" onClick={() => setOn(true)}>
-        {value}
-      </button>
-    </div>
   );
 }
 
@@ -396,7 +322,7 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
       )}
 
       {shown.length > 0 && (
-        <Section name="Files" count={shown.length}>
+        <Section name="Files" count={shown.length} actions={plus('Add a file', () => onAdding('page'))}>
           {shown.map((f) => {
             const last = f.versions.at(-1);
             return (
@@ -428,6 +354,7 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
           value={t.parent ? <span>{t.parent.title}</span> : <small>None</small>}
           edit={(done) => <Inline label="Part of" placeholder="Task number" onSave={(parent) => saved('task.setParent', { task: t.id, parent })} onEnd={done} />}
         />
+        <SizeFact t={t} />
         <EditKv
           k="Tags"
           target={`task-tags:${t.id}`}
@@ -436,8 +363,8 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
             <Inline label="Tags" initial={t.labels.join(', ')} placeholder="bug, checkout" onSave={(text) => saved('task.tag', { task: t.id, labels: tagsOf(text) })} onEnd={done} />
           )}
         />
-        {t.public_title && <Kv k="Public title">{t.public_title}</Kv>}
-        {t.public_summary && <Kv k="Public summary">{t.public_summary}</Kv>}
+        <MoreFacts t={t} />
+        <PublicFacts t={t} />
         {request && (
           <div className="dt-kv">
             <span className="dt-k">Asked</span>
@@ -487,6 +414,7 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
           ))}
         </Section>
       )}
+      <Meetings t={t} />
       {adding === 'page' && (
         <NewPage task={t.id} onClose={end} onSaved={(file) => void navigate({ to: details.to as never, search: fileSearch(file) as never })} />
       )}
@@ -513,7 +441,7 @@ export function AddMenu({ onAdding }: { onAdding: (what: Adding) => void }) {
       <MenuItem label="Ask someone" onSelect={() => onAdding('ask')} />
       <MenuRule />
       <MenuItem label="Link" onSelect={() => onAdding('link')} />
-      <MenuItem label="New page" onSelect={() => onAdding('page')} />
+      <MenuItem label="File or page" onSelect={() => onAdding('page')} />
     </Menu>
   );
 }

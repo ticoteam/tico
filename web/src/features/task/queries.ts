@@ -2,6 +2,7 @@ import { queryOptions, type QueryClient, type QueryKey } from '@tanstack/react-q
 import { ApiError, api } from '@/api/client';
 import type { NeedsYou, OkPreview, PagePublished, PageShown, PipelineSettingsList, PublishPageBody, TaskDetail, TaskFileList, TaskLinkView, TaskResult } from '@/api/schema';
 import { keys, queryClient, QUIET_STALE_MS, quietRoot, write } from '@/data';
+import type { AccessAudience, FileLibrary, FileSearch, Group, TaskFileResult, TaskFileView } from '@/api/schema';
 
 /* One open task: its detail (GET /api/v2/tasks/{tid}, kept current by the stream under keys.tasks.detail), the files
    and pages it shows (under the detail key, re-read when the stream says its files changed), the stages it can move
@@ -84,7 +85,7 @@ export async function loadTask(client: QueryClient, param: string): Promise<Task
 export const taskFilesQuery = (id: string) =>
   queryOptions({
     queryKey: [...keys.tasks.detail(id), 'files'] as const,
-    queryFn: async ({ signal }) => (await api.get<TaskFileList>(`${taskPath(id)}/files`, { signal })).files,
+    queryFn: async ({ signal }) => (await api.get<TaskFileList>(`${taskPath(id)}/files?all=1`, { signal })).files,
   });
 
 /** One of the task's pages, with the address it is drawn from (GET /api/v2/pages/{fid}). */
@@ -340,4 +341,216 @@ export function dropLink(id: string, link: string) {
     send: (idem) => api.post<LinksAnswer>(`${taskPath(id)}/links`, { remove: link }, { idempotencyKey: idem }),
     settle: (cur: TaskData | undefined, answer) => withLinks(cur, () => answer.links),
   });
+}
+
+/* ---------------------------------------------------------------- Details' facts and the head's ⋯ (s58) */
+
+import type { GoalResult, TaskMeeting, TaskMeetings } from '@/api/schema';
+import { meQuery } from '@/data';
+
+/** How closely someone follows a task (backend/task_followers.py). */
+export type FollowLevel = 'live' | 'mentions' | 'digest' | 'muted';
+export interface Follower {
+  actor: string;
+  notify: FollowLevel;
+}
+/** The detail's task as Details reads its facts: its followers (null for a task with no thread of its own) and its
+    goal, which the schema's task leaves out. */
+export type TaskFacts = TaskData & { followers?: Follower[] | null; goal_id?: string | null };
+
+/** Who may see it: its team, the public roadmap too, or only its people. */
+export type Visible = 'team' | 'public' | 'private';
+export const visibleOf = (t: Pick<TaskData, 'private' | 'visibility'>): Visible => (t.private ? 'private' : t.visibility === 'public' ? 'public' : 'team');
+
+/** The meetings the task was in, newest first (GET /api/v2/tasks/{tid}/meetings). One the person may not read is none. */
+export const taskMeetingsQuery = (id: string) =>
+  queryOptions({
+    queryKey: [...keys.tasks.detail(id), 'meetings'] as const,
+    queryFn: async ({ signal }): Promise<TaskMeeting[]> => {
+      try {
+        const r = await api.get<TaskMeetings>(`${taskPath(id)}/meetings?limit=20`, { signal });
+        return [...(r.meetings ?? [])].sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
+      } catch (e) {
+        if (e instanceof ApiError && (e.status === 403 || e.status === 404)) return [];
+        throw e;
+      }
+    },
+  });
+
+quietRoot('task-goal');
+
+/** A goal's title, for the Goal fact (GET /api/v2/goals/{gid}). */
+export const taskGoalQuery = (goal: string) =>
+  queryOptions({
+    queryKey: ['task-goal', goal] as const,
+    queryFn: async ({ signal }) => (await api.get<GoalResult>(`/api/v2/goals/${enc(goal)}`, { signal })).goal.title,
+    staleTime: QUIET_STALE_MS,
+  });
+
+/** A field edit (POST /api/v2/tasks/{tid}): shown at once, the server's task in its place. */
+const edit = (id: string, fields: Fields | ((t: TaskData) => Fields), body: object) => change(id, fields, (idem) => post(taskPath(id), body, idem));
+
+/** The person accountable for it, whoever owns it; null takes them off. */
+export const setTaskHuman = (id: string, human: string | null) => edit(id, { human_id: human }, { human: human ?? '' });
+
+export const setTaskSize = (id: string, size: number) => edit(id, { size }, { size });
+
+/** The people in one role, replacing who was in it; none takes the role off. */
+export function setTaskRoles(id: string, role: string, people: string[]) {
+  const shown = (t: TaskData): Fields => {
+    const roles = { ...(t.roles ?? {}), [role]: people };
+    if (!people.length) delete roles[role];
+    return { roles };
+  };
+  return edit(id, shown, { roles: { [role]: people } });
+}
+
+/** The public roadmap's title or summary. */
+export const setTaskPublic = (id: string, field: 'public_title' | 'public_summary', text: string) => edit(id, { [field]: text }, { [field]: text });
+
+/** Team, Public roadmap or Private (ui/app/task-props.ts, Visible to). Out of private, then onto the roadmap, is two saves. */
+export async function setTaskVisible(id: string, to: Visible) {
+  const held = queryClient.getQueryData<TaskData>(keys.tasks.detail(id));
+  const now = held ? visibleOf(held) : 'team';
+  if (to === 'private') return edit(id, { private: true }, { private: true });
+  if (now === 'private') {
+    const r = await edit(id, { private: false }, { private: false });
+    if (to === 'team') return r;
+  }
+  const visibility = to === 'public' ? 'public' : 'private';
+  return edit(id, { visibility }, { visibility });
+}
+
+/** Who else sees a private task (POST /api/v2/tasks/{tid}/readers). */
+type ReadersAnswer = { private: boolean; readers: string[] };
+export function setTaskReaders(id: string, add: string[], remove: string[]) {
+  return write<ReadersAnswer>({
+    key: keys.tasks.detail(id),
+    optimistic: (cur: TaskData | undefined) => cur && { ...cur, readers: [...new Set([...(cur.readers ?? []), ...add])].filter((r) => !remove.includes(r)) },
+    send: (idem) => api.post<ReadersAnswer>(`${taskPath(id)}/readers`, { add, remove }, { idempotencyKey: idem }),
+    settle: (cur: TaskData | undefined, answer) => cur && { ...cur, readers: answer.readers, private: answer.private },
+  });
+}
+
+/** Follow, unfollow or set a level: the person themselves, or `actor` (PUT /api/v2/tasks/{tid}/followers). */
+type FollowersAnswer = { followers: Follower[] | null };
+export function followTask(id: string, change: { actor?: string; following: boolean; notify?: FollowLevel }) {
+  const who = change.actor ?? queryClient.getQueryData(meQuery.queryKey)?.id ?? '';
+  const shown = (list: Follower[]): Follower[] => {
+    const rest = list.filter((f) => f.actor !== who);
+    if (!change.following) return rest;
+    const was = list.find((f) => f.actor === who);
+    return [...rest, { actor: who, notify: change.notify ?? was?.notify ?? 'live' }];
+  };
+  return write<FollowersAnswer>({
+    key: keys.tasks.detail(id),
+    optimistic: (cur: TaskFacts | undefined) => cur && { ...cur, followers: shown(cur.followers ?? []) },
+    send: (idem) => api.put<FollowersAnswer>(`${taskPath(id)}/followers`, change, { idempotencyKey: idem }),
+    settle: (cur: TaskFacts | undefined, answer) => cur && { ...cur, followers: answer.followers },
+  });
+}
+
+/** To another pipeline: its stage `stage`, its first when left out. The server's task replaces what was shown. */
+export const moveTaskTo = (id: string, pipeline: string, stage?: string, why?: string) =>
+  change(id, {}, (idem) => post(`${taskPath(id)}/move`, { to_pipeline: pipeline, ...(stage && { to: stage }), ...(why && { why }) }, idem));
+
+/** To the trash, from which it can be restored; the lists that held it are read again. */
+export async function deleteTask(id: string) {
+  await api.post(`${taskPath(id)}/delete`, {});
+  void queryClient.invalidateQueries({ queryKey: ['tasks', 'list'] });
+}
+
+/* ---------------------------------------------------------------- a task's files and pages: add, link, remove, who sees */
+
+/** One of the task's pages with what the reader may do to it (GET /api/v2/pages/{fid}): `can_manage` (who can see it,
+    archive) and `can_delete`. Its frame draws from the same read. */
+export const pageShownQuery = (task: string, file: string) =>
+  queryOptions({
+    queryKey: [...keys.tasks.detail(task), 'page', file, 'shown'] as const,
+    queryFn: ({ signal }) => api.get<PageShown>(`/api/v2/pages/${enc(file)}`, { signal }),
+  });
+
+/** The company's teams, for who can see a page (GET /api/v2/groups). */
+export const pageGroupsQuery = queryOptions({
+  queryKey: ['tasks', 'groups'] as const,
+  queryFn: ({ signal }) => api.get<Group[]>('/api/v2/groups', { signal }),
+  staleTime: QUIET_STALE_MS,
+});
+
+export interface PagePick {
+  id: string;
+  title: string;
+}
+
+/** Pages to link to a task (ui/app/task-pages.ts): the newest until something is typed, then the best matches. Only
+    pages the person may write are offered. */
+export const pagePickQuery = (q: string) =>
+  queryOptions({
+    queryKey: ['tasks', 'page-pick', q.trim()] as const,
+    queryFn: async ({ signal }): Promise<PagePick[]> => {
+      const text = q.trim();
+      const rows = text
+        ? (await api.get<FileSearch>(`/api/v2/files/search?${new URLSearchParams({ q: text, kind: 'page', limit: '20' })}`, { signal })).results
+        : (await api.get<FileLibrary>('/api/v2/files?kind=page&limit=8', { signal })).files;
+      return rows.filter((r) => r.may_write !== false).map((r) => ({ id: r.id, title: r.title }));
+    },
+    staleTime: 30_000,
+  });
+
+/** A file from the person's disk onto the task (POST /api/v2/tasks/{tid}/files); a name the task has adds a version. */
+export async function uploadTaskFile(id: string, file: File): Promise<TaskFileResult> {
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  const r = await api.post<TaskFileResult>(`${taskPath(id)}/files`, fd);
+  await reread(id);
+  return r;
+}
+
+/** Remove a file from the task's list (PATCH /api/v2/files/{fid} archived), or bring it back. It leaves at once. */
+export async function archiveTaskFile(id: string, file: string, archived: boolean) {
+  const r = await write<unknown>({
+    key: taskFilesQuery(id).queryKey,
+    optimistic: (cur: TaskFileView[] | undefined) => cur?.map((f) => (f.id === file ? { ...f, archived } : f)),
+    send: (idem) => api.patch(`/api/v2/files/${enc(file)}`, { archived }, { idempotencyKey: idem }),
+  });
+  await reread(id);
+  return r;
+}
+
+/** Link a page to the task as related (POST /api/v2/pages/{fid}/links). */
+export async function linkTaskPage(id: string, page: string) {
+  const r = await api.post<PageShown>(`/api/v2/pages/${enc(page)}/links`, { target: `task:${id}`, role: 'related' });
+  await reread(id);
+  return r;
+}
+
+const shownKey = (task: string, file: string) => pageShownQuery(task, file).queryKey;
+
+/** Archive a page, or restore it (PATCH /api/v2/pages/{fid}). An archived page leaves the task's tabs. */
+export async function archivePage(task: string, file: string, archived: boolean) {
+  const r = await write<PageShown>({
+    key: shownKey(task, file),
+    optimistic: (cur: PageShown | undefined) => cur && { ...cur, page: { ...cur.page, archived } },
+    send: (idem) => api.patch<PageShown>(`/api/v2/pages/${enc(file)}`, { archived }, { idempotencyKey: idem }),
+    settle: (cur: PageShown | undefined, answer) => (cur ? { ...cur, page: answer.page } : answer),
+  });
+  await reread(task);
+  return r;
+}
+
+/** Who can see a page: null is everyone who can see where it is filed (PATCH /api/v2/pages/{fid} audience). */
+export function setPageAudience(task: string, file: string, audience: AccessAudience | null) {
+  return write<PageShown>({
+    key: shownKey(task, file),
+    optimistic: (cur: PageShown | undefined) => cur && { ...cur, page: { ...cur.page, audience } },
+    send: (idem) => api.patch<PageShown>(`/api/v2/pages/${enc(file)}`, { audience }, { idempotencyKey: idem }),
+    settle: (cur: PageShown | undefined, answer) => (cur ? { ...cur, page: answer.page } : answer),
+  });
+}
+
+/** Delete a page and every version for good (DELETE /api/v2/files/{fid}); the task is read again. */
+export async function deletePage(task: string, file: string) {
+  const r = await api.delete<unknown>(`/api/v2/files/${enc(file)}`);
+  await reread(task);
+  return r;
 }

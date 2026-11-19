@@ -284,3 +284,214 @@ export const newPage = defineAction({
   did: (i) => `Wrote the page ${i.title.trim()}`,
   target: (i) => ({ kind: 'task-files', id: i.task }),
 });
+
+/* ---------------------------------------------------------------- Details' facts and the head's ⋯ (s58) */
+
+import { deleteTask, followTask, moveTaskTo, setTaskHuman, setTaskPublic, setTaskReaders, setTaskRoles, setTaskSize, setTaskVisible } from './queries';
+
+const actor =s.string({ min: 1, max: 200 });
+
+export const setHuman = defineAction({
+  id: 'task.setHuman',
+  title: 'Set the person accountable for a task',
+  kind: 'change',
+  input: s.object({ task, human: s.nullable(actor) }),
+  run: (_ctx, i) => said(setTaskHuman(i.task, i.human)),
+  did: (i) => (i.human ? 'Set the Human' : 'Took the Human off'),
+  target: (i) => ({ kind: 'task-human', id: i.task }),
+});
+
+export const setSize = defineAction({
+  id: 'task.setSize',
+  title: 'Size a task',
+  kind: 'change',
+  input: s.object({ task, size: s.number({ min: 0, max: 1_000_000 }) }),
+  run: (_ctx, i) => said(setTaskSize(i.task, i.size)),
+  did: () => 'Sized it',
+  target: (i) => ({ kind: 'task-size', id: i.task }),
+});
+
+/** Who is on the task in one role (reviewer, qa…): the whole list for that role; an empty one takes the role off. */
+export const setRole = defineAction({
+  id: 'task.setRole',
+  title: 'Put people on a task in a role',
+  kind: 'change',
+  input: s.object({ task, role: s.string({ pattern: /^[a-z0-9][a-z0-9_-]{0,39}$/, what: 'a short name: letters, digits, - or _' }), people: s.array(actor, { max: 50 }) }),
+  run: (_ctx, i) => said(setTaskRoles(i.task, i.role, i.people)),
+  did: () => 'Changed who is on it',
+  target: (i) => ({ kind: 'task-people', id: i.task }),
+});
+
+export const setPublic = defineAction({
+  id: 'task.setPublic',
+  title: "Write a task's public title or summary",
+  kind: 'change',
+  input: s.object({ task, field: s.oneOf(['public_title', 'public_summary'] as const), text: s.string({ max: 8000 }) }),
+  run: (_ctx, i) => said(setTaskPublic(i.task, i.field, i.text.trim())),
+  did: () => 'Saved the public text',
+  target: (i) => ({ kind: 'task-public', id: i.task }),
+});
+
+/* Showing a task to the whole team or on the public roadmap is the person's own press; making it private is open. */
+export const setVisible = defineAction({
+  id: 'task.setVisible',
+  title: 'Change who can see a task',
+  kind: 'change',
+  input: s.object({ task, to: s.oneOf(['team', 'public', 'private'] as const) }),
+  can: ({ via }, { to }) => !(via === 'tico' && to !== 'private'),
+  run: (_ctx, i) => said(setTaskVisible(i.task, i.to)),
+  did: (i) => (i.to === 'private' ? 'Made it private' : i.to === 'public' ? 'Put it on the public roadmap' : 'Shared it with the team'),
+  target: (i) => ({ kind: 'task-visible', id: i.task }),
+});
+
+/** Who else sees a private task: ordinary work among teammates, so Tico may do it for the person. */
+export const setReaders = defineAction({
+  id: 'task.setReaders',
+  title: 'Change who else sees a private task',
+  kind: 'change',
+  input: s.object({ task, add: s.array(actor, { max: 50 }), remove: s.array(actor, { max: 50 }) }),
+  run: (_ctx, i) => said(setTaskReaders(i.task, i.add, i.remove)),
+  did: (i) => (i.add.length ? 'Let them see it' : 'Took them off'),
+  target: (i) => ({ kind: 'task-visible', id: i.task }),
+});
+
+/** Follow, unfollow or set how closely: the person, or `actor` (someone who already sees the task). */
+export const follow = defineAction({
+  id: 'task.follow',
+  title: 'Follow a task',
+  kind: 'change',
+  input: s.object({ task, actor: s.optional(actor), following: s.boolean(), notify: s.optional(s.oneOf(['live', 'mentions', 'digest', 'muted'] as const)) }),
+  run: (_ctx, i) => said(followTask(i.task, { ...(i.actor && { actor: i.actor }), following: i.following, ...(i.notify && { notify: i.notify }) })),
+  did: (i) => (i.following ? 'Following' : 'Unfollowed'),
+  target: (i) => ({ kind: 'task-followers', id: i.task }),
+});
+
+/** Open again a finished task, with why (docs/dev/pipelines-v3.md C24). */
+export const reopen = defineAction({
+  id: 'task.reopen',
+  title: 'Reopen a task',
+  kind: 'change',
+  input: s.object({ task, why: s.string({ min: 1, max: 2000 }) }),
+  run: (_ctx, i) => said(moveTask(i.task, 'reopen', i.why.trim())),
+  did: () => 'Reopened',
+  target: (i) => ({ kind: 'task-stage', id: i.task }),
+});
+
+/** To another pipeline, at its `stage` (its first when left out). On the task's page, the address follows it there. */
+export const moveTo = defineAction({
+  id: 'task.moveTo',
+  title: 'Move a task to another pipeline',
+  kind: 'change',
+  input: s.object({ task, pipeline: s.string({ min: 1, max: 200 }), stage: s.optional(s.string({ min: 1, max: 200 })), why: s.optional(s.string({ max: 2000 })) }),
+  run: async ({ router }, i) => {
+    const r = await said(moveTaskTo(i.task, i.pipeline, i.stage, i.why?.trim() || undefined));
+    const path = router.state.location.pathname;
+    const n = r.task.number ?? r.task.id;
+    if (path.startsWith('/tasks/')) await router.navigate({ to: `/tasks/${encodeURIComponent(r.task.pipeline_id ?? i.pipeline)}/${n}` });
+  },
+  did: () => 'Moved it',
+  target: (i) => ({ kind: 'task-stage', id: i.task }),
+});
+
+/* A task goes to the trash, and only a person deletes one (the server refuses anyone acting for them). */
+export const remove = defineAction({
+  id: 'task.delete',
+  title: 'Delete a task',
+  kind: 'change',
+  input: s.object({ task }),
+  tico: false,
+  run: async ({ router, queryClient }, i) => {
+    const held = queryClient.getQueryData<{ pipeline_id: string | null }>(['tasks', 'detail', i.task]);
+    await said(deleteTask(i.task));
+    if (router.state.location.pathname.startsWith('/flow/')) await router.navigate({ to: '/flow' });
+    else await router.navigate({ to: `/tasks/${encodeURIComponent(held?.pipeline_id ?? 'all')}` });
+  },
+  did: () => 'Deleted',
+});
+
+/* ---------------------------------------------------------------- a task's files and pages */
+
+import type { Schema } from '@/actions';
+import { archivePage, archiveTaskFile, deletePage, linkTaskPage, setPageAudience, uploadTaskFile } from './queries';
+
+const fileId = s.string({ min: 1, max: 100 });
+const ids = s.array(s.string({ min: 1, max: 200 }), { max: 500 });
+
+/** A file from the person's disk: only a click or a drop has one. */
+const picked: Schema<File> = {
+  parse: (v, p) => (typeof File !== 'undefined' && v instanceof File ? { ok: true, value: v } : { ok: false, error: `${p || 'input'}: expected a file` }),
+  json: () => ({ type: 'object', description: 'A file the person chose' }),
+  optional: false,
+  '~standard': {
+    version: 1,
+    vendor: 'tico',
+    validate: (v) => (typeof File !== 'undefined' && v instanceof File ? { value: v } : { issues: [{ message: 'expected a file' }] }),
+  },
+};
+
+/* The file comes from the person's own disk, so only their press adds it. */
+export const upload = defineAction({
+  id: 'task.upload',
+  title: 'Add a file to a task',
+  kind: 'change',
+  input: s.object({ task, file: picked }),
+  tico: false,
+  run: (_ctx, i) => said(uploadTaskFile(i.task, i.file)),
+  did: (i) => `Added ${i.file.name}`,
+  target: (i) => ({ kind: 'task-files', id: i.task }),
+});
+
+export const linkPage = defineAction({
+  id: 'task.linkPage',
+  title: 'Link a page to a task',
+  kind: 'change',
+  input: s.object({ task, page: fileId }),
+  run: (_ctx, i) => said(linkTaskPage(i.task, i.page)),
+  did: () => 'Linked the page',
+  target: (i) => ({ kind: 'task-files', id: i.task }),
+});
+
+/** Takes a file off the task's list (it is archived, not deleted), or brings it back. */
+export const archiveFile = defineAction({
+  id: 'task.archiveFile',
+  title: 'Remove a file from a task',
+  kind: 'change',
+  input: s.object({ task, file: fileId, archived: s.boolean() }),
+  run: (_ctx, i) => said(archiveTaskFile(i.task, i.file, i.archived)),
+  did: (i) => (i.archived ? 'Removed the file' : 'Brought the file back'),
+  target: (i) => ({ kind: 'task-files', id: i.task }),
+});
+
+/** An archived page leaves the task's tabs; restoring brings it back. */
+export const archiveTaskPage = defineAction({
+  id: 'task.archivePage',
+  title: 'Archive a page',
+  kind: 'change',
+  input: s.object({ task, page: fileId, archived: s.boolean() }),
+  run: (_ctx, i) => said(archivePage(i.task, i.page, i.archived)),
+  did: (i) => (i.archived ? 'Archived the page' : 'Restored the page'),
+  target: (i) => ({ kind: 'task-files', id: i.task }),
+});
+
+/* Opening a page to everyone is the person's own press; choosing people, teams or agents is open. */
+export const pageAudience = defineAction({
+  id: 'task.pageAudience',
+  title: 'Choose who can see a page',
+  kind: 'change',
+  input: s.object({ task, page: fileId, everyone: s.boolean(), people: ids, teams: ids, agents: ids }),
+  can: ({ via }, { everyone }) => !(via === 'tico' && everyone),
+  run: (_ctx, i) => said(setPageAudience(i.task, i.page, i.everyone ? null : { everyone: false, people: i.people, teams: i.teams, bots: i.agents })),
+  did: () => 'Saved who can see it',
+  target: (i) => ({ kind: 'task-page-more', id: i.page }),
+});
+
+/* Every version goes for good and cannot be brought back: the person's own press, after they confirm. */
+export const removePage = defineAction({
+  id: 'task.deletePage',
+  title: 'Delete a page for good',
+  kind: 'change',
+  input: s.object({ task, page: fileId }),
+  tico: false,
+  run: (_ctx, i) => said(deletePage(i.task, i.page)),
+  did: () => 'Deleted the page',
+});

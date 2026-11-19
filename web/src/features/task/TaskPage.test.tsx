@@ -262,7 +262,7 @@ describe('one open task', () => {
       versions: [{ n: 2, by: 'bot:a1', created_at: '2026-11-02T10:00:00Z', mime: 'text/plain', url: '/api/v2/files/f6?v=2', answers: [], ask: null }],
     };
     serve((url) => {
-      if (url.endsWith('/api/v2/tasks/t1/files')) return { status: 200, body: { files: [notes] } };
+      if (url.endsWith('/api/v2/tasks/t1/files?all=1')) return { status: 200, body: { files: [notes] } };
       if (url.endsWith('/api/v2/files/f6/info')) return { status: 200, body: { file: { id: 'f6', name: 'notes.txt', title: 'Launch notes', mime: 'text/plain', library_kind: 'document', version: 2 } } };
       if (url.endsWith('/api/v2/files/f6/versions')) return { status: 200, body: { versions: [{ version: 2, current: true, mime: 'text/plain', name: 'notes.txt' }] } };
       if (url.endsWith('/api/v2/files/f6/versions/2')) return { status: 200, body: 'Ship on Friday after the review.' };
@@ -339,7 +339,7 @@ describe('a page’s versions, a new page and a picture', () => {
     });
     show(<TaskPage task="12" pipeline="p1" tab="details" />, '/tasks/p1/12/details');
     fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'New page' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'File or page' }));
     const dialog = await screen.findByRole('dialog', { name: 'New page' });
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Title' }), { target: { value: 'Release notes' } });
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Text' }), { target: { value: '<p>What shipped</p>' } });
@@ -365,7 +365,7 @@ describe('a page’s versions, a new page and a picture', () => {
       writers: [],
       versions: [{ n: 1, by: 'bot:a1', created_at: '2026-11-02T10:00:00Z', mime: 'image/png', url: '/api/v2/files/f5?v=1', answers: [], ask: null }],
     };
-    serve((url) => (url.endsWith('/api/v2/tasks/t1/files') ? { status: 200, body: { files: [pic] } } : base(url)));
+    serve((url) => (url.endsWith('/api/v2/tasks/t1/files?all=1') ? { status: 200, body: { files: [pic] } } : base(url)));
     show(<TaskPage task="12" pipeline="p1" tab="details" file="f5" />, '/tasks/p1/12/details?file=f5');
     fireEvent.click(await screen.findByRole('button', { name: 'Sign-in screen, full size' }));
     expect(await screen.findByRole('dialog', { name: 'Sign-in screen' })).toBeTruthy();
