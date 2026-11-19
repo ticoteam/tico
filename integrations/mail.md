@@ -66,8 +66,11 @@ tico email label owner@example.com hub/needs-owner 18f2...       # unlabel, arch
 tico email label owner@example.com STARRED 18f2...               # stars it
 tico email draft owner@example.com --to person@example.org --subject "..." --body-file out/draft.txt
 tico email draft owner@example.com --reply-to 18f2... --body-file out/reply.txt
-tico email discard owner@example.com r-882...                    # only an unsent draft
-tico email send owner@example.com --draft r-882...               # queues it with Tico
+tico email drafts owner@example.com [--q 'to:person@example.org'] [--thread 18f2...]   # draft ids, whoever made them
+tico email draft-show owner@example.com r-882...                 # one draft: headers, body, files (or its message id)
+tico email draft-update owner@example.com r-882... --body-file out/draft.txt   # in place; what you leave out stays
+tico email discard owner@example.com r-882...                    # a draft id or its message id; only an unsent draft
+tico email send owner@example.com --draft r-882...               # queues it with Tico (prints send id, state, task)
 tico email reply owner@example.com --thread 18f2... --body-file out/reply.txt   # draft, then queue it with Tico
 tico email lint owner@example.com --body-file out/draft.txt --subject "..." [--to addr]
 tico email unsubscribe owner@example.com 18f2...                 # one RFC 8058 one-click request
@@ -135,7 +138,10 @@ Each filing command prints an undo line. Add `--json` for the API response.
 - A refused `send` is not an error: the answer is `blocked` with Tico's reason, and the draft stays in Drafts. Check
   the state (`pending`, `waiting_approval` or `blocked`), not the exit code.
 - Running the same `draft` twice finds the same Gmail draft; changing a word makes a
-  new one. Sending the same draft twice sends nothing the second time.
+  new one. To change a draft, use `draft-update`: it keeps the draft id. Sending the same draft twice sends nothing
+  the second time.
+- A draft's message in `thread` or `search` carries its `draft_id`; `drafts` lists them all. Canceling a queued send
+  keeps its draft in Gmail; discard it yourself if it is not wanted.
 - If `tico email mailboxes` shows the mailbox not connected or its last check failed, that is the owner's twenty
   minutes: file a task for `the owner` quoting the line and stop.
 - An unsubscribe `accepted` means the sender said 2xx, not that they will never write again;

@@ -165,9 +165,30 @@ class FakeGmail:
         """{draft id: decoded MIME bytes} of the mailbox's drafts."""
         return {did: _decoded(d["message"]["raw"]) for did, d in self.box(mailbox)["drafts"].items()}
 
-    def _draft_call(self, mailbox, box, tail, query, data):
+    def put_draft(self, mailbox, did, mid, thread, mime):
+        """A draft made outside Tico (in Gmail, or by an older tool), its message also in the mailbox with DRAFT."""
+        box = self.box(mailbox)
+        raw = base64.urlsafe_b64encode(mime).decode().rstrip("=")
+        box["drafts"][did] = {"id": did, "message": {"id": mid, "threadId": thread, "raw": raw}}
+        box["messages"][mid] = _gmail_message(mid, thread, mime)
+        return did
+
+    def _draft_matches(self, draft, q):
+        mime = _decoded(draft["message"]["raw"])
+        if "rfc822msgid:" in q:
+            return _message_id(mime) == q.partition("rfc822msgid:")[2].strip().lower()
+        text = mime.decode("utf-8", "replace").lower()
+        for term in q.split():
+            key, _, value = term.partition(":")
+            header = re.search(rf"(?im)^{key}:(.*)$", text) if value and key in ("to", "subject", "cc") else None
+            if (header and value.strip('"').lower() not in header.group(1)) or (not value and term.lower() not in text):
+                return False
+        return True
+
+    def _draft_call(self, mailbox, box, tail, query, data, method=None):
         if tail == "drafts" and data is not None:
-            did = f"r-{len(box['drafts']) + 1}"
+            box["drafts_made"] = box.get("drafts_made", 0) + 1
+            did = f"r-{box['drafts_made']}"
             message = data["message"]
             box["drafts"][did] = {
                 "id": did,
@@ -179,15 +200,32 @@ class FakeGmail:
             }
             return 200, {"id": did, "message": {k: v for k, v in box["drafts"][did]["message"].items() if k != "raw"}}
         if tail == "drafts":
-            wanted = query.get("q", [""])[0].partition("rfc822msgid:")[2].strip().lower()
+            q = query.get("q", [""])[0]
+            found = [d for d in reversed(box["drafts"].values()) if self._draft_matches(d, q)]  # newest first
+            start, size = int(query.get("pageToken", ["0"])[0]), int(query.get("maxResults", ["100"])[0])
             rows = [
                 {"id": d["id"], "message": {"id": d["message"]["id"], "threadId": d["message"]["threadId"]}}
-                for d in box["drafts"].values()
-                if _message_id(_decoded(d["message"]["raw"])) == wanted
+                for d in found[start : start + size]
             ]
-            return 200, {"drafts": rows[: int(query.get("maxResults", ["100"])[0])]}
-        draft = box["drafts"].get(tail.split("/", 1)[1])
-        return (200, copy.deepcopy(draft)) if draft else (404, {})
+            return 200, {"drafts": rows, **({"nextPageToken": str(start + size)} if start + size < len(found) else {})}
+        did = tail.split("/", 1)[1]
+        draft = box["drafts"].get(did)
+        if draft is None:
+            return 404, {}
+        if method == "PUT":
+            box["edits"] = box.get("edits", 0) + 1
+            message = data["message"]
+            draft["message"] = {
+                "id": f"dm-{did}-{box['edits']}",
+                "threadId": message.get("threadId") or draft["message"]["threadId"],
+                "raw": message["raw"],
+            }
+            return 200, {"id": did, "message": {k: v for k, v in draft["message"].items() if k != "raw"}}
+        if query.get("format") == ["full"]:
+            message = draft["message"]
+            full = _gmail_message(message["id"], message["threadId"], _decoded(message["raw"]))
+            return 200, {"id": did, "message": masked(full) if "fields" in query else full}
+        return 200, copy.deepcopy(draft)
 
     def delete(self, url, *, token):
         path = unquote(urlsplit(url).path)
@@ -195,9 +233,13 @@ class FakeGmail:
         self.calls.append((path, {"method": ["DELETE"]}, None))
         if mailbox.lower() in self.down:
             return 503
-        return 204 if self.box(mailbox)["drafts"].pop(tail.split("/", 1)[1], None) else 404
+        box = self.box(mailbox)
+        gone = box["drafts"].pop(tail.split("/", 1)[1], None)
+        if gone:
+            box["messages"].pop(gone["message"]["id"], None)
+        return 204 if gone else 404
 
-    def send(self, url, *, token, body, content_type):
+    def send(self, url, *, token, body, content_type, method=None):
         mailbox, _, tail = unquote(urlsplit(url).path).split("/gmail/v1/users/", 1)[1].partition("/")
         mailbox = mailbox.lower()
         if "uploadType=multipart" in url:  # the metadata JSON, then the MIME (gmail_live._upload_body)
@@ -205,6 +247,9 @@ class FakeGmail:
             meta, mime = (part.split(b"\r\n\r\n", 1)[1].removesuffix(b"\r\n") for part in body.split(boundary)[1:3])
             found = json.loads(meta)
             raw = base64.urlsafe_b64encode(mime).decode().rstrip("=")
+            if tail.startswith("drafts/") and method == "PUT":
+                message = {**found.get("message", {}), "raw": raw}
+                return self._draft_call(mailbox, self.box(mailbox), tail, {}, {**found, "message": message}, "PUT")
             if tail == "drafts":
                 return self._draft_call(
                     mailbox,
@@ -222,7 +267,7 @@ class FakeGmail:
         return 200, {"id": f"sent-{len(self.sent)}"}
 
     # ------------------------------------------------------------------------------------------------- HTTP
-    def __call__(self, url, *, token, data=None, max_bytes=None):
+    def __call__(self, url, *, token, data=None, max_bytes=None, method=None):
         parsed = urlsplit(url)
         path, query = unquote(parsed.path), parse_qs(parsed.query)
         self.calls.append((path, query, data))
@@ -247,7 +292,7 @@ class FakeGmail:
             rows = [{"id": str(hid), "messagesAdded": added} for hid, added in records.items()]
             return 200, {"history": rows, "historyId": str(self.history_id(mailbox))}
         if tail == "drafts" or tail.startswith("drafts/"):
-            return self._draft_call(mailbox, box, tail, query, data)
+            return self._draft_call(mailbox, box, tail, query, data, method)
         if tail == "labels" and data is not None:
             return 200, {"id": self.label(mailbox, data["name"]), "name": data["name"], "type": "user"}
         if tail == "messages/batchModify":
@@ -301,6 +346,39 @@ class FakeGmail:
 
 def _decoded(raw):
     return base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+
+
+def _gmail_message(mid, thread, mime, labels=("DRAFT",)):
+    """A MIME message as Gmail answers a format=full read: its parts tree, each leaf's bytes base64url."""
+    from email import policy
+    from email.parser import BytesParser
+
+    msg = BytesParser(policy=policy.default).parsebytes(mime)
+
+    def part(p, pid):
+        out = {
+            "partId": pid,
+            "mimeType": p.get_content_type(),
+            "filename": p.get_filename() or "",
+            "headers": [{"name": k, "value": str(v)} for k, v in p.items()],
+        }
+        if p.is_multipart():
+            out["body"] = {"size": 0}
+            out["parts"] = [part(child, f"{pid}.{i}" if pid else str(i)) for i, child in enumerate(p.iter_parts())]
+        else:
+            data = p.get_payload(decode=True) or b""
+            out["body"] = {"size": len(data), "data": base64.urlsafe_b64encode(data).decode()}
+        return out
+
+    text = msg.get_body(preferencelist=("plain",))
+    return {
+        "id": mid,
+        "threadId": thread,
+        "labelIds": list(labels),
+        "snippet": (text.get_content() if text is not None else "")[:100],
+        "internalDate": "1783369000000",  # saved after the fake's mail arrives
+        "payload": part(msg, ""),
+    }
 
 
 def _message_id(mime):

@@ -29,13 +29,18 @@ SCHEMAS.update(
                 "finished_at": "n",
                 "provider_message_id": "n",
                 "detail": "s",
+                "draft_id": "s",
                 "recipients": items("s"),
                 "attachments": items("o"),
                 "decision": "o",
                 "classification": "o",
             }
         ),
-        "EmailSendResult": obj({"send": ref("EmailSend")}),
+        "EmailSendResult": obj(
+            # `draft` on a cancel of a send frozen from a draft: the draft is kept in Gmail.
+            {"send": ref("EmailSend"), "draft": obj({"id": "s", "kept": "b", "detail": "s"})},
+            required=("send",),
+        ),
         "EmailSendDetail": obj({"send": ref("EmailSend"), "body": "s", "bodies": items("o"), "preview_complete": "b"}),
         "EmailSendList": obj({"sends": items(ref("EmailSend")), "next_cursor": "n"}),
         "EmailSuppressionList": obj({"recipients": items("o"), "next_cursor": "n"}),

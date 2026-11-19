@@ -524,6 +524,12 @@ def test_a_large_draft_and_its_send_go_up_as_uploads(api, box, monkeypatch):
         api, "mail/drafts", {"mailbox": BOX, "reply_to": "t1", "body": "Records attached.", "attachments": [pdf]}
     )
     assert files_of(box.drafts(BOX)[made["draft"]])[1] == [("records.pdf", b"%PDF-1.4 records")]
+    # A change to it goes up as an upload too, onto the same draft.
+    changed = api.patch(
+        f"/api/v2/mail/drafts/{made['draft']}", json={"mailbox": BOX, "body": "Records enclosed."}, headers=headers()
+    )
+    assert changed.status_code == 200 and changed.json()["draft"] == made["draft"] and len(box.drafts(BOX)) == 1
+    assert b"Records enclosed." in box.drafts(BOX)[made["draft"]]
     queued = post(api, "email/sends", {"mailbox": BOX, "draft_id": made["draft"]})["send"]
     assert [f["name"] for f in queued["attachments"]] == ["records.pdf"]
     assert S.drain(api.app.state.store, api.app.state.auth) == 1
@@ -597,3 +603,144 @@ def test_a_bots_stopped_draft_says_why_to_the_bot_and_keeps_it(api, box, monkeyp
     assert hubcli.main(["email", "draft", BOX, "--reply-to", "t1", "--body", claim["body"]]) == 0
     printed = json.loads(capsys.readouterr().out)
     assert (printed["review"], printed["review_reason"]) == ("stop", S.STOPPED["missing_file"])
+
+
+# ------------------------------------------------------------------------------------------------- drafts by any id
+OLD_TOOL_DRAFT = (
+    b"From: ana@acme.example\r\nTo: billing@vendor.example\r\nSubject: Re: Invoice 4471\r\n"
+    b"In-Reply-To: <inv-4471@vendor.example>\r\nMessage-ID: <old-tool-1@acme.example>\r\n"
+    b"Content-Type: text/plain\r\n\r\nWe paid on Monday.\r\n"
+)
+
+
+def test_a_draft_is_discarded_by_its_message_id_and_a_missing_one_is_not_found(api, box):
+    """A draft another tool made is discarded by the message id a search shows; a name that is no draft is a clear
+    not_found, never deleted false."""
+    box.put_draft(BOX, "r-900", "dm-old", "t1", OLD_TOOL_DRAFT)
+    gone = api.delete(f"/api/v2/mail/drafts/dm-old?mailbox={BOX}", headers=headers())
+    assert gone.status_code == 200 and gone.json() == {
+        "mailbox": BOX,
+        "draft": "r-900",
+        "message": "dm-old",
+        "deleted": True,
+    }
+    assert "r-900" not in box.box(BOX)["drafts"]
+    again = api.delete(f"/api/v2/mail/drafts/dm-old?mailbox={BOX}", headers=headers())
+    assert again.status_code == 404 and "tico email drafts" in again.json()["error"]["detail"]
+    made = post(api, "mail/drafts", {"mailbox": BOX, "reply_to": "t1", "body": "Thanks, paid today."})
+    assert api.delete(f"/api/v2/mail/drafts/{made['draft']}?mailbox={BOX}", headers=headers()).json()["deleted"]
+    with api.app.state.store.read() as c:
+        logged = [json.loads(r[0]) for r in c.execute("SELECT detail FROM events WHERE action='mail.draft_discarded'")]
+    assert [e["draft"] for e in logged] == ["r-900", made["draft"]]
+
+
+def test_drafts_are_listed_read_and_named_in_threads_and_searches(api, box):
+    made = post(api, "mail/drafts", {"mailbox": BOX, "to": ["books@vendor.example"], "subject": "Books", "body": "Hi."})
+    box.put_draft(BOX, "r-900", "dm-old", "t1", OLD_TOOL_DRAFT)
+    listed = get(api, f"mail/drafts?mailbox={BOX}")["drafts"]
+    assert [(d["draft_id"], d["msg_id"], d["subject"]) for d in listed] == [
+        ("r-900", "dm-old", "Re: Invoice 4471"),
+        (made["draft"], made["message"], "Books"),
+    ]
+    assert listed[0]["to"] == [SENDER] and listed[0]["thread_id"] == "t1" and listed[0]["updated"]
+    assert [d["draft_id"] for d in get(api, f"mail/drafts?mailbox={BOX}&thread=t1")["drafts"]] == ["r-900"]
+    assert [d["draft_id"] for d in get(api, f"mail/drafts?mailbox={BOX}&q=to:books@vendor.example")["drafts"]] == [
+        made["draft"]
+    ]
+    # A thread and a search show which message is a draft, and its draft id.
+    thread = get(api, f"mail/threads/t1?mailbox={BOX}")["messages"]
+    assert [(m["msg_id"], m.get("draft_id")) for m in thread] == [("m1", None), ("dm-old", "r-900")]
+    found = get(api, f"mail/messages?mailbox={BOX}&q=Invoice")["messages"]
+    assert {m["msg_id"]: m.get("draft_id") for m in found} == {"m1": None, "dm-old": "r-900"}
+    # Read by its draft id, by its message id, or through `message` with a draft id.
+    for path in ("mail/drafts/r-900", "mail/drafts/dm-old", "mail/messages/r-900"):
+        read = get(api, f"{path}?mailbox={BOX}")
+        assert (read["draft_id"], read["msg_id"], read["body"].strip()) == ("r-900", "dm-old", "We paid on Monday.")
+    missing = api.get(f"/api/v2/mail/messages/r-404?mailbox={BOX}", headers=headers())
+    assert missing.status_code == 404 and "tico email drafts" in missing.json()["error"]["detail"]
+
+
+def test_a_draft_is_changed_in_place_and_stays_a_reply_with_its_files(api, box):
+    token = as_bot(api, "ops")
+    grant(api, "ops", "read_write")
+    pdf = tico_file(api, token, "records.pdf", b"%PDF-1.4 records")
+    made = post(api, "mail/drafts", {**REPLY, "attachments": [pdf]}, token)
+    patch = {"mailbox": BOX, "body": "Thanks for the invoice; it is paid.\n\nOps"}
+    changed = api.patch(f"/api/v2/mail/drafts/{made['draft']}", json=patch, headers=headers(token))
+    assert changed.status_code == 200, changed.text
+    updated = changed.json()
+    assert updated["draft"] == made["draft"] and updated["message"] != made["message"] and updated["updated"]
+    assert (updated["to"], updated["thread"], updated["subject"]) == ([SENDER], "t1", "Re: Invoice 4471")
+    mime = box.drafts(BOX)[made["draft"]]
+    assert b"it is paid." in mime and b"In-Reply-To: <inv-4471@vendor.example>" in mime
+    assert files_of(mime)[1] == [("records.pdf", b"%PDF-1.4 records")]  # left out: its files are kept
+    assert box.box(BOX)["drafts"][made["draft"]]["message"]["threadId"] == "t1"
+    # By its new message id, files off and a new subject; the lint still refuses what it would refuse in a new draft.
+    off = {"mailbox": BOX, "attachments": [], "cc": ["ap@vendor.example"]}
+    api.patch(f"/api/v2/mail/drafts/{updated['message']}", json=off, headers=headers(token)).raise_for_status()
+    assert (
+        files_of(box.drafts(BOX)[made["draft"]])[1] == [] and b"Cc: ap@vendor.example" in box.drafts(BOX)[made["draft"]]
+    )
+    before = box.drafts(BOX)[made["draft"]]
+    refused = api.patch(
+        f"/api/v2/mail/drafts/{made['draft']}", json={"mailbox": BOX, "body": "Paid."}, headers=headers(token)
+    )
+    assert refused.status_code == 422 and refused.json()["error"]["code"] == "lint"
+    assert box.drafts(BOX)[made["draft"]] == before and len(box.drafts(BOX)) == 1
+    # The draft's old words asked for again are a new draft, not this changed one.
+    assert post(api, "mail/drafts", {**REPLY, "attachments": [pdf]}, token)["draft"] != made["draft"]
+
+
+def test_the_assistant_changes_its_persons_draft_but_a_discard_asks_them(api, box):
+    from backend import assistant
+    from backend.tests.helpers.assistant import assistant_turn
+
+    _, attempt = assistant_turn(api, "ana-test", "Tidy my reply to the invoice.")
+    made = post(api, "mail/drafts", {"mailbox": BOX, "reply_to": "t1", "body": "Thanks, paid today."})
+    changed = api.patch(
+        f"/api/v2/mail/drafts/{made['draft']}",
+        json={"mailbox": BOX, "body": "Thanks, we paid it today."},
+        headers=headers(attempt["token"]),
+    )
+    assert changed.status_code == 200, changed.text
+    assert b"we paid it today" in box.drafts(BOX)[made["draft"]]
+    # Gmail deletes a discarded draft for good: the Assistant proposes it to its person instead.
+    assert not assistant.write_allowed("DELETE", f"/api/v2/mail/drafts/{made['draft']}")
+
+
+def test_a_send_names_its_draft_by_message_id_and_a_gone_draft_says_so(api, box):
+    autonomous(api)
+    made = post(api, "mail/drafts", {"mailbox": BOX, "reply_to": "t1", "body": "Thanks, paid today."})
+    queued = post(api, "email/sends", {"mailbox": BOX, "draft_id": made["message"]})["send"]
+    assert (queued["state"], queued["draft_id"]) == ("pending", made["draft"])
+    canceled = post(api, f"email/sends/{queued['id']}/cancel", {})
+    assert canceled["send"]["state"] == "canceled" and canceled["draft"]["id"] == made["draft"]
+    assert canceled["draft"]["kept"] and made["draft"] in box.drafts(BOX)  # the cancel never touched Gmail
+    api.delete(f"/api/v2/mail/drafts/{made['draft']}?mailbox={BOX}", headers=headers()).raise_for_status()
+    gone = api.post("/api/v2/email/sends", json={"mailbox": BOX, "draft_id": made["draft"]}, headers=headers())
+    assert gone.status_code == 404 and "no longer exists" in gone.json()["error"]["detail"]
+
+
+def test_a_queued_send_prints_its_id_task_and_approval_and_a_retry_asks_no_reviewer(api, box, monkeypatch, capsys):
+    from backend.tests.helpers.automation_cli import Client
+    from backend.tests.helpers.files import turn
+    from clients import hubcli, remotecli
+
+    _, attempt = turn(api, bot="ops")
+    grant(api, "ops", "read_write")
+    made = post(api, "mail/drafts", REPLY, attempt["token"])
+    task = post(api, "tasks", {"owner": "ops", "title": "Pay the invoice", "body": "Pay it."})["id"]
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    monkeypatch.setenv("HUB_TOKEN", attempt["token"])
+    monkeypatch.setattr(remotecli, "Client", lambda url, token, **kwargs: Client(api, token))
+    capsys.readouterr()
+    argv = ["email", "send", BOX, "--draft", made["draft"], "--task", task, "--approval-id", "msg-1"]
+    assert hubcli.main(argv) == 0
+    send = json.loads(capsys.readouterr().out)["send"]
+    assert send["id"] and send["state"] == "waiting_approval" and send["task_id"] == task
+    assert send["approval_id"] and send["approval_task_id"] and "policy" not in send["decision"]
+    asked = []
+    monkeypatch.setattr(S, "classify", lambda *a, **k: asked.append(1) or {"status": "classified", "review": None})
+    key, body = "send-once", {"mailbox": BOX, "draft_id": made["draft"]}
+    first = post(api, "email/sends", body, attempt["token"], key=key)["send"]
+    assert post(api, "email/sends", body, attempt["token"], key=key)["send"]["id"] == first["id"] and asked == [1]
